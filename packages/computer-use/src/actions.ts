@@ -357,9 +357,10 @@ export function canRetryInForeground(
 	);
 }
 
+/** An `inconclusive` check, like a `preexisting` one, proves nothing about delivery and keeps `current`. */
 export function outcomeAfterCheck(
 	current: "worked" | "didnt" | "unknown",
-	check: "verified" | "preexisting" | "failed",
+	check: "verified" | "preexisting" | "failed" | "inconclusive",
 ): "worked" | "didnt" | "unknown" {
 	if (check === "verified") return "worked";
 	if (check === "failed") return "didnt";

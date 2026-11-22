@@ -15,6 +15,7 @@ import type {
 	PlatformReadTextResponse,
 	PlatformRoot,
 	PlatformRootKind,
+	PlatformRootList,
 	PlatformRootQuery,
 	PlatformTarget,
 	PlatformWaitForRequest,
@@ -149,18 +150,29 @@ export const macosBackend: Pick<
 		return parseApps(await macosHelper.command<unknown>("listApps", {}, { signal }));
 	},
 
-	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
+	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRootList> {
 		const pid = macosRootPidFilter(query.pid);
-		return parseRoots(
-			await macosHelper.command<unknown>(
-				"listRoots",
-				{
-					...(pid === undefined ? {} : { pid }),
-					...(query.title?.trim() ? { title: query.title.trim() } : {}),
-				},
-				{ signal },
-			),
+		const reply = await macosHelper.command<unknown>(
+			"listRoots",
+			{
+				...(pid === undefined ? {} : { pid }),
+				...(query.title?.trim() ? { title: query.title.trim() } : {}),
+			},
+			{ signal },
 		);
+		// A partial listing still resolves the roots it names by identity, but its omissions never prove closure.
+		const complete = (reply as { complete?: unknown } | undefined)?.complete === true;
+		if (query.authoritative && !complete)
+			throw Object.assign(
+				new Error(
+					`The Accessibility root inventory${pid === undefined ? "" : ` of pid ${pid}`} is not known to be complete; its missing roots are unknown, not closed.`,
+				),
+				{ code: "inventory_incomplete" },
+			);
+		const roots: PlatformRootList = parseRoots(reply);
+		// A reply without `complete: true`, e.g. from an older external helper, is partial.
+		if (!complete) roots.complete = false;
+		return roots;
 	},
 
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
@@ -242,6 +254,16 @@ export const macosBackend: Pick<
 		args: PlatformWaitForRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformWaitForResponse> {
-		return await macosHelper.command("axWaitFor", normalizeTarget(args), options);
+		const reply = await macosHelper.command<PlatformWaitForResponse & { complete?: unknown }>(
+			"axWaitFor",
+			normalizeTarget(args),
+			options,
+		);
+		// Only a helper that reports `complete` walked and read the whole scope; anything else fails closed.
+		if (args.gone && reply?.found && reply.complete !== true) {
+			const { gone: _gone, ...rest } = reply;
+			return { ...rest, found: false, incomplete: true };
+		}
+		return reply;
 	},
 };

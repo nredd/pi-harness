@@ -447,17 +447,30 @@ confirmed foreground modal, so they can disagree with `act_ui` about which root 
 ### Post-action outcomes
 
 Terminal `act_ui` results say the action was delivered, or, after a timed-out or otherwise indeterminate action, name it
-(`Action N timed out; whether it was delivered is unknown.`) and say not to replay the transaction, and:
+(`Action N timed out; whether it was delivered is unknown.`) and say not to replay the transaction, or, when the settled
+outcome is otherwise `unknown`, say `Delivery of the action is unknown` and not to replay the transaction, and:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new window, dialog or sheet
   roots of the same pid appeared and are still live (menus and popovers do not count). Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: the root is still listed but the helper answers
   `root_not_found` for its ref (matched on the error code, not the message). A failed probe stays generic. Rediscover with `find_roots`.
-- The identity probe proves `target_closed` only from successful listings: a probe that fails after an
-  empty listing leaves the outcome `post_action_observation_failed`. macOS and Windows listings carry no
-  completeness information, so an empty listing from them is still read as closure; only the Linux helper
-  fails a PID-scoped listing that timed out instead of returning it empty.
+- The identity probe proves `target_closed` only from a complete listing: it asks for an authoritative
+  listing, and a probe that fails leaves the outcome `post_action_observation_failed`, even after an
+  empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
+  reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
+  their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
+  process has exited. A failed size read is retried once unless the window's paired CG bounds already
+  admit it, and the window is filtered on the retry's value. A partial listing still resolves the roots
+  it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
+  identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
+  `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
+  `observe_ui` without a root does the same for an omitted frontmost window. The macOS client fails an
+  authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
+  an older external helper that has no `complete` field, and reads such a reply as partial.
+  Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
+  `focused` only after one. Windows listings carry no completeness information, so an empty listing from
+  them is still read as closure.
 
 ### Ref lifecycle
 
@@ -1786,10 +1799,34 @@ act_ui({
 })
 ```
 
-Verification reports `verified`, `preexisting`, or `failed`. A preexisting
-condition means the requested end state holds, but is not evidence that the
-action caused it. Use `ref` for one exact element or `scopeRef` for a subtree;
-role-only conditions must be scoped, and value checks require an exact `ref`.
+Verification reports `verified`, `preexisting`, `failed`, or `inconclusive`. A
+preexisting condition means the requested end state holds, but is not evidence
+that the action caused it. Use `ref` for one exact element or `scopeRef` for a
+subtree; role-only conditions must be scoped, and value checks require an exact
+`ref`.
+
+An `absent` condition holds only on complete evidence. The helper must walk the
+whole scope and read every field the condition tests (the macOS walk stops at
+depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
+without the helper's `complete: true`, e.g. from an older external helper, as
+incomplete. The successor observation, captured from the exact root the wait read
+(its native ref or window id, never a same-title window and never a foreground
+modal that opened meanwhile), must neither show the
+condition nor mark a node `truncated` in the scope, above it or, unless the
+scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
+missing from the successor proves nothing while the condition shows anywhere in
+it. A root closure proven from a complete listing also settles it. Otherwise
+`act_ui` reports the check `inconclusive` with `postcondition_inconclusive`,
+keeping the delivery outcome from before the check (its message claims delivery
+only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
+instead of `gone`, with `unreadRefs` only when the successor has unread nodes
+there. When the root of a claimed absence cannot be observed or resolved by that
+identity afterward, `wait_for` returns `inconclusive: true` with `observationError` and no successor
+state. A `wait_for` that timed out while the helper still saw the condition is a
+failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
+failed successor observation after it, or after any presence wait, is an error.
+The Windows UIA wait still answers `gone` from a truncated walk; only the
+successor's `truncated` root catches that.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 
@@ -2860,15 +2897,27 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results say the action was delivered, or name the timed-out or otherwise indeterminate action and say its delivery is unknown, and:
+Terminal `act_ui` results say the action was delivered, name the timed-out or otherwise indeterminate action and say its delivery is unknown, or say its delivery is unknown when the settled outcome is otherwise `unknown` (and not to replay it), and:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
-- The identity probe proves `target_closed` only from successful listings: a probe that fails after an
-  empty listing leaves the outcome `post_action_observation_failed`. macOS and Windows listings carry no
-  completeness information, so an empty listing from them is still read as closure; only the Linux helper
-  fails a PID-scoped listing that timed out instead of returning it empty.
+- The identity probe proves `target_closed` only from a complete listing: it asks for an authoritative
+  listing, and a probe that fails leaves the outcome `post_action_observation_failed`, even after an
+  empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
+  reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
+  their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
+  process has exited. A failed size read is retried once unless the window's paired CG bounds already
+  admit it, and the window is filtered on the retry's value. A partial listing still resolves the roots
+  it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
+  identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
+  `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
+  `observe_ui` without a root does the same for an omitted frontmost window. The macOS client fails an
+  authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
+  an older external helper that has no `complete` field, and reads such a reply as partial.
+  Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
+  `focused` only after one. Windows listings carry no completeness information, so an empty listing from
+  them is still read as closure.
 
 ## Ref lifecycle
 

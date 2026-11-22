@@ -287,4 +287,285 @@ func runRefLookAssertions() {
     "present empty scroll extent is not treated as absent")
   print("macos ref ownership and look serialization checks passed")
   runAXTraversalAssertions()
+  runAbsenceEvidenceAssertions()
+}
+
+/// A failed read, a bounded walk or a partial root listing never proves absence (#1242, #1243).
+private func runAbsenceEvidenceAssertions() {
+  final class Node {
+    let name: String
+    init(_ name: String) { self.name = name }
+  }
+  func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() {
+      print("FAIL: \(message)")
+      exit(1)
+    }
+  }
+  func world(children: [String: [Node]], unreadable: Set<String> = []) -> AXTraversalWorld<Node> {
+    AXTraversalWorld<Node>(
+      role: { _ in "AXGroup" },
+      childLists: { unreadable.contains($0.name) ? nil : (children[$0.name] ?? [], nil) },
+      sameElement: { $0.name == $1.name }, hash: { $0.name.hashValue })
+  }
+
+  check(axReadEvidence(.success) == .present, "a successful read is present")
+  check(
+    [AXError.noValue, .attributeUnsupported, .invalidUIElement].allSatisfy { axReadEvidence($0) == .absent },
+    "no value, an unsupported attribute and a destroyed element are authoritative absence")
+  check(
+    [AXError.cannotComplete, .apiDisabled, .failure, .notImplemented].allSatisfy { axReadEvidence($0) == .failed },
+    "a timeout or any other failure proves nothing")
+
+  // A chain one level past the waitFor depth limit: its last node lies below the cut.
+  let limit = waitForMaxDepth
+  let chain = (0...(limit + 1)).map { Node("n\($0)") }
+  var chainChildren: [String: [Node]] = [:]
+  for depth in 0...limit { chainChildren[chain[depth].name] = [chain[depth + 1]] }
+  let deep = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: limit, maxNodes: waitForMaxNodes, checkFrontier: true)
+  check(deep.nodes.count == limit + 1 && !deep.complete, "a node below the depth limit leaves the walk incomplete")
+  let unchecked = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: limit, maxNodes: waitForMaxNodes, checkFrontier: false)
+  check(unchecked.nodes.count == limit + 1, "an unchecked frontier walks the same nodes")
+  let whole = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: limit + 1, maxNodes: waitForMaxNodes, checkFrontier: true)
+  check(whole.nodes.count == limit + 2 && whole.complete, "a leaf at the depth limit completes the walk")
+  let frontierUnread = world(children: chainChildren, unreadable: [chain[limit].name])
+    .walk(startingAt: chain[0], maxDepth: limit, maxNodes: waitForMaxNodes, checkFrontier: true)
+  check(!frontierUnread.complete, "an unreadable node at the depth limit may have children")
+  let budget = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 20, maxNodes: 5, checkFrontier: true)
+  check(budget.nodes.count == 5 && !budget.complete, "the node budget leaves the walk incomplete")
+  let wide = world(children: ["root": (0..<5).map { Node("c\($0)") }])
+    .walk(startingAt: Node("root"), maxDepth: 20, maxNodes: 3, checkFrontier: true)
+  check(!wide.complete, "children cut by the queue budget leave the walk incomplete")
+  let unreadable = world(children: chainChildren, unreadable: ["n5"])
+    .walk(startingAt: chain[0], maxDepth: 20, maxNodes: waitForMaxNodes, checkFrontier: true)
+  check(unreadable.nodes.count == 6 && !unreadable.complete, "a failed child read leaves the walk incomplete")
+
+  // The production `waitFor` pass (#1243): a match beyond its depth or node budget leaves absence undecided.
+  func verdict(_ pass: AXWaitPass<Node>) -> String {
+    switch pass.verdict {
+    case .found: return "found"
+    case .absent: return "absent"
+    case .undecided: return "undecided"
+    }
+  }
+  let chainWorld = world(children: chainChildren)
+  func named(_ name: String) -> (Node) -> Bool? { { $0.name == name } }
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: false, matches: named(chain[limit + 1].name))) == "undecided",
+    "a match one level below the depth cut is undecided, never gone")
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: false, matches: named(chain[limit].name))) == "found",
+    "a match at the depth limit is found")
+  var shallowChildren = chainChildren
+  shallowChildren[chain[limit].name] = nil
+  let shallow = world(children: shallowChildren)
+  check(
+    verdict(shallow.waitPass(startingAt: chain[0], scopeExact: false) { _ in false }) == "absent",
+    "a whole, fully read scope without a match proves absence")
+  check(
+    verdict(shallow.waitPass(startingAt: chain[0], scopeExact: false) { $0.name == "n3" ? nil : false }) == "undecided",
+    "an unread predicate field leaves absence undecided")
+  check(
+    verdict(shallow.waitPass(startingAt: chain[0], scopeExact: false) { $0.name == "n2" ? nil : $0.name == "n3" }) == "found",
+    "a later match wins over an undecided node")
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: true, matches: named("n1"))) == "absent",
+    "an exact scope tests only its own element")
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: true, matches: named("n0"))) == "found",
+    "an exact scope matches itself")
+  // The root and `waitForMaxNodes` children: the queue budget cuts the last child.
+  let crowd = (0..<waitForMaxNodes).map { Node("k\($0)") }
+  let crowdWorld = world(children: ["crowd": crowd])
+  let lastChild = "k\(waitForMaxNodes - 1)"
+  check(
+    verdict(crowdWorld.waitPass(startingAt: Node("crowd"), scopeExact: false, matches: named(lastChild))) == "undecided",
+    "a match past the node budget is undecided, never gone")
+  check(
+    verdict(crowdWorld.waitPass(startingAt: Node("crowd"), scopeExact: false, matches: named("k\(waitForMaxNodes - 2)"))) == "found",
+    "a match inside the node budget is found")
+
+  func fields(_ values: [AXWaitField: AXStringRead]) -> (AXWaitField) -> AXStringRead {
+    { values[$0] ?? .absent }
+  }
+  let button: [AXWaitField: AXStringRead] = [.role: .value("AXButton"), .title: .value("Save"), .value: .value(" On ")]
+  check(axWaitConditionMatch(role: "AXButton", text: "save", value: "on", read: fields(button)) == true, "every predicate read and matched")
+  check(axWaitConditionMatch(role: "AXLink", text: nil, value: nil, read: fields(button)) == false, "a read role mismatch")
+  check(axWaitConditionMatch(role: "AXButton", text: "open", value: nil, read: fields(button)) == false, "read text mismatch")
+  check(axWaitConditionMatch(role: nil, text: nil, value: "off", read: fields(button)) == false, "read value mismatch")
+  check(axWaitConditionMatch(role: "AXButton", text: nil, value: nil, read: fields([:])) == false, "an absent role cannot match")
+  check(axWaitConditionMatch(role: nil, text: nil, value: "on", read: fields([:])) == false, "an absent value cannot match")
+  check(axWaitConditionMatch(role: "AXButton", text: nil, value: nil, read: fields([.role: .failed])) == nil, "a failed role read is undecided")
+  check(
+    axWaitConditionMatch(role: nil, text: "save", value: nil, read: fields([.title: .failed, .description: .value("Other")])) == nil,
+    "an unread text field leaves the text undecided")
+  check(
+    axWaitConditionMatch(role: nil, text: "save", value: nil, read: fields([.title: .failed, .description: .value("Save")])) == true,
+    "text read elsewhere still matches")
+  check(axWaitConditionMatch(role: nil, text: nil, value: "on", read: fields([.value: .failed])) == nil, "a failed value read is undecided")
+  check(
+    axWaitConditionMatch(role: "AXLink", text: "save", value: nil, read: fields([.role: .value("AXButton"), .title: .failed])) == false,
+    "a read mismatch decides despite another failed read")
+
+  check(windowListComplete(0) && windowListComplete(windowListCap), "a read window list within the cap is complete")
+  check(!windowListComplete(nil) && !windowListComplete(windowListCap + 1), "a failed or over-cap window list is incomplete")
+
+  let main: [String: Any] = ["title": "Main", "isFocused": false]
+  let sheet: [String: Any] = ["title": "Sheet", "isFocused": true]
+  let fresh: [String: Any] = ["title": "Fresh", "isFocused": true]
+  func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> Set<String> {
+    Set(rootInventoryChanges(before: before, after: after).map { "\($0.change):\($0.root["title"] as? String ?? "")" })
+  }
+  let both = RootInventorySnapshot(roots: ["w": main, "s": sheet], complete: true)
+  check(
+    changes(both, RootInventorySnapshot(roots: ["w": main], complete: true)) == ["closed:Sheet"],
+    "a root missing from a complete listing closed")
+  check(
+    changes(both, RootInventorySnapshot(roots: ["w": main], complete: false)).isEmpty,
+    "a root missing from an incomplete listing is unknown, not closed")
+  check(
+    changes(RootInventorySnapshot(roots: ["w": main], complete: true), RootInventorySnapshot(roots: ["w": main, "f": fresh], complete: false))
+      == ["appeared:Fresh", "focused:Fresh"],
+    "a root seen in an incomplete listing still appeared after a complete one")
+  check(
+    changes(RootInventorySnapshot(roots: ["w": main], complete: false), RootInventorySnapshot(roots: ["w": main, "f": fresh], complete: true)).isEmpty,
+    "a root missing from an incomplete earlier listing neither appeared nor gained focus")
+  check(
+    changes(
+      RootInventorySnapshot(roots: ["w": main], complete: false),
+      RootInventorySnapshot(roots: ["w": ["title": "Main", "isFocused": true]], complete: true)) == ["focused:Main"],
+    "a root seen in both listings gained focus")
+  check(changes(both, both).isEmpty, "unchanged listings report nothing")
+  runWindowInventoryAssertions()
+  print("macos absence evidence checks passed")
+}
+
+/// Production inventory assembly (`WindowInventoryWorld.listing` and `select`) over injected AX reads (#1242).
+private func runWindowInventoryAssertions() {
+  func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() {
+      print("FAIL: \(message)")
+      exit(1)
+    }
+  }
+  func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> Set<String> {
+    Set(rootInventoryChanges(before: before, after: after).map { "\($0.change):\($0.root["title"] as? String ?? "")" })
+  }
+  final class Window {
+    let name: String
+    init(_ name: String) { self.name = name }
+  }
+  /// Scripted AX replies: each `size` read consumes the window's next reply, then repeats the last one.
+  final class Script {
+    var windows: [Window]?
+    var fallback: [Window] = []
+    var sizes: [String: [AXSizeRead]] = [:]
+    var sheets: [String: (sheets: [Window], complete: Bool)] = [:]
+    var sizeReads = 0
+    init(windows: [Window]?) { self.windows = windows }
+    var world: WindowInventoryWorld<Window> {
+      WindowInventoryWorld<Window>(
+        windows: { self.windows }, fallbackWindows: { self.fallback }, position: { _ in .zero },
+        size: { window in
+          self.sizeReads += 1
+          var queue = self.sizes[window.name] ?? [.size(CGSize(width: 800, height: 600))]
+          let reply = queue.removeFirst()
+          self.sizes[window.name] = queue.isEmpty ? [reply] : queue
+          return reply
+        },
+        sheets: { self.sheets[$0.name] ?? ([], true) })
+    }
+    func select(paired: [String: CGRect] = [:]) -> WindowInventorySelection<Window> {
+      world.select(world.listing()) { paired[$0.name] }
+    }
+  }
+  func snapshot(_ selection: WindowInventorySelection<Window>) -> RootInventorySnapshot {
+    var roots: [String: [String: Any]] = [:]
+    for kept in selection.windows {
+      roots[kept.element.name] = ["title": kept.element.name, "isFocused": false]
+      for sheet in kept.sheets { roots[sheet.name] = ["title": sheet.name, "isFocused": false] }
+    }
+    return RootInventorySnapshot(roots: roots, complete: selection.complete)
+  }
+  func names(_ selection: WindowInventorySelection<Window>) -> [String] { selection.windows.map { $0.element.name } }
+  let main = Window("main")
+  let unfocused = Window("unfocused")
+  let sheet = Window("sheet")
+  // The complete earlier listing: the focused main window, an unfocused window and its sheet.
+  let before = RootInventorySnapshot(
+    roots: Dictionary(uniqueKeysWithValues: ["main", "unfocused", "sheet"].map { ($0, ["title": $0, "isFocused": false] as [String: Any]) }),
+    complete: true)
+
+  let whole = Script(windows: [main, unfocused])
+  whole.sheets["unfocused"] = ([sheet], true)
+  let wholeSelection = whole.select()
+  check(names(wholeSelection) == ["main", "unfocused"] && wholeSelection.complete, "every read succeeded: a complete inventory")
+  check(wholeSelection.windows[1].sheets.map(\.name) == ["sheet"], "a listed window carries its sheet")
+  check(changes(before, snapshot(wholeSelection)).isEmpty, "a complete unchanged inventory reports nothing")
+  let closed = Script(windows: [main])
+  check(changes(before, snapshot(closed.select())) == ["closed:unfocused", "closed:sheet"], "a complete inventory proves closure")
+
+  // An `AXWindows` timeout falls back to the main/focused window: the unfocused window and its sheet are unknown.
+  let timedOut = Script(windows: nil)
+  timedOut.fallback = [main]
+  let timedOutSelection = timedOut.select()
+  check(names(timedOutSelection) == ["main"] && !timedOutSelection.complete, "a failed AXWindows read leaves the inventory incomplete")
+  check(changes(before, snapshot(timedOutSelection)).isEmpty, "a timed-out window list closes neither the unfocused window nor its sheet")
+
+  // A failed sheet read on a live unfocused window: the window stays listed, its sheet is unknown.
+  let sheetTimeout = Script(windows: [main, unfocused])
+  sheetTimeout.sheets["unfocused"] = ([], false)
+  let sheetSelection = sheetTimeout.select()
+  check(names(sheetSelection) == ["main", "unfocused"] && !sheetSelection.complete, "a failed sheet read leaves the inventory incomplete")
+  check(changes(before, snapshot(sheetSelection)).isEmpty, "a sheet missing after a failed sheet read is not closed")
+
+  // The skip filter and its evidence come from one reply; a retry replaces both.
+  let retried = Script(windows: [main, unfocused])
+  retried.sizes["unfocused"] = [.failed, .size(CGSize(width: 800, height: 600))]
+  let retriedSelection = retried.select()
+  check(names(retriedSelection) == ["main", "unfocused"], "a size read that succeeds on retry keeps the window")
+  check(retriedSelection.complete && retriedSelection.windows[1].axFrame.size == CGSize(width: 800, height: 600), "the retry's size frames the window")
+  check(retried.sizeReads == 3, "only a failed size read is retried, once")
+  let unreadable = Script(windows: [main, unfocused])
+  unreadable.sizes["unfocused"] = [.failed]
+  let unreadableSelection = unreadable.select()
+  check(names(unreadableSelection) == ["main"] && !unreadableSelection.complete, "an unpaired window whose size stays unreadable is unknown")
+  check(changes(before, snapshot(unreadableSelection)).isEmpty, "an unreadable window is not closed")
+  let pairedUnreadable = Script(windows: [main, unfocused])
+  pairedUnreadable.sizes["unfocused"] = [.failed]
+  let pairedSelection = pairedUnreadable.select(paired: ["unfocused": CGRect(x: 5, y: 5, width: 400, height: 300)])
+  check(
+    names(pairedSelection) == ["main", "unfocused"] && pairedSelection.complete
+      && pairedSelection.windows[1].effectiveFrame == CGRect(x: 5, y: 5, width: 400, height: 300),
+    "a paired window falls back to its CG bounds")
+  check(pairedUnreadable.sizeReads == 2, "usable paired bounds admit a window without retrying its failed size read")
+  let small = Script(windows: [main, unfocused])
+  small.sizes["unfocused"] = [.size(CGSize(width: 50, height: 40))]
+  let smallSelection = small.select()
+  check(names(smallSelection) == ["main"] && smallSelection.complete, "a window read as too small is skipped without doubt")
+  let pairedSmall = Script(windows: [main, unfocused])
+  pairedSmall.sizes["unfocused"] = [.failed]
+  check(pairedSmall.select(paired: ["unfocused": CGRect(x: 0, y: 0, width: 50, height: 40)]).complete, "a too-small paired window is skipped on its CG bounds")
+  check(pairedSmall.sizeReads == 3, "paired bounds that do not admit the window leave its failed size read retried")
+  let pairedRetried = Script(windows: [main, unfocused])
+  pairedRetried.sizes["unfocused"] = [.failed, .size(CGSize(width: 800, height: 600))]
+  let pairedRetriedSelection = pairedRetried.select(paired: ["unfocused": CGRect(x: 0, y: 0, width: 50, height: 40)])
+  check(
+    names(pairedRetriedSelection) == ["main", "unfocused"] && pairedRetriedSelection.complete
+      && pairedRetriedSelection.windows[1].effectiveFrame.size == CGSize(width: 800, height: 600),
+    "the retry's readable size admits a window its paired bounds would skip")
+  let sizeless = Script(windows: [main, unfocused])
+  sizeless.sizes["unfocused"] = [.absent]
+  check(sizeless.select().complete, "a window without a size attribute is skipped without doubt")
+
+  // Over the cap the listed windows still resolve, but a window past the cap is unknown, never closed.
+  let many = (0...windowListCap).map { Window("w\($0)") }
+  let overCap = Script(windows: many)
+  let overCapSelection = overCap.select()
+  check(overCapSelection.windows.count == windowListCap && !overCapSelection.complete, "an over-cap list is capped and incomplete")
+  check(names(overCapSelection).contains("w5"), "an existing target still resolves from an over-cap list")
+  let beforeMany = RootInventorySnapshot(
+    roots: Dictionary(uniqueKeysWithValues: many.map { ($0.name, ["title": $0.name, "isFocused": false] as [String: Any]) }),
+    complete: true)
+  check(changes(beforeMany, snapshot(overCapSelection)).isEmpty, "a window past the cap is unknown, not closed")
 }
