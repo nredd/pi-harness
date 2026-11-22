@@ -8,6 +8,7 @@
  * `HARNESS_USAGE_STATE` points at a JSON file re-read on EVERY request, so a scenario changes what
  * the next poll sees by rewriting it:
  *   { "mode": "ok" | "hang" | "error", "snapshots": [UsageSnapshot, ...], "blocks": [...] }
+ * An optional `views` array adds `version: 2` and `views` to the reply, even when empty.
  * `hang` never replies (the footer's request timeout), `error` replies `{ success: false }`.
  * `HARNESS_USAGE_LOG` receives one JSON line per request: `{ "t": <epoch ms>, "refresh": <param>, "ready": <startup finished> }`.
  * It also sets one extension status, so a scenario can prove the status line is left intact.
@@ -24,6 +25,7 @@ interface State {
 	mode?: "ok" | "hang" | "error";
 	snapshots?: unknown[];
 	blocks?: unknown[];
+	views?: unknown[];
 }
 
 function readState(): State {
@@ -63,7 +65,11 @@ export default function (pi: ExtensionAPI) {
 		}
 		pi.events.emit(reply, {
 			success: true,
-			data: { snapshots: state.snapshots ?? [], blocks: state.blocks ?? [] },
+			data: {
+				snapshots: state.snapshots ?? [],
+				blocks: state.blocks ?? [],
+				...(state.views === undefined ? {} : { version: 2, views: state.views }),
+			},
 		});
 	});
 }

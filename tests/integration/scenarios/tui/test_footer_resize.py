@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pi_release.stack import find_package
 
-from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, install_usage_fixture
+from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, install_usage_fixture, view
 from harness.sessions import write_session
 
 if TYPE_CHECKING:
@@ -164,3 +164,51 @@ def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[
     for width, height in ((60, 24), (320, 60), (120, 40)):
         pane.resize(width, height)
         assert_footer(pane, width, resets=resets)
+
+
+def test_google_meter_reaches_the_quota_footer(sandbox: Sandbox, tui: Callable[..., TmuxPane]) -> None:
+    """A faux `google` model shows its observed count, not subscription headroom.
+
+    Parameters:
+        sandbox (Sandbox): private installed stack.
+        tui (Callable[..., TmuxPane]): actual terminal launcher for that sandbox.
+    """
+    if (sandbox.agent_dir / "stack-name").read_text() != "local":
+        pytest.skip("The metered footer scenario targets the workspace preset, not a published pin")
+    preset = find_package("pi-preset", sandbox.settings()["packages"], sandbox.agent_dir)
+    # Slice 9 removes the hard-coded provider table. Keep the scenario runnable in parallel with it.
+    if "const QUOTA_PROVIDERS" in (preset / "src/footer-quota.ts").read_text():
+        pytest.skip("#1178 slice 9 must remove the legacy footer's provider allowlist")
+    usage = install_usage_fixture(sandbox)
+    google = view(
+        "google",
+        "Google",
+        "Goog",
+        access="metered",
+        meters=[
+            {
+                "name": "rpd",
+                "scope": "model",
+                "families": ["faux-fast"],
+                "kind": "calendar",
+                "basis": "observed",
+                "quantity": {"unit": "requests", "used": 37, "limit": 250},
+                "resetRule": {"at": "00:00", "timeZone": "America/Los_Angeles", "every": "day"},
+            },
+        ],
+    )
+    usage.set(views=[google])
+    row = (
+        r"(?m)^\s*(?:Quota left:|Left:)\s+Goog(?:le)?\b[^\n]*"
+        r"\b37/250\s+req(?:uests)?\s+obs(?:erved)?\b[^\n]*$"
+    )
+    screen = tui(
+        {"providers": {"google": {"models": ["faux-fast"], "steps": []}}},
+        model="google/faux-fast",
+        extra_args=["-e", str(USAGE_FIXTURE_EXTENSION)],
+        env=fixture_env(usage),
+        wait_pattern=STATUS,
+    ).wait_for(row)
+    match = re.search(row, screen)
+    assert match is not None, screen
+    assert "%" not in match[0], screen

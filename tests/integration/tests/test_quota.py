@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from harness import quota
+from harness.paths import REPO_ROOT
 from harness.sandbox import Sandbox, build_sandbox
 
 if TYPE_CHECKING:
@@ -124,6 +125,69 @@ def test_set_rewrites_state_and_omits_missing_providers(tmp_path: Path) -> None:
     fixture.set()
     assert json.loads(fixture.state_path.read_text()) == {"mode": "ok", "snapshots": [], "blocks": []}
     assert not fixture.log_path.exists()
+
+
+@pytest.mark.parametrize("fixture_name", ["legacy-reported", "metered"])
+def test_view_matches_shared_contract(fixture_name: str) -> None:
+    """Mirror the shared v2 provider views, with and without optional fields.
+
+    Parameters:
+        fixture_name (str): shared view scenario.
+    """
+    path = REPO_ROOT.parents[1] / "packages/subscription-router/tests/fixtures/views.json"
+    cases = json.loads(path.read_text())["views"]
+    case = next(case for case in cases if case["name"] == fixture_name)
+    for expected in case["usage"]["views"]:
+        display = expected["display"]
+        assert (
+            quota.view(
+                expected["provider"],
+                display["full"],
+                display["compact"],
+                access=expected["access"],
+                display_footer=display.get("footer"),
+                reading=expected.get("snapshot"),
+                meters=expected["meters"],
+                pools=expected["pools"],
+                marks=expected["marks"],
+            )
+            == expected
+        )
+
+
+def test_set_writes_views_without_widening_legacy_snapshots(tmp_path: Path) -> None:
+    """Keep a metered `google` request count distinct from collected usage windows.
+
+    Parameters:
+        tmp_path (Path): private state and log files.
+    """
+    fixture = quota.UsageFixture(tmp_path / "state.json", tmp_path / "log.jsonl")
+    meter = {
+        "name": "rpd",
+        "scope": "model",
+        "families": ["faux-fast"],
+        "kind": "calendar",
+        "basis": "observed",
+        "quantity": {"unit": "requests", "used": 37, "limit": 250},
+    }
+    google = quota.view("google", "Google", "Goog", access="metered", meters=[meter])
+    fixture.set(anthropic=(20, 40), views=[google])
+    state = json.loads(fixture.state_path.read_text())
+    assert [s["provider"] for s in state["snapshots"]] == ["anthropic"]
+    assert state["views"] == [
+        {
+            "provider": "google",
+            "display": {"full": "Google", "compact": "Goog"},
+            "access": "metered",
+            "meters": [meter],
+            "pools": [],
+            "marks": [],
+        }
+    ]
+    fixture.set(views=[])
+    assert json.loads(fixture.state_path.read_text())["views"] == []
+    fixture.set()
+    assert "views" not in json.loads(fixture.state_path.read_text())
 
 
 def test_install_removes_only_the_router_and_seeds_empty_state(tmp_path: Path) -> None:

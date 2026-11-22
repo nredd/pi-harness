@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pi_release.stack import find_package, package_directory
 
@@ -80,6 +80,50 @@ def snapshot(
     }
 
 
+def view(
+    provider: str,
+    full: str,
+    compact: str,
+    *,
+    access: Literal["subscription", "metered", "unknown"] = "unknown",
+    display_footer: dict[str, Any] | None = None,
+    reading: dict[str, Any] | None = None,
+    meters: list[dict[str, Any]] | None = None,
+    pools: list[dict[str, Any]] | None = None,
+    marks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a router `ProviderView`, independent of the legacy collected-provider list.
+
+    Parameters:
+        provider (str): Pi provider ID.
+        full (str): full display label.
+        compact (str): compact display label.
+        access (str): access classification.
+        display_footer (dict[str, Any] | None): optional footer display options.
+        reading (dict[str, Any] | None): optional usage snapshot.
+        meters (list[dict[str, Any]] | None): non-percent usage windows.
+        pools (list[dict[str, Any]] | None): credit pools.
+        marks (list[dict[str, Any]] | None): active exhaustion marks.
+
+    Returns:
+        dict[str, Any]: JSON-ready provider view.
+    """
+    display: dict[str, Any] = {"full": full, "compact": compact}
+    if display_footer is not None:
+        display["footer"] = display_footer
+    result = {
+        "provider": provider,
+        "display": display,
+        "access": access,
+        "meters": meters or [],
+        "pools": pools or [],
+        "marks": marks or [],
+    }
+    if reading is not None:
+        result["snapshot"] = reading
+    return result
+
+
 @dataclass(frozen=True)
 class UsageFixture:
     """The fixture's state file and request log inside one sandbox.
@@ -99,6 +143,7 @@ class UsageFixture:
         *,
         mode: str = "ok",
         statuses: tuple[str, str] = ("available", "available"),
+        views: list[dict[str, Any]] | None = None,
     ) -> None:
         """Rewrite the state; a `None` provider is omitted from `snapshots` (missing data).
 
@@ -107,6 +152,7 @@ class UsageFixture:
             codex (tuple[float, float] | None): same for OpenAI Codex.
             mode (str): `ok`, `hang` or `error`.
             statuses (tuple[str, str]): snapshot status for Anthropic and Codex.
+            views (list[dict[str, Any]] | None): opt into a v2 reply, including for an empty list.
         """
         snapshots = [
             snapshot(provider, used, status=status)
@@ -116,7 +162,10 @@ class UsageFixture:
             )
             if used is not None
         ]
-        self.state_path.write_text(json.dumps({"mode": mode, "snapshots": snapshots, "blocks": []}))
+        state: dict[str, Any] = {"mode": mode, "snapshots": snapshots, "blocks": []}
+        if views is not None:
+            state["views"] = views
+        self.state_path.write_text(json.dumps(state))
 
 
 def install_usage_fixture(box: Sandbox, *, keep_router: bool = False) -> UsageFixture:
