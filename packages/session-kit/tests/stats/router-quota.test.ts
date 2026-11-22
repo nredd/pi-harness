@@ -1,8 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
-import { beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readRouterQuota } from "../../src/stats/router-quota.ts";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const NOW = 1_800_000_000_000;
 let dir: string;
@@ -13,6 +16,28 @@ beforeEach(({ onTestFinished }) => {
 	const root = join(dir, "router-state", "v1");
 	mkdirSync(root, { recursive: true });
 	view = join(root, "view.json");
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+const validView = `[{"provider":"future-provider","marks":[{"window":"daily","until":${NOW + 60_000}}]}]`;
+
+it.each([false, true])("rejects oversized files with a valid first chunk (grew after stat: %s)", async (grew) => {
+	writeFileSync(view, validView + " ".repeat(1024 * 1024));
+	const file = await fs.open(view);
+	const info = await file.stat();
+	if (grew) vi.spyOn(file, "stat").mockResolvedValue(Object.assign(info, { size: validView.length }));
+	const read = file.read.bind(file);
+	const shortRead = vi
+		.spyOn(file, "read")
+		.mockImplementationOnce((options) => read({ ...options, length: validView.length }));
+	vi.mocked(fs.open).mockResolvedValueOnce(file);
+	try {
+		expect(await readRouterQuota(dir, NOW)).toEqual([]);
+		expect(shortRead).toHaveBeenCalledTimes(grew ? 2 : 0);
+	} finally {
+		await file.close();
+	}
 });
 
 it("fails open for a missing, corrupt, non-file or oversized view", async () => {

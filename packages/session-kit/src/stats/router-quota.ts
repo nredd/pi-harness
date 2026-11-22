@@ -143,11 +143,16 @@ export async function readRouterQuota(agentDir: string, now: number): Promise<Qu
 		);
 		try {
 			const info = await file.stat();
-			if (!info.isFile()) return [];
+			if (!info.isFile() || info.size > MAX_VIEW_BYTES) return [];
 			const buffer = Buffer.alloc(MAX_VIEW_BYTES + 1);
-			const { bytesRead } = await file.read(buffer);
-			if (bytesRead > MAX_VIEW_BYTES) return [];
-			return projectViews(JSON.parse(buffer.toString("utf8", 0, bytesRead)), now);
+			let offset = 0;
+			// Short reads do not establish EOF, and the file can grow after stat.
+			while (offset < buffer.length) {
+				const { bytesRead } = await file.read({ buffer, offset, length: buffer.length - offset, position: offset });
+				if (bytesRead === 0) return projectViews(JSON.parse(buffer.toString("utf8", 0, offset)), now);
+				offset += bytesRead;
+			}
+			return [];
 		} finally {
 			await file.close();
 		}
