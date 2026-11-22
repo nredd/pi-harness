@@ -63,7 +63,14 @@ import {
 } from "./contract.ts";
 import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
 import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import {
+	noteAfterAct,
+	noteForOutline,
+	noteFromLook,
+	noteRegionKeyForRef,
+	renderNote,
+	type WindowNote,
+} from "./note.ts";
 import {
 	controlLine,
 	foldToBudget,
@@ -2289,6 +2296,8 @@ async function performSearchUi(
 		escalatedOCR = true;
 	}
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
+	// A cached query rechecks the note: a graft or a restored session note may name a node no longer readable.
+	const note = noteForOutline(state.currentNote, outline);
 	// Browser snapshots are not partial reads; expand_ui cannot re-read them.
 	const unreadRefs =
 		ranked.totalMatches === 0 && !isBrowserContextId(state.contextId)
@@ -2303,7 +2312,7 @@ async function performSearchUi(
 		totalMatches: ranked.totalMatches,
 		returned: matches.length,
 		hasMore: ranked.totalMatches > matches.length,
-		note: state.currentNote,
+		note,
 		...(inconclusive ? { inconclusive: true as const, unreadRefs } : {}),
 	};
 	const collides = (match: OutlineSearchMatch) =>
@@ -2312,7 +2321,7 @@ async function performSearchUi(
 		(match) =>
 			`${controlLine(match.node)} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score!.toFixed(2)}` : ""}]${collides(match) ? `\n  path: ${match.path}` : ""}`,
 	);
-	const noteHeader = renderNote(state.currentNote);
+	const noteHeader = renderNote(note);
 	const noteText = noteHeader ? `${noteHeader}\n\n` : "";
 	const escalationText = escalatedOCR
 		? " OCR text was escalated for this search after the cached outline had no matches."
@@ -2396,7 +2405,7 @@ async function performExpandUi(
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
 		renderedOutline: folded.text,
-		note: state.currentNote,
+		note: noteForOutline(state.currentNote, outline),
 	};
 	return {
 		content: [
@@ -2419,7 +2428,7 @@ async function performInspectUi(params: InspectUiParams): Promise<AgentToolResul
 		stateId: state.currentCapture?.stateId,
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
-		note: state.currentNote,
+		note: noteForOutline(state.currentNote, outline),
 	};
 	const fields = [
 		formatOutlineNodeLabel(target),
