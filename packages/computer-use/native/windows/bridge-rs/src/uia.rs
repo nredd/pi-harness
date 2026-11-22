@@ -200,6 +200,42 @@ pub fn annotation_can_set_text(signals: &ElementAnnotationSignals) -> bool {
     signals.value && !signals.value_read_only.unwrap_or(false) || signals.text
 }
 
+/// Why an owner-bound UIA walk produced no usable result.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OwnedWalkError {
+    /// The HWND stopped belonging to the admitted PID at one of the checks.
+    RootStale,
+    /// UIA failed while the admitted PID still owned the HWND.
+    Uia(String),
+}
+
+/// Acquire and walk the UIA root of `hwnd` only while `owner_pid` reports `pid`.
+///
+/// The owner is checked before acquisition, after acquisition but before any
+/// traversal, and after the walk; a result or error seen across an owner change
+/// is discarded as [`OwnedWalkError::RootStale`]. Reuse of the exact numeric
+/// HWND and PID pair between checks is indistinguishable.
+pub fn walk_owned_root<R, T>(
+    hwnd: isize,
+    pid: u64,
+    mut owner_pid: impl FnMut(isize) -> Option<u64>,
+    acquire: impl FnOnce(isize) -> Result<R, String>,
+    walk: impl FnOnce(R) -> Result<T, String>,
+) -> Result<T, OwnedWalkError> {
+    let mut owned = || {
+        (owner_pid(hwnd) == Some(pid))
+            .then_some(())
+            .ok_or(OwnedWalkError::RootStale)
+    };
+    owned()?;
+    let root = acquire(hwnd);
+    // ElementFromHandle may have resolved a replacement window.
+    owned()?;
+    let walked = walk(root.map_err(OwnedWalkError::Uia)?);
+    owned()?;
+    walked.map_err(OwnedWalkError::Uia)
+}
+
 // ---------------------------------------------------------------------------
 // Windows implementation  (windows crate)
 // ---------------------------------------------------------------------------
@@ -301,18 +337,36 @@ mod native {
         }
     }
 
-    /// Entry point called from the public stub on cfg(windows).
-    pub fn uia_extract(store: &mut RefStore, hwnd: isize) -> Result<Vec<Value>, String> {
-        crate::desktop::validated_bounds(hwnd, None).map_err(|error| error.to_string())?;
-        let _com = ComGuard::new()?;
-        let uia = automation()?;
+    /// A UIA root acquired for one HWND. Fields drop in order, so COM is
+    /// uninitialized only after both interfaces are released.
+    pub struct UiaRoot {
+        root: IUIAutomationElement,
+        uia: IUIAutomation,
+        com: ComGuard,
+    }
 
+    /// Acquire the UIA root for `hwnd` without walking it.
+    pub fn acquire_root(hwnd: isize) -> Result<UiaRoot, String> {
+        crate::desktop::validated_bounds(hwnd, None).map_err(|error| error.to_string())?;
+        let com = ComGuard::new()?;
+        let uia = automation()?;
+        // SAFETY: COM is initialized; a stale HWND is reported as an HRESULT.
         let root = unsafe {
             uia.ElementFromHandle(HWND(hwnd as *mut _))
                 .map_err(|e| format!("ElementFromHandle: {e}"))?
         };
+        Ok(UiaRoot { root, uia, com })
+    }
 
-        extract_from_root(store, &uia, &root)
+    /// Walk an acquired root into fresh outline elements.
+    pub fn root_elements(root: UiaRoot) -> Result<Vec<Value>, String> {
+        extract_from_root(&mut RefStore::new(), &root.uia, &root.root)
+    }
+
+    /// Entry point called from the public stub on cfg(windows).
+    pub fn uia_extract(store: &mut RefStore, hwnd: isize) -> Result<Vec<Value>, String> {
+        let root = acquire_root(hwnd)?;
+        extract_from_root(store, &root.uia, &root.root)
     }
 
     pub fn uia_extract_from(
@@ -605,12 +659,14 @@ mod native {
         }))
     }
 
-    pub fn read_live_text(
-        hwnd: isize,
+    /// Read the observed element's text inside an acquired root. Callers bind the
+    /// root to its owner with [`super::walk_owned_root`].
+    pub fn read_text_in_root(
+        root: UiaRoot,
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<String, String> {
-        let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        let element = find_in_root(&root, runtime_id_target, automation_id)?;
         // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
         if unsafe { element.CurrentIsPassword() }
             .map_err(|e| format!("CurrentIsPassword: {e}"))?
@@ -1021,28 +1077,36 @@ mod native {
         runtime_id_target: &[i32],
         automation_id: &str,
     ) -> Result<(ComGuard, IUIAutomation, IUIAutomationElement), String> {
-        crate::desktop::validated_bounds(hwnd, None).map_err(|error| error.to_string())?;
         if runtime_id_target.is_empty() {
             return Err("Element reference is stale".to_owned());
         }
-        let com = ComGuard::new()?;
-        let uia = automation()?;
-        let root = unsafe {
-            uia.ElementFromHandle(HWND(hwnd as *mut _))
-                .map_err(|e| format!("ElementFromHandle: {e}"))?
-        };
-        let _discovery = DiscoveryLease::begin(&uia, &root)?;
-        if runtime_id(&root)?.as_slice() == runtime_id_target {
-            ensure_observed_automation_id(&root, automation_id)?;
-            return Ok((com, uia, root));
+        let root = acquire_root(hwnd)?;
+        let element = find_in_root(&root, runtime_id_target, automation_id)?;
+        let UiaRoot { uia, com, .. } = root;
+        Ok((com, uia, element))
+    }
+
+    /// Find the observed element inside an acquired root by RuntimeId.
+    fn find_in_root(
+        root: &UiaRoot,
+        runtime_id_target: &[i32],
+        automation_id: &str,
+    ) -> Result<IUIAutomationElement, String> {
+        if runtime_id_target.is_empty() {
+            return Err("Element reference is stale".to_owned());
+        }
+        let _discovery = DiscoveryLease::begin(&root.uia, &root.root)?;
+        if runtime_id(&root.root)?.as_slice() == runtime_id_target {
+            ensure_observed_automation_id(&root.root, automation_id)?;
+            return Ok(root.root.clone());
         }
         // An AutomationId can be reused after destruction. Never substitute it
         // for the observed RuntimeId, even when only one matching node exists.
-        let (found, _) = bounded_elements(&uia, &root)?;
+        let (found, _) = bounded_elements(&root.uia, &root.root)?;
         for element in found {
             if runtime_id(&element)?.as_slice() == runtime_id_target {
                 ensure_observed_automation_id(&element, automation_id)?;
-                return Ok((com, uia, element));
+                return Ok(element);
             }
         }
         Err("Element reference is stale".to_owned())
@@ -1125,8 +1189,9 @@ mod native {
 
 #[cfg(windows)]
 pub use native::{
-    focus, focus_for_input, live_elements, occlusion_ok, press, read_live_text, scroll, set_text,
-    snapshot, uia_extract, ElementSnapshot, PressResult, ScrollResult, SetTextResult,
+    acquire_root, focus, focus_for_input, live_elements, occlusion_ok, press, read_text_in_root,
+    root_elements, scroll, set_text, snapshot, uia_extract, ElementSnapshot, PressResult,
+    ScrollResult, SetTextResult, UiaRoot,
 };
 
 #[cfg(not(windows))]
@@ -1155,12 +1220,23 @@ pub enum ScrollResult {
     NoPattern,
 }
 #[cfg(not(windows))]
-pub fn read_live_text(
-    _hwnd: isize,
+pub fn read_text_in_root(
+    root: UiaRoot,
     _runtime_id: &[i32],
     _automation_id: &str,
 ) -> Result<String, String> {
+    match root {}
+}
+/// Uninhabited off Windows: no UIA root can be acquired.
+#[cfg(not(windows))]
+pub enum UiaRoot {}
+#[cfg(not(windows))]
+pub fn acquire_root(_hwnd: isize) -> Result<UiaRoot, String> {
     Err("UIA is only supported on Windows".to_owned())
+}
+#[cfg(not(windows))]
+pub fn root_elements(root: UiaRoot) -> Result<Vec<Value>, String> {
+    match root {}
 }
 #[cfg(not(windows))]
 pub fn live_elements(_hwnd: isize) -> Result<Vec<Value>, String> {
@@ -1266,6 +1342,36 @@ mod unit_tests {
         let mut store = RefStore::new();
         let result = extract_elements(&mut store, 0);
         assert!(result.is_empty());
+    }
+
+    // -- Owner-bound walk ----------------------------------------------------
+
+    #[test]
+    fn owned_walk_reports_an_acquire_refusal_across_owner_loss_as_root_stale() {
+        // `acquire_root` refuses a closed HWND through its own desktop check.
+        for after in [None, Some(8)] {
+            let mut owners = [Some(7), after].into_iter();
+            let result = walk_owned_root(
+                22,
+                7,
+                |_| owners.next().expect("unexpected owner check"),
+                |_| -> Result<(), String> { Err("coordinate_blocked".to_owned()) },
+                |()| -> Result<(), String> { panic!("must not walk a refused root") },
+            );
+            assert_eq!(result, Err(OwnedWalkError::RootStale));
+        }
+        let mut owners = [Some(7), Some(7)].into_iter();
+        let result = walk_owned_root(
+            22,
+            7,
+            |_| owners.next().expect("unexpected owner check"),
+            |_| -> Result<(), String> { Err("coordinate_blocked".to_owned()) },
+            |()| -> Result<(), String> { panic!("must not walk a refused root") },
+        );
+        assert_eq!(
+            result,
+            Err(OwnedWalkError::Uia("coordinate_blocked".to_owned()))
+        );
     }
 
     // -- Role mapping (cross-platform) --------------------------------------
