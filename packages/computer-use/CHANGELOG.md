@@ -20,6 +20,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
+- Headless Swift tests drive `Bridge.handleRequest` through request admission for discovery, focus, frame, wait, text-read, look, hit-test and desktop-input commands: argument checks, absent PIDs, stale refs and look ids, CG-only menu looks and look-record eviction. No capture, clipboard write, app activation or input runs; runtime behavior is unchanged (#645).
 - Add tests for Linux X11 root matching and window metadata using synthetic snapshots without a display server (nredd/pi-harness#696).
 - Run the full JS/TS runtime suite on Bun with an independent report-only Istanbul signal (#645).
 - Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).

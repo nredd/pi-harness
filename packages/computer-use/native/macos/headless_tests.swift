@@ -359,6 +359,7 @@ struct HeadlessTests {
         try runActAssertions()
         runKeyboardAssertions()
         runRequestFramingAssertions()
+        try runRequestAdmissionAssertions()
         testMotionLifecycle()
         runCursorMotionAssertions()
         runCursorLifecycleAssertions()

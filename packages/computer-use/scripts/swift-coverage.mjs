@@ -20,6 +20,7 @@ export const testSources = [
 	"native/macos/cursor_motion_tests.swift",
 	"native/macos/overlay_tests.swift",
 	"native/macos/ref_look_tests.swift",
+	"native/macos/request_admission_tests.swift",
 	"native/macos/request_framing_tests.swift",
 	"native/macos/support_tests.swift",
 ];
