@@ -853,6 +853,19 @@ func secondaryActionRetryIsSafe(axError: Int32) -> Bool {
 	axError == AXError.invalidUIElement.rawValue
 }
 
+/// A failed `AXPress` establishes non-delivery only for a dead element or an action the element, API or app refused.
+/// `cannotComplete` (the app did not answer in time), `failure` and anything else may have pressed, so `press` never
+/// re-presses on a refreshed element or falls back to a pointer click after them: that could press twice (#1240).
+func axPressNotDelivered(axError: Int32) -> Bool {
+	[AXError.invalidUIElement, .actionUnsupported, .illegalArgument, .apiDisabled, .notImplemented].map(\.rawValue).contains(axError)
+}
+
+/// A step that may have delivered its input without proof (`evidence.deliveryUnknown`): a batch must stop there, so a
+/// later step neither runs on an unknown state nor hides it (#1240). A generic `unknown` does not stop the batch.
+func stepDeliveryUnknown(_ step: [String: Any]) -> Bool {
+	(step["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true
+}
+
 /// A failed `secondaryAction`: `cannotComplete` (the app did not answer in time) may have run it anyway.
 func secondaryActionFailureOutcome(axError: Int32) -> String {
 	axError == AXError.cannotComplete.rawValue ? "unknown" : "didnt"
@@ -3306,15 +3319,21 @@ final class Bridge {
 			} else if world.supportsAction(element, kAXPressAction as CFString) {
 				let cursorPoint = try? coordinatePoint()
 				var status = world.performAction(element, kAXPressAction as CFString)
-				if status != .success, let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
+				if status != .success, axPressNotDelivered(axError: status.rawValue), let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
 					status = world.performAction(refreshed, kAXPressAction as CFString)
 				}
 				if status == .success {
 					performed["grounding"] = "description"
 					performed["delivery"] = "ax"
 					if let cursorPoint { animateCursor(at: cursorPoint) }
-				} else {
+				} else if axPressNotDelivered(axError: status.rawValue) {
 					try executeCoordinates(coordinatePoint())
+				} else {
+					// The press may have landed: report it unknown instead of pressing or clicking again.
+					performed["grounding"] = "description"
+					performed["delivery"] = "ax"
+					return finish(["outcome": "unknown", "performed": performed, "evidence": ["deliveryUnknown": true],
+						"error": ["code": "ax_delivery_unknown", "message": "AXPress failed (AXError \(status.rawValue)) and may have been delivered; it was not retried"]])
 				}
 			} else {
 				try executeCoordinates(coordinatePoint())
@@ -3380,9 +3399,14 @@ final class Bridge {
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
 				world.sleep(30_000)
-				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
-				let changed = afterValue != (beforeValue ?? "")
-				return finish(["outcome": changed ? "worked" : "didnt", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
+				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString)
+				// Only two successful reads that differ confirm the posted text; a failed read never stands in for a value.
+				let changed = beforeValue != nil && afterValue != nil && afterValue != beforeValue
+				var evidence: [String: Any] = ["valueChanged": changed]
+				if let afterValue { evidence["value"] = afterValue }
+				// The text was posted: an unconfirmed readback is unknown, never didnt, which would invite a resend (#1241).
+				if !changed { evidence["deliveryUnknown"] = true }
+				return finish(["outcome": changed ? "worked" : "unknown", "performed": performed, "evidence": evidence])
 			}
 		} else if let element, action == "secondaryAction" {
 			// AX-only: runs one action the element itself advertises, checked live against its current action list.
@@ -3664,7 +3688,7 @@ final class Bridge {
 			do {
 				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
-				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
+				if (step["outcome"] as? String) == "didnt" || stepDeliveryUnknown(step) { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {
 				var step: [String: Any] = ["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]]
 				if let evidence = failure.evidence { step["evidence"] = evidence }

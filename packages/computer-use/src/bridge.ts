@@ -1516,7 +1516,7 @@ async function helperAct(
 				.act(helperActRequest(target, action, initialPolicy), { signal, timeoutMs })
 				.catch(timedOut),
 		);
-		if (canRetryInForeground(action, result.outcome, headless)) {
+		if (canRetryInForeground(action, result, headless)) {
 			const foreground = checked(await actInForeground());
 			const trace = executionTraceFromAct(foreground, "foreground");
 			trace.backgroundFirst = true;
@@ -1524,7 +1524,7 @@ async function helperAct(
 			trace.escalationReason = "side_effect_free_didnt";
 			trace.backgroundAttempt = {
 				outcome: "didnt",
-				reason: "Background input produced no observable value change; a foreground retry was safe.",
+				reason: "Background input posted nothing; a foreground retry was safe.",
 			};
 			return trace;
 		}
@@ -2695,8 +2695,8 @@ async function dispatchUiTransaction(
 		try {
 			const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 			steps.push(step);
-			// A later action would run on an unknown state and its outcome would mask the timeout.
-			if (isTimedOutStep(step)) return stoppedTransaction(steps);
+			// A later action would run on an unknown state and its outcome would mask the indeterminate delivery.
+			if (isIndeterminateStep(step)) return stoppedTransaction(steps);
 			// The stop index is recorded whether or not the refusal carries an error.
 			if (step.outcome === "didnt") return { ...aggregateExecutions(steps), stoppedAt: steps.length - 1 };
 			// A helper that stopped after posting part of the action reports the count; never run the next action.
@@ -2747,8 +2747,19 @@ function stoppedTransaction(steps: ExecutionTrace[]): ExecutionTrace {
 	return { ...aggregateExecutions(steps), error: step.error, evidence: step.evidence, stoppedAt: steps.length - 1 };
 }
 
-function isTimedOutStep(step: ExecutionTrace): boolean {
-	return step.outcome === "unknown" && step.error?.code === "timeout";
+/**
+ * Why a step's delivery is explicitly indeterminate, or undefined: a timeout, an AX press that may have landed
+ * (`ax_delivery_unknown`), or posted input the helper flagged `evidence.deliveryUnknown`. A generic `unknown` is not.
+ */
+function indeterminateReason(step: ExecutionTrace): string | undefined {
+	if (step.outcome !== "unknown") return undefined;
+	if (step.error?.code === "timeout") return "timed out";
+	if (step.error?.code === "ax_delivery_unknown") return "failed with an AX error after the press may have landed";
+	return step.evidence?.deliveryUnknown === true ? "posted input that its readback did not confirm" : undefined;
+}
+
+function isIndeterminateStep(step: ExecutionTrace): boolean {
+	return indeterminateReason(step) !== undefined;
 }
 
 /**
@@ -2888,7 +2899,7 @@ export async function terminalDesktopActionResult(
 	provisional?: ProvisionalAbsence,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
 	await normalizeRootDeltaRefs(execution, target);
-	const timedOutIndex = timedOutStepIndex(execution);
+	const unknownIndex = indeterminateStepIndex(execution);
 	let exactRootAvailable: boolean | undefined;
 	let liveRoots: PlatformRoot[] = [];
 	try {
@@ -2938,9 +2949,9 @@ export async function terminalDesktopActionResult(
 			gone: condition.gone || undefined,
 			timeoutMs: condition.timeoutMs,
 		};
-		// A transaction that already stopped, a timed-out step included, keeps its outcome and original error;
+		// A transaction that already stopped, an indeterminate step included, keeps its outcome and original error;
 		// the check is recorded beside it.
-		const stopped = execution.error !== undefined || execution.stoppedAt !== undefined || timedOutIndex >= 0;
+		const stopped = execution.error !== undefined || execution.stoppedAt !== undefined || unknownIndex >= 0;
 		if (!stopped)
 			execution.outcome = settledOutcome(
 				execution,
@@ -3012,19 +3023,18 @@ export async function terminalDesktopActionResult(
 		? `closed before a successor observation could be captured.${successorText}`
 		: `could not be observed afterward: ${message}`;
 	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay.
-	const deliveryUnknown = timedOutIndex < 0 && execution.outcome === "unknown";
-	const result =
-		timedOutIndex >= 0
-			? `${timeoutSentence(timedOutIndex)} Its source root ${root} ${rootFate}`
-			: deliveryUnknown
-				? `Delivery of the action is unknown, and its source root ${root} ${rootFate}`
-				: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
-	const next =
-		timedOutIndex >= 0
-			? `Do not replay the transaction: call find_roots, then observe_ui to check whether action ${timedOutIndex + 1} took effect.`
-			: deliveryUnknown
-				? "Do not replay the transaction: call find_roots, then observe_ui to check whether it took effect."
-				: "Call find_roots, then observe_ui to continue.";
+	// An indeterminate step names itself; any other unknown outcome, e.g. an unproven absence, says so generically.
+	const deliveryUnknown = unknownIndex >= 0 || execution.outcome === "unknown";
+	const unknownLead =
+		unknownIndex >= 0
+			? `${indeterminateSentence(execution, unknownIndex)} Its`
+			: "Delivery of the action is unknown, and its";
+	const result = deliveryUnknown
+		? `${unknownLead} source root ${root} ${rootFate}`
+		: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
+	const next = deliveryUnknown
+		? `Do not replay the transaction: call find_roots, then observe_ui to check whether ${unknownIndex >= 0 ? `action ${unknownIndex + 1}` : "it"} took effect.`
+		: "Call find_roots, then observe_ui to continue.";
 	return {
 		content: [
 			{
@@ -3056,27 +3066,27 @@ function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	return `Stopped${atAction} (${code}).${posted}${unknown}${stuck} Do not replay the transaction.`;
 }
 
-/** Index of the step that timed out, or -1: its delivery stays unknown whatever is observed afterward. */
-function timedOutStepIndex(execution: ExecutionTrace): number {
-	return (execution.steps ?? []).findIndex(isTimedOutStep);
+/** Index of the step whose delivery is indeterminate, or -1: it stays unknown whatever is observed afterward. */
+function indeterminateStepIndex(execution: ExecutionTrace): number {
+	return (execution.steps ?? []).findIndex(isIndeterminateStep);
 }
 
-/** Later evidence settles an act's outcome, except after a timed-out step: postconditions and values cannot prove delivery. */
+/** Later evidence settles an act's outcome, except after an indeterminate step: postconditions and values cannot prove delivery. */
 function settledOutcome(execution: ExecutionTrace, settled: ActOutcome): ActOutcome {
-	return timedOutStepIndex(execution) < 0 ? settled : execution.outcome!;
+	return indeterminateStepIndex(execution) < 0 ? settled : execution.outcome!;
 }
 
-/** The numbered timeout sentence plus the completed prefix, shared by successor and terminal results. */
-function timeoutSentence(index: number): string {
+/** The numbered indeterminate-delivery sentence plus the completed prefix, shared by successor and terminal results. */
+function indeterminateSentence(execution: ExecutionTrace, index: number): string {
 	const prefix = index === 0 ? "" : index === 1 ? " Action 1 completed." : ` Actions 1-${index} completed.`;
-	return `Action ${index + 1} timed out; whether it was delivered is unknown.${prefix}`;
+	return `Action ${index + 1} ${indeterminateReason(execution.steps![index]!)}; whether it was delivered is unknown.${prefix}`;
 }
 
-function timeoutSummary(execution: ExecutionTrace, stateId: string): string | undefined {
-	const index = timedOutStepIndex(execution);
+function indeterminateSummary(execution: ExecutionTrace, stateId: string): string | undefined {
+	const index = indeterminateStepIndex(execution);
 	return index < 0
 		? undefined
-		: `${timeoutSentence(index)} Do not replay the transaction: check state ${stateId} for whether action ${index + 1} took effect before retrying it.`;
+		: `${indeterminateSentence(execution, index)} Do not replay the transaction: check state ${stateId} for whether action ${index + 1} took effect before retrying it.`;
 }
 
 async function performDesktopTransaction(
@@ -3105,7 +3115,8 @@ async function performDesktopTransaction(
 			// Any stop, even an errorless first-step `didnt`, or an error: neither `expect` nor observed values upgrade it.
 			const partial = execution.error !== undefined || execution.stoppedAt !== undefined;
 			try {
-				if (condition && !partial) {
+				// An indeterminate step skips the postcondition: a passing or stale check cannot settle its delivery.
+				if (condition && !partial && indeterminateStepIndex(execution) < 0) {
 					const {
 						text: expectedText,
 						role: expectedRole,
@@ -3172,7 +3183,7 @@ async function performDesktopTransaction(
 					provisional = undefined;
 				}
 				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
-				// A timed-out step is always a stop; `settledOutcome` keeps it unknown should one ever arrive unstopped.
+				// An indeterminate step is always a stop; `settledOutcome` keeps it unknown should one ever arrive unstopped.
 				// An explicit delivery error also blocks the observed-value upgrade.
 				if (!partial)
 					execution.outcome = settledOutcome(
@@ -3184,19 +3195,22 @@ async function performDesktopTransaction(
 							execution.error,
 						),
 					);
-				const timedOutIndex = timedOutStepIndex(execution);
+				const unknownIndex = indeterminateStepIndex(execution);
 				for (const [index, action] of executedActions.entries()) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {
 						window: noteWindowForTarget(capture.target, capture.look),
 						rootDelta: execution.rootDelta,
 						// The saved note carries the indeterminate delivery to every later call on this state.
-						timedOutAction: index === timedOutIndex ? index + 1 : undefined,
+						unknownDelivery:
+							index === unknownIndex
+								? `action ${index + 1} ${indeterminateReason(execution.steps![index]!)}`
+								: undefined,
 					});
 				}
 				const built = await buildToolResult(
 					"act_ui",
 					keyboardStopSummary(execution) ??
-						timeoutSummary(execution, capture.capture.stateId) ??
+						indeterminateSummary(execution, capture.capture.stateId) ??
 						`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
 					capture,
 					execution,

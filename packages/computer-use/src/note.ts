@@ -49,8 +49,8 @@ interface NoteRefreshOutcome {
 	windowChanged?: boolean;
 	newWindowLabel?: string;
 	rootDelta?: Array<{ change: string; kind: string; title?: string; ref?: string }>;
-	/** 1-based number of the acted action when it timed out, so its delivery is unknown. */
-	timedOutAction?: number;
+	/** Why the acted action's delivery is unknown, e.g. `action 1 timed out`; absent when it is not. */
+	unknownDelivery?: string;
 }
 
 function normalizedLabel(value: string): string {
@@ -209,9 +209,9 @@ export function noteAfterAct(
 			const key = regionKey(ancestor);
 			const region = note.regions.find((candidate) => candidate.key === key);
 			const detail =
-				refreshOutcome.timedOutAction === undefined
+				refreshOutcome.unknownDelivery === undefined
 					? "acted here"
-					: `acted here; delivery unknown (action ${refreshOutcome.timedOutAction} timed out)`;
+					: `acted here; delivery unknown (${refreshOutcome.unknownDelivery})`;
 			if (region) {
 				region.status = "changed";
 				region.detail = detail;
