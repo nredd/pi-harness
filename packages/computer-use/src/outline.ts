@@ -40,6 +40,11 @@ export interface OutlineNode {
 	truncated: boolean;
 	scrollExtent?: OutlineScrollExtent;
 	text: OutlineText[];
+	/**
+	 * Set when a later look could not confirm this node is still readable (a scoped graft that saw protection, or a
+	 * newer look of the same root). Its text is already redacted; keep only its ref, role and geometry.
+	 */
+	unconfirmed?: true;
 	children: OutlineNode[];
 	parent?: OutlineNode;
 }
@@ -150,30 +155,48 @@ const PROTECTED_ROLES = new Set(["axsecuretextfield", "password text", "unknown"
  * role, or one the helper could not classify, counts as protected.
  */
 export function isProtectedNode(node: Pick<OutlineNode, "role" | "subrole" | "title" | "description">): boolean {
-	// Restored session outlines are untrusted JSON and may omit either field.
+	// `restoreOutline` normalizes untrusted JSON, so both fields are always strings here.
 	return (
-		PROTECTED_ROLES.has((node.role ?? "").trim().toLowerCase()) ||
-		(node.subrole ?? "").trim().toLowerCase() === "axsecuretextfield" ||
+		PROTECTED_ROLES.has(node.role.trim().toLowerCase()) ||
+		node.subrole.trim().toLowerCase() === "axsecuretextfield" ||
 		node.title === PROTECTED_LABEL ||
 		node.description === PROTECTED_LABEL
 	);
 }
 
-/** Drop a protected node's value and OCR text, whatever an older or faulty helper sent. Mutates `node`. */
+/**
+ * Allowlist a protected node's metadata: keep its classification (role, subrole), ref, geometry and capabilities,
+ * and replace every text field with the marker. AX titles, descriptions and identifiers can still hold the text an
+ * older or faulty helper sent, so nothing untrusted reaches indexing, search, diffs or serialization. Mutates `node`.
+ */
 function sanitizeProtected(node: OutlineNode): OutlineNode {
 	if (isProtectedNode(node)) {
+		node.title = PROTECTED_LABEL;
+		node.description = "";
+		node.identifier = "";
 		node.value = "";
 		node.text = [];
 	}
 	return node;
 }
 
-/** Replace every text field of `node` that an earlier, unconfirmed look supplied. Mutates `node`. */
+/**
+ * Replace every text field of `node` that an earlier, unconfirmed look supplied, identifier included (it can be the
+ * old displayed label), and mark it unconfirmed. Refs, role and geometry stay so the node is still addressable.
+ * Mutates `node`.
+ */
 function redactRetained(node: OutlineNode): void {
 	node.title = REDACTED_LABEL;
 	node.description = "";
+	node.identifier = "";
 	node.value = "";
 	node.text = [];
+	node.unconfirmed = true;
+}
+
+/** Whether a cached query may echo `node`'s text: it is readable and no later look revoked it. */
+export function isConfirmedReadable(node: OutlineNode): boolean {
+	return !node.unconfirmed && !isProtectedNode(node);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -737,7 +760,7 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 	const refToWireRef = new Map<string, string>();
 	const wireRefToRef = new Map<string, string>();
 	const restoreNode = (raw: SerializedOutlineNode, parent?: OutlineNode): OutlineNode => {
-		const node = sanitizeProtected({ ...raw, children: [], parent });
+		const node = sanitizeProtected(normalizeRestored(raw, parent));
 		nodes.push(node);
 		if (node.wireRef) {
 			refToWireRef.set(node.ref, node.wireRef);
@@ -748,6 +771,33 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 	};
 	const root = restoreNode(serialized.root);
 	return { lookId: serialized.lookId, root, nodes, refToWireRef, wireRefToRef };
+}
+
+/**
+ * A stored node is untrusted JSON: older writers or a damaged file may omit fields. Normalize every field a fold,
+ * search or diff reads, so a missing role restores as blank (unclassified, hence protected) instead of crashing.
+ */
+function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): OutlineNode {
+	const record = raw as Partial<SerializedOutlineNode>;
+	const node: OutlineNode = {
+		...raw,
+		ref: toString(record.ref),
+		role: toString(record.role),
+		subrole: toString(record.subrole),
+		identifier: toString(record.identifier),
+		title: toString(record.title),
+		description: toString(record.description),
+		value: toString(record.value),
+		actions: Array.isArray(record.actions)
+			? record.actions.filter((value): value is string => typeof value === "string")
+			: [],
+		text: Array.isArray(record.text) ? record.text.filter((item) => typeof item?.string === "string") : [],
+		children: [],
+		parent,
+	};
+	if (record.unconfirmed === true) redactRetained(node);
+	else delete node.unconfirmed;
+	return node;
 }
 
 function outlineRefNumber(ref: string): number {
@@ -805,6 +855,8 @@ function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRe
 	target.truncated = source.truncated;
 	target.scrollExtent = source.scrollExtent ? { ...source.scrollExtent } : undefined;
 	target.text = source.text.map((text) => ({ ...text, rect: text.rect ? { ...text.rect } : undefined }));
+	// The source is a fresh look, so its classification is current.
+	delete target.unconfirmed;
 }
 
 function preserveUnreused(node: OutlineNode, parent: OutlineNode, used: Set<OutlineNode>): OutlineNode | undefined {

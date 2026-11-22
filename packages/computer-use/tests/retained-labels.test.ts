@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { describe, onTestFinished, test, vi } from "vitest";
 import { noteForOutline, noteFromLook, renderNote, type WindowNote } from "../src/note.ts";
 import {
+	foldToBudget,
 	graftScopedOutline,
 	isProtectedNode,
 	PROTECTED_LABEL,
@@ -12,6 +13,7 @@ import {
 	searchOutlineRanked,
 	serializeOutline,
 } from "../src/outline.ts";
+import { loadStoredOutline, saveStoredOutline } from "../src/outline-store.ts";
 import { changesBetween, renderChanges, stabilizeRefs } from "../src/view.ts";
 import { desktopRoot, installFakeDesktop, lookPayload, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
 import { outlineNode, outlineOf } from "../test/support/outline-nodes.mjs";
@@ -105,7 +107,21 @@ async function desktop(shape: Shape) {
 			vi.useRealTimers();
 		}
 	};
-	return { fake, assertQueriesClean, actWhile };
+	/** Restart the session from `results` (oldest first), as Pi does when it reloads a branch. */
+	const restart = async (results: Array<{ toolName: string; details: unknown }>) => {
+		await fake.bridge.shutdownComputerUseSession();
+		fake.bridge.reconstructStateFromBranch({
+			...fake.ctx,
+			sessionManager: {
+				getBranch: () =>
+					results.map(({ toolName, details }) => ({
+						type: "message",
+						message: { role: "toolResult", toolName, details: JSON.parse(JSON.stringify(details)) },
+					})),
+			},
+		});
+	};
+	return { fake, assertQueriesClean, actWhile, restart };
 }
 
 describe.each(Object.entries(PROTECTED_SHAPES))("a readable node that turns %s", (_name, shape) => {
@@ -204,6 +220,23 @@ test("a restored session note from before the fix is redacted by every cached qu
 	await assertQueriesClean(observed.stateId, "@e2");
 });
 
+test("a restored node without a role expands as protected, not as a crash", async () => {
+	const { fake, restart } = await desktop(PROTECTED_SHAPES["linux password"]);
+	fake.tree = [wireNode("c", "AXGroup", "Group", { children: [wireNode("k", "AXStaticText", SECRET)] })];
+	const observed = await fake.observe();
+	// An older writer or a damaged file: untyped JSON whose node omits `role` and `subrole`.
+	const stored = JSON.parse(JSON.stringify(present(loadStoredOutline(observed.stateId))));
+	const kid = stored.root.children[0].children[0];
+	delete kid.role;
+	delete kid.subrole;
+	kid.value = SECRET_VALUE;
+	saveStoredOutline(observed.stateId, stored);
+	await restart([{ toolName: "observe_ui", details: observed.result.details }]);
+	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId: observed.stateId, ref: "@e2", depth: 3 });
+	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+	assert.match(fake.text(expanded), /\[protected\]/);
+});
+
 describe("isProtectedNode", () => {
 	test.each([
 		["macOS secure role", { role: "AXSecureTextField" }],
@@ -228,27 +261,42 @@ describe("isProtectedNode", () => {
 });
 
 describe("outline sanitizing", () => {
+	// An AX title, description or identifier can still hold the old text, so none of them is trusted.
 	const protectedWire = {
 		ref: "s",
 		role: "AXSecureTextField",
-		title: "Password",
+		title: SECRET,
+		description: SECRET,
+		identifier: SECRET,
 		value: SECRET_VALUE,
 		text: [{ string: SECRET_VALUE, confidence: 1 }],
+		rect: { x: 1, y: 2, w: 3, h: 4 },
 	};
+	const textFields = (node: {
+		title: string;
+		description: string;
+		identifier: string;
+		value: string;
+		text: unknown;
+	}) => [node.title, node.description, node.identifier, node.value, node.text];
 
-	test("a parsed protected node never carries a value or text", () => {
+	test("a parsed protected node keeps only its role, ref, geometry and marker", () => {
 		const outline = parsed({
 			lookId: "l",
 			outline: {
 				ref: "w",
 				role: "AXWindow",
-				children: [protectedWire, { ref: "r", role: "AXTextField", value: "ok" }],
+				children: [protectedWire, { ref: "r", role: "AXTextField", title: "Name", value: "ok" }],
 			},
 		});
 		const [, secure, readable] = outline.nodes;
-		assert.deepEqual([secure.title, secure.value, secure.text], ["Password", "", []]);
-		assert.equal(readable.value, "ok", "readable values survive");
-		assert.equal(searchOutlineRanked(outline, SECRET_VALUE).totalMatches, 0);
+		assert.deepEqual(textFields(secure), [PROTECTED_LABEL, "", "", "", []]);
+		assert.deepEqual([secure.role, secure.wireRef, secure.rect], ["AXSecureTextField", "s", protectedWire.rect]);
+		assert.deepEqual([readable.title, readable.value], ["Name", "ok"], "readable fields survive");
+		for (const query of [SECRET, SECRET_VALUE, "private"])
+			assert.equal(searchOutlineRanked(outline, query).totalMatches, 0, query);
+		assert.ok(!JSON.stringify(serializeOutline(outline)).includes(SECRET));
+		assert.ok(!foldToBudget(outline).text.includes(SECRET));
 	});
 
 	test("restoring a stored outline sanitizes protected nodes written before the fix", () => {
@@ -259,23 +307,37 @@ describe("outline sanitizing", () => {
 				children: [{ ...outlineNode("@e2", { ...protectedWire, ref: "@e2" }), children: [] }],
 			},
 		});
-		assert.deepEqual([restored.nodes[1].value, restored.nodes[1].text], ["", []]);
+		assert.deepEqual(textFields(restored.nodes[1]), [PROTECTED_LABEL, "", "", "", []]);
 	});
 
 	test("a restored node missing its role or subrole is unclassified, not a crash", () => {
-		const bare = { ref: "@e2", title: "Bare", value: SECRET_VALUE, text: [], children: [] };
-		const noSubrole = { ...bare, ref: "@e3", role: "AXTextField", value: "kept" };
-		const restored = restoreOutline({
-			lookId: "l",
-			root: { ...outlineNode("@e1", { role: "AXWindow" }), children: [bare as never, noSubrole as never] },
-		});
+		// Untyped JSON, as read from disk: no cast hides the missing fields.
+		const restored = restoreOutline(
+			JSON.parse(
+				JSON.stringify({
+					lookId: "l",
+					root: {
+						ref: "@e1",
+						role: "AXWindow",
+						children: [
+							{ ref: "@e2", title: "Bare", value: SECRET_VALUE, children: [] },
+							{ ref: "@e3", role: "AXTextField", title: "Bare", value: "kept", children: [] },
+							{ ref: "@e4", role: "AXStaticText", title: SECRET, unconfirmed: true, children: [] },
+						],
+					},
+				}),
+			),
+		);
 		assert.deepEqual(
-			restored.nodes.slice(1).map((node) => [node.title, node.value]),
+			restored.nodes.slice(1).map((node) => [node.role, node.subrole, node.title, node.value, node.unconfirmed]),
 			[
-				["Bare", ""],
-				["Bare", "kept"],
+				["", "", PROTECTED_LABEL, "", undefined],
+				["AXTextField", "", "Bare", "kept", undefined],
+				["AXStaticText", "", REDACTED_LABEL, "", true],
 			],
 		);
+		assert.ok(!foldToBudget(restored).text.includes(SECRET));
+		assert.equal(searchOutlineRanked(restored, "private").totalMatches, 0);
 	});
 
 	test("diffs between a readable and a protected look name only the new fields", () => {
@@ -310,6 +372,8 @@ describe("graftScopedOutline", () => {
 								role: "AXStaticText",
 								title: SECRET,
 								description: SECRET,
+								// An identifier can itself be the old displayed label.
+								identifier: SECRET,
 								value: SECRET_VALUE,
 								text: [{ string: SECRET, confidence: 1 }],
 								children: [outlineNode("@e4", { wireRef: "deep", title: SECRET })],
@@ -320,6 +384,14 @@ describe("graftScopedOutline", () => {
 			}),
 		);
 	const scoped = (child: object) => outlineOf(outlineNode("g", { wireRef: "g", children: [outlineNode("n", child)] }));
+
+	test("a fresh scoped look re-confirms a node an earlier revocation left unconfirmed", () => {
+		const outline = base();
+		graftScopedOutline(outline, "@e2", scoped({ wireRef: "new", role: "password text", title: PROTECTED_LABEL }));
+		graftScopedOutline(outline, "@e2", scoped({ wireRef: "old", role: "AXStaticText", title: "Fresh" }));
+		const node = present(outline.nodes.find((candidate) => candidate.ref === "@e3"));
+		assert.deepEqual([node.title, node.unconfirmed], ["Fresh", undefined]);
+	});
 
 	test("preserved children stay readable when the scoped look has no protected node", () => {
 		const outline = base();
@@ -332,9 +404,11 @@ describe("graftScopedOutline", () => {
 		graftScopedOutline(outline, "@e2", scoped({ wireRef: "new", role: "password text", title: PROTECTED_LABEL }));
 		const preserved = present(outline.nodes.find((node) => node.ref === "@e3"));
 		assert.deepEqual(
-			[preserved.title, preserved.description, preserved.value, preserved.text],
-			[REDACTED_LABEL, "", "", []],
+			[preserved.title, preserved.description, preserved.identifier, preserved.value, preserved.text],
+			[REDACTED_LABEL, "", "", "", []],
 		);
+		assert.deepEqual([preserved.wireRef, preserved.unconfirmed], ["old", true], "the ref stays addressable");
+		for (const query of [SECRET, "private"]) assert.equal(searchOutlineRanked(outline, query).totalMatches, 0, query);
 		assert.equal(present(outline.nodes.find((node) => node.ref === "@e4")).title, REDACTED_LABEL);
 		assert.equal(
 			present(outline.nodes.find((node) => node.wireRef === "new")).title,
