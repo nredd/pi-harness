@@ -226,6 +226,11 @@ async function textField(onTestFinished: Parameters<typeof installFakeDesktop>[0
 	return { fake, stateId };
 }
 
+/** The successor capture shows the requested `new` while the helper's readback stayed `before`. */
+function observeNew(fake: Awaited<ReturnType<typeof installFakeDesktop>>) {
+	fake.tree = [wireNode("name", "AXTextField", "Name", { canSetValue: true, isTextInput: true, value: "new" })];
+}
+
 const STALE_WRITE = {
 	outcome: "unknown",
 	performed: { delivery: "ax", grounding: "description" },
@@ -241,6 +246,7 @@ test("an accepted AXValue write with a stale readback is dispatched once and sto
 }) => {
 	const { fake, stateId } = await textField(onTestFinished, false);
 	fake.actResult = STALE_WRITE;
+	observeNew(fake);
 	const result = await fake.call(fake.bridge.executeAct, { stateId, actions: setTwice });
 	assert.deepEqual(
 		fake.actCalls.map((request: { action: string; policy: string }) => `${request.action}:${request.policy}`),
@@ -248,7 +254,7 @@ test("an accepted AXValue write with a stale readback is dispatched once and sto
 		"never resent in the foreground, and the next action never runs",
 	);
 	const { execution } = result.details;
-	assert.equal(execution.outcome, "unknown");
+	assert.equal(execution.outcome, "unknown", "the successor's requested value never upgrades the unknown write");
 	assert.equal(execution.stoppedAt, 0);
 	assert.equal(execution.steps[0].escalatedToForeground, undefined);
 	assert.match(fake.text(result), /^Action 1 posted input that its readback did not confirm; whether it was delivered/);
@@ -262,6 +268,7 @@ test("a strict-headless batch keeps the stale write unknown and its readback val
 		stoppedAt: 0,
 		steps: [STALE_WRITE],
 	};
+	observeNew(fake);
 	const result = await fake.call(fake.bridge.executeAct, { stateId, actions: setTwice });
 	assert.equal(fake.actBatchCalls.length, 1);
 	assert.equal(fake.actCalls.length, 0);
