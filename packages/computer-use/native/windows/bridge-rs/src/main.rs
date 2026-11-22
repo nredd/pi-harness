@@ -2082,6 +2082,16 @@ mod tests {
     }
 
     #[test]
+    fn default_helper_states_mint_distinct_look_generations() {
+        // Production init keys each generation with a fresh RandomState. Two values are
+        // 64-bit keyed hashes, so a collision is possible but has probability ~2^-64.
+        let mut first = HelperState::default();
+        let mut second = HelperState::default();
+        assert_ne!(first.look_generation, second.look_generation);
+        assert_ne!(first.fresh_look_id(), second.fresh_look_id());
+    }
+
+    #[test]
     fn restored_text_ref_cannot_resolve_after_helper_restart() {
         let mut first = HelperState::new(10);
         let old_id = first.fresh_look_id();
