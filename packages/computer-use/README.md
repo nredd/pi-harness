@@ -236,6 +236,10 @@ creation time. Each root ref names one instance:
 - Discovery issues the native root ref (`@w`) per HWND and tag, and `find_roots` issues the `@r` per
   native ref, so a same-HWND replacement is listed under a NEW `@r`. A root ref denotes the instance it
   was issued for; rediscovery never moves an old ref onto the replacement
+- Native root refs are namespaced per helper lifetime: each helper process numbers them from a random
+  nonzero 32-bit nonce in the high half of the ref number. After a helper restart an old `@r` stays
+  `root_stale` even when the same HWND and PID now host an untagged replacement that the new helper
+  tags (nonce collision ~2^-32)
 - An old `@r`, and every look, wait, focus or action that resolves through it, fails with `root_stale`
   once its instance is gone; call `find_roots` and observe the new `@r`. A look stays bound to the
   instance it observed, whatever a later discovery lists

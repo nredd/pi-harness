@@ -89,7 +89,8 @@ impl HelperState {
 
     fn new(look_generation: u64) -> Self {
         Self {
-            store: RefStore::new(),
+            // Root refs are namespaced per helper lifetime (see `RefStore::default`).
+            store: RefStore::default(),
             roots: HashMap::new(),
             root_instances: HashMap::new(),
             looks: HashMap::new(),
@@ -2731,6 +2732,26 @@ mod tests {
             .insert_window(NativeHandle::new(hwnd), generation)
             .to_string();
         json!({"windowId": hwnd, "pid": pid, "kind": "window", "title": "t", "rootRef": root_ref})
+    }
+
+    #[test]
+    fn root_refs_never_cross_a_helper_restart() {
+        // The window is replaced by one with the same HWND and PID, and the restarted
+        // helper even tags it with the same token: its ref must still differ, so a
+        // saved root from the old lifetime never resolves (~2^-32 nonce collision).
+        let mut first = HelperState::new(10);
+        let old = issued_root(&mut first, 21, 7, owned_by(7).token);
+        let old_ref = old["rootRef"].as_str().unwrap().to_owned();
+        first.save_roots(None, vec![old], |_| Some(owned_by(7)));
+        let mut restarted = HelperState::new(10);
+        let new = issued_root(&mut restarted, 21, 7, owned_by(7).token);
+        restarted.save_roots(None, vec![new.clone()], |_| Some(owned_by(7)));
+
+        assert_ne!(new["rootRef"].as_str().unwrap(), old_ref);
+        assert!(first.root_instances.contains_key(&old_ref));
+        assert!(!restarted.root_instances.contains_key(&old_ref));
+        let old_window = windows_bridge::refs::WindowRef::parse(&old_ref).unwrap();
+        assert_eq!(restarted.store.get_window(&old_window), None);
     }
 
     #[test]

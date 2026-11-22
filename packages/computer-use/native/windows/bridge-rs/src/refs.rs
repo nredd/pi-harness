@@ -5,8 +5,9 @@
 //! should get its own `RefStore` so that references remain scoped to a
 //! single discovery session.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::RandomState, HashMap, HashSet};
 use std::fmt;
+use std::hash::BuildHasher;
 
 /// An opaque native handle (e.g., HWND or UIA element pointer).
 ///
@@ -160,8 +161,16 @@ impl RefStore {
 }
 
 impl Default for RefStore {
+    /// A store for one helper lifetime: window ref ids start at a random nonzero
+    /// 32-bit nonce in the high half, so a ref an earlier helper process issued never
+    /// denotes a window in this one, even for the same HWND and instance tag (nonce
+    /// collision ~2^-32). `new` keeps `@w1`-based numbering for scoped stores.
     fn default() -> Self {
-        Self::new()
+        let nonce = RandomState::new().hash_one(std::process::id()) as u32;
+        Self {
+            next_window_id: (u64::from(nonce.max(1)) << 32) | 1,
+            ..Self::new()
+        }
     }
 }
 

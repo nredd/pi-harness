@@ -98,3 +98,27 @@ fn test_retrieve_element_handle() {
     let retrieved = store.get_element(&eref);
     assert_eq!(retrieved, Some(NativeHandle::new(0xDEAD)));
 }
+
+// ---------------------------------------------------------------------------
+// Helper lifetimes never share window refs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_default_stores_namespace_window_refs_per_lifetime() {
+    // Probabilistic only in the nonce: two stores collide with probability ~2^-32.
+    let handle = NativeHandle::new(42);
+    let mut first = RefStore::default();
+    let mut restarted = RefStore::default();
+    let old = first.insert_window(handle, 7);
+    let new = restarted.insert_window(handle, 7);
+
+    assert_ne!(old, new, "a restarted store reissues no earlier ref");
+    assert_ne!(old.to_string(), "@w1");
+    assert_eq!(restarted.get_window(&old), None);
+    assert_eq!(first.get_window(&old), Some(handle));
+    let next = first.insert_window(NativeHandle::new(43), 7);
+    assert_eq!(
+        next.to_string(),
+        format!("@w{}", old.to_string()[2..].parse::<u64>().unwrap() + 1)
+    );
+}

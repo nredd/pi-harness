@@ -174,3 +174,59 @@ test("A Windows root ref denotes one window instance, never a same-HWND replacem
 	});
 	expect(looks()).toEqual(["@w1", "@w2"]);
 });
+
+test("A Windows root ref from an earlier helper lifetime never observes a same-HWND replacement", async ({
+	onTestFinished,
+}) => {
+	const original = { ...currentPlatformBackend };
+	const cwd = makeTestTempDir("cu-observation-restart-", onTestFinished);
+	onTestFinished(() => {
+		Object.assign(currentPlatformBackend, original);
+		vi.restoreAllMocks();
+		vi.unstubAllEnvs();
+	});
+	vi.stubEnv("PI_CODING_AGENT_DIR", cwd);
+	vi.stubEnv("PI_COMPUTER_USE_BLOCKED_APPS", undefined);
+	vi.stubEnv("PI_COMPUTER_USE_CDP_PORT", undefined);
+	Object.assign(currentPlatformBackend, platformBackendForRuntime("win32"), {
+		ensureReady: async (_ctx: unknown, state: unknown) => state,
+	});
+	// Each helper lifetime numbers root refs under its own nonce in the high 32 bits (`RefStore::default`).
+	const lifetimeRef = (nonce: number) => `@w${nonce * 2 ** 32 + 1}`;
+	let listed: Record<string, unknown> = { ...root, rootRef: lifetimeRef(3) };
+	const command = vi.spyOn(windowsHelper, "command").mockImplementation(async (name, args) => {
+		switch (name) {
+			case "listRoots":
+				return { roots: [listed] };
+			case "look":
+				return {
+					lookId: `look-${String(args?.rootRef)}`,
+					window: { rootRef: args?.rootRef, framePoints: { x: 0, y: 0, w: 100, h: 100 }, scaleFactor: 1 },
+					outline: { ref: "native-window", role: "window", title: "Notes", children: [] },
+					readText: { requested: false, executed: false },
+				};
+			default:
+				throw new Error(`Unexpected helper command ${name}`);
+		}
+	});
+	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } } as Parameters<
+		typeof executeFind
+	>[4];
+	const observe = async (rootRef: string) =>
+		await executeObserve("t", { root: rootRef, mode: "semantic" }, undefined, undefined, ctx);
+	const originalRef = (await executeFind("t", {}, undefined, undefined, ctx)).details.windows[0].windowRef;
+	await observe(originalRef);
+
+	// The helper exits and the window is replaced with the same HWND and PID and no tag; the
+	// restarted helper tags it and lists it as its own first root.
+	windowsHelper.dispose();
+	listed = { ...root, rootRef: lifetimeRef(5) };
+	await expect(observe(originalRef)).rejects.toMatchObject({ code: "root_stale" });
+	const looks = () => command.mock.calls.filter(([name]) => name === "look").map(([, args]) => args?.rootRef);
+	expect(looks()).toEqual([lifetimeRef(3)]);
+	const replacement = (await executeFind("t", {}, undefined, undefined, ctx)).details.windows[0];
+	expect(replacement.windowRef).not.toBe(originalRef);
+	await observe(replacement.windowRef);
+	await expect(observe(originalRef)).rejects.toMatchObject({ code: "root_stale" });
+	expect(looks()).toEqual([lifetimeRef(3), lifetimeRef(5)]);
+});
