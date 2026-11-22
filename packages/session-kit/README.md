@@ -691,17 +691,18 @@ counters or timestamps cannot be identified and can append beside the old row in
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 
-A v3 month can have multiple referenced delta shards. There is no fixed per-month delta-count
-cap: file count grows with late updates, not with unchanged or whole-month exports. The regression
-covers 40 successive deltas and a repeat export; the total machine expansion budget still applies.
-A separate compaction/archival follow-up must define an explicit maintenance protocol before
-rewriting sealed generations; never drop referenced files just to reduce their count.
-Session metadata repeats only with consistent start/child attribution; aggregation takes the
-maximum end. Quota aggregation selects the freshest observation, not their sum.
-The transport must publish only manifest-referenced files and prune unreferenced files in the
-producer's own directory, never another machine's directory. This PR only fixes the exporter/outbox:
-the published tree and the 60-second `git add` budget still require the separate sync-helper pruning
-follow-up. Issue #1033 remains partly open until that lands.
+A sealed v3 month retains at most 32 manifest references. When a late update would exceed that
+limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte
+and compacts all later shards into one new shard. Compaction uses the previous published rows plus
+any new delta, so it keeps calls and session metadata even after their transcripts leave the local
+scan. It keeps the maximum session end and selects one quota reading per window from the compacted
+deltas using the normal quota rules at export time. The base is unchanged, but a growing late-update
+shard may be rewritten at each compaction. No format change is required; readers still accept the
+older, larger manifests. The machine expansion budget still applies.
+
+The manifest switches to the new references before obsolete files are pruned. A failed compaction
+leaves the previous manifest readable, and frozen recovery copies are still protected. Usage data
+stays local; compaction does not enable remote sharing.
 
 Event exact keys:
 

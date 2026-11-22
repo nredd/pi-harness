@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	decodeShard,
+	encodeShard,
 	exportStats,
 	importStats,
 	loadCombined,
@@ -407,7 +409,7 @@ it("migrates a legacy boolean recovery marker to a frozen file set once", async 
 	);
 });
 
-it("keeps many sealed deltas proportional to new events and leaves no superseded files", async () => {
+it("compacts sealed deltas without rewriting the base or losing archived calls", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const lines = Array.from({ length: 100 }, (_, i) => {
 		const row = JSON.parse(
@@ -422,7 +424,29 @@ it("keeps many sealed deltas proportional to new events and leaves no superseded
 	const ref = before.shards[0];
 	if (!ref) throw new Error("Missing shard");
 	const original = readFileSync(join(first.snapshotDir, ref.file));
+	const latePath = join(agent, "sessions", "archived.jsonl");
+	const lateMs = at("2026-10-02");
+	sessionFile(latePath, {
+		startMs: lateMs,
+		lines: [assistantLine({ ms: lateMs, provider: "physical", model: "fixture", input: 500 })],
+	});
+	await exportStats(agent, out);
+	rmSync(latePath);
+	// Rebuild the usage cache so the archived call exists only in published history.
+	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+	let peak = 0;
 	for (let i = 100; i < 140; i++) {
+		if (i === 130) {
+			// A valid older manifest need not list its deltas in order of increasing session end.
+			const { shards, ...header } = manifest(first.snapshotDir);
+			writeFileSync(
+				join(first.snapshotDir, "manifest.json"),
+				JSON.stringify({
+					...header,
+					shards: [shards[0], ...shards.slice(1).reverse()],
+				}),
+			);
+		}
 		const row = JSON.parse(
 			assistantLine({ ms: at("2026-10-01") + i, provider: "physical", model: "fixture", input: i + 1 }),
 		);
@@ -430,15 +454,79 @@ it("keeps many sealed deltas proportional to new events and leaves no superseded
 		lines.push(JSON.stringify(row));
 		sessionFile(path, { startMs: at("2026-10-01"), lines });
 		await exportStats(agent, out);
+		peak = Math.max(peak, manifest(first.snapshotDir).shards.length);
 	}
-	await exportStats(agent, out);
 	const after = manifest(first.snapshotDir);
-	expect(after.shards).toHaveLength(41);
-	expect(after.shards.reduce((n, s) => n + s.bytes, 0)).toBeLessThanOrEqual(ref.bytes + 40 * 256);
+	expect(peak).toBe(32);
+	expect(after.shards).toHaveLength(11);
+	expect(after.shards).toContainEqual(ref);
+	expect(after.shards.reduce((n, s) => n + s.bytes, 0)).toBeLessThan(ref.bytes + 41 * 256);
+	await exportStats(agent, out);
+	expect(manifest(first.snapshotDir).shards).toEqual(after.shards);
 	expect(readFileSync(join(first.snapshotDir, ref.file))).toEqual(original);
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(["manifest.json", ...after.shards.map((s) => s.file)].sort());
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls).toHaveLength(140);
+	const imported = await loadCombined(viewer);
+	expect(imported.calls.map((call) => call.input)).toEqual([...Array.from({ length: 140 }, (_, i) => i + 1), 500]);
+	expect(imported.sessions).toHaveLength(2);
+	expect(imported.sessions.map((session) => session.endMs)).toEqual([at("2026-10-01") + 139, lateMs]);
+});
+
+it("compacts an already over-cap month missing from the scan and keeps last-good on digest mismatch", async () => {
+	const result = await exportStats(agent, out);
+	const previous = manifest(result.snapshotDir);
+	const month = "2026-10";
+	for (let i = 0; i < 33; i++) {
+		const bytes = encodeShard({
+			version: 3,
+			machineId: previous.machineId,
+			month,
+			events: [],
+			sessions: [],
+			quota: [
+				{
+					harness: "pi",
+					provider: "fixture",
+					limitId: "fixture",
+					window: "daily",
+					usedPercent: i,
+					resetAt: at("2026-10-02"),
+					durationMs: 86_400_000,
+					observedAt: at("2026-10-01") + i,
+					planType: null,
+					account: "",
+				},
+			],
+		});
+		const sha256 = createHash("sha256").update(bytes).digest("hex");
+		const file = `${month}-${sha256}.json.gz`;
+		writeFileSync(join(result.snapshotDir, file), bytes);
+		previous.shards.push({ month, file, sha256, bytes: bytes.length });
+	}
+	writeFileSync(join(result.snapshotDir, "manifest.json"), JSON.stringify(previous));
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const oldCache = await readGlobal(viewer);
+	const previousFiles = readdirSync(result.snapshotDir).sort();
+	vi.mocked(writeFile).mockRejectedValueOnce(Object.assign(new Error("read-only fixture"), { code: "EROFS" }));
+	await expect(exportStats(agent, out)).rejects.toThrow("read-only fixture");
+	expect(manifest(result.snapshotDir)).toEqual(previous);
+	expect(readdirSync(result.snapshotDir).sort()).toEqual(previousFiles);
+	await exportStats(agent, out);
+	const after = manifest(result.snapshotDir);
+	expect(after.shards).toHaveLength(2);
+	expect(after.shards[0]).toEqual(previous.shards[0]);
+	const compact = after.shards[1];
+	if (!compact) throw new Error("Missing compacted shard");
+	const path = join(result.snapshotDir, compact.file);
+	const bytes = readFileSync(path);
+	const corrupt = Buffer.from(bytes);
+	corrupt[corrupt.length - 1] = (corrupt.at(-1) ?? 0) ^ 1;
+	writeFileSync(path, corrupt);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 0, retained: 1 });
+	expect((await readGlobal(viewer)).machines).toEqual(oldCache.machines);
+	writeFileSync(path, bytes);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).quota).toEqual([expect.objectContaining({ usedPercent: 32 })]);
 });
 
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {

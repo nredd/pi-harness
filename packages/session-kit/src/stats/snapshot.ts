@@ -36,6 +36,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 const HASH = /^[a-f0-9]{64}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_BYTES = 128 * 1024 * 1024;
+const MAX_SEALED_SHARDS = 32;
 const SHARD_FILE = /^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/;
 export interface Identity {
 	machineId: string;
@@ -847,6 +848,40 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 	return revised;
 }
 
+/** Compact late updates without rewriting the base or consulting the current transcript scan. */
+function compactDeltas(base: Shard, deltas: readonly Shard[], exportedAt: number): Shard {
+	const sessions = new Map<string, SnapshotSession>();
+	for (const delta of deltas)
+		for (const session of delta.sessions) {
+			const prior = sessions.get(session.id);
+			if (!prior || prior.endMs < session.endMs) sessions.set(session.id, session);
+		}
+	return {
+		...base,
+		events: deltas.flatMap((delta) => delta.events),
+		sessions: [...sessions.values()],
+		quota: mergeQuota(
+			deltas.flatMap((delta) => delta.quota as SnapshotQuota[]),
+			exportedAt,
+		),
+	};
+}
+
+function monthDelta(full: Shard, old: readonly Shard[]): Shard | undefined {
+	const events = new Set(old.flatMap((shard) => shard.events.map((event) => event.id)));
+	const ends = new Map<string, number>();
+	for (const shard of old)
+		for (const session of shard.sessions) ends.set(session.id, Math.max(ends.get(session.id) ?? 0, session.endMs));
+	const quotas = new Set(old.flatMap((shard) => (shard.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))));
+	const delta = {
+		...full,
+		events: full.events.filter((event) => !events.has(event.id)),
+		sessions: full.sessions.filter((session) => session.endMs > (ends.get(session.id) ?? 0)),
+		quota: (full.quota as SnapshotQuota[]).filter((q) => !quotas.has(JSON.stringify(q))),
+	};
+	return delta.events.length || delta.sessions.length || delta.quota.length ? delta : undefined;
+}
+
 /** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
 async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
 	const cleanupErrors = new Map<string, number>();
@@ -1013,45 +1048,49 @@ export async function exportStats(
 	// superseded files to this set, so subsequent active generations still prune automatically.
 	if (recoveryPending && (captureRecovery || !state.recoveryPending))
 		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending, recoveryFiles, lostHarnesses });
-	// Uncorrected past months stay sealed: append only newly discovered events/metadata.
-	// An explicit harness replacement starts a new generation rather than retaining dropped history.
+	// Uncorrected past months stay sealed. An explicit replacement drops their old generations.
 	const sealed =
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
 			? previous
 			: null;
 	const current = monthOf(exportedAt);
 	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
-	const publishedShards: Shard[] = [];
+	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: Shard }[]>();
 	if (sealed)
-		for (const [i, previousShard] of sealed.shards.entries()) {
-			if (previousShard.month >= current || revised.has(previousShard.month)) continue;
-			snapshot.manifest.shards.push(nth(sealed.manifest.shards, i));
-			publishedShards.push(previousShard);
+		for (const [i, shard] of sealed.shards.entries()) {
+			if (shard.month >= current || revised.has(shard.month)) continue;
+			const refs = prior.get(shard.month) ?? [];
+			refs.push({ ref: nth(sealed.manifest.shards, i), shard });
+			prior.set(shard.month, refs);
 		}
-	for (const full of snapshot.shards) {
-		const old = publishedShards.filter((previousShard) => previousShard.month === full.month);
-		const events = new Set(old.flatMap((previousShard) => previousShard.events.map((event) => event.id)));
-		const sessions = new Map(
-			old.flatMap((previousShard) => previousShard.sessions.map((session) => [session.id, session] as const)),
-		);
-		const quotas = new Set(
-			old.flatMap((previousShard) => (previousShard.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))),
-		);
-		const delta: Shard = {
-			...full,
-			events: full.events.filter((event) => !events.has(event.id)),
-			sessions: full.sessions.filter((session) => {
-				const prior = sessions.get(session.id);
-				return !prior || session.endMs > prior.endMs;
-			}),
-			quota: (full.quota as SnapshotQuota[]).filter((q) => !quotas.has(JSON.stringify(q))),
-		};
-		if (!delta.events.length && !delta.sessions.length && !(delta.quota as SnapshotQuota[]).length) continue;
-		validateShard(delta, snapshot.manifest, delta.month);
+	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
+	const publishedShards: Shard[] = [];
+	for (const month of [...new Set([...prior.keys(), ...fresh.keys()])].sort()) {
+		let old = prior.get(month) ?? [];
+		const full = fresh.get(month);
+		let delta =
+			full &&
+			monthDelta(
+				full,
+				old.map(({ shard }) => shard),
+			);
+		if (old.length + Number(delta !== undefined) > MAX_SEALED_SHARDS) {
+			const base = nth(old, 0);
+			const deltas = old.slice(1).map(({ shard }) => shard);
+			if (delta) deltas.push(delta);
+			delta = monthDelta(compactDeltas(base.shard, deltas, exportedAt), [base.shard]);
+			old = [base];
+		}
+		for (const { ref, shard } of old) {
+			snapshot.manifest.shards.push(ref);
+			publishedShards.push(shard);
+		}
+		if (!delta) continue;
+		validateShard(delta, snapshot.manifest, month);
 		const bytes = encodeShard(delta);
 		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
 		const sha256 = digest(bytes);
-		const file = `${delta.month}-${sha256}.json.gz`;
+		const file = `${month}-${sha256}.json.gz`;
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {
 			await writeFile(join(snapshotDir, file), bytes, { flag: "wx", mode: 0o600 });
@@ -1060,7 +1099,7 @@ export async function exportStats(
 			if (!(await readFile(join(snapshotDir, file))).equals(bytes))
 				await atomicContents(join(snapshotDir, file), bytes);
 		}
-		snapshot.manifest.shards.push({ month: delta.month, file, sha256, bytes: bytes.length });
+		snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
 		publishedShards.push(delta);
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
