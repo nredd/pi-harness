@@ -86,7 +86,7 @@ import {
 	setFallbackSubagent,
 } from "./agent-types.ts";
 import { inChildSessionContext } from "./child-context.ts";
-import { type Clock, realClock } from "./clock.ts";
+import { type Clock, realClock, type TimerHandle } from "./clock.ts";
 import { CompletionOutbox } from "./completion-outbox.ts";
 import { createStopActions, isLiveWorkflow, registerControlTools } from "./control-tools.ts";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.ts";
@@ -508,6 +508,17 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
 
 /** CLI flag that runs a workflow script at session start. */
 export const WORKFLOW_FILE_FLAG = "subagents-workflow-file";
+
+/** What a workflow launch gets once `session_shutdown` has begun: shutdown would neither stop nor join it. */
+export const WORKFLOW_SHUTDOWN_REFUSAL = "The session is shutting down: no new workflow can start.";
+
+/**
+ * How long `session_shutdown` waits for aborted workflows to settle. An abort
+ * settles once `worker.terminate()` resolves, normally within milliseconds; a
+ * stalled one must not hold quit or session replacement, which the host awaits
+ * with no timeout of its own. Same ceiling as a child session's shutdown handlers.
+ */
+export const WORKFLOW_SHUTDOWN_DEADLINE_MS = 3_000;
 
 /**
  * Re-exported from where they now live, because this is where they were
@@ -1766,7 +1777,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	// agents are detached instead and hand their results back when the user returns
 	// to this session (see detached-results.ts). Only agents that cannot outlive the
 	// session are aborted.
-	pi.on("session_shutdown", async (event: { reason?: string }) => {
+	//
+	// Once per activation: a second event while the first waits (a quit signal during
+	// a pending /reload) gets the first one's teardown, reason and session file
+	// included, rather than tearing down again.
+	let shutdown: Promise<void> | undefined;
+	pi.on("session_shutdown", (event: { reason?: string }) => (shutdown ??= shutDown(event)));
+	async function shutDown(event: { reason?: string }): Promise<void> {
 		fleet.flushState(); // appendEntry must run before this activation loses its context
 		const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
 		unwatchDetached?.();
@@ -1786,10 +1803,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			delete (globalThis as any)[MANAGER_KEY];
 		}
 		scheduler.stop();
+		// Before the abort pass below: a run launched after it would escape both it
+		// and the join, outliving teardown.
+		workflowsClosing = true;
+		// Before any run is aborted: a run that settles while another is still
+		// terminating must not send its notice into the closing session.
+		outbox.hold();
 		// Before abortAll, and not folded into it: a workflow owns a worker thread
 		// as well as its children, and only its own signal terminates that.
 		for (const task of workflowTasks.values()) task.abortController.abort();
 		workflowTasks.clear();
+		// Joined, completion callbacks included, while the outbox is still open: an
+		// aborted run settles once its worker is down, and its Stopped notice is then
+		// spooled below on a switch or dropped with the outbox on quit (#1257).
+		await joinWorkflowRuns();
 		const switching = event?.reason !== "quit" && sessionFile !== undefined;
 		if (switching) {
 			// A group may still be held, or not registered until the parent's turn
@@ -1865,7 +1892,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// point after which a synchronous final flush is complete. Synchronous:
 		// `emit` does not await listeners, and pi exits once this handler returns.
 		pi.events.emit("subagents:disposed", {});
-	});
+	}
 
 	// Live widget: show running agents above editor.
 	// widgetMode (default "background") selects what the widget shows: "all" =
@@ -3380,6 +3407,47 @@ Terse command-style prompts produce shallow, generic work.
 	const workflowTasks = new Map<string, WorkflowTask>();
 
 	/**
+	 * Detached runs still going, each through its completion callback; a run
+	 * leaves once that callback has run. `session_shutdown` aborts the runs and
+	 * joins these before disposing the outbox, widget and fleet: a callback that
+	 * ran afterwards armed its notice timer on the closed outbox (#1257).
+	 */
+	const pendingWorkflowRuns = new Map<Promise<void>, { fenced: boolean }>();
+
+	/** Set once `session_shutdown` begins: both launch paths then refuse. */
+	let workflowsClosing = false;
+
+	/** Run a task in the background, then `settled`, for `session_shutdown` to join. */
+	function detachWorkflowRun(ctx: ExtensionContext, task: WorkflowTask, settled: () => void): void {
+		const state = { fenced: false };
+		const run = runWorkflowTask(ctx, task)
+			.then(() => {
+				if (!state.fenced) settled();
+			})
+			.finally(() => pendingWorkflowRuns.delete(run));
+		pendingWorkflowRuns.set(run, state);
+	}
+
+	/**
+	 * Wait for the pending runs, for at most {@link WORKFLOW_SHUTDOWN_DEADLINE_MS}.
+	 * A run still going at the deadline is fenced: its callback, once it settles,
+	 * would act on the disposed outbox and a session that has gone, so it is skipped.
+	 */
+	async function joinWorkflowRuns(): Promise<void> {
+		if (pendingWorkflowRuns.size === 0) return;
+		let deadline: TimerHandle | undefined;
+		await Promise.race([
+			Promise.allSettled(pendingWorkflowRuns.keys()),
+			new Promise<void>((resolve) => {
+				deadline = clock.setTimeout(resolve, WORKFLOW_SHUTDOWN_DEADLINE_MS);
+				deadline.unref?.();
+			}),
+		]);
+		deadline!.cancel();
+		for (const state of pendingWorkflowRuns.values()) state.fenced = true;
+	}
+
+	/**
 	 * Workflow runs as the fleet list wants them.
 	 *
 	 * Mapped here rather than handing `WorkflowTask` over the seam: the list is
@@ -3565,6 +3633,7 @@ Terse command-style prompts produce shallow, generic work.
 		},
 
 		execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
+			if (workflowsClosing) return textResult(WORKFLOW_SHUTDOWN_REFUSAL);
 			const resumeFrom = resolveResumeTarget(params.resumeFromRunId, workflowTasks);
 			if (resumeFrom !== undefined && !resumeFrom.ok) return textResult(resumeFrom.message);
 
@@ -3633,7 +3702,7 @@ Terse command-style prompts produce shallow, generic work.
 
 			// Background, like Claude Code: the id comes back now and the run keeps
 			// going without the tool call.
-			void runWorkflowTask(ctx, task).then(() => notifyWorkflowFinished(task));
+			detachWorkflowRun(ctx, task, () => notifyWorkflowFinished(task));
 
 			return {
 				content: [
@@ -3746,6 +3815,11 @@ Terse command-style prompts produce shallow, generic work.
 			else console.warn(`[pi-subagents] ${message}`);
 		};
 
+		if (workflowsClosing) {
+			report(WORKFLOW_SHUTDOWN_REFUSAL, "warning");
+			return;
+		}
+
 		// The flag is the same machinery by another door, so the master switch has
 		// to close it too — silently ignoring a flag the user typed would be worse
 		// than saying why nothing ran.
@@ -3790,7 +3864,7 @@ Terse command-style prompts produce shallow, generic work.
 
 		// Detached: session_start is awaited by the host, and a workflow can run for
 		// minutes — blocking here would hold the whole session's startup.
-		void runWorkflowTask(ctx, task).then(() => {
+		detachWorkflowRun(ctx, task, () => {
 			// No tool call to attach a result card to, so the card becomes a session
 			// entry (same layout), and the outcome is handed to the model as context
 			// for its next turn rather than forcing one.

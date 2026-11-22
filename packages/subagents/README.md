@@ -1566,6 +1566,21 @@ Use `Agent` for one task or a few known tasks. Use a workflow when discovery det
 items pass through stages, or findings need independent verification. Every `agent()` gets a real
 child session with its own tools/model; the coordinator itself has no filesystem or network API.
 The run uses a worker thread, not a separate OS subprocess per agent.
+Ending the session stops every running workflow and waits up to three seconds
+(`WORKFLOW_SHUTDOWN_DEADLINE_MS`) for each worker thread to exit; past that, shutdown proceeds and
+a late completion is discarded. While it waits no notice is sent, and a new launch through the
+tool or `--subagents-workflow-file` is refused with "The session is shutting down: no new workflow
+can start." A second shutdown event in the meantime shares the first one's teardown, reason
+included. What happens to the outcome of a run that stops within the deadline depends on how it
+was launched:
+
+- `SubagentWorkflow` tool in a file-backed session: on `/new`, `/resume`, `/fork` or `/reload` its
+  `Stopped` notice is spooled for the session you left and appears when you return to it; on quit,
+  or in a session with no file, it is dropped. Keeping it on a switch follows the held-notice policy background agents already
+  use; it is an addition, not something [#1257](https://github.com/nredd/pi-harness/issues/1257)
+  required
+- `--subagents-workflow-file`: shutdown appends the run's workflow entry and queues its
+  `workflow-result` for the next turn before it returns, on quit too
 
 ### The lifecycle
 
