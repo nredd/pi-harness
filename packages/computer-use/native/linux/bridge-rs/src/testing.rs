@@ -47,6 +47,7 @@ pub struct RecordingSink {
     fail_posts: Vec<usize>,
     lost_acks: Vec<(usize, bool)>,
     panic_posts: Vec<usize>,
+    panic_after_posts: Vec<usize>,
     cancel_after: Option<(usize, Arc<InputState>)>,
     query_fails: bool,
     /// Sleep inside every post, as a slow server round trip would.
@@ -108,6 +109,11 @@ impl RecordingSink {
     /// Panic inside the post at `attempt`, before anything is applied.
     pub fn panic_post(mut self, attempt: usize) -> Self {
         self.panic_posts.push(attempt);
+        self
+    }
+    /// Apply the post at `attempt`, then panic before acknowledging it.
+    pub fn panic_after_post(mut self, attempt: usize) -> Self {
+        self.panic_after_posts.push(attempt);
         self
     }
     /// Refuse every point admission with `coordinate_blocked`.
@@ -256,6 +262,9 @@ impl InputSink for RecordingSink {
             )));
         }
         self.apply(event, detail, x, y, admitted);
+        if self.panic_after_posts.contains(&attempt) {
+            panic!("recorded post {attempt} panicked after it was applied");
+        }
         Ok(())
     }
 }

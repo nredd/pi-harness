@@ -960,26 +960,31 @@ impl<'a, S: InputSink> Held<'a, S> {
     }
     /// Admit and release the newest owed input; a no-op when nothing is held. Sequences
     /// release in reverse press order, so the newest is always the one to release. It
-    /// stays owed until the post confirms, and turns ambiguous when the post is uncertain.
+    /// stays owed until the post confirms, and is ambiguous from submission until the
+    /// sink definitely rejects it.
     fn release(&mut self) -> Result<(), ProtocolError> {
         let Some(&owed) = self.owed.last() else {
             return Ok(());
         };
         self.input.admit()?;
+        // Ambiguous from submission on: a panic inside the sink must not leave it
+        // looking unsent, or cleanup would release it a second time.
+        if let Some(last) = self.owed.last_mut() {
+            last.ambiguous = true;
+        }
         match self.input.post_checked(owed.event, owed.detail, 0, 0) {
             Ok(()) => {
                 self.owed.pop();
                 Ok(())
             }
-            Err(PostFailure::Rejected(error)) => Err(error),
-            Err(PostFailure::Uncertain(error)) => {
-                self.owed.pop();
-                self.owed.push(Owed {
-                    ambiguous: true,
-                    ..owed
-                });
+            Err(PostFailure::Rejected(error)) => {
+                // A definite rejection had no effect: the release may be sent again.
+                if let Some(last) = self.owed.last_mut() {
+                    last.ambiguous = false;
+                }
                 Err(error)
             }
+            Err(PostFailure::Uncertain(error)) => Err(error),
         }
     }
     fn tap(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
@@ -1788,6 +1793,29 @@ mod tests {
             [("key+", 8, true), ("key+", 9, true), ("key-", 8, false)]
         );
         assert_eq!(input.state().unconfirmed_releases(), ["keycode 9"]);
+    }
+
+    #[test]
+    fn panic_after_normal_release_is_not_resent() {
+        // The release reached the server, then the post panicked: delivery is unknown,
+        // so cleanup observes control up instead of releasing it a second time.
+        let input = Input::with_sink(RecordingSink::default().panic_after_post(1));
+        let outcome = catch_unwind(AssertUnwindSafe(|| input.keypress(&["control"])));
+        assert!(outcome.is_err());
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, true)]);
+        assert!(input.state().unconfirmed_releases().is_empty());
+
+        // The record turns ambiguous before the sink runs, so a panic cannot leave it
+        // looking unsent.
+        let input = Input::with_sink(RecordingSink::default().panic_after_post(1));
+        let mut held = Held::new(&input);
+        held.press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, 8).unwrap();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = held.release();
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(held.owed.len(), 1);
+        assert!(held.owed[0].ambiguous, "marked before the sink ran");
     }
 
     #[test]
