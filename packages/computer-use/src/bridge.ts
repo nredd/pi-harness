@@ -168,7 +168,8 @@ interface ExecutionTrace {
 	escalationReason?: string;
 	backgroundAttempt?: { outcome: "foreground_required" | "didnt"; reason: string };
 	verification?: {
-		status: "verified" | "preexisting" | "failed";
+		/** `inconclusive`: an `absent` condition was not found, but incomplete evidence cannot prove it gone. */
+		status: "verified" | "preexisting" | "failed" | "inconclusive";
 		text?: string;
 		role?: string;
 		value?: string;
@@ -341,6 +342,10 @@ interface WaitForDetails {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
+	/** An `absent` condition was not found, but incomplete evidence cannot prove it gone; `found` stays false. */
+	inconclusive?: true;
+	/** Successor nodes in the condition's scope that could not be read (`truncated`). */
+	unreadRefs?: string[];
 	target?: SerializedOutlineSearchMatch;
 	nodeCount?: number;
 	text?: string;
@@ -1984,6 +1989,36 @@ function outlineConditionPresent(outline: Outline, condition: ReturnType<typeof 
 	);
 }
 
+/**
+ * Why a successor outline cannot corroborate a `gone` condition: it still shows the condition, or a node that is
+ * the condition's scope, above it, or (unless exact) inside it is unread (`truncated`). The Windows UIA wait does
+ * not report its own truncation, so absence is checked here on every platform. `undefined` when corroborated.
+ */
+function absenceUnproven(
+	outline: Outline,
+	condition: ReturnType<typeof validateCondition>,
+): { present: boolean; unreadRefs: string[] } | undefined {
+	if (outlineConditionPresent(outline, condition)) return { present: true, unreadRefs: [] };
+	const scope = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
+	const unreadRefs = outline.nodes
+		.filter(
+			(node) =>
+				node.truncated &&
+				(!scope ||
+					nodeWithinScope(scope, node.ref, false) ||
+					(!condition.scopeExact && nodeWithinScope(node, scope.ref, false))),
+		)
+		.map((node) => node.ref);
+	return unreadRefs.length > 0 ? { present: false, unreadRefs } : undefined;
+}
+
+function absenceUnprovenMessage(unproven: { present: boolean; unreadRefs: string[] }): string {
+	if (unproven.present) return "the successor observation still shows the condition";
+	const { unreadRefs } = unproven;
+	const list = `${unreadRefs.slice(0, 5).join(", ")}${unreadRefs.length > 5 ? ", ..." : ""}`;
+	return `${unreadRefs.length} node${unreadRefs.length === 1 ? "" : "s"} in its scope could not be read (${list})`;
+}
+
 function conditionScopeNode(
 	outline: Outline,
 	condition: ReturnType<typeof validateCondition>,
@@ -2106,15 +2141,20 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 	const useDiff = !transition.useFullView;
 	const matches = searchOutline(refreshed.outline, text, role, undefined, 1);
 	const foundTarget = matches[0];
+	// A helper's `gone` holds only when the successor observation corroborates it.
+	const unproven = gone && raw.found ? absenceUnproven(refreshed.outline, condition) : undefined;
+	const inconclusive = gone && (raw.incomplete === true || unproven !== undefined);
 	const details: WaitForDetails = {
 		tool: "wait_for",
 		stateId: refreshed.capture.stateId,
 		baseStateId: baseView.stateId,
 		view: useDiff ? "diff" : "full",
 		changes: useDiff ? transition.changes : undefined,
-		found: raw.found,
-		gone: raw.gone || undefined,
+		found: raw.found && !inconclusive,
+		gone: (raw.gone && !inconclusive) || undefined,
 		timedOut: raw.timedOut || undefined,
+		...(inconclusive ? { inconclusive: true as const } : {}),
+		...(unproven?.unreadRefs.length ? { unreadRefs: unproven.unreadRefs } : {}),
 		target: foundTarget ? serializeOutlineSearchMatch(foundTarget) : undefined,
 		nodeCount: Number.isFinite(raw.nodeCount) ? Number(raw.nodeCount) : refreshed.outline.nodes.length,
 		text,
@@ -2123,11 +2163,13 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		scopeRef,
 		renderedOutline: foldToBudget(refreshed.outline).text,
 	};
-	const message = details.found
-		? details.gone
-			? "Condition disappeared."
-			: "Condition appeared."
-		: `Timed out after ${timeoutMs}ms waiting for condition.`;
+	const message = inconclusive
+		? `Inconclusive: the condition is not proven gone: ${unproven ? absenceUnprovenMessage(unproven) : `the accessibility tree could not be read completely within ${timeoutMs}ms`}. Observe or wait again before treating it as gone.`
+		: details.found
+			? details.gone
+				? "Condition disappeared."
+				: "Condition appeared."
+			: `Timed out after ${timeoutMs}ms waiting for condition.`;
 	return {
 		content: [
 			{
@@ -2741,6 +2783,9 @@ export async function terminalDesktopActionResult(
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
 			};
+		} else if (execution.error?.code === "postcondition_inconclusive") {
+			// The proven closure settles an absence the helper could not confirm.
+			execution.error = undefined;
 		}
 	}
 	const successors = targetClosed
@@ -2867,6 +2912,16 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
+			// The outcome before an `absent` check: an uncorroborated absence falls back to it.
+			let outcomeBeforeAbsence: ActOutcome | undefined;
+			const absenceUnconfirmed = (reason: string): void => {
+				execution.verification!.status = "inconclusive";
+				execution.outcome = settledOutcome(execution, outcomeBeforeAbsence!);
+				execution.error = {
+					code: "postcondition_inconclusive",
+					message: `The action was delivered, but its absent postcondition is not proven: ${reason}.`,
+				};
+			};
 			try {
 				if (condition && !execution.error) {
 					const {
@@ -2901,11 +2956,14 @@ async function performDesktopTransaction(
 						gone: gone || undefined,
 						timeoutMs,
 					};
+					if (gone) outcomeBeforeAbsence = execution.outcome ?? "unknown";
 					execution.outcome = settledOutcome(
 						execution,
 						outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status),
 					);
-					if (!verification.found) {
+					if (gone && !verification.found && verification.incomplete) {
+						absenceUnconfirmed(`the accessibility tree could not be read completely within ${timeoutMs}ms`);
+					} else if (!verification.found) {
 						execution.error = {
 							code: "postcondition_failed",
 							message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
@@ -2922,6 +2980,11 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
+				if (outcomeBeforeAbsence !== undefined && execution.verification!.status !== "inconclusive") {
+					const unproven =
+						execution.verification!.status === "failed" ? undefined : absenceUnproven(capture.outline, condition!);
+					if (unproven) absenceUnconfirmed(absenceUnprovenMessage(unproven));
+				}
 				execution.outcome = settledOutcome(
 					execution,
 					outcomeAfterObservedValues(
@@ -2960,7 +3023,16 @@ async function performDesktopTransaction(
 					clearDesktopOperationState(state);
 					throw error;
 				}
-				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);
+				const terminal = await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);
+				// Without a successor observation or a proven closure, the helper's absence stays uncorroborated.
+				const status = execution.verification?.status;
+				if (
+					outcomeBeforeAbsence !== undefined &&
+					terminal.details.status !== "target_closed" &&
+					(status === "verified" || status === "preexisting")
+				)
+					absenceUnconfirmed("no successor observation could be captured");
+				return terminal;
 			}
 		}, signal),
 	);
@@ -4133,10 +4205,22 @@ act_ui({
 })
 ```
 
-Verification reports `verified`, `preexisting`, or `failed`. A preexisting
-condition means the requested end state holds, but is not evidence that the
-action caused it. Use `ref` for one exact element or `scopeRef` for a subtree;
-role-only conditions must be scoped, and value checks require an exact `ref`.
+Verification reports `verified`, `preexisting`, `failed`, or `inconclusive`. A
+preexisting condition means the requested end state holds, but is not evidence
+that the action caused it. Use `ref` for one exact element or `scopeRef` for a
+subtree; role-only conditions must be scoped, and value checks require an exact
+`ref`.
+
+An `absent` condition holds only on complete evidence. The helper must walk the
+whole scope and read every field the condition tests (the macOS walk stops at
+depth 12 and 2,000 nodes), and the successor observation must neither show the
+condition nor mark a node `truncated` in the scope, above it or, unless the
+scope is an exact `ref`, below it. A root closure proven from a complete listing
+also settles it. Otherwise the check is `inconclusive` with
+`postcondition_inconclusive` and the outcome keeps its delivery evidence, and
+`wait_for` returns `inconclusive: true` (plus `unreadRefs`) instead of `gone`.
+The Windows UIA wait still answers `gone` from a truncated walk; only the
+successor's `truncated` root catches that.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 

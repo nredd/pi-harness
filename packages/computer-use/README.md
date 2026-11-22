@@ -450,9 +450,12 @@ Terminal `act_ui` results say the action was delivered, or, after a timed-out ac
 - `post_action_observation_failed` with code `root_stale`: the root is still listed but the helper answers
   `root_not_found` for its ref (matched on the error code, not the message). A failed probe stays generic. Rediscover with `find_roots`.
 - The identity probe proves `target_closed` only from successful listings: a probe that fails after an
-  empty listing leaves the outcome `post_action_observation_failed`. macOS and Windows listings carry no
-  completeness information, so an empty listing from them is still read as closure; only the Linux helper
-  fails a PID-scoped listing that timed out instead of returning it empty.
+  empty listing leaves the outcome `post_action_observation_failed`. The Linux helper fails a PID-scoped
+  listing that timed out, and the macOS helper fails one (`inventory_incomplete`) whose `AXWindows` list,
+  sheet sources (`AXSheets`, children and their roles) or a skipped window's size could not be read, or
+  that exceeds 128 windows, unless the process has exited. Native macOS `rootDelta` likewise reports
+  `closed` only against a complete listing, and `appeared` or `focused` only after one. Windows listings
+  carry no completeness information, so an empty listing from them is still read as closure.
 
 ### Ref lifecycle
 
@@ -1766,10 +1769,22 @@ act_ui({
 })
 ```
 
-Verification reports `verified`, `preexisting`, or `failed`. A preexisting
-condition means the requested end state holds, but is not evidence that the
-action caused it. Use `ref` for one exact element or `scopeRef` for a subtree;
-role-only conditions must be scoped, and value checks require an exact `ref`.
+Verification reports `verified`, `preexisting`, `failed`, or `inconclusive`. A
+preexisting condition means the requested end state holds, but is not evidence
+that the action caused it. Use `ref` for one exact element or `scopeRef` for a
+subtree; role-only conditions must be scoped, and value checks require an exact
+`ref`.
+
+An `absent` condition holds only on complete evidence. The helper must walk the
+whole scope and read every field the condition tests (the macOS walk stops at
+depth 12 and 2,000 nodes), and the successor observation must neither show the
+condition nor mark a node `truncated` in the scope, above it or, unless the
+scope is an exact `ref`, below it. A root closure proven from a complete listing
+also settles it. Otherwise the check is `inconclusive` with
+`postcondition_inconclusive` and the outcome keeps its delivery evidence, and
+`wait_for` returns `inconclusive: true` (plus `unreadRefs`) instead of `gone`.
+The Windows UIA wait still answers `gone` from a truncated walk; only the
+successor's `truncated` root catches that.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 
@@ -2844,9 +2859,12 @@ Terminal `act_ui` results say the action was delivered, or name the timed-out ac
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
 - The identity probe proves `target_closed` only from successful listings: a probe that fails after an
-  empty listing leaves the outcome `post_action_observation_failed`. macOS and Windows listings carry no
-  completeness information, so an empty listing from them is still read as closure; only the Linux helper
-  fails a PID-scoped listing that timed out instead of returning it empty.
+  empty listing leaves the outcome `post_action_observation_failed`. The Linux helper fails a PID-scoped
+  listing that timed out, and the macOS helper fails one (`inventory_incomplete`) whose `AXWindows` list,
+  sheet sources (`AXSheets`, children and their roles) or a skipped window's size could not be read, or
+  that exceeds 128 windows, unless the process has exited. Native macOS `rootDelta` likewise reports
+  `closed` only against a complete listing, and `appeared` or `focused` only after one. Windows listings
+  carry no completeness information, so an empty listing from them is still read as closure.
 
 ## Ref lifecycle
 

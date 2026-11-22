@@ -222,6 +222,8 @@ export interface PlatformWaitForResponse {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
+	/** A `gone` wait that timed out because its last walk could not read the whole scope: absence is unknown. */
+	incomplete?: boolean;
 	nodeCount?: number;
 }
 

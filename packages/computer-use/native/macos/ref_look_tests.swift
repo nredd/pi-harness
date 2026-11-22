@@ -287,4 +287,108 @@ func runRefLookAssertions() {
     "present empty scroll extent is not treated as absent")
   print("macos ref ownership and look serialization checks passed")
   runAXTraversalAssertions()
+  runAbsenceEvidenceAssertions()
+}
+
+/// A failed read, a bounded walk or a partial root listing never proves absence (#1242, #1243).
+private func runAbsenceEvidenceAssertions() {
+  final class Node {
+    let name: String
+    init(_ name: String) { self.name = name }
+  }
+  func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() {
+      print("FAIL: \(message)")
+      exit(1)
+    }
+  }
+  func world(children: [String: [Node]], unreadable: Set<String> = []) -> AXTraversalWorld<Node> {
+    AXTraversalWorld<Node>(
+      role: { _ in "AXGroup" },
+      childLists: { unreadable.contains($0.name) ? nil : (children[$0.name] ?? [], nil) },
+      sameElement: { $0.name == $1.name }, hash: { $0.name.hashValue })
+  }
+
+  check(axReadEvidence(.success) == .present, "a successful read is present")
+  check(
+    [AXError.noValue, .attributeUnsupported, .invalidUIElement].allSatisfy { axReadEvidence($0) == .absent },
+    "no value, an unsupported attribute and a destroyed element are authoritative absence")
+  check(
+    [AXError.cannotComplete, .apiDisabled, .failure, .notImplemented].allSatisfy { axReadEvidence($0) == .failed },
+    "a timeout or any other failure proves nothing")
+
+  // A chain 0...13: the depth-13 node lies one level past the waitFor depth limit of 12.
+  let chain = (0...13).map { Node("n\($0)") }
+  var chainChildren: [String: [Node]] = [:]
+  for depth in 0..<13 { chainChildren[chain[depth].name] = [chain[depth + 1]] }
+  let deep = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 12, maxNodes: 2000, checkFrontier: true)
+  check(deep.nodes.count == 13 && !deep.complete, "a node below the depth limit leaves the walk incomplete")
+  let unchecked = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 12, maxNodes: 2000, checkFrontier: false)
+  check(unchecked.nodes.count == 13, "an unchecked frontier walks the same nodes")
+  let whole = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 13, maxNodes: 2000, checkFrontier: true)
+  check(whole.nodes.count == 14 && whole.complete, "a leaf at the depth limit completes the walk")
+  let frontierUnread = world(children: chainChildren, unreadable: ["n12"])
+    .walk(startingAt: chain[0], maxDepth: 12, maxNodes: 2000, checkFrontier: true)
+  check(!frontierUnread.complete, "an unreadable node at the depth limit may have children")
+  let budget = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 20, maxNodes: 5, checkFrontier: true)
+  check(budget.nodes.count == 5 && !budget.complete, "the node budget leaves the walk incomplete")
+  let wide = world(children: ["root": (0..<5).map { Node("c\($0)") }])
+    .walk(startingAt: Node("root"), maxDepth: 20, maxNodes: 3, checkFrontier: true)
+  check(!wide.complete, "children cut by the queue budget leave the walk incomplete")
+  let unreadable = world(children: chainChildren, unreadable: ["n5"])
+    .walk(startingAt: chain[0], maxDepth: 20, maxNodes: 2000, checkFrontier: true)
+  check(unreadable.nodes.count == 6 && !unreadable.complete, "a failed child read leaves the walk incomplete")
+
+  func fields(_ values: [AXWaitField: AXStringRead]) -> (AXWaitField) -> AXStringRead {
+    { values[$0] ?? .absent }
+  }
+  let button: [AXWaitField: AXStringRead] = [.role: .value("AXButton"), .title: .value("Save"), .value: .value(" On ")]
+  check(axWaitConditionMatch(role: "AXButton", text: "save", value: "on", read: fields(button)) == true, "every predicate read and matched")
+  check(axWaitConditionMatch(role: "AXLink", text: nil, value: nil, read: fields(button)) == false, "a read role mismatch")
+  check(axWaitConditionMatch(role: "AXButton", text: "open", value: nil, read: fields(button)) == false, "read text mismatch")
+  check(axWaitConditionMatch(role: nil, text: nil, value: "off", read: fields(button)) == false, "read value mismatch")
+  check(axWaitConditionMatch(role: "AXButton", text: nil, value: nil, read: fields([:])) == false, "an absent role cannot match")
+  check(axWaitConditionMatch(role: nil, text: nil, value: "on", read: fields([:])) == false, "an absent value cannot match")
+  check(axWaitConditionMatch(role: "AXButton", text: nil, value: nil, read: fields([.role: .failed])) == nil, "a failed role read is undecided")
+  check(
+    axWaitConditionMatch(role: nil, text: "save", value: nil, read: fields([.title: .failed, .description: .value("Other")])) == nil,
+    "an unread text field leaves the text undecided")
+  check(
+    axWaitConditionMatch(role: nil, text: "save", value: nil, read: fields([.title: .failed, .description: .value("Save")])) == true,
+    "text read elsewhere still matches")
+  check(axWaitConditionMatch(role: nil, text: nil, value: "on", read: fields([.value: .failed])) == nil, "a failed value read is undecided")
+  check(
+    axWaitConditionMatch(role: "AXLink", text: "save", value: nil, read: fields([.role: .value("AXButton"), .title: .failed])) == false,
+    "a read mismatch decides despite another failed read")
+
+  check(windowListComplete(0) && windowListComplete(windowListCap), "a read window list within the cap is complete")
+  check(!windowListComplete(nil) && !windowListComplete(windowListCap + 1), "a failed or over-cap window list is incomplete")
+
+  let main: [String: Any] = ["title": "Main", "isFocused": false]
+  let sheet: [String: Any] = ["title": "Sheet", "isFocused": true]
+  let fresh: [String: Any] = ["title": "Fresh", "isFocused": true]
+  func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> Set<String> {
+    Set(rootInventoryChanges(before: before, after: after).map { "\($0.change):\($0.root["title"] as? String ?? "")" })
+  }
+  let both = RootInventorySnapshot(roots: ["w": main, "s": sheet], complete: true)
+  check(
+    changes(both, RootInventorySnapshot(roots: ["w": main], complete: true)) == ["closed:Sheet"],
+    "a root missing from a complete listing closed")
+  check(
+    changes(both, RootInventorySnapshot(roots: ["w": main], complete: false)).isEmpty,
+    "a root missing from an incomplete listing is unknown, not closed")
+  check(
+    changes(RootInventorySnapshot(roots: ["w": main], complete: true), RootInventorySnapshot(roots: ["w": main, "f": fresh], complete: false))
+      == ["appeared:Fresh", "focused:Fresh"],
+    "a root seen in an incomplete listing still appeared after a complete one")
+  check(
+    changes(RootInventorySnapshot(roots: ["w": main], complete: false), RootInventorySnapshot(roots: ["w": main, "f": fresh], complete: true)).isEmpty,
+    "a root missing from an incomplete earlier listing neither appeared nor gained focus")
+  check(
+    changes(
+      RootInventorySnapshot(roots: ["w": main], complete: false),
+      RootInventorySnapshot(roots: ["w": ["title": "Main", "isFocused": true]], complete: true)) == ["focused:Main"],
+    "a root seen in both listings gained focus")
+  check(changes(both, both).isEmpty, "unchanged listings report nothing")
+  print("macos absence evidence checks passed")
 }
