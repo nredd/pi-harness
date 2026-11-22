@@ -1,6 +1,18 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readdir, readFile, realpath, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	link,
+	lstat,
+	mkdir,
+	readdir,
+	readFile,
+	realpath,
+	rename,
+	rmdir,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
@@ -256,9 +268,24 @@ async function outboxStateFile(dir: string, snapshotDir: string): Promise<string
 		.digest("hex");
 	return join(dir, "pi-session-kit", "outboxes", `${key}.json`);
 }
-/** Private like the state it holds: the `outboxes/` directory is 0700, the file 0600. */
+/**
+ * Private like the state it holds: the `outboxes/` directory is 0700, also when an older kit created it
+ * under a looser umask. On POSIX it must be a real directory owned by this user (not a symlink), else the
+ * export is refused. Without POSIX ownership (Windows) the platform's permissions apply.
+ */
+async function privateOutboxes(dir: string): Promise<void> {
+	await mkdir(dir, { recursive: true, mode: 0o700 });
+	const uid = process.getuid?.();
+	if (uid === undefined) return;
+	const info = await lstat(dir);
+	if (!info.isDirectory() || info.uid !== uid)
+		throw new Error(
+			`Outbox bookkeeping directory ${JSON.stringify(dir)} is not a directory owned by this user; move it aside and retry`,
+		);
+	if ((info.mode & 0o777) !== 0o700) await chmod(dir, 0o700);
+}
+/** Written 0600 through an atomic rename into the directory `privateOutboxes` checked. */
 async function recordOutbox(path: string, state: OutboxState): Promise<void> {
-	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
 	await atomicJson(path, { version: 1, ...state });
 }
 function validateState(value: unknown): ExportState {
@@ -311,18 +338,14 @@ async function exportState(dir: string): Promise<ExportState> {
 		validateState,
 	);
 }
-/**
- * This outbox's own bookkeeping (`own`), else the legacy installation-wide fields it inherits. Corrupt
- * fails.
- */
-async function outboxState(path: string, legacy: ExportState): Promise<{ state: OutboxState; own: boolean }> {
+/** This outbox's own bookkeeping, `null` when it has none. Corrupt fails. */
+async function ownOutbox(path: string): Promise<OutboxState | null> {
 	try {
-		return { state: validateOutbox(await jsonFile(path)), own: true };
+		return validateOutbox(await jsonFile(path));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return null;
 	}
-	const { salt: _, ...inherited } = legacy;
-	return { state: inherited, own: false };
 }
 
 /**
@@ -767,10 +790,10 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 export interface ExportOptions {
 	harnesses?: readonly Harness[];
 	/**
-	 * Publish this scan as a replacement generation. Bypasses the narrower-set, clock-rollback and
-	 * unreadable-history safeguards and clears frozen recovery files, so it drops published history absent
-	 * from the scan, sealed months included. Viewers holding a newer snapshot reject the replacement as
-	 * older until the clock passes it.
+	 * Publish this scan as a replacement generation. Bypasses the narrower-set, clock-rollback,
+	 * unreadable-history and missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
+	 * from the scan, sealed months included. Viewers holding a newer snapshot never import the replacement;
+	 * they accept this machine again only from a later export timestamped at or after the snapshot they hold.
 	 */
 	replaceHarnesses?: boolean;
 	roots?: Partial<HarnessRoots>;
@@ -1126,7 +1149,8 @@ async function publishStats(
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	// One instant, taken first, is both checked and published.
 	const exportedAt = Date.now();
-	const previous = intactPrevious(await loadPrevious(snapshotDir), options.replaceHarnesses === true);
+	const loadedPrevious = await loadPrevious(snapshotDir);
+	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
 	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
 	// the active month, be replaced by the scan and pruned. Refuse before the salt, the scan cache or any
 	// bookkeeping can be written.
@@ -1136,15 +1160,32 @@ async function publishStats(
 		throw new Error(
 			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ${published}); ` +
 				"refusing to reopen sealed months. Fix the clock, or pass --replace-harnesses to publish anyway: " +
-				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot " +
-				`reject the replacement as older until the clock passes ${published}`,
+				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot keep " +
+				"it and never import this replacement; they accept this machine again only from a later export " +
+				`timestamped at or after ${published}`,
 		);
 	}
-	const installation = await exportState(dir);
 	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
 	// stale recovery state over this one's.
 	const statePath = await outboxStateFile(dir, snapshotDir);
-	const bookkeeping = await outboxState(statePath, installation);
+	await privateOutboxes(dirname(statePath));
+	const own = await ownOutbox(statePath);
+	// A missing manifest is a first export only if nothing says this outbox published before. Otherwise
+	// publishing the scan would replace its sealed history and prune the shards that hold it.
+	if (loadedPrevious === null && !options.replaceHarnesses) {
+		const shards = (await readdir(snapshotDir, { withFileTypes: true })).some(
+			(entry) => entry.isFile() && SHARD_FILE.test(entry.name),
+		);
+		if (own !== null || shards)
+			throw new Error(
+				`Published usage manifest is missing from ${JSON.stringify(snapshotDir)}, but this outbox published ` +
+					"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
+					"or pass --replace-harnesses to publish without that history",
+			);
+	}
+	const installation = await exportState(dir);
+	const { salt: _, ...inherited } = installation;
+	const bookkeeping = { state: own ?? inherited, own: own !== null };
 	const state: ExportState = { ...bookkeeping.state, salt: installation.salt };
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.

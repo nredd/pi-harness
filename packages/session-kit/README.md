@@ -511,9 +511,10 @@ node ARTIFACT import --agent-dir DIR --input REPO
 ```
 
 `--replace-harnesses` publishes this scan as a replacement generation. It bypasses the
-narrower-set, clock-rollback and unreadable-history safeguards below and unfreezes recovery files,
-so it drops published history absent from the scan, sealed months included, and viewers holding a
-newer snapshot reject the replacement as older until the clock passes it. The usage text says so too.
+narrower-set, clock-rollback, unreadable-history and missing-manifest safeguards below and unfreezes
+recovery files, so it drops published history absent from the scan, sealed months included. Viewers
+holding a newer snapshot never import the replacement: they keep their copy and accept this machine
+again only from a later export timestamped at or after the snapshot they hold. The usage text says so too.
 
 `--harness` picks what an export reads; the default is `pi` only, so other tools are opt-in. Roots
 default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_DIR` or `~/.claude`,
@@ -633,7 +634,10 @@ Installation state, never synced:
   without its own state file inherits those legacy fields, then records its own.
 - `DIR/pi-session-kit/outboxes/<sha256>.json`: one outbox's bookkeeping, keyed by the SHA-256 of
   the resolved `<OUT>/machines/<UUID>` path and written only under that outbox's export lock (the
-  `outboxes/` directory is created 0700, the file is written 0600 through an atomic rename), so
+  `outboxes/` directory is created 0700, the file is written 0600 through an atomic rename; on POSIX
+  an existing `outboxes/`, e.g. one an older kit created 0755, is tightened to 0700, and one that is
+  a symlink, not a directory or not owned by this user refuses the export before anything is
+  written), so
   two outboxes of one agent dir cannot record stale state over each other's recovery set. The key is
   the lowercase hex SHA-256 of that `realpath`, so aliases of one outbox share a file. The format is
   exactly `{version, harnesses, failures, recoveryPending, recoveryFiles, lostHarnesses,
@@ -655,9 +659,21 @@ Installation state, never synced:
   superseded generations. So that export prunes nothing it cannot account for: every shard file that
   neither the active manifest nor the inherited fields name is frozen as a recovery file, recovery
   stays pending, and the result warns `no bookkeeping for this outbox: froze N unaccounted shard
-  files as recovery files; pass --replace-harnesses to drop them`. To rebind instead, move
-  `outboxes/<old key>.json` to the new key before the next export; to accept the loss, pass
-  `--replace-harnesses`.
+  files as recovery files; pass --replace-harnesses to drop them`. To rebind instead, first stop
+  and drain every scheduled sync and manual exporter: moving the checkout while an export holds
+  `.export.lock` moves the held lock with it, later exports then fail with `EEXIST`, and no export
+  ever reclaims a lock by age. Then move the checkout and `outboxes/<old key>.json` to the new key
+  before the next export. Never overwrite an existing `outboxes/<new key>.json` without reconciling
+  its `recoveryFiles` with the old one: the overwritten set is unprotected from pruning. To accept
+  the loss instead, pass `--replace-harnesses`.
+  A missing `manifest.json` is a first export only when the outbox has no own bookkeeping and no
+  shard files. Otherwise (e.g. the manifest alone was deleted) publishing the scan would replace the
+  sealed history and prune the shards holding it, so the export is refused before the salt, the scan
+  cache or any bookkeeping is written, keeping every shard: `Published usage manifest is missing
+  from "<dir>", but this outbox published before (its bookkeeping or shard files remain); restore
+  manifest.json from the sync checkout, or pass --replace-harnesses to publish without that
+  history`. A crash between the first export's shard writes and its manifest is refused the same
+  way; nothing was published, so `--replace-harnesses` loses nothing there.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -754,8 +770,8 @@ their archived calls. Even 1 ms behind is refused; the same instant is not. The 
 published manifest use one instant, taken before the published manifest is read. Fix the clock, or pass
 `--replace-harnesses` to publish anyway (e.g. after a clock that ran ahead). That has two
 consequences, which the refusal also states: it drops sealed history absent from this scan, and
-viewers that imported the newer snapshot reject the replacement as older (keeping their copy) until
-the clock passes the published `exportedAt`. A history-preserving recovery is tracked in
+viewers that imported the newer snapshot never import the replacement (keeping their copy); they
+accept this machine again only from a later export timestamped at or after the `exportedAt` they hold. A history-preserving recovery is tracked in
 [#1252](https://github.com/nredd/pi-harness/issues/1252).
 
 New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
