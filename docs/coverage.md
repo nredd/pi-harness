@@ -126,8 +126,9 @@ or platform averages. The macOS fan-in selects the Darwin floors from the plan. 
 and missing selected-OS floors fail closed, including when the global target is enabled. With `enforce_target: true`, the target
 overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
 use their explicit per-OS caps, not that target override. Enforced Bun signals have zero uncovered
-lines/functions/branches/statements and measure their full owned inventory. Computer-use starts
-with independent report-only Bun accounting pending hosted evidence (#645).
+lines/functions/branches/statements and measure their full owned inventory. `computer-use-vitest/bun`
+is enforced at zero since hosted main run `45009970545` (`39b7a5bb`): its macOS and Ubuntu Bun
+reports each listed all 36 primary files with zero misses (#645).
 Primary signals of eligible packages remain `enforced`; pending eligible inventory also fails.
 Owner-excluded/report-only goals do not acquire the primary target override. Report-only means
 counter excess is informational, not that reporting is optional: every selected signal still needs
@@ -153,7 +154,7 @@ injected runtime facts let either engine exercise Node/Bun identity and GC/no-GC
 mutating Bun's immutable global. Real disposable producer tests retain an unimported gate as
 uncovered, exercise its success/refusal paths, and reject missing/malformed LCOV or statement
 summaries. Hosted receipts must bind these reports to the PR's own final HEAD; historical primary
-artifacts are not evidence for these new signals. Computer-use Bun enforcement and native coverage work remain #645.
+artifacts are not evidence for these new signals. Computer-use native coverage work remains #645.
 
 Clean local counts, report hashes and the measured +26-second (8.5%) serial runtime sample are
 recorded [here](https://github.com/nredd/pi-harness/blob/8b87a89a7c39447ad658f07bf507ab144eb5b330/coverage/receipts/phase0-macos.md). These local receipts are advisory evidence,

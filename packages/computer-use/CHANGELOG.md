@@ -5,6 +5,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 ## [Unreleased]
 
 - Move the entry to `src/index.ts`, retire the inherited website/media/workflows, preserve prose, and build native payloads instead of committing them (#870).
+- Enforce zero uncovered lines, functions, branches and statements for the JS/TS runtime suite on Bun, on macOS and Linux, like the Node signal (#645).
 
 ### Fixed
 
