@@ -772,6 +772,22 @@ describe("routing on the composed chain", () => {
 		expect(tracker.record(NEON, { block: true, evidence: "inferred", expiry: "window-reset" })).toBeUndefined();
 	});
 
+	it("L3: a daily failure confirmed at or after Pacific midnight writes nothing", async () => {
+		const { clock, tracker, router, env } = routed();
+		const midnight = nextPacificMidnight(T0);
+		const failedAt = midnight - 1000;
+		const message = fauxAssistantMessage("", { stopReason: "error", errorMessage: DAILY, timestamp: failedAt });
+		// The commit boundary is inclusive: a deadline equal to the commit instant already passed.
+		clock.now = midnight;
+		expect(await router.confirm(asModel(CARBON), env, undefined, failedAt, message)).toBe(false);
+		clock.now = midnight + MINUTE;
+		expect(await router.confirm(asModel(CARBON), env, undefined, failedAt, message)).toBe(false);
+		expect(tracker.active()).toEqual([]);
+		clock.now = midnight - 1;
+		expect(await router.confirm(asModel(CARBON), env, undefined, failedAt, message)).toBe(true);
+		expect(tracker.active()).toMatchObject([{ until: midnight, expiry: "window-reset", resetKnown: true }]);
+	});
+
 	it("never confirms a cancelled failure", async () => {
 		const { tracker, router, env } = routed();
 		const controller = new AbortController();
