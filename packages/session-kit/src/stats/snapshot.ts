@@ -256,6 +256,11 @@ async function outboxStateFile(dir: string, snapshotDir: string): Promise<string
 		.digest("hex");
 	return join(dir, "pi-session-kit", "outboxes", `${key}.json`);
 }
+/** Private like the state it holds: the `outboxes/` directory is 0700, the file 0600. */
+async function recordOutbox(path: string, state: OutboxState): Promise<void> {
+	await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+	await atomicJson(path, { version: 1, ...state });
+}
 function validateState(value: unknown): ExportState {
 	const optional = RECOVERY_KEYS.filter((key) => record(value) && Object.hasOwn(value, key));
 	exact(value, ["version", "salt", "harnesses", "failures", ...optional]);
@@ -1240,8 +1245,7 @@ async function publishStats(
 	// Freeze recovery scope BEFORE replacing unreadable history. Ordinary exports never add newly
 	// superseded files to this set, so subsequent active generations still prune automatically.
 	if (recoveryPending && (captureRecovery || !state.recoveryPending || unaccounted.length > 0))
-		await atomicJson(statePath, {
-			version: 1,
+		await recordOutbox(statePath, {
 			harnesses: state.harnesses,
 			failures: state.failures,
 			recoveryPending,
@@ -1336,8 +1340,7 @@ async function publishStats(
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
 	// derives the set from the snapshot itself, so a widening is still protected.
-	const stateWarnings = await atomicJson(statePath, {
-		version: 1,
+	const stateWarnings = await recordOutbox(statePath, {
 		harnesses: published,
 		failures,
 		recoveryPending,

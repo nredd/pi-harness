@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -246,6 +246,13 @@ it("does not carry a freshness mark from an older export that stamped a lost har
 	const next = await exportStats(agent, out, undefined, options);
 	expect(next.harnesses?.claude?.failed).toBe("lost");
 	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
+});
+
+it.runIf(process.platform !== "win32")("keeps outbox bookkeeping private", async () => {
+	const first = await exportStats(agent, out);
+	const path = outboxStatePath(agent, first.snapshotDir);
+	expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
+	expect(statSync(path).mode & 0o777).toBe(0o600);
 });
 
 it("prunes post-recovery active generations while retaining only the frozen recovery files", async () => {

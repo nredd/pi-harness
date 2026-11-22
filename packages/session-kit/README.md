@@ -627,7 +627,8 @@ Installation state, never synced:
   never rewrites it. Older kits kept the outbox bookkeeping below here, installation-wide; an outbox
   without its own state file inherits those legacy fields, then records its own.
 - `DIR/pi-session-kit/outboxes/<sha256>.json`: one outbox's bookkeeping, keyed by the SHA-256 of
-  the resolved `<OUT>/machines/<UUID>` path and written only under that outbox's export lock, so
+  the resolved `<OUT>/machines/<UUID>` path and written only under that outbox's export lock (the
+  `outboxes/` directory is created 0700, the file is written 0600 through an atomic rename), so
   two outboxes of one agent dir cannot record stale state over each other's recovery set. It holds
   the harness set the last successful export published (`null` until one is recorded), written only
   after the manifest is published. `failures` holds consecutive failed exports per harness.
