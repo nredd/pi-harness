@@ -936,7 +936,7 @@ function createSetup(argv, deps) {
 		const reason = await foreignDestinationReason();
 		if (reason === undefined) return;
 		throw new HelperLifecycleRefusal(
-			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle (${reason}); automatic setup does not replace it. Remove it or fix the override, then run \`node scripts/setup-helper.mjs\` from the package root.`,
+			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle (${reason}); automatic setup does not replace it. Remove that entry, or correct or unset PI_COMPUTER_USE_HELPER_APP_PATH, then run \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
 		);
 	}
 

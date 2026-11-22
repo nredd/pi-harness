@@ -39,6 +39,8 @@ const DEV_FPR = "B".repeat(40);
 const ZIP_BYTES = Buffer.from("fake zip payload");
 const ZIP_SHA = createHash("sha256").update(ZIP_BYTES).digest("hex");
 const REPAIR = "Quit the helper, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
+const OVERRIDE_REPAIR =
+	"Remove that entry, or correct or unset PI_COMPUTER_USE_HELPER_APP_PATH, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
 
 /**
  * @param {string} file Path to write.
@@ -1118,6 +1120,7 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			),
 			message,
 		);
+		assert.ok(message.endsWith(`automatic setup does not replace it. ${OVERRIDE_REPAIR}`), message);
 		assert.equal(rec.spawn.length, 0, "nothing is verified, stopped or copied");
 		assert.equal(
 			rec.exec.some(([command]) => command === "pkill" || command === "pgrep"),
