@@ -522,6 +522,20 @@ describe("chain situations", () => {
 		expect(s.tracker.active()).toMatchObject([{ window: "inferred:daily", evidence: "inferred" }]);
 	});
 
+	it("C10: a terminal failure with partial output is marked, but never edited or continued", async () => {
+		const s = await run({ chain: [CARBON, VERTEX] });
+		s.script(CARBON, { partial: "visible", error: BILLING });
+		const messages = await s.prompt();
+		expect(s.calls).toEqual(["google/gemini-4-carbon"]);
+		expect(messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: BILLING });
+		expect(s.tracker.active()).toMatchObject([{ provider: "google", window: "inferred:billing" }]);
+		expect(s.harness.session.sessionManager.getBranch().filter((entry) => entry.type === "context_edit")).toEqual([]);
+		expect(s.notifications.filter((text) => text.includes("out of quota"))).toEqual([]);
+		// The next prompt skips the provider the partial failure exhausted.
+		await s.prompt();
+		expect(s.calls.at(-1)).toBe("google-vertex/gemini-4-carbon");
+	});
+
 	it("/router reset forgets failure counts", async () => {
 		const s = await run({ chain: [CARBON, NEON] });
 		// One counted unknown 429, then per-minute throttles exhaust core retries without a success.

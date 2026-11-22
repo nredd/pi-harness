@@ -55,6 +55,26 @@ export class SettleRecovery {
 	}
 
 	/**
+	 * Confirm and mark a terminal quota failure that already streamed output, so the next prompt
+	 * skips the exhausted scope (spec C10). Nothing is omitted or continued: `handle` still refuses
+	 * partial output, because replaying it would duplicate or lose what the user already saw.
+	 * Returns whether a mark was written.
+	 */
+	async markPartial(
+		event: Pick<AgentBeforeSettleEvent, "context">,
+		profile: Profile,
+		env: RouteEnv,
+		signal: AbortSignal | undefined,
+	): Promise<boolean> {
+		const failed = trailingError(event.context.contextEntries);
+		if (!failed || !isQuotaError(failed.message) || !hasPartialOutput(failed.message)) return false;
+		const { provider, model: id } = failed.message;
+		const entry = profile.chain.find((item) => sameModel(item, { provider, id }));
+		const model = entry && env.resolve(entry);
+		return model !== undefined && this.router.confirm(model, env, signal, failed.message.timestamp, failed.message);
+	}
+
+	/**
 	 * Decide whether the settling run ended on a confirmed quota error of a
 	 * `profile` chain model, and if so how to continue.
 	 */

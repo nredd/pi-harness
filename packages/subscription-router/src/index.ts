@@ -388,7 +388,10 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			if (!profile) return undefined;
 			const signal = ctx.signal;
 			const current = captureSelection(ctx, signal);
-			const outcome = await recovery.handle(event, profile, routeEnv(ctx, usage, confirmation), signal, current);
+			const env = routeEnv(ctx, usage, confirmation);
+			// Partial output is marked for the next prompt but never omitted or continued.
+			if (await recovery.markPartial(event, profile, env, signal)) return undefined;
+			const outcome = await recovery.handle(event, profile, env, signal, current);
 			if (!current()) return undefined;
 			if (outcome.kind === "exhausted") {
 				ctx.ui.notify(outcome.error.message, "error");
