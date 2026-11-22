@@ -436,7 +436,10 @@ test.each([7, 6])("external daemon from another executable with protocol %s is n
 	if (protocol === 7) assert.equal((await client.ensureProtocol()).protocolVersion, 7);
 	else await assert.rejects(client.ensureProtocol(), /reports protocol 6; expected 7.*operator/);
 	await assert.rejects(client.restart(), /restarted by its operator/);
-	assert.deepEqual(fake.requests.map(({ cmd }) => cmd), ["diagnostics", "diagnostics"]);
+	assert.deepEqual(
+		fake.requests.map(({ cmd }) => cmd),
+		["diagnostics", "diagnostics"],
+	);
 	assert.deepEqual(spawn.calls, []);
 });
 

@@ -11,6 +11,7 @@ import { macosHelperBuild } from "./helper-build.mjs";
 import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
+const NO_LISTENER_CODES = new Set<string | undefined>(["ENOENT", "ECONNREFUSED"]);
 const HELPER_PROTOCOL_VERSION = 7;
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 
@@ -22,22 +23,22 @@ const configuredSocketPath = path.resolve(process.env.PI_CU_SOCKET_PATH ?? DEFAU
 const usingExternalHelperSocket = !isManagedSocket(configuredSocketPath);
 export const HELPER_SOCKET_PATH = usingExternalHelperSocket ? configuredSocketPath : DEFAULT_HELPER_SOCKET_PATH;
 
-function canonicalSocketDirectory(socketPath: string): string {
-	const directory = path.dirname(socketPath);
+function canonicalPath(filePath: string): string {
 	try {
-		return realpathSync.native(directory);
+		return realpathSync.native(filePath);
 	} catch {
-		return directory;
+		return filePath;
 	}
 }
 
 function isManagedSocket(socketPath: string): boolean {
 	if (socketPath === DEFAULT_HELPER_SOCKET_PATH) return true;
+	const resolved = canonicalPath(socketPath);
 	// Reserve case variants of the managed socket name in its directory even
 	// before the socket exists, when there is no inode to compare.
 	return (
-		path.basename(socketPath).toLowerCase() === path.basename(DEFAULT_HELPER_SOCKET_PATH) &&
-		canonicalSocketDirectory(socketPath) === canonicalSocketDirectory(DEFAULT_HELPER_SOCKET_PATH)
+		path.basename(resolved).toLowerCase() === path.basename(DEFAULT_HELPER_SOCKET_PATH) &&
+		canonicalPath(path.dirname(resolved)) === canonicalPath(path.dirname(DEFAULT_HELPER_SOCKET_PATH))
 	);
 }
 
@@ -363,7 +364,7 @@ export class MacosHelperClient {
 			};
 			const onError = (error: NodeJS.ErrnoException) =>
 				settle(() => {
-					const absent = !connected && ["ENOENT", "ECONNREFUSED"].includes(error.code ?? "");
+					const absent = !connected && NO_LISTENER_CODES.has(error.code);
 					reject(new HelperTransportError(error.message, absent ? "helper_not_listening" : undefined));
 				});
 			// The helper crashed or dropped the socket before a full reply line: fail now, not at the timeout.

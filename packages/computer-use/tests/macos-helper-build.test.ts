@@ -27,7 +27,7 @@ afterEach(() => {
 	vi.resetModules();
 });
 
-async function rig(buildIdentity: string | undefined, { external = false, installed = true, alias = false } = {}) {
+async function rig(buildIdentity: string | undefined, { external = false, installed = true, alias = "" } = {}) {
 	const home = makeTestTempDir("cu-build-app-", onTestFinished);
 	const app = path.join(home, "fixture.app");
 	vi.doMock("node:os", async (original) => {
@@ -50,14 +50,32 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 	if (alias) {
 		const managedDir = path.join(home, "Library", "Caches", "pi-computer-use");
 		mkdirSync(managedDir, { recursive: true });
-		symlinkSync(managedDir, path.join(home, "alias"));
-		override = `${path.relative(process.cwd(), home)}/unused/../alias/BRIDGE.sock/`;
+		if (alias === "socket") {
+			const managedSocket = path.join(managedDir, "bridge.sock");
+			writeFileSync(managedSocket, "stand-in for the socket path");
+			override = path.join(home, "socket-link");
+			symlinkSync(managedSocket, override);
+		} else {
+			symlinkSync(managedDir, path.join(home, "alias"));
+			override = `${path.relative(process.cwd(), home)}/unused/../alias/BRIDGE.sock/`;
+		}
 	}
 	vi.stubEnv("PI_CU_SOCKET_PATH", override);
 	vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", app);
+	const connect = { afterConnect: undefined as ((socket: import("node:net").Socket) => void) | undefined };
 	vi.doMock("node:net", async (original) => {
 		const real = await original<typeof import("node:net")>();
-		return { ...real, default: { ...real, createConnection: () => real.createConnection(socketPath) } };
+		return {
+			...real,
+			default: {
+				...real,
+				createConnection: () => {
+					const socket = real.createConnection(socketPath);
+					socket.once("connect", () => queueMicrotask(() => connect.afterConnect?.(socket)));
+					return socket;
+				},
+			},
+		};
 	});
 	const spawn = vi.fn(() => {
 		throw new Error("Unexpected helper process launch");
@@ -67,6 +85,7 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 	onTestFinished(() => macosActivityGlow.close());
 	return {
 		client: macosHelper,
+		connect,
 		glow: macosActivityGlow,
 		fake,
 		spawn,
@@ -102,8 +121,8 @@ test("reports the resident helper's executable rather than the configured app on
 	assert.deepEqual(commands(), ["diagnostics"]);
 });
 
-test("a relative, symlinked socket override still refuses a stale managed daemon", async () => {
-	const { client, commands, spawn } = await rig(older, { alias: true });
+test.each(["directory", "socket"])("a symlinked %s override still refuses a stale managed daemon", async (alias) => {
+	const { client, commands, spawn } = await rig(older, { alias });
 	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
 	assert.deepEqual(commands(), ["diagnostics"]);
 	assert.equal(spawn.mock.calls.length, 0);
@@ -126,6 +145,14 @@ test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}
 		assert.equal(spawn.mock.calls.length, 0);
 	},
 );
+
+test("a socket error after connecting is not proof that the daemon was absent", async () => {
+	const { client, fake, connect, spawn } = await rig(current, { installed: false });
+	fake.script("diagnostics", silent());
+	connect.afterConnect = (socket) => socket.destroy(Object.assign(new Error("write failed"), { code: "ECONNREFUSED" }));
+	await assert.rejects(client.ensureInstalled(), /setup was not run: HelperTransportError: write failed/);
+	assert.equal(spawn.mock.calls.length, 0);
+});
 
 test("keeps a matching resident when its executable is missing", async () => {
 	const { client, spawn, commands } = await rig(current, { installed: false });
