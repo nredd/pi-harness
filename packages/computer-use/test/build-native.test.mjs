@@ -22,6 +22,10 @@ beforeEach(() => {
 	tmpdir = path.join(sandbox, "tmp");
 	cwd = path.join(sandbox, "cwd");
 	for (const dir of [rootDir, tmpdir, cwd]) mkdirSync(dir, { recursive: true });
+	write(path.join(rootDir, "package.json"), JSON.stringify({ version: "1.2.3" }));
+	for (const source of ["activity_glow", "agent_cursor", "agent_cursor_motion", "bridge", "helper_entry"]) {
+		write(path.join(rootDir, "native", "macos", `${source}.swift`), "// fixture\n");
+	}
 });
 
 function elf(machine) {
@@ -89,7 +93,7 @@ test("macOS arm64 build compiles with swiftc, chmods and ad-hoc signs", async ()
 		assert.equal(swift[swift.indexOf(framework) - 1], "-framework");
 	}
 	const sources = swift
-		.filter((arg) => arg.endsWith(".swift"))
+		.filter((arg) => arg.startsWith(path.join(rootDir, "native")) && arg.endsWith(".swift"))
 		.map((arg) => path.relative(path.join(rootDir, "native", "macos"), arg));
 	assert.deepEqual(sources, [
 		"activity_glow.swift",

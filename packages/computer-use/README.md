@@ -428,7 +428,10 @@ Measured, not assumed:
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
 - `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
-- `ensureProtocol()` restarts a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
+- The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the Swift sources `build:native` compiles (line endings normalized; any other `.swift` file in the checkout is ignored). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
+- The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched; once a probe timed out, a later absence is not proof either, only a verified reply is. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
+- After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
 
 ### Whole-desktop control
 
@@ -861,7 +864,7 @@ Browser pages are roots, not a second agent-facing context hierarchy. `launch_br
 
 The macOS socket server and Windows line protocol accept multiple in-flight requests and correlate responses by request id. macOS protects shared AX ref/look stores and the root-event sequence; Windows uses a fixed worker pool and initializes UIA per worker thread. Both platforms keep eight immutable native look records and serialize global synthesized input. Target focus, bounded occlusion preflight, and event delivery share that same critical section; another worker cannot change the foreground between validation and delivery. UIA-only Windows batches do not acquire the global input lock, while any batch that may fall back to pointer or keyboard delivery holds it for the complete transaction. Further event-delivery and occlusion details live in the [macOS implementation reference](../reference/platforms/macos/implementation.mdx) and [Windows bridge reference](../reference/platforms/windows.mdx).
 
-The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. An unknown accessibility role suppresses text reads and is treated as secure. Observations can return partial trees, but `wait_for` with `gone` cannot confirm absence from incomplete data. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and a batch stops at that step with outcome `unknown`. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
+The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. The helper validates numeric AT-SPI `GetRole` IDs, not role names. It treats password, invalid, unknown, extended, unrecognized and unavailable roles as secure and suppresses their accessible names, descriptions and text. Snapshot and explicit text reads check the live role before `GetText` and discard the reply if the role changes or cannot be confirmed afterward. Root discovery likewise rechecks each application and window role after reading its names and redacts them unless the same readable role is confirmed. These are separate calls: the recheck narrows the race but cannot catch a role that changes and switches back between checks. Observations can return partial trees, but `wait_for` with `gone` cannot confirm absence from incomplete data. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and a batch stops at that step with outcome `unknown`. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
 
 Windows UIA extraction is bounded. When the native limit omits descendants, the nearest retained ancestors are marked `truncated`; `expand_ui` performs a scoped look and the helper carries forward the untouched refs into the new immutable look record. Windows root deltas combine an event journal with authoritative before/after snapshots. `SetWinEventHook` accelerates settling and retains short-lived root transitions, while snapshots remain the source of truth for persistent state.
 
@@ -1380,7 +1383,7 @@ There is no portal session, PipeWire frame, input dispatch, or restore-token imp
 
 - The helper is a local stdin/stdout child process and opens no helper network listener.
 - It can inspect applications exposed on the current user's AT-SPI bus; run only trusted agents and extensions in that session.
-- Password-role values are omitted and explicit reads are rejected, though application mislabeling remains possible.
+- The helper suppresses accessible names, descriptions and text values when AT-SPI reports a password role or cannot provide a recognized role. This depends on the application reporting its role correctly. The checks are not atomic with the name or `GetText` reads. Root discovery protects each application and window by its own role. Snapshot reads also apply protection per node: a protected ancestor does not protect a descendant reported with a readable role (#1233).
 - On X11, capture can read window pixels and non-headless physical fallback can control the global pointer/keyboard and request focus. These are broad desktop capabilities; strict headless/background policy blocks XTEST and focus, but does not make AT-SPI or requested X11 observation private.
 - On Wayland, portal diagnostics are read-only; capture and input are not implemented.
 - CDP is separate: its loopback TCP listener is unauthenticated, not UID-bound. Any local process that can reach the port, including another UID, can discover the websocket at `/json/version`, control pages and request cookies with `Storage.getCookies`. A random port and profile mode `0700` do not authenticate clients. `launch_browser` defaults to a fresh non-default temporary profile, matching modern Chrome's [remote-debugging security policy](https://developer.chrome.com/blog/remote-debugging-port), but opt-in `managed_browser_profile` exposes the reused profile's live sessions. Do not enable persistence on shared or untrusted hosts; a UID-bound pipe is not implemented.
@@ -1445,13 +1448,17 @@ The normal runtime requires this executable inside the resolved helper app:
 
 Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. Set `PI_COMPUTER_USE_HELPER_APP_PATH` only when an explicit location is needed for development or testing.
 
-Install the packaged, downloaded, or locally buildable helper with:
+A stale or unstamped managed helper is refused before desktop commands run; the client does not replace, restart or stop it. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run.
+
+From the installed package root, explicitly repair a missing or stale helper with:
 
 ```bash
 node scripts/setup-helper.mjs --runtime
 ```
 
-For source development, rebuild first and then run the same installer:
+Setup stops the old daemon only when it replaces the bundle. If it reports the app already current but the refusal persists, e.g. a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
+
+For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
 ```bash
 npm run build:native
@@ -1466,7 +1473,7 @@ If the macOS helper crashes or drops its socket, or the Windows or Linux helper 
 
 ## Grant macOS permissions
 
-Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again.
+Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again. With an external `PI_CU_SOCKET_PATH` helper, Recheck only checks again: grant access to that helper and have its operator restart it first if needed.
 
 The helper checks Accessibility with `AXIsProcessTrusted` and Screen Recording with Core Graphics preflight plus a ScreenCaptureKit content query ([macOS permissions reference](../reference/platforms/macos/accessibility.mdx#trust-and-permission)). System Settings labels can vary by macOS version, so identify the app by its name and path rather than relying on one pane label.
 

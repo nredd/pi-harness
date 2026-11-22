@@ -5,7 +5,7 @@ import type { ExtensionContext, SessionEntry, SessionStartEvent } from "@earendi
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, expect, it, vi } from "vitest";
 import { EMPTY_REMINDER_MARKER } from "../../src/plan/hooks.ts";
-import { EMPTY_REMINDER_MESSAGE_TYPE } from "../../src/tool/types.ts";
+import { EMPTY_REMINDER_MESSAGE_TYPE, NUDGE_BUDGET_ENTRY_TYPE } from "../../src/tool/types.ts";
 import registerTodo from "../fixtures/home-fixtures.ts";
 import { TEST_HOME } from "../fixtures/setup.ts";
 import { createTodoCtx, createTodoPi } from "../fixtures/todo-host.ts";
@@ -64,7 +64,8 @@ async function setup({
 	};
 }
 
-const reminder = { continue: true, entries: [{ type: "custom_message", ...marker, details: {} }] };
+const budget = { type: "custom", customType: NUDGE_BUDGET_ENTRY_TYPE, data: { persistenceVersion: 1, nudge: "empty" } };
+const reminder = { continue: true, entries: [budget, { type: "custom_message", ...marker, details: {} }] };
 
 it("counts work across settles, skips conversation, and expands the trailing marker only once", async () => {
 	const { tool, settle, emit, input } = await setup();
@@ -264,12 +265,12 @@ it("counts a read that completes while the todo overlay refresh is pending", asy
 	expect(await settle()).toEqual(reminder);
 });
 
-it.each(["resume", "reload"] as const)("restores the prompt budget on %s after cooldown expires", async (reason) => {
+it.each(["resume", "reload"] as const)("restores the prompt budget on %s from bookkeeping", async (reason) => {
 	const { tool, settle, input, emit } = await setup({
 		calls: 1,
 		cooldown: 2,
 		reason,
-		branch: [{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" }],
+		branch: [{ ...budget, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
 	});
 	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 	for (let i = 0; i < 3; i++) {
@@ -278,6 +279,36 @@ it.each(["resume", "reload"] as const)("restores the prompt budget on %s after c
 		await emit("agent_settled", { aborted: false });
 	}
 	await input();
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+it("spends the empty budget on neither a restored marker nor stale-list bookkeeping", async () => {
+	const stale = { ...budget, data: { persistenceVersion: 1, nudge: "stale" } };
+	const { tool, settle } = await setup({
+		calls: 1,
+		reason: "resume",
+		branch: [
+			{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" },
+			{ ...stale, id: "stale", parentId: "nudge", timestamp: "" },
+		] as SessionEntry[],
+	});
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+it.each([
+	["a missing version", { nudge: "empty" }],
+	["an unsupported version", { persistenceVersion: 2, nudge: "empty" }],
+	["an unknown kind", { persistenceVersion: 1, nudge: "held" }],
+	["a non-object payload", "empty"],
+	["null data", null],
+])("leaves the budget unspent for bookkeeping with %s", async (_case, data) => {
+	const { tool, settle } = await setup({
+		calls: 1,
+		reason: "resume",
+		branch: [{ ...budget, data, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
+	});
 	await tool("Agent");
 	expect(await settle()).toEqual(reminder);
 });
