@@ -315,6 +315,7 @@ async fn handle_request_with(
             })
             .await
         }
+        "atspiLookRoot" => look_root(state, &request.args, &connect, x11::list_windows).await,
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
@@ -434,6 +435,31 @@ async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Val
         "windows": windows,
         "roots": windows
     }))
+}
+
+/// The live root of `lookId`'s retained look, found by the AT-SPI bus name and object path
+/// the look retains, never by an inventory `@w` handle a later listing may reissue (#1300).
+/// `root` is `null` only when the bounded lookup proved it absent. The owner PID and
+/// executable are live; X11 enrichment adds at most a `WM_CLASS` block alias.
+async fn look_root(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
+    windows: impl FnOnce() -> Result<Vec<x11::WindowInfo>, ProtocolError>,
+) -> Result<Value, ProtocolError> {
+    let look_id = required_str(args, "lookId", "atspiLookRoot requires lookId")?;
+    let mut root = lock(state)?.look(look_id)?.root;
+    let Some((pid, executable)) = connect().await?.exact_root(&root.accessible).await? else {
+        return Ok(json!({ "root": Value::Null }));
+    };
+    root.pid = pid;
+    root.executable = executable;
+    root.wm_class = None;
+    if let Ok(windows) = windows() {
+        x11::enrich_roots(std::slice::from_mut(&mut root), &windows);
+    }
+    let reference = lock(state)?.root_ref(&root.accessible).unwrap_or_default();
+    Ok(json!({ "root": root_json(&reference, &root, 0) }))
 }
 
 async fn resolve_root(
@@ -629,14 +655,15 @@ fn focus_window(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, 
     let root = lock(state)?
         .root(reference)
         .ok_or_else(|| ProtocolError::new("Root not found", ErrorCode::TargetNotFound))?;
-    let window = root
-        .x11_window
-        .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
     let policy = if args.get("policy").is_some() {
         PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?
     } else {
         PhysicalPolicy::Foreground
     };
+    policy.refuse_strict_headless()?;
+    let window = root
+        .x11_window
+        .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
     x11::focus_window(window, policy)
 }
 
@@ -712,6 +739,7 @@ async fn act(
         }
         // Semantic delivery was attempted first. Only an explicitly physical-capable
         // policy may fall back to the element centre.
+        policy.refuse_strict_headless()?;
         let bounds = node.bounds.ok_or_else(|| {
             ProtocolError::new(
                 "Element has no coordinate fallback",
@@ -748,6 +776,7 @@ async fn act(
         .get("y")
         .and_then(Value::as_f64)
         .ok_or_else(|| invalid("coordinate target requires y"))?;
+    policy.refuse_strict_headless()?;
     let owning_window = record
         .root
         .x11_window
@@ -3085,6 +3114,155 @@ mod tests {
         }
         let error = deliver(RecordingSink::default(), "wiggle", json!({})).unwrap_err();
         assert_eq!(error.code, ErrorCode::UnsupportedCommand);
+    }
+
+    /// An accessible whose children are `paths` on `:1.1`.
+    struct Inventory(&'static [&'static str]);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl Inventory {
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            self.0
+                .iter()
+                .map(|path| (":1.1", OwnedObjectPath::try_from(*path).unwrap()))
+                .collect()
+        }
+    }
+
+    /// A bus daemon reporting PID 42 for every connection.
+    struct OwnerPid;
+
+    #[zbus::interface(name = "org.freedesktop.DBus")]
+    impl OwnerPid {
+        #[zbus(name = "GetConnectionUnixProcessID")]
+        fn get_connection_unix_process_id(&self, _name: &str) -> u32 {
+            42
+        }
+    }
+
+    #[tokio::test]
+    async fn look_root_follows_the_look_not_a_reissued_inventory_handle() {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let mut other = observed_root();
+        other.pid = 43;
+        other.accessible.path = "/other".into();
+        let mut closed = observed_root();
+        closed.accessible.path = "/closed".into();
+        // A is listed and observed, then a PID-scoped listing of B drops A's handle.
+        let a_ref = lock(&state).unwrap().replace_roots(vec![observed_root()])[0]
+            .0
+            .clone();
+        // The class the look saw is never carried over: only a live pairing reports one.
+        let mut looked = observed_root();
+        looked.wm_class = Some(("stale".into(), "Stale".into()));
+        let (look_id, _) = lock(&state)
+            .unwrap()
+            .insert_look(looked, vec![node()], None);
+        let (closed_look, _) = lock(&state).unwrap().insert_look(closed, vec![], None);
+        lock(&state).unwrap().replace_roots(vec![other]);
+        assert!(lock(&state).unwrap().root(&a_ref).is_none());
+        let paired = x11::WindowInfo {
+            id: 71,
+            pid: 42,
+            title: "Editor".into(),
+            wm_class: Some(("keepassxc".into(), "KeePassXC".into())),
+            frame: observed_root().frame.unwrap(),
+            focused: true,
+            minimized: false,
+            z_order: 0,
+        };
+        with_peer(
+            |server| {
+                server
+                    .serve_at("/org/freedesktop/DBus", OwnerPid)?
+                    .serve_at("/org/a11y/atspi/accessible/root", Inventory(&["/app"]))?
+                    .serve_at("/app", Inventory(&["/window"]))
+            },
+            async |connection| {
+                let connect = async || {
+                    Ok(AtspiClient::from_connection(
+                        connection.clone(),
+                        Duration::from_millis(250),
+                    ))
+                };
+                let args = json!({ "lookId": look_id });
+                let found = look_root(&state, &args, connect, || Ok(vec![paired]))
+                    .await
+                    .unwrap();
+                let root = &found["root"];
+                assert_eq!(root["pid"], 42);
+                assert_eq!(root["metadata"]["busName"], ":1.1");
+                assert_eq!(root["metadata"]["objectPath"], "/window");
+                assert_eq!(
+                    root["metadata"]["wmClass"],
+                    json!({"instance":"keepassxc","class":"KeePassXC"})
+                );
+                // No inventory handle names it any more; the look still does.
+                assert_eq!(root["rootRef"], "");
+                // Without X11 there is no class evidence, and the root is still found.
+                let found = look_root(&state, &args, connect, || Err(capability("no X11")))
+                    .await
+                    .unwrap();
+                assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["pid"], 42);
+                // Its application no longer lists the closed root: proven absent.
+                let reply = peer_request(
+                    &state,
+                    &connection,
+                    "atspiLookRoot",
+                    json!({ "lookId": closed_look }),
+                )
+                .await;
+                assert_eq!(reply.result.unwrap(), json!({ "root": null }));
+                for (args, code) in [
+                    (json!({}), ErrorCode::InvalidRequest),
+                    (json!({"lookId":"look_999"}), ErrorCode::StaleLook),
+                ] {
+                    let reply = peer_request(&state, &connection, "atspiLookRoot", args).await;
+                    assert_eq!(reply.error.unwrap().code, code);
+                }
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn strict_headless_refuses_physical_fallback_in_every_session_kind() {
+        // An X11 root, and one with no X11 window (Wayland or no graphical session).
+        let mut detached = observed_root();
+        detached.accessible.path = "/detached".into();
+        detached.x11_window = None;
+        detached.frame = None;
+        for root in [observed_root(), detached] {
+            let state = Arc::new(Mutex::new(HelperState::default()));
+            let root_ref = lock(&state).unwrap().replace_roots(vec![root.clone()])[0]
+                .0
+                .clone();
+            let (look_id, nodes) = lock(&state).unwrap().insert_look(root, vec![node()], None);
+            let element = json!({"ref": nodes[0].reference});
+            with_peer(Ok, async |connection| {
+                for (cmd, args) in [
+                    // The element has no Action interface, so press falls back.
+                    ("act", json!({"action":"press","target":element})),
+                    (
+                        "act",
+                        json!({"action":"scroll","target":element,"params":{"scrollY":1}}),
+                    ),
+                    ("act", json!({"action":"click","target":{"x":1,"y":1}})),
+                    ("focusWindow", json!({"rootRef":root_ref})),
+                ] {
+                    let mut args = args;
+                    args["lookId"] = json!(look_id);
+                    args["policy"] = json!("ax_only");
+                    let error = peer_request(&state, &connection, cmd, args.clone())
+                        .await
+                        .error
+                        .unwrap();
+                    assert_eq!(error.code, ErrorCode::ForegroundRequired, "{args}");
+                }
+            })
+            .await;
+        }
     }
 
     #[tokio::test]

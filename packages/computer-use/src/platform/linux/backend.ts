@@ -231,6 +231,16 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 	): Promise<PlatformReadTextResponse> {
 		return await linuxHelper.command("atspiReadText", { ...args }, options);
 	},
+	async lookRoot(
+		lookId: string,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<PlatformRoot | undefined> {
+		const result = await linuxHelper.command<{ root?: unknown }>("atspiLookRoot", { lookId }, options);
+		// Only an explicit `null` proves absence; a malformed reply is not evidence either way.
+		if (result?.root === null) return undefined;
+		if (typeof result?.root !== "object") throw new Error("Linux helper atspiLookRoot reply has no root.");
+		return parseRoots([result.root])[0];
+	},
 	async waitFor(
 		args: PlatformWaitForRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },

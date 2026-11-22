@@ -413,6 +413,26 @@ impl AtspiClient {
         Ok(roots)
     }
 
+    /// The live bus owner of `root`, found by its bus name and object path alone (#1300): one
+    /// registry read, then only the window lists of applications on `root`'s own connection,
+    /// never another application's metadata. `None` only when every read completed without
+    /// listing it; a failed or timed-out read is an error, never absence.
+    pub async fn exact_root(
+        &self,
+        root: &AccessibleRef,
+    ) -> Result<Option<(u64, Option<Executable>)>, ProtocolError> {
+        let registry = AccessibleRef {
+            destination: REGISTRY_DESTINATION.to_owned(),
+            path: REGISTRY_ROOT.to_owned(),
+        };
+        for app in self.children(&registry).await? {
+            if app.destination == root.destination && self.children(&app).await?.contains(root) {
+                return self.bus_owner(root).await.map(Some);
+            }
+        }
+        Ok(None)
+    }
+
     /// Read provider metadata only while the live role is readable before and after the read.
     async fn checked_metadata<T>(
         &self,
@@ -1870,6 +1890,125 @@ mod tests {
             },
         )
         .await;
+    }
+
+    /// An exact root lookup reads the registry and its own connection's application only: a
+    /// stalled application on another connection is never asked (#1300).
+    #[tokio::test]
+    async fn exact_root_reads_only_its_own_application() {
+        let (stall, mut requests) = StalledReply::new();
+        with_peer(
+            |server| {
+                let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
+                    name,
+                    role,
+                    children,
+                    has_text: false,
+                };
+                server
+                    .serve_at(FIXTURE_DBUS_ROOT, OwnerBus)?
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        node(
+                            "Registry",
+                            "desktop",
+                            &[(":1.43", "/stalled"), (":1.42", "/app")],
+                        ),
+                    )?
+                    .serve_at("/stalled", StalledApplication(stall))?
+                    .serve_at(
+                        "/app",
+                        node("Editor", "application", &[(":1.42", "/app/window")]),
+                    )
+            },
+            async |connection| {
+                let proc = ProcFixture::new(&[(25361, "/usr/bin/fixture-editor")]);
+                let client = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT)
+                    .with_proc_root(&proc.0);
+                let at = |destination: &str, path: &str| AccessibleRef {
+                    destination: destination.into(),
+                    path: path.into(),
+                };
+                let (pid, executable) = client
+                    .exact_root(&at(":1.42", "/app/window"))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(pid, 25361);
+                assert_eq!(executable.unwrap().name, "fixture-editor");
+                // Absent only once its own application's window list completed without it.
+                assert!(client
+                    .exact_root(&at(":1.42", "/app/closed"))
+                    .await
+                    .unwrap()
+                    .is_none());
+                assert!(client
+                    .exact_root(&at(":1.44", "/app/window"))
+                    .await
+                    .unwrap()
+                    .is_none());
+                assert!(requests.try_recv().is_err(), "asked another application");
+                // Its own application stalls: unknown, never absent.
+                let error = client
+                    .exact_root(&at(":1.43", "/stalled/window"))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::Timeout);
+                assert_eq!(requests.try_recv(), Ok(()));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn exact_root_reports_a_stalled_registry_or_owner_lookup() {
+        for stalled_pid in [false, true] {
+            let (stall, mut requests) = StalledReply::new();
+            with_peer(
+                |server| {
+                    if !stalled_pid {
+                        return server.serve_at(FIXTURE_REGISTRY_ROOT, StalledRegistry(stall));
+                    }
+                    server
+                        .serve_at(FIXTURE_DBUS_ROOT, StalledBus(stall))?
+                        .serve_at(
+                            FIXTURE_REGISTRY_ROOT,
+                            TreeNode {
+                                name: "Registry",
+                                role: "desktop",
+                                children: &[(":1.42", "/app")],
+                                has_text: false,
+                            },
+                        )?
+                        .serve_at(
+                            "/app",
+                            TreeNode {
+                                name: "Editor",
+                                role: "application",
+                                children: &[(":1.42", "/app/window")],
+                                has_text: false,
+                            },
+                        )
+                },
+                async |connection| {
+                    let client = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT);
+                    let root = AccessibleRef {
+                        destination: ":1.42".into(),
+                        path: "/app/window".into(),
+                    };
+                    let error = client.exact_root(&root).await.unwrap_err();
+                    assert_eq!(requests.try_recv(), Ok(()));
+                    assert_eq!(error.code, ErrorCode::Timeout);
+                    let member = if stalled_pid {
+                        "GetConnectionUnixProcessID"
+                    } else {
+                        "GetChildren"
+                    };
+                    assert_eq!(error.message, format!("AT-SPI2 {member} timed out"));
+                },
+            )
+            .await;
+        }
     }
 
     /// A descendant on another connection is never read under the root's identity.

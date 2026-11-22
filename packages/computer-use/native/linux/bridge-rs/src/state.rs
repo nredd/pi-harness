@@ -52,6 +52,11 @@ impl HelperState {
         self.roots.get(reference).cloned()
     }
 
+    /// The inventory handle the latest listing issued for `accessible`, if it listed it.
+    pub fn root_ref(&self, accessible: &AccessibleRef) -> Option<String> {
+        self.root_refs.get(accessible).cloned()
+    }
+
     pub fn roots(&self) -> Vec<(String, RootSnapshot)> {
         let mut roots = self
             .roots

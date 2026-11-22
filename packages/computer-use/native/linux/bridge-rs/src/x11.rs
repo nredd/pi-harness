@@ -66,7 +66,21 @@ impl PhysicalPolicy {
             value => Err(invalid(format!("Unknown delivery policy '{value}'"))),
         }
     }
+    /// Refuse strict headless (`ax_only`) with `foreground_required` before any physical
+    /// target, geometry or session is resolved (#1298): the action needs foreground
+    /// delivery, whatever this session could otherwise offer.
+    pub fn refuse_strict_headless(self) -> Result<(), ProtocolError> {
+        if self == Self::AxOnly {
+            return Err(err(
+                "ax_only policy forbids synthesized input and window focus",
+                ErrorCode::ForegroundRequired,
+            ));
+        }
+        Ok(())
+    }
+    /// Admit physical input under this policy in `session`; strict headless refuses first.
     pub fn require_physical(self, session: SessionKind) -> Result<(), ProtocolError> {
+        self.refuse_strict_headless()?;
         if session == SessionKind::Headless {
             return Err(err(
                 "Physical input is unavailable in a headless Linux session",
@@ -79,17 +93,13 @@ impl PhysicalPolicy {
                 ErrorCode::CapabilityDeferred,
             ));
         }
-        match self {
-            Self::AxOnly => Err(err(
-                "ax_only policy forbids XTEST and window focus",
-                ErrorCode::CoordinateBlocked,
-            )),
-            Self::Background => Err(err(
+        if self == Self::Background {
+            return Err(err(
                 "Background policy forbids global XTEST input",
                 ErrorCode::ForegroundRequired,
-            )),
-            Self::Default | Self::Foreground => Ok(()),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -174,30 +184,37 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
     Ok(out)
 }
 
+/// Pair each root with its best-ranked X11 window of the same PID, title first, then
+/// geometry; each window pairs once. Pairing is a heuristic, so `WM_CLASS` is copied only
+/// when no other window of that PID ranks equally (#1300): a tie is no class evidence,
+/// never proof that one sibling's class belongs to the root.
 pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
     let mut used = Vec::new();
     for root in roots {
-        let best = windows
-            .iter()
-            .filter(|w| w.pid != 0 && w.pid == root.pid && !used.contains(&w.id))
-            .min_by_key(|w| {
-                let title = if !root.name.is_empty()
-                    && (w.title.contains(&root.name) || root.name.contains(&w.title))
-                {
-                    0
-                } else {
-                    1_000_000
-                };
-                title + distance(root.frame.as_ref(), &w.frame)
-            });
+        let rank = |w: &WindowInfo| {
+            let title = if !root.name.is_empty()
+                && (w.title.contains(&root.name) || root.name.contains(&w.title))
+            {
+                0
+            } else {
+                1_000_000
+            };
+            title + distance(root.frame.as_ref(), &w.frame)
+        };
+        let owned = || windows.iter().filter(|w| w.pid != 0 && w.pid == root.pid);
+        let best = owned()
+            .filter(|w| !used.contains(&w.id))
+            .min_by_key(|w| rank(w));
         if let Some(w) = best {
+            // A window already paired elsewhere still ties: that pairing was a choice too.
+            let ambiguous = owned().any(|other| other.id != w.id && rank(other) == rank(w));
             used.push(w.id);
             root.x11_window = Some(w.id);
             root.frame = Some(w.frame.clone());
             root.is_focused = w.focused;
             root.is_minimized = w.minimized;
             root.z_order = Some(w.z_order);
-            root.wm_class.clone_from(&w.wm_class);
+            root.wm_class = if ambiguous { None } else { w.wm_class.clone() };
             if root.name.is_empty() {
                 root.name.clone_from(&w.title);
             }
@@ -1711,13 +1728,35 @@ mod tests {
     }
     #[test]
     fn policy_guards() {
-        assert_eq!(
-            PhysicalPolicy::AxOnly
-                .require_physical(SessionKind::X11)
-                .unwrap_err()
-                .code,
-            ErrorCode::CoordinateBlocked
-        );
+        // Strict headless is `foreground_required` in every session kind (#1298).
+        for session in [
+            SessionKind::X11,
+            SessionKind::Wayland,
+            SessionKind::Headless,
+        ] {
+            let error = PhysicalPolicy::AxOnly
+                .require_physical(session)
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{session:?}");
+            assert!(error.message.starts_with("ax_only"), "{}", error.message);
+        }
+        // Outside strict headless the session decides first.
+        for policy in [PhysicalPolicy::Default, PhysicalPolicy::Background] {
+            assert_eq!(
+                policy
+                    .require_physical(SessionKind::Wayland)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CapabilityDeferred
+            );
+            assert_eq!(
+                policy
+                    .require_physical(SessionKind::Headless)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CoordinateBlocked
+            );
+        }
         assert_eq!(
             PhysicalPolicy::Background
                 .require_physical(SessionKind::X11)
@@ -1729,8 +1768,8 @@ mod tests {
             .require_physical(SessionKind::X11)
             .is_ok());
         assert!(PhysicalPolicy::Default
-            .require_physical(SessionKind::Headless)
-            .is_err());
+            .require_physical(SessionKind::X11)
+            .is_ok());
     }
     #[test]
     fn focus_does_not_send_after_shutdown() {
