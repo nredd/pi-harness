@@ -1155,6 +1155,42 @@ it("clock rollback preserves sealed history", async () => {
 	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-10-25"));
 });
 
+it("refuses a same-month clock rollback before the scan, salt or bookkeeping can write", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	const line = (input: number) =>
+		assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input });
+	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7)] });
+	const first = await exportStats(agent, out);
+	// Exact equality is not a rollback.
+	await exportStats(agent, out);
+	const files = (): Record<string, Buffer | undefined> => {
+		const read = (file: string) => {
+			try {
+				return readFileSync(file);
+			} catch {
+				return undefined;
+			}
+		};
+		return {
+			cache: read(join(agent, "pi-session-kit", "stats-cache.json")),
+			salt: read(join(agent, "pi-session-kit", "export-state.json")),
+			bookkeeping: read(outboxStatePath(agent, first.snapshotDir)),
+			manifest: read(join(first.snapshotDir, "manifest.json")),
+		};
+	};
+	// A changed transcript would make the loader rewrite its cache, and a missing salt would be created.
+	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7), line(8)] });
+	rmSync(join(agent, "pi-session-kit", "export-state.json"));
+	const before = files();
+	expect(before.cache && before.bookkeeping && before.manifest && !before.salt).toBeTruthy();
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
+	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
+	expect(files()).toEqual(before);
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+	await exportStats(agent, out);
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02"));
+});
+
 it.each(["corrupt", "missing"])("keeps the active manifest when one shard among intact ones is %s", async (damage) => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const months = ["2026-08-10", "2026-09-10", "2026-10-10"];

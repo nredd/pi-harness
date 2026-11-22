@@ -1096,13 +1096,25 @@ async function publishStats(
 	identity: Identity,
 ): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
+	// One instant, taken first, is both checked and published.
+	const exportedAt = Date.now();
+	const previous = intactPrevious(await loadPrevious(snapshotDir), options.replaceHarnesses === true);
+	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
+	// the active month, be replaced by the scan and pruned. Refuse before the salt, the scan cache or any
+	// bookkeeping can be written.
+	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
+	if (exportedAt < publishedAt && !options.replaceHarnesses)
+		throw new Error(
+			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ` +
+				`${new Date(publishedAt).toISOString()}); refusing to reopen sealed months. Fix the clock, ` +
+				"or pass --replace-harnesses to publish anyway",
+		);
 	const installation = await exportState(dir);
 	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
 	// stale recovery state over this one's.
 	const statePath = await outboxStateFile(dir, snapshotDir);
 	const bookkeeping = await outboxState(statePath, installation);
 	const state: ExportState = { ...bookkeeping.state, salt: installation.salt };
-	const previous = intactPrevious(await loadPrevious(snapshotDir), options.replaceHarnesses === true);
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
 	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);
@@ -1138,16 +1150,6 @@ async function publishStats(
 		);
 	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
-	const exportedAt = Date.now();
-	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
-	// the active month, be replaced by the scan and pruned. Refuse before anything is written.
-	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
-	if (exportedAt < publishedAt && !options.replaceHarnesses)
-		throw new Error(
-			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ` +
-				`${new Date(publishedAt).toISOString()}); refusing to reopen sealed months. Fix the clock, ` +
-				"or pass --replace-harnesses to publish anyway",
-		);
 	const scans = await loadHarnesses({
 		now: exportedAt,
 		harnesses: external,
