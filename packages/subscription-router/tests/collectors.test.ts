@@ -403,6 +403,31 @@ it("selects configured collector IDs without changing the credential provider", 
 	expect(read).toHaveBeenCalledOnce();
 });
 
+it("preserves alias credential authorization", async () => {
+	const { usage, getAccessToken } = harness();
+	const alias = "faux-alias";
+	const declarations = { [alias]: { collector: { id: provider } } };
+	const trusted = vi.fn(fake.read);
+	const replacement = vi.fn(async () => ({ windows: [] }));
+	install({ ...fake, read: trusted });
+	usage.configureCollectors(declarations);
+	expect(await usage.get(ctx, alias)).toMatchObject({ status: "available", windows: reading.windows });
+	install({ ...fake, read: replacement });
+	expect(usage.peek(alias)).toBeUndefined();
+	expect(await usage.get(ctx, alias, { force: true })).toMatchObject({ status: "unavailable" });
+	expect(await usage.get(ctx, provider)).toMatchObject({ status: "available", windows: [] });
+	expect(replacement).toHaveBeenCalledOnce();
+	expect(getAccessToken.mock.calls).toEqual([
+		[ctx, alias],
+		[ctx, provider],
+	]);
+	// Loading config again is the explicit re-authorization.
+	usage.configureCollectors(declarations);
+	expect(await usage.get(ctx, alias)).toMatchObject({ status: "available", windows: [] });
+	expect(getAccessToken).toHaveBeenLastCalledWith(ctx, alias);
+	expect(trusted).toHaveBeenCalledOnce();
+});
+
 it("cancels an oversized streamed response before parsing without trusting content-length", async () => {
 	const { usage, fetch } = harness();
 	const cancel = vi.fn(async () => {

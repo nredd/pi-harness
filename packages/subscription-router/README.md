@@ -330,7 +330,10 @@ isolation boundary. Deadlines bound asynchronous waits, not time spent in synchr
 (and optional `meters`, `pools` or `credits`), or `undefined` for unsupported data. Only matching
 percentage windows can block models. Set `providers.<provider>.collector.id` to use a different
 registered adapter; credentials still come from `<provider>`. Unknown explicit IDs return `unavailable`
-without falling back to the provider ID. The router validates and copies reading fields; malformed
+without falling back to the provider ID. An alias is a credential grant to the registration that owns
+the ID when the alias first resolves, not to the name: once that registration is replaced or
+unregistered, the alias returns `unavailable` without a credential lookup until config loads again
+(session start or `/reload`), which re-authorizes the current owner. The router validates and copies reading fields; malformed
 readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
 reported basis; extensions cannot set snapshot metadata.
 

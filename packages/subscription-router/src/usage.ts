@@ -207,6 +207,8 @@ export class UsageService {
 		{ registration: CollectorRegistration; binding: CollectorRegistration; unbind: AbortController }
 	>();
 	private providers: Readonly<Record<string, ProviderConfig>> = {};
+	/** Aliased providers whose authorized registration retired. Only `configureCollectors` re-authorizes. */
+	private readonly revoked = new Set<string>();
 	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration | undefined>();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly generations = new Map<string, number>();
@@ -222,12 +224,17 @@ export class UsageService {
 		},
 	) {}
 
-	/** Apply provider declarations before serving reads for this config. */
+	/**
+	 * Apply provider declarations before serving reads for this config. A configured alias is a
+	 * credential grant to the registration that owns its ID at first resolution; each call
+	 * re-authorizes aliases whose granted registration has since retired.
+	 */
 	configureCollectors(providers: Readonly<Record<string, ProviderConfig>> = {}): void {
 		this.providers = providers;
 		for (const [provider, { registration, unbind }] of this.collectors) {
 			if (registration !== registrationFor(collectorIdFor(provider, providers))) unbind.abort();
 		}
+		this.revoked.clear();
 	}
 
 	/**
@@ -406,9 +413,11 @@ export class UsageService {
 	private currentCollector(provider: string): CollectorRegistration | undefined {
 		// Checked again here: the provider, not the collector ID, selects the credential.
 		if (!isCollectorId(provider)) return undefined;
-		const registration = registrationFor(collectorIdFor(provider, this.providers));
 		const current = this.collectors.get(provider);
 		if (current) return current.binding;
+		if (this.revoked.has(provider)) return undefined;
+		const id = collectorIdFor(provider, this.providers);
+		const registration = registrationFor(id);
 		if (!registration) return undefined;
 		const unbind = new AbortController();
 		const binding = {
@@ -420,6 +429,8 @@ export class UsageService {
 			this.invalidate(provider);
 			this.lastManualRefreshAt.delete(provider);
 			this.collectors.delete(provider);
+			// The alias granted credentials to this registration, not to a later owner of its ID.
+			if (id !== provider) this.revoked.add(provider);
 		});
 		return binding;
 	}
