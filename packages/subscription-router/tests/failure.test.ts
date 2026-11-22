@@ -26,6 +26,11 @@ function retryDelay(delay: unknown) {
 	return { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: delay };
 }
 
+it("takes the hint floor from the caller", () => {
+	expect(classify("429: retry in 45s", NOW, 30_000)).toStrictEqual({ class: "hinted", hintMs: 45_000, ...quota });
+	expect(classify("429: retry in 95s", NOW, 120_000)).toStrictEqual(perMinute);
+});
+
 describe("classify failure text", () => {
 	it.each<[string, string | undefined, FailureClassification]>([
 		[

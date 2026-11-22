@@ -341,8 +341,7 @@ export class Router {
 	): Promise<boolean> {
 		const decision = await env.refresh(model, signal, failedAt, failed);
 		if (!decision?.block || signal?.aborted || decision[COLLECTOR_EVIDENCE]?.aborted) return false;
-		this.tracker.mark(model, decision);
-		return true;
+		return this.tracker.record(model, decision) !== undefined;
 	}
 
 	/**

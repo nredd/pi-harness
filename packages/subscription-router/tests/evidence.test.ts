@@ -55,6 +55,8 @@ async function decide(adapter: ConfirmationEvidence, context: FailureContext): P
 	return adapter.decide(context);
 }
 
+const NEON = { provider: "google", id: "gemini-4-neon" };
+
 describe("failure-inferred evidence", () => {
 	it("marks a daily token on the first failure until the next Pacific midnight", async () => {
 		const evidence = await decide(failureEvidence(new FailureHistory()), failure(DAILY));
@@ -114,6 +116,44 @@ describe("failure-inferred evidence", () => {
 		expect(await decide(loose, failure(rpc(retryDelay("7200s"))))).toMatchObject({
 			decision: { resetAt: T0 + MAX_BLOCK_MS },
 		});
+	});
+
+	it("treats the 60-second hint floor as a default that a lower minHintSeconds lowers", async () => {
+		const HINT_45S = rpc(retryDelay("45s"));
+		const low = { failure: { minHintSeconds: 30 } };
+		expect(await decide(failureEvidence(new FailureHistory(), low.failure), failure(HINT_45S))).toMatchObject({
+			kind: "block",
+			decision: { window: "inferred:hint", resetAt: T0 + 45_000 },
+		});
+		const { usage } = reader(noSource());
+		expect(await confirmEvidence(usage, new FailureHistory(), low)(failure(HINT_45S))).toMatchObject({
+			resetAt: T0 + 45_000,
+		});
+		// Without the setting a 45-second hint is a throttle on every path.
+		expect(await confirmEvidence(usage, new FailureHistory(), undefined)(failure(HINT_45S))).toBeUndefined();
+	});
+
+	it("lets maxBlockMinutes cap the billing and unknown-shape backoff too", async () => {
+		const clock = { now: T0 };
+		const tracker = new ExhaustionTracker(() => clock.now);
+		const adapter = failureEvidence(new FailureHistory(), {
+			maxBlockMinutes: 2,
+			repeat: { count: 1, withinMinutes: 10 },
+		});
+		const billing = await decide(adapter, failure("402: credits depleted"));
+		expect(tracker.record(CARBON, (billing as { decision: UsageDecision }).decision)).toMatchObject({
+			until: T0 + 2 * MINUTE,
+			resetKnown: false,
+		});
+		const unknown = await decide(adapter, failure(BARE, T0, NEON));
+		expect(tracker.record(NEON, (unknown as { decision: UsageDecision }).decision)).toMatchObject({
+			until: T0 + 2 * MINUTE,
+		});
+		// Unconfigured, the backoff keeps its 5-minute first step.
+		const plain = await decide(failureEvidence(new FailureHistory()), failure("402: credits depleted"));
+		expect(
+			new ExhaustionTracker(() => T0).record(CARBON, (plain as { decision: UsageDecision }).decision),
+		).toMatchObject({ until: T0 + 5 * MINUTE });
 	});
 
 	it("raises the hint floor with minHintSeconds", async () => {
@@ -485,7 +525,6 @@ describe("inferred marks", () => {
 });
 
 describe("routing on the composed chain", () => {
-	const NEON = { provider: "google", id: "gemini-4-neon" };
 	const profile: Profile = { id: "metered", name: "Metered", chain: [CARBON, { ...NEON, thinking: "xhigh" }] };
 	const asModel = (ref: { provider: string; id: string }) => ({ ...ref, api: "test" }) as unknown as Model<Api>;
 
@@ -499,7 +538,7 @@ describe("routing on the composed chain", () => {
 			resolve: (entry) => asModel(entry),
 			refresh: (model, signal, failedAt, message) => confirm({ model, signal, failedAt, message }),
 		};
-		return { tracker, router, env };
+		return { clock, tracker, router, env };
 	}
 
 	const retry = (errorMessage: string): ModelRouteRequest => ({
@@ -536,6 +575,19 @@ describe("routing on the composed chain", () => {
 		const user = { ...retry(DAILY), reason: "user" as const, failed: undefined };
 		const routes = await Promise.all([router.route(profile, user, env), router.route(profile, user, env)]);
 		expect(routes.map((route) => route.model.id)).toEqual([NEON.id, NEON.id]);
+	});
+
+	it("discards an inferred deadline that elapsed before confirmation finished", async () => {
+		const { clock, tracker, router, env } = routed();
+		const text = rpc(retryDelay("60s"));
+		const message = fauxAssistantMessage("", { stopReason: "error", errorMessage: text, timestamp: T0 });
+		clock.now = T0 + 61_000;
+		expect(await router.confirm(asModel(CARBON), env, undefined, T0, message)).toBe(false);
+		expect(tracker.active()).toEqual([]);
+		// The same hint confirmed in time marks until failedAt + hint.
+		clock.now = T0 + 59_000;
+		expect(await router.confirm(asModel(CARBON), env, undefined, T0, message)).toBe(true);
+		expect(tracker.active()).toMatchObject([{ until: T0 + 60_000, expiry: "hinted" }]);
 	});
 
 	it("never confirms a cancelled failure", async () => {

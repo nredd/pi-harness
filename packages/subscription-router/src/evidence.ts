@@ -8,10 +8,11 @@
  * Uncollected providers, and collected ids used with an API key, reach the failure adapter.
  *
  * Failure-inferred thresholds: a daily or spend-window token, a 402/billing failure, or a
- * retry hint of at least 60 seconds marks on the first failure. A bare quota status marks on
- * the second distinct failure of that model within 10 minutes, with no success between.
- * Per-minute throttles, auth (401/403), transport and safety failures never mark. Inferred
- * marks end at 24 hours for daily windows and 60 minutes otherwise.
+ * retry hint of at least `minHintSeconds` (default 60) marks on the first failure. A bare quota
+ * status marks on the second distinct failure of that model within 10 minutes, with no success
+ * between. Per-minute throttles, auth (401/403), transport and safety failures never mark.
+ * Inferred marks end at 24 hours for daily windows and 60 minutes otherwise; `maxBlockMinutes`
+ * lowers every end, the billing and unknown-shape backoff included.
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -43,7 +44,14 @@ export type EvidenceDecision = UsageDecision & {
 	cause?: "quota" | "billing";
 	/** The failure this decision is about; a mark made at or after it is not re-counted. */
 	evidenceAt?: number;
+	/** Longest backoff for a decision without a deadline, from the provider's `maxBlockMinutes`. */
+	maxBlockMs?: number;
 };
+
+/** The hint floor for `settings`: `minHintSeconds`, default 60 seconds. */
+function minHintMs(settings: ProviderConfig["failure"] = {}): number {
+	return (settings.minHintSeconds ?? DEFAULT_MIN_HINT_SECONDS) * 1000;
+}
 
 export type Evidence = { kind: "block"; decision: EvidenceDecision } | { kind: "clear" } | { kind: "abstain" };
 
@@ -75,9 +83,9 @@ export function composeEvidence(
  * Never-mark rules: auth (401/403), 5xx, transport, safety and per-minute failures, whatever their
  * wording. Checked before any adapter, so not even a collected provider's read can mark one.
  */
-export function neverMarks({ message, failedAt }: FailureContext): boolean {
+export function neverMarks({ message, failedAt }: FailureContext, settings?: ProviderConfig["failure"]): boolean {
 	if (message?.stopReason !== "error") return false;
-	const found = classify(message.errorMessage, failedAt);
+	const found = classify(message.errorMessage, failedAt, minHintMs(settings));
 	return found.class === "not-quota" || found.class === "per-minute";
 }
 
@@ -145,23 +153,28 @@ export function failureEvidence(
 	history: FailureHistory,
 	settings: ProviderConfig["failure"] = {},
 ): ConfirmationEvidence {
-	const minHintMs = (settings.minHintSeconds ?? DEFAULT_MIN_HINT_SECONDS) * 1000;
+	const floor = minHintMs(settings);
 	const repeat = settings.repeat ?? DEFAULT_REPEAT;
 	const configuredCap = settings.maxBlockMinutes === undefined ? Infinity : settings.maxBlockMinutes * MINUTE;
 	const cap = (failedAt: number, end: number, classCap: number) =>
 		Math.min(end, failedAt + Math.min(classCap, configuredCap));
+	// Without a deadline the tracker backs off; a configured cap shortens that backoff too.
+	const backoff = {
+		expiry: "backoff",
+		...(Number.isFinite(configuredCap) ? { maxBlockMs: configuredCap } : {}),
+	} as const;
 	return {
 		name: "failure",
 		async decide({ model, failedAt, message }) {
 			if (message?.stopReason !== "error") return ABSTAIN;
-			const found = classify(message.errorMessage, failedAt);
+			const found = classify(message.errorMessage, failedAt, floor);
 			const base = { block: true, evidence: "inferred", evidenceAt: failedAt } as const;
 			const modelScope = { scope: "model" as const, families: [model.id], cause: "quota" as const };
 			switch (found.class) {
 				case "billing":
 					return {
 						kind: "block",
-						decision: { ...base, window: "inferred:billing", scope: "provider", cause: "billing", expiry: "backoff" },
+						decision: { ...base, ...backoff, window: "inferred:billing", scope: "provider", cause: "billing" },
 					};
 				case "daily":
 					return {
@@ -186,7 +199,6 @@ export function failureEvidence(
 						},
 					};
 				case "hinted":
-					if (found.hintMs < minHintMs) return CLEAR;
 					return {
 						kind: "block",
 						decision: {
@@ -201,7 +213,7 @@ export function failureEvidence(
 					if (history.record(model, failedAt, repeat.withinMinutes * MINUTE) < repeat.count) return ABSTAIN;
 					return {
 						kind: "block",
-						decision: { ...base, ...modelScope, window: "inferred:backoff", expiry: "backoff" },
+						decision: { ...base, ...modelScope, ...backoff, window: "inferred:backoff" },
 					};
 				default:
 					// per-minute, weak and not-quota (auth, transport, safety) never mark.
@@ -218,7 +230,7 @@ export function confirmEvidence(
 	provider: ProviderConfig | undefined,
 ): (failure: FailureContext) => Promise<EvidenceDecision | undefined> {
 	const confirm = composeEvidence(evidenceChain(usage, history, provider));
-	return async (failure) => (neverMarks(failure) ? undefined : confirm(failure));
+	return async (failure) => (neverMarks(failure, provider?.failure) ? undefined : confirm(failure));
 }
 
 /**

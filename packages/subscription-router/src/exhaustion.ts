@@ -52,7 +52,18 @@ export class ExhaustionTracker {
 
 	constructor(private readonly now: () => number = Date.now) {}
 
-	/** Record a confirmed block for the scope of `decision` and return the mark. */
+	/**
+	 * Record confirmed evidence: the mark, or nothing when an inferred deadline (`hinted` or
+	 * `window-reset`) already passed before confirmation finished. Only a decision without a
+	 * deadline backs off, so an elapsed hint is never replaced by a fresh backoff.
+	 */
+	record(model: ModelRef, decision: EvidenceDecision): ExhaustionMark | undefined {
+		const deadline = decision.expiry === "hinted" || decision.expiry === "window-reset";
+		if (deadline && (decision.resetAt ?? -Infinity) <= this.now()) return undefined;
+		return this.mark(model, decision);
+	}
+
+	/** Record a confirmed block for the scope of `decision` and return the mark. Routing uses `record`. */
 	mark(model: ModelRef, decision: EvidenceDecision): ExhaustionMark {
 		const families = decision.scope === "model" ? decision.families : undefined;
 		const key = scopeKey(model.provider, families);
@@ -70,7 +81,11 @@ export class ExhaustionTracker {
 		const recent = previous !== undefined && now - previous.until < BACKOFF_CAP_MS;
 		const confirmations = (recent ? previous.confirmations : 0) + 1;
 		const resetKnown = decision.resetAt !== undefined && decision.resetAt > now;
-		const backoff = Math.min(BACKOFF_BASE_MS * 2 ** (confirmations - 1), BACKOFF_CAP_MS);
+		const backoff = Math.min(
+			BACKOFF_BASE_MS * 2 ** (confirmations - 1),
+			BACKOFF_CAP_MS,
+			decision.maxBlockMs ?? Infinity,
+		);
 		const mark: ExhaustionMark = {
 			provider: model.provider,
 			families,

@@ -154,8 +154,11 @@ function retryHint(delays: string[], prose: string): number | undefined {
 	return undefined;
 }
 
-/** Classify evidence, not marks. The caller owns repeat thresholds and caps the resulting expiry. */
-export function classify(errorMessage: string | undefined, now: number): FailureClassification {
+/**
+ * Classify evidence, not marks. The caller owns repeat thresholds and caps the resulting expiry.
+ * A retry hint shorter than `minHintMs` (default one minute) is a per-minute throttle.
+ */
+export function classify(errorMessage: string | undefined, now: number, minHintMs = MINUTE): FailureClassification {
 	const text = (errorMessage ?? "").trim();
 	const leading = LEADING_STATUS.exec(text) ?? PREFIXED_STATUS.exec(text);
 	const { status, codes, prose, quotaIds, delays } = rpcSignals(parseBody(text));
@@ -192,7 +195,7 @@ export function classify(errorMessage: string | undefined, now: number): Failure
 		if (SPEND_WINDOW.test(`${windows} ${message}`)) return { class: "rolling", resetAt: now + 10 * MINUTE, ...quota };
 		const hintMs = retryHint(delays, message);
 		if (hintMs === undefined) return { class: "unknown-quota", ...quota };
-		if (hintMs < MINUTE) return { class: "per-minute", ...quota };
+		if (hintMs < minHintMs) return { class: "per-minute", ...quota };
 		return { class: "hinted", hintMs, ...quota };
 	}
 	if (WEAK.test(signal)) return { class: "weak", ...quota };
