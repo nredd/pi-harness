@@ -1786,6 +1786,9 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			delete (globalThis as any)[MANAGER_KEY];
 		}
 		scheduler.stop();
+		// Before any run is aborted: a run that settles while another is still
+		// terminating must not send its notice into the closing session.
+		outbox.hold();
 		// Before abortAll, and not folded into it: a workflow owns a worker thread
 		// as well as its children, and only its own signal terminates that.
 		for (const task of workflowTasks.values()) task.abortController.abort();

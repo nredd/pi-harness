@@ -1566,7 +1566,9 @@ Use `Agent` for one task or a few known tasks. Use a workflow when discovery det
 items pass through stages, or findings need independent verification. Every `agent()` gets a real
 child session with its own tools/model; the coordinator itself has no filesystem or network API.
 The run uses a worker thread, not a separate OS subprocess per agent.
-Ending the session stops every running workflow and waits for its worker thread to exit. On
+Ending the session stops every running workflow and waits for its worker thread to exit. No
+notice is sent while it waits, so a run that stops first does not start a turn in the closing
+session. On
 `/new`, `/resume`, `/fork` or `/reload` the run's `Stopped` notice is handed to the session you
 left and appears when you return to it; on quit it is dropped.
 

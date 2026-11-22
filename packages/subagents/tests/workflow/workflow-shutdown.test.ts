@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { NOTIFICATION_HOLD_MS } from "../../src/completion-outbox.ts";
 import { drainDetached } from "../../src/detached-results.ts";
 import { createSubagentsExtension, WORKFLOW_ENTRY_TYPE, WORKFLOW_FILE_FLAG } from "../../src/index.ts";
 import { runWorkflow, type WorkflowRunResult } from "../../src/workflow/runtime.ts";
@@ -126,6 +127,44 @@ it("spools an aborted run's Stopped notice on a session switch instead of sendin
 			details: expect.objectContaining({ id: run.taskId }),
 		}),
 	]);
+});
+
+/** Two held tool runs; shutdown aborts both, the first settles and the hold elapses before the second. */
+async function shutDownAcrossTwo(reason: string) {
+	const first = holdNextRun();
+	const second = holdNextRun();
+	await startSession();
+	for (const id of ["tc-1", "tc-2"])
+		await booted.tools.get("SubagentWorkflow").execute(id, { script }, undefined, undefined, context);
+	const shutdown = booted.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason }, context);
+	await Promise.all([first.aborted, second.aborted]);
+	first.complete();
+	await flush();
+	clock.advance(NOTIFICATION_HOLD_MS * 2);
+	const sentBeforeSecond = notices().length;
+	second.complete();
+	await shutdown;
+	return { sentBeforeSecond };
+}
+
+it("holds a Stopped notice while shutdown waits for another run, then spools it on a switch", async () => {
+	const { sentBeforeSecond } = await shutDownAcrossTwo("new");
+
+	expect(sentBeforeSecond, "no notice may be sent into the closing session").toBe(0);
+	expect(clock.pending).toBe(0);
+	const [spooled, ...rest] = drainDetached(sessionFile);
+	expect(rest).toEqual([]);
+	expect(spooled!.content).toContain("2 background tasks finished.");
+	expect(notices()).toEqual([]);
+});
+
+it("holds a Stopped notice while shutdown waits for another run, then drops it on quit", async () => {
+	const { sentBeforeSecond } = await shutDownAcrossTwo("quit");
+
+	expect(sentBeforeSecond).toBe(0);
+	clock.advance(60_000);
+	expect(notices()).toEqual([]);
+	expect(drainDetached(sessionFile)).toEqual([]);
 });
 
 it("records a flag-launched run's outcome before shutdown returns", async () => {
