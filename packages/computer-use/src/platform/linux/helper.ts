@@ -174,6 +174,12 @@ async function waitForShared<T>(promise: Promise<T>, signal?: AbortSignal): Prom
 export interface LinuxHelperClientOptions {
 	helperPath?: string;
 	setupHelperScript?: string;
+	/**
+	 * The disposal of the client this one replaces, resolving to its refusal: physical commands and this
+	 * client's own `dispose()` wait for it and inherit the refusal, since the input it may have left held is
+	 * still held in this process's desktop.
+	 */
+	predecessor?: Promise<string | undefined>;
 }
 
 export class LinuxHelperClient {
@@ -189,12 +195,17 @@ export class LinuxHelperClient {
 	private inputUnsafe?: string;
 	/** Discarded helpers whose exit status is still unknown: any of them may yet exit owing releases. */
 	private unsettledExits = new Set<Promise<void>>();
+	/** Settles once the predecessor's refusal, if any, is latched here. */
+	private readonly predecessor?: Promise<void>;
 	private readonly helperPath: string;
 	private readonly setupHelperScript: string;
 
 	constructor(options: LinuxHelperClientOptions = {}) {
 		this.helperPath = options.helperPath ?? LINUX_HELPER_PATH;
 		this.setupHelperScript = options.setupHelperScript ?? SETUP_HELPER_SCRIPT;
+		this.predecessor = options.predecessor?.then((refusal) => {
+			if (refusal !== undefined) this.refusePhysicalInput(refusal);
+		});
 	}
 
 	/**
@@ -207,12 +218,14 @@ export class LinuxHelperClient {
 		this.installPromise = undefined;
 		this.setupAbort?.abort();
 		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
+		// A chain of resets: what any predecessor left held is carried down to the newest client.
+		await this.predecessor;
 		await this.awaitDiscardedExits();
 		return this.inputUnsafe;
 	}
 
-	/** Refuse physical input from now on with `message`, e.g. carried over from a disposed predecessor. */
-	refusePhysicalInput(message: string): void {
+	/** Refuse physical input from now on with `message`. */
+	private refusePhysicalInput(message: string): void {
 		this.inputUnsafe ??= message;
 	}
 
@@ -492,6 +505,8 @@ export class LinuxHelperClient {
 		throwIfAborted(signal);
 		// A respawned helper has no record of what an earlier one left held: only non-physical commands go on.
 		const physical = isPhysicalCommand(cmd, args);
+		// A predecessor still being disposed may yet report input left held: learn that before any physical write.
+		if (physical && this.predecessor) await waitForShared(this.predecessor, signal);
 		for (;;) {
 			this.refuseUnsafe(physical);
 			const child = await this.process(signal);
@@ -558,16 +573,14 @@ export class LinuxHelperClient {
 export let linuxHelper = new LinuxHelperClient();
 
 /**
- * Session shutdown: install a fresh client for the next session, then dispose the old one (terminal) and
- * wait, bounded, for its helper's exit status. Resolves to the refusal when it may have left input held:
- * the caller must surface it, and the fresh client keeps refusing physical input, since the input is still
- * held in this process's desktop.
+ * Session shutdown: dispose the old client (terminal) and install a fresh one for the next session that
+ * holds every physical write until that disposal settles, then wait, bounded, for the old helper's exit
+ * status. Resolves to the refusal when it may have left input held: the caller must surface it, and the
+ * fresh client inherits it before its first physical write, since the input is still held in this process's
+ * desktop. Concurrent resets chain: each client's disposal waits for its own predecessor's.
  */
 export async function resetLinuxHelper(): Promise<string | undefined> {
-	const old = linuxHelper;
-	const next = new LinuxHelperClient();
-	linuxHelper = next;
-	const warning = await old.dispose();
-	if (warning !== undefined) next.refusePhysicalInput(warning);
-	return warning;
+	const disposal = linuxHelper.dispose();
+	linuxHelper = new LinuxHelperClient({ predecessor: disposal });
+	return await disposal;
 }

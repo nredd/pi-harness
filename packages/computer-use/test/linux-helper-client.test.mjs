@@ -316,4 +316,57 @@ describe("Linux helper exit owing releases (#1183)", () => {
 		exitOnly(quiet.children.at(-1), 0);
 		assert.equal(await cleanReset, undefined);
 	});
+
+	test("physical input on the fresh client waits for the predecessor's disposal; resets chain", async () => {
+		let acted = 0;
+		const { children, spawn, helper } = await clientFor(() => ({
+			listRoots: ok([]),
+			act: effect(
+				() => {
+					acted += 1;
+				},
+				ok({ outcome: "worked" }),
+			),
+		}));
+		vi.spyOn(helper.linuxHelper, "ensureInstalled").mockResolvedValue(undefined);
+		await helper.linuxHelper.command("listRoots");
+		const old = children.at(-1);
+		const first = helper.resetLinuxHelper();
+		const fresh = helper.linuxHelper;
+		vi.spyOn(fresh, "ensureInstalled").mockResolvedValue(undefined);
+		const pending = fresh.command("act", {});
+		// Non-physical commands go on; a second reset meanwhile chains onto the first.
+		assert.deepEqual(await fresh.command("listRoots"), []);
+		const second = helper.resetLinuxHelper();
+		const newest = helper.linuxHelper;
+		vi.spyOn(newest, "ensureInstalled").mockResolvedValue(undefined);
+		const later = newest.command("focusWindow", {});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(acted, 0, "no physical write before the predecessor's status is known");
+		for (const child of children.slice(1)) exitOnly(child, 0);
+		old.stderr.write(report);
+		await new Promise((resolve) => setImmediate(resolve));
+		exitOnly(old, 3);
+		assert.match(await first, /keycode 50/);
+		assert.match(await second, /keycode 50/, "the second reset inherits the first one's refusal");
+		for (const command of [pending, later])
+			await assert.rejects(command, (error) => {
+				assert.equal(error.code, "input_unsafe");
+				assert.match(error.message, /keycode 50/);
+				return true;
+			});
+		assert.equal(acted, 0);
+		assert.equal(spawn.calls.length, 2, "only the listRoots helper was spawned for the fresh client");
+
+		// A clean predecessor lets physical input through once its exit is known.
+		const clean = await clientFor(() => ({ listRoots: ok([]), act: ok({ outcome: "worked" }) }));
+		vi.spyOn(clean.helper.linuxHelper, "ensureInstalled").mockResolvedValue(undefined);
+		await clean.helper.linuxHelper.command("listRoots");
+		const reset = clean.helper.resetLinuxHelper();
+		vi.spyOn(clean.helper.linuxHelper, "ensureInstalled").mockResolvedValue(undefined);
+		const through = clean.helper.linuxHelper.command("act", {});
+		exitOnly(clean.children.at(-1), 0);
+		assert.equal(await reset, undefined);
+		assert.deepEqual(await through, { outcome: "worked" });
+	});
 });
