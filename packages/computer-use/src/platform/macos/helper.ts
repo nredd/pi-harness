@@ -202,16 +202,16 @@ export class MacosHelperClient {
 	private requestSequence = 0;
 	private diagnosticsCache?: PlatformDiagnostics;
 	helperBuild?: string;
+	staleBuildMessage?: string;
 
 	verifyBuild(result: { buildIdentity?: unknown; executablePath?: unknown } | undefined): void {
+		this.staleBuildMessage = undefined;
 		this.helperBuild = toOptionalString(result?.buildIdentity) ?? "unknown";
 		if (usingExternalHelperSocket) return;
 		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
 		if (this.helperBuild !== expectedBuild) {
-			throw new HelperCommandError(
-				`pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): re-run the package setup to update it.`,
-				"stale_helper",
-			);
+			this.staleBuildMessage = `pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): re-run the package setup to update it.`;
+			throw new HelperCommandError(this.staleBuildMessage, "stale_helper");
 		}
 	}
 

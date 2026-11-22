@@ -185,6 +185,27 @@ test("keeps the external socket override and shows its reported build in macOS s
 	assert.match(notify.mock.calls[0][0], new RegExp(`^helper build: ${older.replace("+", "\\+")}$`, "m"));
 });
 
+test("macOS status shows unchecked, then stale with the expected build, then the matching build", async () => {
+	Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
+	const { client, fake } = await rig(older);
+	const { default: extension } = await import("../src/index.ts");
+	const pi = createRecordingPi();
+	extension(pi.pi);
+	const status = async () => {
+		const notify = vi.fn();
+		await pi.commands.get("computer-use")?.handler("status", { cwd: process.cwd(), ui: { notify } });
+		return notify.mock.calls[0][0] as string;
+	};
+	assert.match(await status(), /^helper build: not checked$/m);
+	await assert.rejects(client.ensureProtocol(), { code: "stale_helper" });
+	const stale = await status();
+	assert.match(stale, /^helper build: stale -- /m);
+	assert.ok(stale.includes(`expected ${current}`));
+	fake.diagnostics.buildIdentity = current;
+	await client.ensureProtocol();
+	assert.ok((await status()).split("\n").includes(`helper build: ${current}`));
+});
+
 test("passes a version and production source hash to swiftc", async () => {
 	const root = makeTestTempDir("cu-build-stamp-", onTestFinished);
 	const dir = path.join(root, "native", "macos");
