@@ -1,6 +1,11 @@
 import type { FindParams } from "./contract.ts";
+import type { PlatformName } from "./platform/types.ts";
 
-export function normalizeFindParams(params: FindParams | null | undefined): FindParams {
+export function assertMacosPidUpperBound(pid: number, field: string): void {
+	if (pid > 2147483647) throw new Error(`${field} must be at most 2147483647 on macOS.`);
+}
+
+export function normalizeFindParams(params: FindParams | null | undefined, platform?: PlatformName): FindParams {
 	const rawParams = params ?? {};
 	if (
 		rawParams.pid !== undefined &&
@@ -8,6 +13,7 @@ export function normalizeFindParams(params: FindParams | null | undefined): Find
 	) {
 		throw new Error("find_roots.pid must be a positive integer when provided.");
 	}
+	if (platform === "macos" && rawParams.pid !== undefined) assertMacosPidUpperBound(rawParams.pid, "find_roots.pid");
 	return {
 		text: trimOrUndefined(rawParams.text),
 		app: trimOrUndefined(rawParams.app),
