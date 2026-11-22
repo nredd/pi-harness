@@ -212,7 +212,9 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		};
 	};
 	Object.assign(currentPlatformBackend, {
-		name: options.platform ?? currentPlatformBackend.name,
+		// Pin a host-neutral fake to macOS policy so it behaves alike on every CI host; Linux and Windows
+		// admit roots only by an executable identity the default roots do not carry.
+		name: options.platform ?? "macos",
 		ensureReady: async () => {
 			fake.readyCalls++;
 			return {
