@@ -5695,7 +5695,7 @@ Terminal `act_ui` results always say the action was delivered, and:
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
-- A PID-scoped listing whose AX window or sheet inventory could not be read completely fails with `inventory_incomplete` (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing.
+- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`.
 
 ## Ref lifecycle
 

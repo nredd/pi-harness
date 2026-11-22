@@ -4361,12 +4361,23 @@ subtree; role-only conditions must be scoped, and value checks require an exact
 
 An `absent` condition holds only on complete evidence. The helper must walk the
 whole scope and read every field the condition tests (the macOS walk stops at
-depth 12 and 2,000 nodes), and the successor observation must neither show the
+depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
+without the helper's `complete: true`, e.g. from an older external helper, as
+incomplete. The successor observation, captured from the root the wait read and
+never from a foreground modal that opened meanwhile, must neither show the
 condition nor mark a node `truncated` in the scope, above it or, unless the
-scope is an exact `ref`, below it. A root closure proven from a complete listing
-also settles it. Otherwise the check is `inconclusive` with
-`postcondition_inconclusive` and the outcome keeps its delivery evidence, and
-`wait_for` returns `inconclusive: true` (plus `unreadRefs`) instead of `gone`.
+scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
+missing from the successor proves nothing while the condition shows anywhere in
+it. A root closure proven from a complete listing also settles it. Otherwise
+`act_ui` reports the check `inconclusive` with `postcondition_inconclusive`,
+keeping the delivery outcome from before the check (its message claims delivery
+only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
+instead of `gone`, with `unreadRefs` only when the successor has unread nodes
+there. When the root of a claimed absence cannot be observed afterward,
+`wait_for` returns `inconclusive: true` with `observationError` and no successor
+state. A `wait_for` that timed out while the helper still saw the condition is a
+failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
+failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
 
