@@ -721,11 +721,15 @@ it("compaction respects machine expansion budget", async () => {
 		(value, encoding) => measure(value, encoding) + (value === expanded[0] ? padding : 0),
 	);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	await exportStats(agent, out).catch((error: unknown) => {
-		expect(error).toMatchObject({ message: expect.stringMatching(/128 MiB|larger than/) });
-	});
+	const orphanBytes = gzipSync(expanded[0] ?? "", { level: 0 });
+	const orphanHash = createHash("sha256").update(orphanBytes).digest("hex");
+	const orphan = join(snapshotDir, `2026-09-${orphanHash}.json.gz`);
+	writeFileSync(orphan, orphanBytes);
+	const files = readdirSync(snapshotDir).sort();
+	await expect(exportStats(agent, out)).rejects.toThrow("Machine snapshot exceeds 128 MiB expanded");
 	expect(manifest(snapshotDir)).toEqual(before);
-	expect(readdirSync(snapshotDir)).toEqual(expect.arrayContaining(before.shards.map((ref) => ref.file)));
+	expect(readdirSync(snapshotDir).sort()).toEqual(files);
+	expect(readFileSync(orphan)).toEqual(orphanBytes);
 	expect(await importStats(join(root, "fresh"), out)).toMatchObject({ imported: 1, problems: [] });
 });
 

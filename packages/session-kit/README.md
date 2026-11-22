@@ -701,8 +701,8 @@ reset, using separate shards for readings of the same key. Base readings partici
 occupying any delta slots. The combined reader orders quota by the serialized
 `[provider, limitId, window, account]` key in UTF-16 code-unit order, independent of manifest order.
 If the quota history cannot fit the cap
-or the candidate exceeds the reader's cumulative expansion budget, export fails without publishing
-or pruning. No format change is required; readers still accept older, larger manifests.
+or the candidate exceeds the reader's cumulative expansion budget (`Machine snapshot exceeds
+128 MiB expanded`), export fails without publishing or pruning. No format change is required; readers still accept older, larger manifests.
 
 The manifest switches to the new references before obsolete files are pruned. Write errors before
 manifest publication leave the previous manifest and its shards readable; frozen recovery copies

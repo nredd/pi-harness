@@ -441,7 +441,14 @@ function expandWithinBudget(
 	remaining: number,
 ): { text: string; expandedBytes: number } {
 	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
-	const text = (version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
+	let text: string;
+	try {
+		text = (version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE")
+			throw new Error("Machine snapshot exceeds 128 MiB expanded", { cause: error });
+		throw error;
+	}
 	return { text, expandedBytes: chargeExpansion(Buffer.byteLength(text), remaining) };
 }
 
