@@ -244,9 +244,10 @@ export interface EvictedNote {
 	 */
 	reopenRefusal?: string;
 	/**
-	 * The saved running child's transcript was written within
-	 * `RECENT_CHILD_WRITE_SECONDS` at bind time, so another process may still
-	 * own it. Lookups then report the refusal instead of "interrupted".
+	 * The saved child's transcript was written within `RECENT_CHILD_WRITE_SECONDS`
+	 * (or is dated in the future) at bind time, so another process may still own
+	 * it, whatever its last recorded status. Lookups then report the refusal
+	 * instead of "interrupted".
 	 */
 	possiblyRunning?: true;
 	/** The `.output` transcript when one was written, else the session file. */

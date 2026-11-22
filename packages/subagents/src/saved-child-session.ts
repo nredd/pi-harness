@@ -170,14 +170,16 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 		if (savedCwd !== undefined && header.cwd !== savedCwd) {
 			return { refusal: `child session does not match its saved working directory: ${file}` };
 		}
-		if (status === "running") {
-			const write = lastWrite(stats.mtimeMs, now);
-			if (write)
-				return {
-					file: canonicalFile,
-					recent: true,
-					refusal: `may still be running in another process (${write}): ${file}`,
-				};
+		// Any status: a journal row can be lost (a failed or truncated append), so
+		// only the transcript's write age can say no process still drives it.
+		const write = lastWrite(stats.mtimeMs, now);
+		if (write) {
+			const recorded = status === "running" ? "" : `last recorded status ${status}, `;
+			return {
+				file: canonicalFile,
+				recent: true,
+				refusal: `may still be running in another process (${recorded}${write}): ${file}`,
+			};
 		}
 		return { file: canonicalFile };
 	} catch {

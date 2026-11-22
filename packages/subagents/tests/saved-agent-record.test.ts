@@ -15,6 +15,8 @@ import {
 	sameSavedChild,
 } from "../src/saved-child-session.ts";
 
+/** A check long after every write in these tests, so none is recent. */
+const CHECKED_LATER = Number.MAX_SAFE_INTEGER;
 const base = { id: "synthetic-child", type: "general-purpose", description: "synthetic job", status: "completed" };
 
 describe("saved agent lookup notes", () => {
@@ -139,7 +141,7 @@ describe("saved child transcript identity", () => {
 		const current = join(root, "current.jsonl");
 		writeFileSync(file, `${JSON.stringify({ type: "session", parentSession: recorded })}\n`);
 		const check = () =>
-			checkSavedChild({ file, directories: [root], parentFile: current, status: "completed", now: 0 });
+			checkSavedChild({ file, directories: [root], parentFile: current, status: "completed", now: CHECKED_LATER });
 		expect(check()).toEqual({ refusal: `parent session is missing or unreadable: ${recorded}` });
 		writeFileSync(recorded, "");
 		expect(check()).toEqual({ refusal: `parent session is missing or unreadable: ${current}` });
@@ -161,7 +163,7 @@ describe("saved child validation", () => {
 	it("accepts the journaled creation directory when current settings give another", () => {
 		const { root, parentFile, directory, file } = child();
 		const elsewhere = join(root, "elsewhere");
-		const options = { file, parentFile, status: "completed", now: 0 } as const;
+		const options = { file, parentFile, status: "completed", now: CHECKED_LATER } as const;
 		expect(checkSavedChild({ ...options, directories: [undefined, elsewhere] })).toEqual({
 			refusal: `child session is outside its configured directory: ${file}`,
 		});
@@ -206,7 +208,7 @@ describe("saved child validation", () => {
 
 	it("reads a header line past the first chunk and refuses one past the cap", () => {
 		const { directory, parentFile, file } = child({ padding: "x".repeat(10_000) });
-		const options = { directories: [directory], parentFile, status: "completed", now: 0 } as const;
+		const options = { directories: [directory], parentFile, status: "completed", now: CHECKED_LATER } as const;
 		expect(checkSavedChild({ ...options, file })).toEqual({ file: realpathSync(file) });
 		writeFileSync(file, `${JSON.stringify({ type: "session", parentSession: parentFile })}`);
 		expect(checkSavedChild({ ...options, file })).toEqual({
@@ -223,7 +225,14 @@ describe("saved child validation", () => {
 		const link = join(root, "link");
 		symlinkSync(directory, link, "dir");
 		const canonical = canonicalPaths();
-		const options = { file, directories: [link], parentFile, status: "completed", now: 0, canonical } as const;
+		const options = {
+			file,
+			directories: [link],
+			parentFile,
+			status: "completed",
+			now: CHECKED_LATER,
+			canonical,
+		} as const;
 		expect(checkSavedChild(options)).toEqual({ file: realpathSync(file) });
 		// A later row reuses the first resolution instead of resolving the link again.
 		unlinkSync(link);

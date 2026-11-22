@@ -18,6 +18,7 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentRunner from "../src/agent-runner.ts";
+import { RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
 let fixture: ScenarioSession;
@@ -26,6 +27,12 @@ function agentId(receipt: string | undefined): string {
 	const id = receipt?.match(/Agent ID: (\S+)/)?.[1];
 	if (!id) throw new Error(`No Agent ID in ${receipt}`);
 	return id;
+}
+/** Date a finished child's transcript past the recent-write window of the fixture clock. */
+function settle(file: string | undefined) {
+	if (!file) throw new Error("Missing child transcript");
+	const stale = new Date(fixture.clock.now() - (RECENT_CHILD_WRITE_SECONDS + 1) * 1000);
+	utimesSync(file, stale, stale);
 }
 afterEach(async () => {
 	await fixture?.dispose();
@@ -50,6 +57,7 @@ it("reopens the newest id after two restarts through a symlinked child directory
 		const record = fixture.record(agentId(receipt?.text));
 		await record.promise;
 		await host.session.waitForIdle();
+		settle(record.sessionFile);
 		return record;
 	};
 	const restart = async () => {
@@ -88,6 +96,7 @@ it("links a successor journaled through a symlinked directory after its transcri
 		const record = fixture.record(agentId(outcomes(host, "Agent").at(-1)?.text));
 		await record.promise;
 		await host.session.waitForIdle();
+		settle(record.sessionFile);
 		return record;
 	};
 	const restart = async () => {
@@ -124,6 +133,7 @@ it("validates a reopened row against the creation directory its predecessor jour
 	const parentFile = parent.getSessionFile();
 	const file = record.sessionFile;
 	if (!parentFile || !file) throw new Error("Missing session path");
+	settle(file);
 	const journaled = parent
 		.getBranch()
 		.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record")
@@ -416,6 +426,7 @@ it.each([
 				await call(reopened, spawn("second child", { name: "crash-probe" }));
 				const second = fixture.record(agentId(outcomes(reopened, "Agent").at(-1)?.text));
 				await second.promise;
+				settle(second.sessionFile);
 				expect(second.handle).toBe("general-purpose-2");
 				expect(second.alias).toBe("crash-probe-2");
 				await reopened.session.waitForIdle();
@@ -540,6 +551,7 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 	const parentFile = parent.getSessionFile();
 	const file = record.sessionFile;
 	if (!parentFile || !file) throw new Error("Missing transcript");
+	settle(file);
 	const outside = join(fixture.root, "empty.jsonl");
 	const link = join(dirname(file), "foreign.jsonl");
 	const directory = join(dirname(file), "directory");
@@ -688,6 +700,72 @@ it("journals both ends of a foreground resume, including an interrupted second r
 	}
 });
 
+it("refuses a fresh transcript whose resume start was never journaled, from another manager", {
+	timeout: 30_000,
+}, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const hold = fixture.heldTool();
+	const child = fixture.physical("kid", "child", [
+		answer("FIRST DONE"),
+		toolCalls({ name: "hold", args: {} }),
+		answer("DONE AFTER HOLD"),
+	]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("foreground probe", { run_in_background: false })), answer("SPAWNED")]);
+	await h.session.prompt("spawn foreground");
+	const row = parent.getBranch().find((entry) => entry.type === "custom" && entry.customType === "subagents:record");
+	if (row?.type !== "custom") throw new Error("Missing child record");
+	const { id, sessionFile } = row.data as { id: string; sessionFile: string };
+	// The resume's `running` row is lost: the journal still ends on `completed`.
+	const append = parent.appendCustomEntry.bind(parent);
+	const lost = vi.spyOn(parent, "appendCustomEntry").mockImplementation((customType, data) => {
+		if (customType === "subagents:record" && (data as { status?: string }).status === "running")
+			throw new Error("journal truncated");
+		return append(customType, data);
+	});
+	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+	h.setResponses([toolCalls(spawn("resume foreground", { resume: id, run_in_background: false })), answer("DONE")]);
+	const old = h.session.prompt("resume into tool barrier");
+	await hold.entered;
+	try {
+		expect(errors.mock.calls.flat().join(" ")).toContain("journal truncated");
+		const journaled = parent
+			.getBranch()
+			.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record")
+			.at(-1);
+		expect(journaled).toMatchObject({ data: { id, status: "completed" } });
+		const fresh = new Date(fixture.clock.now() - 5_000);
+		utimesSync(sessionFile, fresh, fresh);
+		const parentFile = parent.getSessionFile();
+		if (!parentFile) throw new Error("Missing parent transcript");
+		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+		next.setResponses([
+			toolCalls(
+				{ name: "get_subagent_result", args: { agent_id: id } },
+				spawn("resume from another manager", { resume: id }),
+			),
+			answer("CHECKED"),
+		]);
+		await next.session.prompt("recover the resumed child");
+		const refusal = "may still be running in another process (last recorded status completed, last write 5s ago";
+		expect(outcomes(next, "get_subagent_result")[0]).toMatchObject({
+			isError: true,
+			text: expect.stringContaining(refusal),
+		});
+		expect(outcomes(next, "Agent")[0]).toMatchObject({ isError: true, text: expect.stringContaining(refusal) });
+		expect(child.state.callCount).toBe(2);
+		next.cleanup();
+	} finally {
+		lost.mockRestore();
+		errors.mockRestore();
+		hold.release();
+		await old;
+		h.cleanup();
+	}
+});
+
 it("#330: a fresh stopped child retains its output across a fresh parent activation", { timeout: 30_000 }, async () => {
 	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
 	const hold = fixture.heldTool();
@@ -746,7 +824,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	const tasksDir = dirname(output);
 	const stale = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 	for (const path of [output, tasksDir, dirname(tasksDir)]) utimesSync(path, stale, stale);
-	// A recent write does not block a terminal child from reopening.
+	// A journaled terminal status is not proof the writer is gone: a recent write still blocks a reopen.
 	if (!record.sessionFile) throw new Error("Missing child transcript");
 	const recent = new Date(fixture.clock.now());
 	utimesSync(record.sessionFile, recent, recent);
@@ -762,6 +840,9 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	expect(recovered).toContain("last recorded status: stopped, recovered from saved parent session");
 	expect(recovered).toContain(`transcript: ${output}`);
 	expect(recovered).toContain("SYNTHETIC PROGRESS 330"); // the saved result text comes back with the branch (#372)
+	expect(recovered).toContain(
+		"may still be running in another process (last recorded status stopped, last write 0s ago; retry in 120 s)",
+	);
 	reopened.setResponses([
 		toolCalls({ name: "get_subagent_result", args: { agent_id: "synthetic-empty" } }),
 		answer("LOOKED UP EMPTY"),
@@ -772,6 +853,8 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	);
 	expect(readFileSync(output, "utf8")).toBe(persisted);
 	expect(child.state.callCount).toBe(1);
+	// The dispatch rechecks the write age, so the wait clears without a restart.
+	fixture.clock.advance(RECENT_CHILD_WRITE_SECONDS * 1000);
 	reopened.setResponses([
 		toolCalls({ name: "stop_subagent", args: { agent_id: id } }),
 		toolCalls({ name: "steer_subagent", args: { agent_id: "synthetic-empty", message: "no transcript to open" } }),
