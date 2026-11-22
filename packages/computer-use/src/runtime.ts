@@ -42,11 +42,6 @@ export class StateStore<T> {
 		return this.records.get(stateId);
 	}
 
-	/** Every retained record, oldest first. Mutating a record's `value` keeps its eviction order. */
-	values(): IterableIterator<StoredState<T>> {
-		return this.records.values();
-	}
-
 	clear(): void {
 		this.records.clear();
 	}

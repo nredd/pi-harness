@@ -800,31 +800,6 @@ function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): Ou
 	return node;
 }
 
-/**
- * Revoke text a newer look of the same root no longer vouches for. `confirmed` lists the refs that newer look saw
- * readable; every other node of `serialized` that still carries text is redacted and marked unconfirmed (refs stay,
- * so actions still address it). Returns the revoked copy and whether any node changed.
- */
-export function revokeUnconfirmed(
-	serialized: SerializedOutline,
-	confirmed: Set<string>,
-): { outline: SerializedOutline; changed: boolean } {
-	const outline = restoreOutline(serialized);
-	let changed = false;
-	for (const node of outline.nodes) {
-		if (!isConfirmedReadable(node) || confirmed.has(node.ref)) continue;
-		redactRetained(node);
-		changed = true;
-	}
-	return { outline: serializeOutline(outline), changed };
-}
-
-/** Refs a look vouches for, or `undefined` when it saw nothing protected or unconfirmed and so revokes nothing. */
-export function revocationFor(outline: Outline): Set<string> | undefined {
-	if (outline.nodes.every(isConfirmedReadable)) return undefined;
-	return new Set(outline.nodes.filter(isConfirmedReadable).map((node) => node.ref));
-}
-
 function outlineRefNumber(ref: string): number {
 	const match = /^@e(\d+)$/.exec(ref);
 	return match ? Number(match[1]) : 0;

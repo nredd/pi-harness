@@ -13,8 +13,6 @@ const OUTPUT_STORE_MAX_BYTES = 64 * 1024 * 1024;
 
 interface StoredOutput {
 	ref: string;
-	/** State whose query produced the output, so a protection revocation can drop it. */
-	stateId?: string;
 	filePath: string;
 	storedBytes: number;
 	totalBytes: number;
@@ -39,7 +37,7 @@ function boundedPrefix(value: string, maxBytes: number, maxLines: number): strin
 	return new TextDecoder().decode(utf8Prefix(new TextEncoder().encode(lineBounded), maxBytes));
 }
 
-function storeOutput(value: string, stateId?: string): StoredOutput {
+function storeOutput(value: string): StoredOutput {
 	const encoded = new TextEncoder().encode(value);
 	const stored = encoded.byteLength > OUTPUT_ENTRY_MAX_BYTES ? utf8Prefix(encoded, OUTPUT_ENTRY_MAX_BYTES) : encoded;
 	outputDirectory ??= mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-output-"));
@@ -48,7 +46,6 @@ function storeOutput(value: string, stateId?: string): StoredOutput {
 	writeFileSync(filePath, stored, { mode: 0o600 });
 	const entry: StoredOutput = {
 		ref,
-		stateId,
 		filePath,
 		storedBytes: stored.byteLength,
 		totalBytes: encoded.byteLength,
@@ -56,26 +53,17 @@ function storeOutput(value: string, stateId?: string): StoredOutput {
 	};
 	outputs.set(entry.ref, entry);
 	outputBytes += entry.storedBytes;
-	while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) dropOutput(outputs.values().next().value!);
-	return entry;
-}
-
-function dropOutput(entry: StoredOutput): void {
-	outputs.delete(entry.ref);
-	outputBytes -= entry.storedBytes;
-	try {
-		unlinkSync(entry.filePath);
-	} catch {
-		/* already removed */
+	while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) {
+		const [oldestRef, oldest] = outputs.entries().next().value!;
+		outputs.delete(oldestRef);
+		outputBytes -= oldest.storedBytes;
+		try {
+			unlinkSync(oldest.filePath);
+		} catch {
+			/* already removed */
+		}
 	}
-}
-
-/**
- * Drop every stored output a query on one of `stateIds` produced: a protection revocation means those pages may
- * hold text no current look vouches for. Side effect: deletes their files.
- */
-export function revokeStoredOutputs(stateIds: ReadonlySet<string>): void {
-	for (const entry of [...outputs.values()]) if (entry.stateId && stateIds.has(entry.stateId)) dropOutput(entry);
+	return entry;
 }
 
 function refinementFor(tool: string): string {
@@ -86,7 +74,7 @@ function refinementFor(tool: string): string {
 	return "request a smaller or more focused result";
 }
 
-export function applyOutputEnvelope<T>(tool: string, result: AgentToolResult<T>, stateId?: string): AgentToolResult<T> {
+export function applyOutputEnvelope<T>(tool: string, result: AgentToolResult<T>): AgentToolResult<T> {
 	const textParts = result.content.filter(
 		(part): part is Extract<(typeof result.content)[number], { type: "text" }> => part.type === "text",
 	);
@@ -95,7 +83,7 @@ export function applyOutputEnvelope<T>(tool: string, result: AgentToolResult<T>,
 	const lines = combined === "" ? 0 : combined.split("\n").length;
 	if (bytes <= MODEL_TEXT_MAX_BYTES && lines <= MODEL_TEXT_MAX_LINES) return result;
 
-	const entry = storeOutput(combined, stateId);
+	const entry = storeOutput(combined);
 	const preview = boundedPrefix(combined, MODEL_PREVIEW_BYTES, MODEL_TEXT_MAX_LINES - 4);
 	const returnedBytes = new TextEncoder().encode(preview).byteLength;
 	const availability = entry.complete
