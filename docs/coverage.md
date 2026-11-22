@@ -453,6 +453,49 @@ inline source tests count. Declaration-only Windows modules can lack an LLVM map
 contain block comments; the Linux declaration check is unchanged. This is not Windows ARM64 or
 live desktop evidence.
 
+The caps alone cannot see a shrinking denominator: a build or instrumentation change can drop an
+uncovered block from BOTH exports, which then agree on the smaller map, and the uncovered count
+falls without a new test (#1192). So the signal also records reviewed `mapped_totals`: per OS, per
+package-relative source, the file's SHA-256 and its mapped `lines` / `functions` (main run
+[here](https://github.com/nredd/pi-harness/actions/runs/45009970545) measured 5181 / 619; its
+producer `metadata.json` hashes match the recorded ones). An enforced `llvm-lcov` signal must record
+them for every OS it accounts. Accounting then fails when a source whose hash still matches its
+record maps fewer lines or functions than recorded, or leaves the signal's records. Record keys are
+canonical package-relative POSIX paths on every host: no drive, backslash, leading `/`, empty, `.` or
+`..` segment. Growth is allowed. Every run writes the current records, hashed from the checkout, to the
+summary's `measured_mapped_totals`, and `--measure` proposes them in its review diff. Records are
+separate from the uncovered caps and never loosen them.
+
+A file is stale when no current record guards its denominator: it is measured but has no record or
+its record hashes other source (a new or edited file), or it is recorded, not measured and its source
+changed or was deleted. Stale files are not compared. Every run lists them in the summary's
+`stale_mapped_totals` and logs one `STALE mapped totals, not compared (#1270)` warning per signal
+naming them. This is a WARNING, not a failure: a source edit leaves that file's mapped denominator
+unguarded until a reviewed `--measure` refresh lands. Whether the fan-in should fail on stale files is
+the open policy choice in #1270.
+
+The base ratchet checks every record against the checkout. A record the policy adds or edits must
+hash the checkout's source, so a mistyped hash cannot turn a remeasurement into a permanent stale
+opt-out; it fails with `Mapped totals must hash the checkout source`, even with a ledger entry.
+Lowering a record whose source still matches the base record, or dropping the record of any source
+that still exists, is a remeasurement. It needs a new, exact `remeasurements` entry, like
+`enforcement_changes`:
+
+```json
+{
+  "package": "computer-use-windows-native",
+  "signal": "primary",
+  "os": "win32",
+  "reason": "Toolchain bump drops inlined helper regions; hosted runs <id> and <id> agree."
+}
+```
+
+Missing, blank, duplicated (a repeated base entry included), stale or recycled base entries fail.
+Needing no entry: an initial record, growth, a refresh of an edited source to its new hash, and
+removing a deleted source's record. To create or refresh records, run the replay below with
+`--measure` in place of `--base HEAD` against an artifact built from the same sources, and review the
+`mapped_totals` hunk.
+
 To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
 `coverage.json` and `metadata.json` from its single `windows-*` directory into
 `<reports-root>/packages/computer-use/coverage/native-windows/`, and run:
