@@ -319,7 +319,11 @@ The live `COLLECTED_PROVIDERS` export is retained; use `collectedProviders()` fo
 
 A collector receives the provider credential from Pi, so register only code you trust with that
 credential. A `kind: "http"` adapter defines `request(token)` and `parse(payload)`; a `kind: "custom"`
-adapter defines `read({ token, signal, now })` and should stop on abort. Return normalized `windows`
+adapter defines `read({ token, signal, now })` and should stop on abort. HTTP response bodies are
+streamed and capped at `MAX_USAGE_RESPONSE_BYTES` (256 KiB after decoding HTTP content encoding).
+Extensions run as trusted code in the same process; this API is not a sandbox or a credential
+isolation boundary. Deadlines bound asynchronous waits, not time spent in synchronous callbacks
+(`acceptsCredential`, `request`, `parse`, or `read` before it yields). Return normalized `windows`
 (and optional `meters`, `pools` or `credits`), or `undefined` for unsupported data. Only matching
 percentage windows can block models. Set `providers.<provider>.collector.id` to use a different
 registered adapter; credentials still come from `<provider>`. Unknown explicit IDs return `unavailable`

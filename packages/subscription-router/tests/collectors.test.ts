@@ -351,6 +351,41 @@ it("selects configured collector IDs without changing the credential provider", 
 	expect(read).toHaveBeenCalledOnce();
 });
 
+it("cancels an oversized streamed response before parsing without trusting content-length", async () => {
+	const { usage, fetch } = harness();
+	const cancel = vi.fn(async () => {
+		throw new Error("fake cancel error");
+	});
+	const { readable, enqueue } = (() => {
+		let stream!: ReadableStreamDefaultController<Uint8Array>;
+		const readable = new ReadableStream<Uint8Array>({
+			start: (controller) => {
+				stream = controller;
+			},
+			cancel,
+		});
+		return { readable, enqueue: (size: number) => stream.enqueue(new Uint8Array(size)) };
+	})();
+	fetch.mockResolvedValueOnce(new Response(readable, { headers: { "content-length": "2" } }));
+	const parse = vi.fn(() => reading);
+	install({ provider, kind: "http", request: () => ({ url: "https://quota.example.invalid", headers: {} }), parse });
+	const result = usage.get(ctx, provider);
+	enqueue(256 * 1024);
+	enqueue(1);
+	expect(await result).toMatchObject({ status: "error", message: "Usage request failed." });
+	expect(parse).not.toHaveBeenCalled();
+	expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("rejects a missing HTTP body", async () => {
+	const { usage, fetch } = harness();
+	fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+	const parse = vi.fn(() => reading);
+	install({ provider, kind: "http", request: () => ({ url: "https://quota.example.invalid", headers: {} }), parse });
+	expect(await usage.get(ctx, provider)).toMatchObject({ status: "error" });
+	expect(parse).not.toHaveBeenCalled();
+});
+
 it("warms a registered scoped provider and includes late registrations in the usage RPC", async () => {
 	const { usage } = harness();
 	const { pi, handlers } = createRecordingPi();
@@ -372,11 +407,34 @@ it("warms a registered scoped provider and includes late registrations in the us
 	const session = { ...ctx, scopedModels: [{ model: { provider } }] } as unknown as ExtensionContext;
 	await handlers.get("session_start")?.[0]?.({}, session);
 	expect(get).toHaveBeenCalledWith(expect.objectContaining({ scopedModels: [{ model: { provider } }] }), provider);
-	await listeners.get("router:rpc:usage")?.({ requestId: "read", refresh: true });
+	const cold = "faux-cold";
+	const failing = "faux-throwing";
+	const hanging = "faux-hanging";
+	const healthyRead = vi.fn(fake.read);
+	const failure = vi.fn(() => {
+		throw new Error("private fake payload");
+	});
+	const stalled = vi.fn(() => deferred<CollectorReading>().promise);
+	install({ ...fake, provider: cold, read: healthyRead });
+	install({ ...fake, provider: failing, read: failure });
+	install({ ...fake, provider: hanging, read: stalled });
+	expect(usage.peek(cold)).toBeUndefined();
+	const reply = listeners.get("router:rpc:usage")?.({ requestId: "read", refresh: true });
+	await vi.advanceTimersByTimeAsync(9_999);
+	expect(healthyRead).toHaveBeenCalledOnce();
+	expect(failure).toHaveBeenCalledOnce();
+	expect(stalled).toHaveBeenCalledOnce();
+	expect(usage.peek(cold)).toMatchObject({ status: "available" });
+	expect(emit).not.toHaveBeenCalled();
+	await vi.advanceTimersByTimeAsync(1);
+	await reply;
 	expect(emit).toHaveBeenCalledWith("router:rpc:usage:reply:read", {
 		success: true,
 		data: {
-			snapshots: expect.arrayContaining([expect.objectContaining({ provider, status: "available" })]),
+			snapshots: expect.arrayContaining([
+				expect.objectContaining({ provider, status: "available" }),
+				expect.objectContaining({ provider: cold, status: "available" }),
+			]),
 			blocks: [],
 		},
 	});

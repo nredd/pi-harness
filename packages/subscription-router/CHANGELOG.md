@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Let trusted extensions register and unregister quota collectors by provider ID, with HTTP and custom reads sharing the existing cache and routing decisions (#1178)
+- Add a versioned registry for trusted quota collectors, with reserved built-in IDs, configured aliases and registration-owned evidence. Validate readings and cap HTTP response bodies at 256 KiB (#1178)
 
 - Parse optional per-provider labels, quota groups, evidence settings, declared limits and collector IDs without changing profile configs that omit the newly reserved `providers` key (#1178)
 

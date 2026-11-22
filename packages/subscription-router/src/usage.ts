@@ -31,6 +31,8 @@ const MANUAL_REFRESH_INTERVAL_MS = 60_000;
 /** A `fresh` read reuses a snapshot retrieved this recently, so concurrent confirmations share one read. */
 const FRESH_REUSE_WINDOW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** Maximum decoded HTTP response bytes retained by a quota read. */
+const MAX_USAGE_RESPONSE_BYTES = 256 * 1024;
 /** Failure backoff steps; the last entry is the cap. Reset on the next success. */
 const FAILURE_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 15 * 60_000] as const;
 /** Upper bound on a server-supplied `Retry-After`, so a bogus header cannot park a provider for days. */
@@ -551,7 +553,7 @@ export class UsageService {
 						retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
 					);
 				}
-				const payload: unknown = await response.json();
+				const payload = await readUsageJson(response, signal);
 				signal.throwIfAborted();
 				parsed = collector.parse(payload);
 			} else {
@@ -573,6 +575,30 @@ export class UsageService {
 			clearTimeout(timeout);
 		}
 	}
+}
+
+async function readUsageJson(response: Response, signal: AbortSignal): Promise<unknown> {
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("Missing usage response body.");
+	const decoder = new TextDecoder();
+	let bytes = 0;
+	let json = "";
+	try {
+		for (;;) {
+			const { done, value } = await untilAborted(reader.read(), signal);
+			if (done) break;
+			bytes += value.byteLength;
+			if (bytes > MAX_USAGE_RESPONSE_BYTES) throw new Error("Usage response exceeded its byte limit.");
+			json += decoder.decode(value, { stream: true });
+		}
+	} catch (error) {
+		// Cancellation can itself hang or reject; never wait for the source to stop.
+		void reader.cancel().catch(() => {});
+		throw error;
+	} finally {
+		reader.releaseLock();
+	}
+	return JSON.parse(json + decoder.decode());
 }
 
 /** Bound awaited work even when an adapter ignores the signal. */
