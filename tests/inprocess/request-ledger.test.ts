@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { outcomes } from "@nredd/pi-test-lib/faux";
 import {
 	createHarness,
@@ -36,12 +36,24 @@ const RowSchema = Type.Object({
 });
 type Row = Static<typeof RowSchema>;
 type Owners = Record<string, string>;
-type Capture = { session: Row["session"]; raw: string; owners: Owners };
+/** Exact text (`provenance`) or exact leading text (`prefixes`) -> ledger category. */
+type Categories = Record<string, string>;
+type Capture = {
+	session: Row["session"];
+	raw: string;
+	owners: Owners;
+	provenance: Categories;
+	prefixes: Categories;
+};
 
 const INTEGRATION = new URL("../integration/", import.meta.url);
 const OLD = "Old history to replace: 🦩";
 const SUMMARY = "Scripted replacement summary";
 const TURN_PREFIX = "Scripted turn prefix";
+const SPAWN = "Spawn the child";
+const CHILD_PROMPT = "Report fixture";
+const NOTE_TYPE = "ledger-fixture";
+const NOTE = "Fixture extension note";
 const WRAPPED_SUMMARY =
 	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n" +
 	`${SUMMARY}\n\n---\n\n**Turn Context (split turn):**\n\n${TURN_PREFIX}\n</summary>`;
@@ -111,7 +123,8 @@ previous = {}
 for item in json.load(sys.stdin):
     raw, session = item["raw"], item["session"]
     owners = {name: ledger.stable_owner(source, root) for name, source in item["owners"].items()}
-    row = ledger.request_ledger(raw, sdk=True, owners=owners, previous=previous.get(session),
+    row = ledger.request_ledger(raw, sdk=True, owners=owners, provenance=item["provenance"],
+                         prefixes=item["prefixes"], previous=previous.get(session),
                          parent=previous["parent"] if session == "child" else None)
     print(json.dumps({"session": session, **row, "synthetic": {"usage": "faux, not reported"}}))
     previous[session] = raw`,
@@ -131,7 +144,12 @@ for item in json.load(sys.stdin):
 }
 
 /** Capture only model id and transcript; keep prior faux usage out of the measured body. */
-function recorder(sink: Capture[], session: Capture["session"], owners: () => Owners) {
+function recorder(
+	sink: Capture[],
+	session: Capture["session"],
+	owners: () => Owners,
+	provenance: () => Categories = () => ({}),
+) {
 	return (response: ReturnType<typeof fauxAssistantMessage>): FauxResponseFactory =>
 		(context, _options, _state, model) => {
 			const messages = context.messages.map((message) => {
@@ -140,7 +158,7 @@ function recorder(sink: Capture[], session: Capture["session"], owners: () => Ow
 				return rest;
 			});
 			const raw = JSON.stringify({ model: model.id, messages });
-			sink.push({ session, raw, owners: owners() });
+			sink.push({ session, raw, owners: owners(), provenance: provenance(), prefixes: {} });
 			return response;
 		};
 }
@@ -214,12 +232,86 @@ it("normalizes only Agent tool result elapsed time and preserves result data", (
 	});
 });
 
+/**
+ * Inject one extension message on the spawn turn and record exact custom-message provenance.
+ * Registered after the subagents fork so its `context` handler sees the final transcript;
+ * `convertToLlm` erases the custom type before the faux factory sees the request.
+ */
+function provenanceObserver(sink: { current: Categories }) {
+	return (pi: ExtensionAPI): void => {
+		pi.on("before_agent_start", (event) =>
+			event.messageType === "user" && event.prompt === SPAWN
+				? { message: { customType: NOTE_TYPE, content: NOTE, display: false } }
+				: undefined,
+		);
+		pi.on("context", (event) => {
+			sink.current = {};
+			for (const message of event.messages) {
+				if (message.role !== "custom") continue;
+				const texts =
+					typeof message.content === "string"
+						? [message.content]
+						: message.content.flatMap((block) => (block.type === "text" ? [block.text] : []));
+				for (const text of texts) sink.current[text] = `extension:${message.customType}`;
+			}
+		});
+	};
+}
+
+/**
+ * `inherit_context` prepends the parent conversation to the child's task prompt in one text block.
+ * The caller knows the prompt it passed, so everything before it is exact inherited provenance.
+ */
+function inheritedPrefix(capture: Capture): Capture {
+	if (capture.session !== "child") return capture;
+	const body: { messages: { role: string; content: unknown }[] } = JSON.parse(capture.raw);
+	const content = body.messages.find(({ role }) => role === "user")?.content;
+	const block = Array.isArray(content) ? content[0] : undefined;
+	const text: unknown = typeof content === "string" ? content : isRecord(block) ? block.text : undefined;
+	if (typeof text !== "string" || !text.endsWith(CHILD_PROMPT) || text === CHILD_PROMPT) {
+		throw new Error("Child task prompt does not follow inherited parent context");
+	}
+	return { ...capture, prefixes: { [text.slice(0, -CHILD_PROMPT.length)]: "inherited_context" } };
+}
+
+/** Size of `text` as a JSON string payload, including escapes but not the enclosing quotes. */
+function escapedBytes(text: string): number {
+	return Buffer.byteLength(JSON.stringify(text).slice(1, -1));
+}
+
+it.each([
+	["a parent capture unchanged", { role: "user", content: "anything" }, "parent", undefined],
+	["string content", { role: "user", content: `ctx\n${CHILD_PROMPT}` }, "child", "ctx\n"],
+	["text block content", { role: "user", content: [{ type: "text", text: `ctx${CHILD_PROMPT}` }] }, "child", "ctx"],
+	["no inherited context", { role: "user", content: CHILD_PROMPT }, "child", null],
+	["a different task", { role: "user", content: "ctx other" }, "child", null],
+	["a non-text first block", { role: "user", content: [{ type: "image" }] }, "child", null],
+	["a non-object first block", { role: "user", content: ["ctx"] }, "child", null],
+	["no user message", { role: "assistant", content: "ctx" }, "child", null],
+] as const)("derives inherited child context from %s", (_label, message, session, expected) => {
+	const capture: Capture = {
+		session,
+		raw: JSON.stringify({ model: "ledger", messages: [message] }),
+		owners: {},
+		provenance: {},
+		prefixes: {},
+	};
+	if (expected === null) {
+		expect(() => inheritedPrefix(capture)).toThrow("Child task prompt does not follow inherited parent context");
+	} else {
+		expect(inheritedPrefix(capture).prefixes).toEqual(
+			expected === undefined ? {} : { [expected]: "inherited_context" },
+		);
+	}
+});
+
 /** Drive a real foreground `Agent` call and a manual compaction with a faux summary. */
 async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }> {
 	const home = await isolateStackHome();
 	const provider = registerFauxProvider({ api: "ledger-faux", models: [{ id: "ledger" }] });
 	let session: AgentSession | undefined;
 	let cleanup: (() => void) | undefined;
+	const observed: { current: Categories } = { current: {} };
 	try {
 		const agentDir = join(home.root, "agent");
 		const agents = join(agentDir, "agents");
@@ -236,7 +328,7 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 			cwd,
 			fauxProvider: provider,
 			useModelRuntimeStream: true,
-			extensionFactories: [await loadFork("pi-subagents")],
+			extensionFactories: [await loadFork("pi-subagents"), provenanceObserver(observed)],
 			settings: {
 				retry: { enabled: false },
 				compaction: { enabled: false, keepRecentTokens: 1 },
@@ -247,8 +339,11 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 		await session.bindExtensions({ mode: "print" });
 		const model = provider.getModel();
 		const original: Capture[] = [];
-		const parent = recorder(original, "parent", () =>
-			Object.fromEntries(h.session.getAllTools().map(({ name, sourceInfo }) => [name, sourceInfo.source])),
+		const parent = recorder(
+			original,
+			"parent",
+			() => Object.fromEntries(h.session.getAllTools().map(({ name, sourceInfo }) => [name, sourceInfo.source])),
+			() => observed.current,
 		);
 		const child = recorder(original, "child", () =>
 			JSON.parse(readFileSync(join(cwd, "ledger-child-owners.json"), "utf8")),
@@ -269,9 +364,10 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 						{
 							subagent_type: "ledger-child",
 							description: "Record child",
-							prompt: "Report fixture",
+							prompt: CHILD_PROMPT,
 							model: `${model.provider}/${model.id}`,
 							run_in_background: false,
+							inherit_context: true,
 						},
 						{ id: "ledger-call" },
 					),
@@ -281,13 +377,15 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 			child(fauxAssistantMessage("Child answer")),
 			parent(fauxAssistantMessage("Parent finished")),
 		]);
-		await session.prompt("Spawn the child");
+		await session.prompt(SPAWN);
 		expect(outcomes(h, "Agent")).toEqual([{ isError: false, text: expect.stringContaining("Child answer") }]);
 		expect(h.getPendingResponseCount()).toBe(0);
 		const resolvedRoot = realpathSync(home.root);
 		return {
-			original,
-			normalized: original.map(({ raw, ...rest }) => ({ ...rest, raw: normalize(raw, home.root, resolvedRoot) })),
+			original: original.map(inheritedPrefix),
+			normalized: original.map(({ raw, ...rest }) =>
+				inheritedPrefix({ ...rest, raw: normalize(raw, home.root, resolvedRoot) }),
+			),
 		};
 	} finally {
 		try {
@@ -346,6 +444,20 @@ it("accounts for compacted history and the actual spawned child's registry", asy
 		expect(rows[5]?.common_prefix_previous_bytes).toBeNull();
 		expect(rows[6]?.buckets["tool_call_args:Agent"]).toBeGreaterThan(0);
 		expect(rows[6]?.buckets["tool_result:Agent"]).toBeGreaterThan(0);
+		// The extension message is a user message by the time the factory sees it; only provenance names it.
+		for (const index of [4, 6]) {
+			expect(original[index]?.provenance).toEqual({ [NOTE]: `extension:${NOTE_TYPE}` });
+			expect(rows[index]?.buckets[`extension:${NOTE_TYPE}`]).toBe(escapedBytes(NOTE));
+		}
+		expect(rows[3]?.buckets[`extension:${NOTE_TYPE}`]).toBeUndefined();
+		// The child's single user block is the parent's rendered history, then the task prompt.
+		const [inherited, category] = Object.entries(original[5]?.prefixes ?? {})[0] ?? [];
+		expect(category).toBe("inherited_context");
+		expect(inherited).toMatch(/^# Parent Conversation Context\n/);
+		expect(inherited).toContain(`[Summary]: ${SUMMARY}`);
+		expect(inherited).toContain(`[User]: ${SPAWN}`);
+		expect(rows[5]?.buckets.inherited_context).toBe(escapedBytes(inherited ?? ""));
+		expect(rows[5]?.buckets.user).toBe(Buffer.byteLength(CHILD_PROMPT));
 		return rows.map((row, request) => ({ run, request, ...row }));
 	});
 	const artifacts = new URL("artifacts/", INTEGRATION);
