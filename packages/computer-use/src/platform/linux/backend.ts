@@ -71,6 +71,11 @@ function parseRootKind(raw: unknown): PlatformRootKind {
 }
 
 /** Block-only names: the helper's ambiguous `exe` link names plus the app-settable X11 `WM_CLASS` pair. */
+/** A process id the helper can report: a positive safe integer. */
+function isPid(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
 function parseBlockAliases(raw: any): { blockAliases?: string[] } {
 	const wmClass = raw?.metadata?.wmClass;
 	const aliases = [...(Array.isArray(raw?.blockAliases) ? raw.blockAliases : []), wmClass?.instance, wmClass?.class]
@@ -245,8 +250,10 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 			});
 		// Only an explicit `null` proves absence; a malformed reply is not evidence either way.
 		if (result?.root === null) return undefined;
-		if (typeof result?.root !== "object") throw new Error("Linux helper atspiLookRoot reply has no root.");
-		return parseRoots([result.root])[0];
+		// An array, or an object without a positive integer `pid`, cannot name a live root either.
+		const root = result?.root as { pid?: unknown } | undefined;
+		if (!isPid(root?.pid)) throw new Error("Linux helper atspiLookRoot reply has no root with a valid pid.");
+		return parseRoots([root])[0];
 	},
 	async waitFor(
 		args: PlatformWaitForRequest,

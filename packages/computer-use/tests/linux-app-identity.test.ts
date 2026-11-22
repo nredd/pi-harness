@@ -422,12 +422,26 @@ test("The Linux backend proves a look root absent only from an explicit null", a
 	command.mockResolvedValueOnce({ root: null });
 	expect(await linuxBackend.lookRoot!("look_1")).toBeUndefined();
 	expect(command).toHaveBeenLastCalledWith("atspiLookRoot", { lookId: "look_1" }, undefined);
-	for (const reply of [{}, { root: "@w1" }, undefined]) {
+	// Malformed: no root, a non-object, an array, or an object without a valid PID.
+	for (const reply of [
+		{},
+		{ root: "@w1" },
+		undefined,
+		{ root: {} },
+		{ root: [] },
+		{ root: [{ pid: 7 }] },
+		{ root: { pid: 0 } },
+		{ root: { pid: "7" } },
+		{ root: { pid: 7.5 } },
+	]) {
 		command.mockResolvedValueOnce(reply);
 		await expect(linuxBackend.lookRoot!("look_1"), JSON.stringify(reply)).rejects.toThrow(
-			"Linux helper atspiLookRoot reply has no root.",
+			"Linux helper atspiLookRoot reply has no root with a valid pid.",
 		);
 	}
+	// A root whose executable the helper could not identify is valid: policy refuses it, not the parser.
+	command.mockResolvedValueOnce({ root: { pid: 7, appId: null } });
+	expect(await linuxBackend.lookRoot!("look_1")).toMatchObject({ pid: 7, appId: undefined });
 	command.mockResolvedValueOnce({
 		root: { pid: 7, appId: "editor", metadata: { wmClass: { instance: "editor", class: "Editor" } } },
 	});
