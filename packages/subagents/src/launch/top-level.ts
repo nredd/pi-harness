@@ -180,7 +180,11 @@ export function createTopLevelLaunch(deps: TopLevelLaunchDeps) {
 	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
 		const saved = manager.getEvictedNote(entry.id);
 		if (saved?.fromSavedSession) {
-			const checked = savedSessionChecker(ctx)(saved, saved.sessionFile!);
+			// Bound to the transcript startup validated: a link retargeted since must not redirect it.
+			const checked = savedSessionChecker(ctx)(
+				{ ...saved, canonicalSessionFile: entry.sessionFile },
+				saved.sessionFile!,
+			);
 			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
 			entry = { ...entry, sessionFile: checked.file };
 		}

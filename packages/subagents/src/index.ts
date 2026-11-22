@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -182,7 +182,7 @@ import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planni
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
 import { savedAgentNote } from "./saved-agent-record.ts";
-import { checkSavedChild, sameSavedChild } from "./saved-child-session.ts";
+import { canonicalChildPath, canonicalPaths, checkSavedChild, sameSavedChild } from "./saved-child-session.ts";
 import { SubagentScheduler } from "./schedule.ts";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
@@ -942,9 +942,42 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		};
 	}
 
+	/**
+	 * Each record's transcript resolved once: its spelling never changes, so
+	 * neither does its identity. An unresolvable one stays unjournaled, which
+	 * only leaves startup to bind the file it validates (and link by resolution).
+	 */
+	const canonicalSessionFiles = new WeakMap<AgentRecord, { sessionFile: string; canonical?: string }>();
+	function canonicalSessionFile(record: AgentRecord, sessionFile: string): string | undefined {
+		const known = canonicalSessionFiles.get(record);
+		if (known?.sessionFile === sessionFile) return known.canonical;
+		const canonical = canonicalChildPath(sessionFile);
+		canonicalSessionFiles.set(record, { sessionFile, canonical });
+		return canonical;
+	}
+
+	/**
+	 * Where a child session lives, for restart recovery. The directory is the one
+	 * it was created in (a worktree child uses the worktree's settings); a reopened
+	 * file outside its manager's directory journals none and inherits its
+	 * predecessor's at startup.
+	 */
+	function savedSessionFields(record: AgentRecord): Record<string, unknown> {
+		const sessionFile = record.sessionFile;
+		if (!sessionFile) return {};
+		// Optional calls: programmatic sessions may carry a partial session manager.
+		const sessionManager = record.session?.sessionManager;
+		const sessionDir = sessionManager?.getSessionDir?.();
+		return {
+			sessionFile,
+			sessionCwd: sessionManager?.getHeader?.()?.cwd,
+			...(sessionDir && dirname(sessionFile) === resolvePath(sessionDir) ? { sessionDir } : {}),
+			canonicalSessionFile: canonicalSessionFile(record, sessionFile),
+		};
+	}
+
 	/** The `subagents:record` history entry, shared by live runs and the detached spool. */
 	function historyRecord(record: AgentRecord): Record<string, unknown> {
-		const sessionCwd = record.session?.sessionManager?.getHeader?.()?.cwd;
 		return {
 			id: record.id,
 			type: record.type,
@@ -958,7 +991,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			alias: record.alias,
 			previousId: record.previousId,
 			...(record.outputFile ? { outputFile: record.outputFile } : {}),
-			...(record.sessionFile ? { sessionFile: record.sessionFile, sessionCwd } : {}),
+			...savedSessionFields(record),
 			...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
 			...(record.modelTier ? { modelTier: record.modelTier } : {}),
 		};
@@ -1234,7 +1267,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			);
 		},
 		savePersistedRun,
-		savePersistedRun,
 	);
 
 	// A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
@@ -1331,6 +1363,8 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		const setting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.();
 		const parentFile = ctx.sessionManager.getSessionFile();
 		const directories = new Map<string, string>();
+		// Every row shares the parent and a few directories: resolve each once.
+		const canonical = canonicalPaths();
 		return (note: EvictedNote, file: string) => {
 			const cwd = note.sessionCwd ?? ctx.cwd;
 			const key = JSON.stringify([note.type, cwd]);
@@ -1339,7 +1373,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				directory = childSessionDir(getAgentConfig(note.type)?.sessionDir, setting, cwd, agentDir, home);
 				directories.set(key, directory);
 			}
-			return checkSavedChild(file, directory, parentFile, note.status, clock.now(), note.sessionCwd);
+			return checkSavedChild({
+				file,
+				// The journaled creation directory survives settings that changed since
+				// (or differ in a worktree) when the row saved a cwd; legacy rows have
+				// only the recomputed one.
+				journaledDirectory: note.sessionDir,
+				directories: [directory],
+				parentFile,
+				status: note.status,
+				now: clock.now(),
+				savedCwd: note.sessionCwd,
+				boundFile: note.canonicalSessionFile,
+				canonical,
+			});
 		};
 	}
 
@@ -1416,9 +1463,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				// A successor first appears after its predecessor, on the same transcript.
 				// Never create an edge from an update to an already seen id (or a cycle).
 				const previous = saved.get(note.previousId ?? "");
-				if (previous && !saved.has(note.id) && sameSavedChild(previous.sessionFile, note.sessionFile)) {
+				if (previous && !saved.has(note.id) && sameSavedChild(previous, note)) {
 					manager.linkSuccessor(previous.id, note.id);
+					// Same transcript, so the same creation directory.
+					note.sessionDir ??= previous.sessionDir;
 				}
+				// An update row of a reopened run journals no directory either. Only one
+				// naming the same transcript (`sameSavedChild`) may carry it forward: a
+				// directory journaled for one file never vouches for another.
+				const earlier = saved.get(note.id);
+				if (earlier && sameSavedChild(earlier, note)) note.sessionDir ??= earlier.sessionDir;
 				saved.set(note.id, note);
 			}
 		}

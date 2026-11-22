@@ -237,9 +237,18 @@ export interface EvictedNote {
 	evictedAfterMin: number;
 	/** The diagnostic came from the saved parent, not a retention sweep. */
 	fromSavedSession?: true;
-	/** Reason startup could not safely reopen a saved child, when available. */
+	/**
+	 * Why startup could not safely reopen a saved child (missing file, foreign
+	 * parent, a possibly live writer). Shown by `steer_subagent` and `Agent`
+	 * `resume`; a dispatch rechecks the file, so a stale refusal can clear.
+	 */
 	reopenRefusal?: string;
-	/** The saved running child had a recent transcript write at bind time. */
+	/**
+	 * The saved child's transcript was written within `RECENT_CHILD_WRITE_SECONDS`
+	 * (or is dated in the future) at bind time, so another process may still own
+	 * it, whatever its last recorded status. Lookups then report the refusal
+	 * instead of "interrupted".
+	 */
 	possiblyRunning?: true;
 	/** The `.output` transcript when one was written, else the session file. */
 	transcript?: string;
@@ -247,6 +256,10 @@ export interface EvictedNote {
 	sessionFile?: string;
 	/** The cwd in the child header that determined its session directory. */
 	sessionCwd?: string;
+	/** The directory the child session was created in, journaled because settings can differ by then. */
+	sessionDir?: string;
+	/** `sessionFile` resolved when its row was written, so links survive the file's deletion. */
+	canonicalSessionFile?: string;
 	/** The run's model fallback, so even an evicted agent's id still discloses it. */
 	modelFallback?: ModelFallback;
 	modelTier?: TierDisclosure;
@@ -300,7 +313,8 @@ export function describeEvicted(note: EvictedNote): string {
 			? "interrupted by a process restart (no live registry record)"
 			: `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
 		: `${note.status}, evicted after ${note.evictedAfterMin} min`;
-	const caution = note.possiblyRunning && note.reopenRefusal ? `; ${note.reopenRefusal}` : "";
+	// A snapshot: a resume or steer rechecks the write age, so its countdown is not live.
+	const caution = note.possiblyRunning && note.reopenRefusal ? `; as of session start: ${note.reopenRefusal}` : "";
 	return `Agent "${note.id}" (${note.description}) ${state}${where}${caution}${fallback}`;
 }
 
@@ -721,8 +735,8 @@ export class AgentManager {
 	private readonly unreadTtlMs = retentionMs("PI_SUBAGENTS_UNREAD_TTL_MIN", UNCONSUMED_RECORD_TTL_MS);
 	private onComplete?: OnAgentComplete;
 	private onStart?: OnAgentStart;
-	private readonly onSessionCreated?: (record: AgentRecord) => void;
-	private readonly onForegroundResumeSettled?: (record: AgentRecord) => void;
+	/** Journals a top-level run when its session exists and when a foreground resume settles. */
+	private readonly onRunJournal?: (record: AgentRecord) => void;
 	private onQueuedStop?: OnAgentQueuedStop;
 	private onReaped?: OnAgentReaped;
 	private onCompact?: OnAgentCompact;
@@ -798,16 +812,15 @@ export class AgentManager {
 		homeDir?: string,
 		onQueuedStop?: OnAgentQueuedStop,
 		onReaped?: OnAgentReaped,
-		onSessionCreated?: (record: AgentRecord) => void,
-		onForegroundResumeSettled?: (record: AgentRecord) => void,
+		onRunJournal?: (record: AgentRecord) => void,
 	) {
 		this.clock = clock;
 		this.homeDir = homeDir;
 
 		this.onComplete = onComplete;
 		this.onStart = onStart;
-		this.onSessionCreated = onSessionCreated;
-		this.onForegroundResumeSettled = onForegroundResumeSettled;
+		// A throwing journal write must not fail the run it describes.
+		this.onRunJournal = guardObserver("run journal", onRunJournal);
 		this.onQueuedStop = guardObserver("queued stop", onQueuedStop);
 		this.onReaped = guardObserver("reaped", onReaped);
 		this.onCompact = guardObserver("compaction", onCompact);
@@ -1505,7 +1518,7 @@ export class AgentManager {
 					}
 					record.pendingSteers = undefined;
 				}
-				this.onSessionCreated?.(record);
+				this.onRunJournal?.(record);
 				options.onSessionCreated?.(session);
 			},
 		})
@@ -1952,7 +1965,7 @@ export class AgentManager {
 		try {
 			// Positive evidence for the reap notice: only a live signal means the prompt runs.
 			record.ranThisRun = record.status === "running";
-			if (record.ranThisRun) this.onSessionCreated?.(record);
+			if (record.ranThisRun) this.onRunJournal?.(record);
 			this.settleOutcome(
 				record,
 				await resumeAgent(record.session, prompt, {
@@ -1992,7 +2005,7 @@ export class AgentManager {
 
 		this.releaseLease(record);
 		this.drainQueue();
-		this.onForegroundResumeSettled?.(record);
+		this.onRunJournal?.(record);
 		return record;
 	}
 
