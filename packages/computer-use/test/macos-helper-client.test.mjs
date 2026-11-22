@@ -70,12 +70,13 @@ async function load({ external, fake, spawn }) {
 	if (spawn) {
 		vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	}
+	// Always: the default socket path must never be the host's real one, even for an external override.
+	vi.doMock("node:os", async (original) => {
+		const actual = await original();
+		const patched = { ...actual, homedir: () => tmp };
+		return { ...patched, default: patched };
+	});
 	if (!external) {
-		vi.doMock("node:os", async (original) => {
-			const actual = await original();
-			const patched = { ...actual, homedir: () => tmp };
-			return { ...patched, default: patched };
-		});
 		vi.doMock("node:net", async (original) => {
 			const actual = await original();
 			const patched = {

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { constants as fsConstants, realpathSync } from "node:fs";
+import { constants as fsConstants, realpathSync, statSync } from "node:fs";
 import { access, lstat, mkdir, realpath, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -54,6 +54,38 @@ function isManagedSocket(socketPath: string): boolean {
 		path.basename(resolved).toLowerCase() === path.basename(DEFAULT_HELPER_SOCKET_PATH) &&
 		canonicalPath(path.dirname(resolved)) === canonicalPath(path.dirname(DEFAULT_HELPER_SOCKET_PATH))
 	);
+}
+
+function statIfPresent(filePath: string): ReturnType<typeof statSync> | undefined {
+	try {
+		return statSync(filePath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+/**
+ * Whether this connection reaches the managed socket. The import-time classification only decides who may
+ * launch or install; it cannot see an alias that resolves later, a hard link, or a default pathname that links
+ * to the override. Recheck the name rule and compare both endpoints' inodes now. Anything that cannot be
+ * inspected counts as managed, so the build check applies.
+ */
+function connectionIsManaged(): boolean {
+	if (!usingExternalHelperSocket) return true;
+	try {
+		if (isManagedSocket(configuredSocketPath)) return true;
+		const configured = statIfPresent(configuredSocketPath);
+		const managed = statIfPresent(DEFAULT_HELPER_SOCKET_PATH);
+		return (
+			configured !== undefined &&
+			managed !== undefined &&
+			configured.dev === managed.dev &&
+			configured.ino === managed.ino
+		);
+	} catch {
+		return true;
+	}
 }
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -244,10 +276,13 @@ export class MacosHelperClient {
 	helperBuild?: string;
 	staleBuildMessage?: string;
 
-	verifyBuild(result: { buildIdentity?: unknown; executablePath?: unknown } | undefined): void {
+	verifyBuild(
+		result: { buildIdentity?: unknown; executablePath?: unknown } | undefined,
+		managed = connectionIsManaged(),
+	): void {
 		this.staleBuildMessage = undefined;
 		this.helperBuild = toOptionalString(result?.buildIdentity) ?? "unknown";
-		if (usingExternalHelperSocket) return;
+		if (!managed) return;
 		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
 		if (this.helperBuild !== expectedBuild) {
 			this.staleBuildMessage = `pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper${macosSigningRefusal(HELPER_APP_PATH, expectedBuild)}`;
@@ -323,7 +358,8 @@ export class MacosHelperClient {
 			const probeId = `build_${id}`;
 			const socket = net.createConnection(HELPER_SOCKET_PATH);
 			let buffer = "";
-			let checkingBuild = !usingExternalHelperSocket && cmd !== "diagnostics";
+			let checkingBuild = false;
+			let managed = true;
 			let settled = false;
 			let connected = false;
 			// First outcome wins: the `close` that follows a reply, timeout, abort or error must not settle again.
@@ -356,6 +392,8 @@ export class MacosHelperClient {
 			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
 			const onConnect = () => {
 				connected = true;
+				managed = connectionIsManaged();
+				checkingBuild = managed && cmd !== "diagnostics";
 				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
 				else sendCommand();
 			};
@@ -369,7 +407,7 @@ export class MacosHelperClient {
 						if (probe.id !== probeId || probe.ok !== true) {
 							throw new HelperTransportError("Invalid helper build probe reply.");
 						}
-						this.verifyBuild(probe.result);
+						this.verifyBuild(probe.result, managed);
 						checkingBuild = false;
 						buffer = "";
 						sendCommand();
@@ -389,7 +427,7 @@ export class MacosHelperClient {
 							throw new HelperTransportError("Invalid helper diagnostics reply ID.");
 						}
 						if (parsed.ok === true) {
-							if (cmd === "diagnostics") this.verifyBuild(parsed.result);
+							if (cmd === "diagnostics") this.verifyBuild(parsed.result, managed);
 							resolve(parsed.result as T);
 						} else
 							reject(
@@ -618,7 +656,7 @@ class MacosActivityGlowConnection {
 						if (this.socket === socket) this.socket = undefined;
 					});
 					const verify = async () => {
-						if (!usingExternalHelperSocket) macosHelper.verifyBuild(await this.send(socket, "diagnostics"));
+						if (connectionIsManaged()) macosHelper.verifyBuild(await this.send(socket, "diagnostics"), true);
 						this.socket = socket;
 						resolve(socket);
 					};

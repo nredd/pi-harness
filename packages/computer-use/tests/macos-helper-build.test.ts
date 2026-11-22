@@ -37,7 +37,15 @@ afterEach(() => {
 	vi.resetModules();
 });
 
-async function rig(buildIdentity: string | undefined, { external = false, installed = true, alias = "" } = {}) {
+async function rig(
+	buildIdentity: string | undefined,
+	{
+		external = false,
+		installed = true,
+		alias = "",
+		override: overrideFor = undefined as ((home: string, socketPath: string) => string) | undefined,
+	} = {},
+) {
 	const home = makeTestTempDir("cu-build-app-", onTestFinished);
 	const app = path.join(home, "fixture.app");
 	vi.doMock("node:os", async (original) => {
@@ -56,7 +64,7 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 		handlers: { listApps: ok([]), setActivityGlow: ok({}) },
 	});
 	onTestFinished(() => fake.stop());
-	let override = external ? socketPath : undefined;
+	let override = external ? socketPath : overrideFor?.(home, socketPath);
 	if (alias) {
 		const managedDir = path.join(home, "Library", "Caches", "pi-computer-use");
 		mkdirSync(managedDir, { recursive: true });
@@ -161,6 +169,50 @@ test.each(["directory", "socket"])("a symlinked %s override still refuses a stal
 	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
 	assert.deepEqual(commands(), ["diagnostics"]);
 	assert.equal(spawn.mock.calls.length, 0);
+});
+
+const managedSocket = (home: string) => path.join(home, "Library", "Caches", "pi-computer-use", "bridge.sock");
+
+test("a default socket pathname that links to the override is managed", async () => {
+	const { client, glow, home, fake, commands } = await rig(current, { external: true });
+	mkdirSync(path.dirname(managedSocket(home)), { recursive: true });
+	symlinkSync(fake.socketPath, managedSocket(home));
+	assert.deepEqual(await client.command("listApps"), []);
+	fake.diagnostics.buildIdentity = older;
+	// The daemon is already marked available, so each connection's own check must refuse.
+	await assert.rejects(glow.setActive(true), { code: "stale_helper" });
+	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
+	assert.deepEqual(commands().slice(-2), ["diagnostics", "diagnostics"]);
+});
+
+test("an override alias that resolves after import is managed", async () => {
+	const { client, home, commands } = await rig(older, {
+		override: (home) => path.join(home, "later", "bridge.sock"),
+	});
+	mkdirSync(path.dirname(managedSocket(home)), { recursive: true });
+	symlinkSync(path.dirname(managedSocket(home)), path.join(home, "later"));
+	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
+	writeFileSync(managedSocket(home), "stand-in for the socket");
+	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
+	assert.ok(commands().every((cmd: string) => cmd === "diagnostics"));
+});
+
+test("an override that cannot be inspected fails closed to managed", async () => {
+	const { client, commands } = await rig(older, {
+		override: (home) => {
+			writeFileSync(path.join(home, "file"), "not a directory");
+			return path.join(home, "file", "h.sock");
+		},
+	});
+	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
+	assert.deepEqual(commands(), ["diagnostics"]);
+});
+
+test("a distinct override stays external while the default socket also exists", async () => {
+	const { client, home } = await rig(older, { external: true });
+	mkdirSync(path.dirname(managedSocket(home)), { recursive: true });
+	writeFileSync(managedSocket(home), "another endpoint");
+	assert.deepEqual(await client.command("listApps"), []);
 });
 
 test("refuses a stale resident daemon before setup when the executable is missing", async () => {
