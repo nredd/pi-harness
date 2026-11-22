@@ -340,7 +340,7 @@
     "subagents": {
       "root": "packages/subagents",
       "owned": ["src/**/*.ts"],
-      "exclusions": [],
+      "exclusions": [{ "path": "src/launch/request.ts", "kind": "type-only", "reason": "Only TypeScript declarations; emits no executable JavaScript." }],
       "status": "measured",
       "note": "",
       "signals": {
