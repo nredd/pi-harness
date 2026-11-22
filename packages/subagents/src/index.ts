@@ -951,11 +951,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	function savedSessionFields(record: AgentRecord): Record<string, unknown> {
 		const sessionFile = record.sessionFile;
 		if (!sessionFile) return {};
+		// Optional calls: programmatic sessions may carry a partial session manager.
 		const sessionManager = record.session?.sessionManager;
-		const sessionDir = sessionManager?.getSessionDir();
+		const sessionDir = sessionManager?.getSessionDir?.();
 		return {
 			sessionFile,
-			sessionCwd: sessionManager?.getHeader()?.cwd,
+			sessionCwd: sessionManager?.getHeader?.()?.cwd,
 			...(sessionDir && dirname(sessionFile) === resolvePath(sessionDir) ? { sessionDir } : {}),
 			canonicalSessionFile: canonicalChildPath(sessionFile),
 		};
