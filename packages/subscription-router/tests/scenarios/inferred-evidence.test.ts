@@ -342,6 +342,35 @@ describe("collected providers keep read-only confirmation", () => {
 		expect(s.tracker.active()).toEqual([]);
 	});
 
+	it("S7: a hint-only failure under 60 seconds never reads or marks", async () => {
+		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
+		const before = s.fetches.length;
+		s.usage = { percent: 100 };
+		const short = "429: retry in 30s";
+		s.script(SONNET, fail(short), fail(short), fail(short), fail(short));
+		await s.prompt();
+		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
+		expect(s.fetches.length).toBe(before);
+		expect(s.tracker.active()).toEqual([]);
+	});
+
+	it("S6: a raised minHintSeconds keeps the authoritative read for a 95s hint", async () => {
+		const s = await run({
+			chain: [SONNET, NEON],
+			tokens: OAUTH,
+			providers: { anthropic: { failure: { minHintSeconds: 120 } } },
+		});
+		const before = s.fetches.length;
+		s.usage = { percent: 100 };
+		s.script(SONNET, fail(HINT_95S));
+		await s.prompt();
+		expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5", "google/gemini-4-neon"]);
+		expect(s.fetches.length).toBe(before + 1);
+		const [mark] = s.tracker.active();
+		expect(mark).toMatchObject({ provider: "anthropic", window: "five_hour" });
+		expect(mark && markEvidence(mark)).toBe("read");
+	});
+
 	it("S15: a weak gate match never reads or marks, even when a fresh read would show the block", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
 		const before = s.fetches.length;

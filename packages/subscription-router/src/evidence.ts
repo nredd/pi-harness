@@ -86,7 +86,10 @@ export function composeEvidence(
  */
 export function neverMarks({ message, failedAt }: FailureContext, settings?: ProviderConfig["failure"]): boolean {
 	if (message?.stopReason !== "error") return false;
-	const found = classify(message.errorMessage, failedAt, minHintMs(settings));
+	// S7 fixes the never-mark line at a 60-second hint. A lower `minHintSeconds` lowers it; a higher
+	// one only narrows what the failure adapter infers, never the authoritative read (S1, S6).
+	const floor = Math.min(minHintMs(settings), DEFAULT_MIN_HINT_SECONDS * 1000);
+	const found = classify(message.errorMessage, failedAt, floor);
 	return found.class === "not-quota" || found.class === "per-minute" || found.class === "weak";
 }
 

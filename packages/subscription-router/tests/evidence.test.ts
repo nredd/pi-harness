@@ -451,6 +451,28 @@ describe("confirmEvidence", () => {
 		expect(reads).toEqual([]);
 	});
 
+	it("S6/S7: a raised minHintSeconds narrows inference only, never the authoritative read", async () => {
+		const raised = { failure: { minHintSeconds: 120 } };
+		const collected = reader({}, block);
+		expect(await confirmEvidence(collected.usage, new FailureHistory(), raised)(failure(HINT_95S))).toBe(block);
+		expect(collected.reads).toHaveLength(1);
+		// Without a usage source the failure adapter applies the raised floor: no mark.
+		const metered = reader(noSource(), block);
+		expect(await confirmEvidence(metered.usage, new FailureHistory(), raised)(failure(HINT_95S))).toBeUndefined();
+		// S7 itself still holds: a hint under 60 seconds is never read, whatever the floor.
+		const short = reader({}, block);
+		expect(
+			await confirmEvidence(short.usage, new FailureHistory(), raised)(failure("429: retry in 30s")),
+		).toBeUndefined();
+		expect(short.reads).toEqual([]);
+		// A lowered floor lowers the never-read line with it.
+		const lowered = reader({}, block);
+		const settings = { failure: { minHintSeconds: 30 } };
+		expect(await confirmEvidence(lowered.usage, new FailureHistory(), settings)(failure("429: retry in 45s"))).toBe(
+			block,
+		);
+	});
+
 	it("lets a quota failure, or a confirmation without a failed message, reach the read", async () => {
 		const { usage, reads } = reader({}, block);
 		const confirm = confirmEvidence(usage, new FailureHistory(), undefined);
