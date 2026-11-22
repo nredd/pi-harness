@@ -249,7 +249,8 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 					: !spanOf(raw) && raw.durationMs === selector.durationMs,
 		);
 		if (legacy) matches = "name" in selector ? matches.slice(-1) : matches.slice(0, 1);
-		if (!matches.length && "durationMs" in selector) {
+		const matched = matches.length > 0;
+		if (!matched && "durationMs" in selector) {
 			// An assumed or inferred span cannot satisfy a selector, but the most limiting reading is still useful.
 			const assumed = windows.filter(({ label }) => label.span !== undefined);
 			assumed.sort(
@@ -262,7 +263,8 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 				reading(
 					window,
 					JSON.stringify([key, window.families]),
-					legacy || window.label.durationMs === undefined ? chosenLabel : undefined,
+					// A fallback reading keeps its own span: a selector never lends it a duration.
+					legacy || (matched && window.label.durationMs === undefined) ? chosenLabel : undefined,
 				),
 			);
 		return display.footer?.placeholder && i === show.length - 1

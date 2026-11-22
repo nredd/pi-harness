@@ -1748,3 +1748,21 @@ test("generic assumed and unrecognized percentage spans keep their own name", ()
 		"Quota left: g rpm 60% (resets Jan 10 13:00; window unknown) tpm 70% (resets Jan 10 13:00; window unknown)",
 	);
 });
+
+test("a duration selector never lends its duration to a qualified reading", () => {
+	const row = (spanSource: string, tier: footer.Tier = "compact") =>
+		footer.formatQuotaRow(
+			projected([
+				view("g", {
+					display: { full: "G", compact: "G", footer: { show: [{ durationMs: WEEK }] } },
+					snapshot: snap("g", [{ ...win("est", 10), spanSource }], { expiresAt: CLOCK + hour }),
+				}),
+			]),
+			tier,
+			plain,
+			fixed,
+		);
+	assert.equal(row("inferred"), "Left: G est~ 90%");
+	assert.equal(row("inferred", "full"), "Quota left: G est 90% (span inferred)");
+	assert.equal(row("assumed"), "Left: G est? 90%");
+});
