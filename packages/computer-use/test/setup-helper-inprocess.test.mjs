@@ -1071,6 +1071,14 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		],
 		[
 			"--runtime",
+			"a parent directory that is a symlink to the real helper's",
+			async (app, base) => {
+				await makeApp(path.join(base, "elsewhere", path.basename(app)), unrelated, infoPlist());
+				await realFs.symlink(path.join(base, "elsewhere"), path.dirname(app));
+			},
+		],
+		[
+			"--runtime",
 			"a bundle path that is a symlink to the real helper",
 			async (app, base) => {
 				await makeApp(path.join(base, "real.app"), unrelated, infoPlist());
@@ -1094,6 +1102,7 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			"an Info.plist that is a symlink to the real helper's plist": "Contents/Info.plist is a symbolic link",
 			"a Contents directory that is a symlink to the real helper's": "Contents is a symbolic link",
 			"a bundle path that is a symlink to the real helper": "the bundle is a symbolic link",
+			"a parent directory that is a symlink to the real helper's": "its parent directory is a symbolic link",
 			"a Contents/Info.plist that is a directory": "Contents/Info.plist is not a file",
 			"a regular file": "the bundle is not a directory",
 		};

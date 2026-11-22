@@ -870,9 +870,13 @@ function createSetup(argv, deps) {
 
 	/**
 	 * Why an existing override destination is not provably this helper's bundle, or `undefined` when it is or when
-	 * nothing exists there. The bundle, `Contents` and `Contents/Info.plist` must be real entries (no symlinks), and
-	 * `plutil` (XML or binary plist) must read `CFBundleIdentifier` as exactly `helperBundleId`. This guards against
-	 * accidental overwrites; it is not authentication.
+	 * nothing exists there. The bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real
+	 * entries (no symlinks), and `plutil` (XML or binary plist) must read `CFBundleIdentifier` as a string that is
+	 * byte-for-byte `helperBundleId` (`-expect string` rejects a dictionary, whose keys `raw` would print; `-n` drops
+	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
+	 *
+	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
+	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
 	 * @returns {Promise<string | undefined>} The reason, or `undefined`.
 	 * @throws {never} Every failure is a reason.
 	 */
@@ -881,6 +885,7 @@ function createSetup(argv, deps) {
 		/** @type {[string, string, boolean][]} Entry, label and whether it must be a directory. */
 		const entries = [
 			[helperAppPath, "the bundle", true],
+			[path.dirname(helperAppPath), "its parent directory", true],
 			[path.dirname(infoPlistPath), "Contents", true],
 			[infoPlistPath, "Contents/Info.plist", false],
 		];
