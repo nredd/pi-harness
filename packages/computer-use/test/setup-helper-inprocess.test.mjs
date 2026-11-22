@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createWriteStream, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, rmSync, writeFileSync } from "node:fs";
 import realFs from "node:fs/promises";
 import realOs from "node:os";
 import path from "node:path";
@@ -39,8 +39,6 @@ const DEV_FPR = "B".repeat(40);
 const ZIP_BYTES = Buffer.from("fake zip payload");
 const ZIP_SHA = createHash("sha256").update(ZIP_BYTES).digest("hex");
 const REPAIR = "Quit the helper, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
-const OVERRIDE_REPAIR =
-	"Remove that entry, or correct or unset PI_COMPUTER_USE_HELPER_APP_PATH, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
 
 /**
  * @param {string} file Path to write.
@@ -243,13 +241,10 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			if (state.plutilError !== undefined) throw state.plutilError;
 			// Stands in for `plutil -extract CFBundleIdentifier raw [-expect string] [-n] -o - -- <path>` on an XML
 			// plist: only a string value matches, and the newline is printed unless `-n` is given.
-			// plist: only a string value matches, and the newline is printed unless `-n` is given.
-			// plist: only a string value matches, and the newline is printed unless `-n` is given.
-			// plist: only a string value matches, and the newline is printed unless `-n` is given.
 			const match = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]*)<\/string>/.exec(
-			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
-			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
-			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
+				await realFs.readFile(args.at(-1), "utf8"),
+			);
+			if (!match) throw sysError("Could not extract value", 1);
 			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
 		}
 		if (command === "security" && args[0] === "find-identity") {
@@ -881,83 +876,8 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			});
 		}
 		assert.equal(LIFECYCLE_PROBE_TIMEOUT_MS, 1_000);
-	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
-		const host = await pendingReplacement();
-		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
-		let rec = await runMain(host, ["--runtime"]);
-		assert.deepEqual(rec.exit, []);
-		const argv = ["plutil", "-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", plist];
-		assert.deepEqual(
-			rec.exec.filter(([command]) => command === "plutil"),
-			[argv, argv],
-		);
-
-		// Any extra byte, even a trailing newline, is another identifier.
-		const padded = await pendingReplacement();
-		padded.deps.execFile = (
-			(inner) => async (command, args, options) =>
-				command === "plutil"
-					? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" }
-					: inner(command, args, options)
-		)(padded.deps.execFile);
-		rec = await runMain(padded, ["--runtime"]);
-		assert.deepEqual(rec.exit, [1]);
-		assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.injaneity\.pi-computer-use\\n"\)/);
-		assert.equal(await realFs.readFile(installedExe(padded), "utf8"), "old");
-	});
-
 		assert.equal(LIFECYCLE_PROBE_MAX_BUFFER, 64 * 1024);
-	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
-		const host = await pendingReplacement();
-		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
-		let rec = await runMain(host, ["--runtime"]);
-		assert.deepEqual(rec.exit, []);
-		const argv = ["plutil", "-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", plist];
-		assert.deepEqual(
-			rec.exec.filter(([command]) => command === "plutil"),
-			[argv, argv],
-		);
-
-		// Any extra byte, even a trailing newline, is another identifier.
-		const padded = await pendingReplacement();
-		padded.deps.execFile = (
-			(inner) => async (command, args, options) =>
-				command === "plutil"
-					? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" }
-					: inner(command, args, options)
-		)(padded.deps.execFile);
-		rec = await runMain(padded, ["--runtime"]);
-		assert.deepEqual(rec.exit, [1]);
-		assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.injaneity\.pi-computer-use\\n"\)/);
-		assert.equal(await realFs.readFile(installedExe(padded), "utf8"), "old");
 	});
-
-	});
-	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
-		const host = await pendingReplacement();
-		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
-		let rec = await runMain(host, ["--runtime"]);
-		assert.deepEqual(rec.exit, []);
-		const argv = ["plutil", "-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", plist];
-		assert.deepEqual(
-			rec.exec.filter(([command]) => command === "plutil"),
-			[argv, argv],
-		);
-
-		// Any extra byte, even a trailing newline, is another identifier.
-		const padded = await pendingReplacement();
-		padded.deps.execFile = (
-			(inner) => async (command, args, options) =>
-				command === "plutil"
-					? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" }
-					: inner(command, args, options)
-		)(padded.deps.execFile);
-		rec = await runMain(padded, ["--runtime"]);
-		assert.deepEqual(rec.exit, [1]);
-		assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.injaneity\.pi-computer-use\\n"\)/);
-		assert.equal(await realFs.readFile(installedExe(padded), "utf8"), "old");
-	});
-
 
 	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
 		const host = await pendingReplacement();
@@ -1071,14 +991,6 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		);
 		assert.match(rec.warn[0], /node scripts\/setup-helper\.mjs --runtime/);
 		assert.equal(
-		[
-			"--runtime",
-			"a parent directory that is a symlink to the real helper's",
-			async (app, base) => {
-				await makeApp(path.join(base, "elsewhere", path.basename(app)), unrelated, infoPlist());
-				await realFs.symlink(path.join(base, "elsewhere"), path.dirname(app));
-			},
-		],
 			rec.exec.some(([command]) => command === "pkill"),
 			false,
 		);
@@ -1104,23 +1016,13 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		assert.deepEqual(rec.exit, [0]);
 		assert.match(rec.warn[0], /Cannot tell whether the helper at .* is running/);
 		assert.ok(rec.warn[0].endsWith(REPAIR), "the postinstall warning names the repair");
-			"a parent directory that is a symlink to the real helper's": "its parent directory is a symbolic link",
 		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
-		[
-			"--runtime",
-			"a parent directory that is a symlink to the real helper's",
-			async (app, base) => {
-				await makeApp(path.join(base, "elsewhere", path.basename(app)), unrelated, infoPlist());
-				await realFs.symlink(path.join(base, "elsewhere"), path.dirname(app));
-			},
-		],
 	});
 
 	const unrelated = "not a pi-computer-use helper bundle";
 
 	test.each([
 		[
-		assert.ok(message.endsWith(`automatic setup does not replace it. ${OVERRIDE_REPAIR}`), message);
 			"--runtime",
 			"an existing directory without Info.plist",
 			async (app) => put(path.join(app, "notes.txt"), unrelated),
@@ -1135,29 +1037,12 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			"a valid foreign plist that names the helper ID in another field and a comment",
 			async (app) =>
 				makeApp(
-		[
-			"a foreign binary plist whose CFBundleIdentifier is a dictionary keyed by the helper ID",
-			infoPlist("").replace(
-				"<string></string>",
-				"<dict><key>com.injaneity.pi-computer-use</key><string>x</string></dict>",
-			),
-			"old",
-		],
 					app,
 					unrelated,
 					infoPlist(
 						"com.example.other",
 						"<!-- com.injaneity.pi-computer-use --><key>CFBundleName</key><string>com.injaneity.pi-computer-use</string>",
-			"a parent directory that is a symlink to the real helper's": "its parent directory is a symbolic link",
 					),
-		[
-			"--runtime",
-			"a parent directory that is a symlink to the real helper's",
-			async (app, base) => {
-				await makeApp(path.join(base, "elsewhere", path.basename(app)), unrelated, infoPlist());
-				await realFs.symlink(path.join(base, "elsewhere"), path.dirname(app));
-			},
-		],
 				),
 		],
 		[
@@ -1178,68 +1063,11 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		[
 			"--runtime",
 			"a Contents directory that is a symlink to the real helper's",
-		[
-			"a foreign binary plist whose CFBundleIdentifier is a dictionary keyed by the helper ID",
-			infoPlist("").replace(
-	test.each(["local install", "in-place re-sign"])(
-		"a %s resolves the signing identity once, before the final recheck, so no lookup separates it from codesign",
-		async (kind) => {
-			const host = await makeHost();
-			await prebuiltBinary(host, "arm64", "new");
-			host.state.devIdOutput = `  1) ${DEV_FPR} "Developer ID Application: Someone (TEAM123456)"\n`;
-			if (kind === "in-place re-sign") {
-				await runMain(host, ["--runtime"]);
-				host.state.codesignInfo = { stdout: "", stderr: "Signature=adhoc" };
-			} else {
-				await makeApp(host.dirs.app, "old", infoPlist());
-			}
-			const plist = path.join(host.dirs.app, "Contents", "Info.plist");
-			let lookups = 0;
-			// A second Developer ID lookup would run after the recheck: swap the plist there.
-			host.deps.execFile = (
-				(inner) => async (command, args, options) => {
-					if (command === "security" && args.includes("-v")) {
-						lookups += 1;
-						if (lookups === 2) writeFileSync(plist, infoPlist("com.example.other"));
-					}
-					return inner(command, args, options);
-				}
-			)(host.deps.execFile);
-			const signedPlists = [];
-			const lookupsAtSign = [];
-			host.deps.spawn = (
-				(inner) => (command, args) => {
-					if (command === "codesign" && args[0] === "--force") {
-						signedPlists.push(readFileSync(plist, "utf8"));
-						lookupsAtSign.push(lookups);
-					}
-					return inner(command, args);
-				}
-			)(host.deps.spawn);
-			const rec = await runMain(host, ["--runtime"]);
-			assert.deepEqual(rec.exit, [], rec.error.join("\n"));
-			assert.deepEqual(lookupsAtSign, [1], "the identity resolver ran once before codesign");
-			assert.equal(signedPlists.length, 1);
-			assert.match(
-				signedPlists[0],
-				/<key>CFBundleIdentifier<\/key><string>com\.injaneity\.pi-computer-use<\/string>/,
-				"codesign signs the bundle the recheck saw",
-			);
-			assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", DEV_FPR]);
-		},
-	);
-
-				"<string></string>",
-				"<dict><key>com.injaneity.pi-computer-use</key><string>x</string></dict>",
-			),
-			"old",
-		],
 			async (app, base) => {
 				await makeApp(path.join(base, "real.app"), "real", infoPlist());
 				await put(path.join(app, "notes.txt"), unrelated);
 				await realFs.symlink(path.join(base, "real.app", "Contents"), path.join(app, "Contents"));
 			},
-			"a parent directory that is a symlink to the real helper's": "its parent directory is a symbolic link",
 		],
 		[
 			"--runtime",
@@ -1269,62 +1097,6 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			"a Contents/Info.plist that is a directory": "Contents/Info.plist is not a file",
 			"a regular file": "the bundle is not a directory",
 		};
-		[
-			"a foreign binary plist whose CFBundleIdentifier is a dictionary keyed by the helper ID",
-			infoPlist("").replace(
-	test.each(["local install", "in-place re-sign"])(
-		"a %s resolves the signing identity once, before the final recheck, so no lookup separates it from codesign",
-		async (kind) => {
-			const host = await makeHost();
-			await prebuiltBinary(host, "arm64", "new");
-			host.state.devIdOutput = `  1) ${DEV_FPR} "Developer ID Application: Someone (TEAM123456)"\n`;
-			if (kind === "in-place re-sign") {
-				await runMain(host, ["--runtime"]);
-				host.state.codesignInfo = { stdout: "", stderr: "Signature=adhoc" };
-			} else {
-				await makeApp(host.dirs.app, "old", infoPlist());
-			}
-			const plist = path.join(host.dirs.app, "Contents", "Info.plist");
-			let lookups = 0;
-			// A second Developer ID lookup would run after the recheck: swap the plist there.
-			host.deps.execFile = (
-				(inner) => async (command, args, options) => {
-					if (command === "security" && args.includes("-v")) {
-						lookups += 1;
-						if (lookups === 2) writeFileSync(plist, infoPlist("com.example.other"));
-					}
-					return inner(command, args, options);
-				}
-			)(host.deps.execFile);
-			const signedPlists = [];
-			const lookupsAtSign = [];
-			host.deps.spawn = (
-				(inner) => (command, args) => {
-					if (command === "codesign" && args[0] === "--force") {
-						signedPlists.push(readFileSync(plist, "utf8"));
-						lookupsAtSign.push(lookups);
-					}
-					return inner(command, args);
-				}
-			)(host.deps.spawn);
-			const rec = await runMain(host, ["--runtime"]);
-			assert.deepEqual(rec.exit, [], rec.error.join("\n"));
-			assert.deepEqual(lookupsAtSign, [1], "the identity resolver ran once before codesign");
-			assert.equal(signedPlists.length, 1);
-			assert.match(
-				signedPlists[0],
-				/<key>CFBundleIdentifier<\/key><string>com\.injaneity\.pi-computer-use<\/string>/,
-				"codesign signs the bundle the recheck saw",
-			);
-			assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", DEV_FPR]);
-		},
-	);
-
-				"<string></string>",
-				"<dict><key>com.injaneity.pi-computer-use</key><string>x</string></dict>",
-			),
-			"old",
-		],
 		const host = await makeHost();
 		await create(host.dirs.app, host.dirs.base);
 		const before = await tree(host.dirs.base);
@@ -1462,14 +1234,14 @@ describe("macOS local helper install and signing", () => {
 		const host = await makeHost();
 		await prebuiltBinary(host, "arm64", "bin v1");
 		host.state.which.codesign = false;
-		// The identity is resolved once: the install path and the signing call share it.
+		let rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] installed helper app (arm64) at ${host.dirs.app}`);
 		assert.deepEqual(
 			rec.spawn.find(([command]) => command === "codesign"),
-			[warning],
+			[
 				"codesign",
-		// Developer ID lookup, local lookup, once more before the lock and once inside it.
-		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 4);
+				"--force",
+				"--deep",
 				"-i",
 				"com.injaneity.pi-computer-use",
 				"--timestamp=none",
@@ -1553,14 +1325,14 @@ describe("macOS local helper install and signing", () => {
 			true,
 			"re-signing rewrites the binary, so the resident helper is stopped first",
 		);
-		// The identity is resolved once: the install path and the signing call share it.
+
 		host.state.codesignInfo = { stdout: "Signature size=9\n", stderr: "" };
 		rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] helper app (arm64) already current at ${host.dirs.app}`);
-			[warning],
+		assert.equal(
 			rec.spawn.some(([command]) => command === "codesign"),
-		// Developer ID lookup, local lookup, once more before the lock and once inside it.
-		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 4);
+			false,
+		);
 	});
 
 	test("an ad-hoc probe that errors is judged by its output, and a bare error is not ad-hoc", async () => {

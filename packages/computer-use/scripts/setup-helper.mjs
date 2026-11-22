@@ -749,28 +749,12 @@ function createSetup(argv, deps) {
 		return (await findDeveloperIdIdentity()) ?? (await ensureLocalSigningIdentity()) ?? "-";
 	}
 
-	/**
-	 * @param {string} outputPath Bundle or binary to sign.
-	 * @param {string} [identifier] Code-signing identifier.
-	 * @param {string} [resolvedIdentity] An identity the caller already resolved, so no lookup runs between the
-	 * caller's last destination check and `codesign`.
-	 * @returns {Promise<string>} The identity used, or `unsigned`.
-	 * @throws {Error} When `codesign` fails.
-	 */
-	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier, resolvedIdentity = undefined) {
-	 * @param {string} outputPath Bundle or binary to sign.
-	 * @param {string} [identifier] Code-signing identifier.
-	 * @param {string} [resolvedIdentity] An identity the caller already resolved, so no lookup runs between the
-	 * caller's last destination check and `codesign`.
-		const identity = resolvedIdentity ?? (await resolveCodeSignIdentity());
-	 * @throws {Error} When `codesign` fails.
-	 */
-	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier, resolvedIdentity = undefined) {
+	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier) {
 		if (env.PI_COMPUTER_USE_NO_SIGN === "1") {
 			return "unsigned";
 		}
 
-		const identity = resolvedIdentity ?? (await resolveCodeSignIdentity());
+		const identity = await resolveCodeSignIdentity();
 		const commandArgs = ["--force", "--deep", "-i", identifier, "--timestamp=none", "--sign", identity, outputPath];
 		await run("codesign", commandArgs);
 		if (identity === "-") {
@@ -878,46 +862,31 @@ function createSetup(argv, deps) {
 		for (let attempt = 0; attempt < 20; attempt += 1) {
 			if (!(await helperIsRunning())) return;
 			await sleep(100);
-	 * nothing exists there. The bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real
-	 * entries (no symlinks), and `plutil` (XML or binary plist) must read `CFBundleIdentifier` as a string that is
-	 * byte-for-byte `helperBundleId` (`-expect string` rejects a dictionary, whose keys `raw` would print; `-n` drops
-	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
-	 *
-	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
-	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
+		}
+		throw new HelperLifecycleRefusal(
+			`The helper at ${helperAppExecutablePath} is still running after pkill; it was not replaced. ${LIFECYCLE_REPAIR}`,
 		);
 	}
 
 	/**
 	 * Why an existing override destination is not provably this helper's bundle, or `undefined` when it is or when
-	 * nothing exists there. The bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real
-	 * entries (no symlinks), and `plutil` (XML or binary plist) must read `CFBundleIdentifier` as a string that is
-	 * byte-for-byte `helperBundleId` (`-expect string` rejects a dictionary, whose keys `raw` would print; `-n` drops
-			[path.dirname(helperAppPath), "its parent directory", true],
-	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
-	 *
-	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
-	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
-	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
-	 *
-	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
-	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
+	 * nothing exists there. The bundle, `Contents` and `Contents/Info.plist` must be real entries (no symlinks), and
+	 * `plutil` (XML or binary plist) must read `CFBundleIdentifier` as exactly `helperBundleId`. This guards against
+	 * accidental overwrites; it is not authentication.
 	 * @returns {Promise<string | undefined>} The reason, or `undefined`.
 	 * @throws {never} Every failure is a reason.
 	 */
 	async function foreignDestinationReason() {
-			[path.dirname(helperAppPath), "its parent directory", true],
 		const infoPlistPath = path.join(helperAppPath, "Contents", "Info.plist");
 		/** @type {[string, string, boolean][]} Entry, label and whether it must be a directory. */
 		const entries = [
 			[helperAppPath, "the bundle", true],
-			[path.dirname(helperAppPath), "its parent directory", true],
 			[path.dirname(infoPlistPath), "Contents", true],
 			[infoPlistPath, "Contents/Info.plist", false],
-				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
+		];
 		for (const [entry, label, directory] of entries) {
 			let stats;
-			identifier = String(stdout);
+			try {
 				stats = await fs.lstat(entry);
 			} catch (error) {
 				if (entry === helperAppPath && error?.code === "ENOENT") return undefined;
@@ -927,16 +896,16 @@ function createSetup(argv, deps) {
 			if (directory ? !stats.isDirectory() : !stats.isFile()) {
 				return `${label} is not a ${directory ? "directory" : "file"}`;
 			}
-				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
+		}
 		let identifier;
 		try {
-			identifier = String(stdout);
+			const { stdout } = await execFile(
 				"plutil",
 				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
 				lifecycleProbeOptions,
 			);
 			identifier = String(stdout);
-			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle (${reason}); automatic setup does not replace it. Remove that entry, or correct or unset PI_COMPUTER_USE_HELPER_APP_PATH, then run \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
+		} catch (error) {
 			return `plutil cannot read its CFBundleIdentifier: ${errorText(error)}`;
 		}
 		return identifier === helperBundleId ? undefined : `its CFBundleIdentifier is ${JSON.stringify(identifier)}`;
@@ -1002,7 +971,7 @@ function createSetup(argv, deps) {
 <key>CFBundleExecutable</key><string>bridge</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>${version}</string>
-				await signHelper(helperAppPath, helperBundleId, signingIdentity);
+<key>CFBundleVersion</key><string>${version}</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 </dict></plist>\n`;
@@ -1015,7 +984,7 @@ function createSetup(argv, deps) {
 			// If a real signing identity is available, upgrade older ad-hoc installs
 			// in place so local builds have a consistent identity. macOS may still
 			// require permission review after native code changes.
-				await signHelper(helperAppPath, helperBundleId, signingIdentity);
+			const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 			if (signingIdentity !== "-" && (await helperHasAdhocSignature())) {
 				// A resident daemon keeps the ad-hoc signature it launched with: stop it so the next command runs the re-signed app.
 				await stopRunningHelper();
@@ -1026,7 +995,7 @@ function createSetup(argv, deps) {
 			}
 			await registerHelperApp();
 			return false;
-		await signHelper(helperAppPath, helperBundleId, signingIdentity);
+		}
 
 		const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 		if (signingIdentity === "-" && existingSourceHash !== undefined && !allowAdhocUpdate) {
@@ -1039,7 +1008,7 @@ function createSetup(argv, deps) {
 		await stopRunningHelper();
 		await assertReplaceableDestination();
 		await fs.mkdir(path.dirname(helperAppExecutablePath), { recursive: true });
-		await signHelper(helperAppPath, helperBundleId, signingIdentity);
+		await fs.mkdir(path.dirname(helperSourceHashPath), { recursive: true });
 		await fs.copyFile(sourcePath, helperAppExecutablePath);
 		await fs.chmod(helperAppExecutablePath, 0o755);
 		await fs.writeFile(infoPlistPath, infoPlist);
