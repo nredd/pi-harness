@@ -215,9 +215,45 @@ test("a restored session note from before the fix is redacted by every cached qu
 		await restore();
 		const result = await fake.call(tool, { stateId: observed.stateId, ...params });
 		assertNoSecret(result, fake.text(result), tool.name);
-		assert.deepEqual(result.details.note.regions[0], { key: "redacted", label: REDACTED_LABEL, status: "seen" });
+		assert.deepEqual(result.details.note.regions[0], {
+			key: "redacted",
+			label: REDACTED_LABEL,
+			status: "seen",
+			source: "redacted",
+		});
 	}
 	await assertQueriesClean(observed.stateId, "@e2");
+});
+
+test("a redacted top-level graft never echoes the old region label", async () => {
+	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
+	const keep = wireButton("b", "Keep");
+	// The field turns protected and comes back under a new wire ref, so the graft keeps the old one unconfirmed.
+	const protectedField = wireNode("a2", "password text", PROTECTED_LABEL, { label: "" });
+	let turned = false;
+	fake.lookPayload = (request: { scopeRef?: string }) => {
+		if (turned) return lookPayload({ lookId: `turned-${request.scopeRef}`, children: [protectedField, keep] });
+		const full = lookPayload({ children: [wireNode("a", "AXTextField", SECRET, { value: SECRET_VALUE }), keep] });
+		return { ...full, outline: { ...full.outline, truncated: true } };
+	};
+	const { stateId, result } = await fake.observe();
+	assert.ok(
+		result.details.note.regions.some(
+			(region: { ref?: string; label: string }) => region.ref === "@e2" && region.label === SECRET,
+		),
+		"precondition: the top-level field has its own note region",
+	);
+	turned = true;
+	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e1" });
+	assert.equal(fake.looks.at(-1).scopeRef, "w", "the truncated root took a scoped look");
+	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+	const found = await fake.call(fake.bridge.executeSearchUi, { stateId, text: "Keep" });
+	assertNoSecret(found, fake.text(found), "search_ui");
+	assert.ok(
+		found.details.note.regions.some((region: { label: string }) => region.label === REDACTED_LABEL),
+		"the preserved field's region is redacted",
+	);
+	await assertQueriesClean(stateId, "@e2");
 });
 
 test("a restored node without a role expands as protected, not as a crash", async () => {
@@ -427,59 +463,120 @@ describe("note retention", () => {
 	test("current regions record their node; retained unmatched regions lose their label and ref", () => {
 		const first = noteFromLook(undefined, look("a", [outlineNode("@e2", { title: SECRET })]), window);
 		assert.deepEqual(
-			first.regions.map((region) => [region.ref, region.label]),
-			[["@e2", SECRET]],
+			first.regions.map((region) => [region.source, region.ref, region.label]),
+			[["node", "@e2", SECRET]],
 		);
 		const second = noteFromLook(first, look("b", [outlineNode("@e3", { role: "AXButton", title: "Go" })]), window);
 		assert.deepEqual(second.regions, [
-			{ key: "AXButton:go", label: "go", status: "seen", ref: "@e3" },
-			{ key: "redacted", label: REDACTED_LABEL, status: "changed", detail: "not matched in latest look" },
+			{ key: "AXButton:go", label: "go", status: "seen", source: "node", ref: "@e3" },
+			{
+				key: "redacted",
+				label: REDACTED_LABEL,
+				status: "changed",
+				source: "redacted",
+				detail: "not matched in latest look",
+			},
 		]);
 		assert.ok(!JSON.stringify(second).includes(SECRET.toLowerCase()));
 	});
 
-	test("protected top-level nodes are noted by their marker, never their title", () => {
+	test("protected top-level nodes are noted by their marker, never their title or identifier", () => {
 		const note = noteFromLook(
 			undefined,
-			look("a", [outlineNode("@e2", { role: "AXSecureTextField", title: SECRET })]),
+			look("a", [outlineNode("@e2", { role: "AXSecureTextField", title: SECRET, identifier: SECRET })]),
 			window,
 		);
 		assert.deepEqual(note.regions[0], {
 			key: `AXSecureTextField:${PROTECTED_LABEL}`,
 			label: PROTECTED_LABEL,
 			status: "seen",
+			source: "node",
 			ref: "@e2",
 		});
 	});
 
-	test("noteForOutline consults the outline's current classification", () => {
+	test("a real region of role window is reclassified by provenance, not exempted by its key", () => {
+		const readable = look("a", [outlineNode("@e2", { role: "window", title: SECRET })]);
+		const note = noteFromLook(undefined, readable, window);
+		assert.equal(note.regions[0].key, `window:${SECRET}`, "the Windows helper's real role shares the prefix");
+		const protectedNow = look("b", [outlineNode("@e2", { role: "password text", title: PROTECTED_LABEL })]);
+		const reconciled = present(noteForOutline(note, protectedNow));
+		assert.ok(!JSON.stringify(reconciled).includes(SECRET), JSON.stringify(reconciled));
+		assert.equal(reconciled.regions[0].label, PROTECTED_LABEL);
+	});
+
+	test("noteForOutline rebuilds labels from confirmed current nodes only", () => {
 		const note: WindowNote = {
 			windowRef: "w",
 			title: "Main",
 			pairing: "exact",
 			regions: [
-				{ key: "AXGroup:readable", label: "readable", status: "seen", ref: "@e2" },
-				{ key: `AXGroup:${SECRET}`, label: SECRET, status: "changed", detail: "acted here", ref: "@e3" },
-				{ key: `AXGroup:${SECRET} gone`, label: `${SECRET} gone`, status: "seen", ref: "@e9" },
-				{ key: `AXGroup:${SECRET} legacy`, label: `${SECRET} legacy`, status: "seen" },
-				{ key: "root:opened:r:Sheet", label: "sheet Sheet", status: "never-looked", detail: "root opened" },
-				{ key: "window:unpaired", label: "window capture", status: "never-looked" },
-				{ key: "redacted", label: REDACTED_LABEL, status: "changed" },
+				{ key: "AXGroup:stale", label: "stale", status: "seen", source: "node", ref: "@e2" },
+				{
+					key: `AXGroup:${SECRET}`,
+					label: SECRET,
+					status: "changed",
+					detail: "acted here",
+					source: "node",
+					ref: "@e3",
+				},
+				{ key: `AXGroup:${SECRET} gone`, label: `${SECRET} gone`, status: "seen", source: "node", ref: "@e9" },
+				{ key: `AXGroup:${SECRET} graft`, label: `${SECRET} graft`, status: "seen", source: "node", ref: "@e4" },
+				{
+					key: `AXGroup:stale:scroll:@e5`,
+					label: "stale",
+					status: "never-looked",
+					source: "node",
+					ref: "@e2",
+					facet: "scroll:@e5",
+				},
+				{ key: "root:opened:r:Sheet", label: "sheet Sheet", status: "never-looked", source: "root" },
+				{ key: "window:unpaired", label: "window capture", status: "never-looked", source: "window" },
+				{ key: "redacted", label: REDACTED_LABEL, status: "changed", source: "redacted", ref: "@e2" },
+				// Legacy regions predate provenance: a ref is reclassified, anything else fails closed.
+				{ key: `window:${SECRET} legacy`, label: `${SECRET} legacy`, status: "changed", ref: "@e3" },
+				{ key: `window:${SECRET} no ref`, label: `${SECRET} no ref`, status: "never-looked" },
 			],
 		};
 		const outline = look("a", [
-			outlineNode("@e2", { title: "Readable" }),
-			outlineNode("@e3", { role: "password text", title: PROTECTED_LABEL, identifier: "/path" }),
+			outlineNode("@e2", { title: "Readable", identifier: "rid" }),
+			outlineNode("@e3", { role: "password text", title: PROTECTED_LABEL, identifier: SECRET }),
+			outlineNode("@e4", { role: "AXGroup", title: REDACTED_LABEL, unconfirmed: true }),
 		]);
 		const reconciled = present(noteForOutline(note, outline));
 		assert.deepEqual(reconciled.regions, [
-			{ key: "AXGroup:readable", label: "readable", status: "seen", ref: "@e2" },
-			{ key: "password text:/path", label: PROTECTED_LABEL, status: "changed", detail: "acted here", ref: "@e3" },
-			{ key: "redacted", label: REDACTED_LABEL, status: "seen" },
-			{ key: "root:opened:r:Sheet", label: "sheet Sheet", status: "never-looked", detail: "root opened" },
-			{ key: "window:unpaired", label: "window capture", status: "never-looked" },
-			{ key: "redacted", label: REDACTED_LABEL, status: "changed" },
+			{ key: "AXGroup:rid", label: "readable", status: "seen", source: "node", ref: "@e2" },
+			{
+				key: `password text:${PROTECTED_LABEL}`,
+				label: PROTECTED_LABEL,
+				status: "changed",
+				detail: "acted here",
+				source: "node",
+				ref: "@e3",
+			},
+			{ key: "redacted", label: REDACTED_LABEL, status: "seen", source: "redacted" },
+			{ key: `AXGroup:${REDACTED_LABEL}`, label: REDACTED_LABEL, status: "seen", source: "node", ref: "@e4" },
+			{
+				key: "AXGroup:rid:scroll:@e5",
+				label: "readable",
+				status: "never-looked",
+				facet: "scroll:@e5",
+				source: "node",
+				ref: "@e2",
+			},
+			{ key: "root:opened:r:Sheet", label: "sheet Sheet", status: "never-looked", source: "root" },
+			{ key: "window:unpaired", label: "window capture", status: "never-looked", source: "window" },
+			{ key: "redacted", label: REDACTED_LABEL, status: "changed", source: "redacted" },
+			{
+				key: `password text:${PROTECTED_LABEL}`,
+				label: PROTECTED_LABEL,
+				status: "changed",
+				source: "node",
+				ref: "@e3",
+			},
+			{ key: "redacted", label: REDACTED_LABEL, status: "never-looked", source: "redacted" },
 		]);
+		assert.ok(!JSON.stringify(reconciled).includes(SECRET));
 		assert.equal(note.regions[1].label, SECRET, "the input note is not mutated");
 		assert.equal(noteForOutline(undefined, outline), undefined);
 	});

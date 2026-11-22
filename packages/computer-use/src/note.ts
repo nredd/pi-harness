@@ -1,4 +1,5 @@
 import {
+	isConfirmedReadable,
 	isProtectedNode,
 	nodeByRef,
 	type Outline,
@@ -13,15 +14,20 @@ interface NoteRegion {
 	label: string;
 	status: "seen" | "changed" | "never-looked";
 	detail?: string;
-	/** Top-level outline node the label was read from; absent for root and window regions. */
+	/**
+	 * Where the label came from. `node` labels are rebuilt from the current outline on every cached query; `root`
+	 * (root listings) and `window` (capture pairing) labels carry no outline text. A region without `source` predates
+	 * provenance: it is reclassified when it has a `ref` and redacted otherwise, whatever its key says.
+	 */
+	source?: "node" | "root" | "window" | "redacted";
+	/** Top-level outline node the label was read from; only `node` regions carry one. */
 	ref?: string;
+	/** Key suffix that tells a node's frontier regions apart, e.g. `scroll:@e7`. */
+	facet?: string;
 }
 
 /** Key shared by every redacted region, so retained history collapses instead of growing. */
 const REDACTED_KEY = "redacted";
-
-/** Regions whose labels come from root listings or capture pairing, never from an outline node. */
-const NON_OUTLINE_KEY = /^(root|window):/;
 
 export interface WindowNote {
 	windowRef: string;
@@ -57,36 +63,53 @@ function redactedRegion(region: NoteRegion): NoteRegion {
 		key: REDACTED_KEY,
 		label: REDACTED_LABEL,
 		status: region.status,
+		source: "redacted",
 		...(region.detail === undefined ? {} : { detail: region.detail }),
 	};
 }
 
+/** Keys and labels of a node that is not confirmed readable carry only its role and marker, never an identifier. */
 function regionKey(node: OutlineNode): string {
-	return `${node.role || "AXUnknown"}:${node.identifier || regionLabel(node)}`;
+	const name = isConfirmedReadable(node) ? node.identifier || regionLabel(node) : regionLabel(node);
+	return `${node.role || "AXUnknown"}:${name}`;
 }
 
 /**
- * A protected node is noted only by its marker, never its title. Any other node falls back to its role, which a
- * readable node always has: `isProtectedNode` counts a blank role as unclassified.
+ * A protected node is noted only by its marker, never its title; an unconfirmed node's title is already the redaction
+ * marker. Any other node falls back to its role, which a readable node always has: `isProtectedNode` counts a blank
+ * role as unclassified.
  */
 function regionLabel(node: OutlineNode): string {
 	if (isProtectedNode(node)) return PROTECTED_LABEL;
 	return normalizedLabel(outlineNodeLabel(node)) || normalizedLabel(node.role);
 }
 
+/** A `node` region for `node`, its key and label built from the node as it is now. */
+function nodeRegion(node: OutlineNode, region: Omit<NoteRegion, "key" | "label" | "source" | "ref">): NoteRegion {
+	return {
+		key: region.facet ? `${regionKey(node)}:${region.facet}` : regionKey(node),
+		label: regionLabel(node),
+		...region,
+		source: "node",
+		ref: node.ref,
+	};
+}
+
 /**
- * Re-check every region against `outline`'s current classification. A region keeps its label only while its node is
- * present and readable; a protected node's region takes its current marker, and an absent or unattributed node's
- * region is redacted. Root and window regions carry no outline text and pass through. Returns a new note.
+ * Rebuild every region from `outline`'s current nodes. A region's text never comes from the saved note: a `node`
+ * region takes the key and label of the node now at its ref, which reads `[protected]` or `[redacted]` when that node
+ * is protected or unconfirmed, and a region whose node is gone is redacted. Root and window regions carry no outline
+ * text and pass through. A legacy region without provenance fails closed: reclassified by its ref, else redacted.
+ * Returns a new note.
  */
 export function noteForOutline(note: WindowNote | undefined, outline: Outline): WindowNote | undefined {
 	if (!note) return undefined;
 	const regions = note.regions.map((region): NoteRegion => {
-		if (region.key === REDACTED_KEY || NON_OUTLINE_KEY.test(region.key)) return region;
-		const node = region.ref ? nodeByRef(outline, region.ref) : undefined;
+		if (region.source === "root" || region.source === "window") return region;
+		const node = region.source !== "redacted" && region.ref ? nodeByRef(outline, region.ref) : undefined;
 		if (!node) return redactedRegion(region);
-		if (!isProtectedNode(node)) return region;
-		return { ...region, key: regionKey(node), label: regionLabel(node) };
+		const { key: _key, label: _label, source: _source, ref: _ref, ...rest } = region;
+		return nodeRegion(node, rest);
 	});
 	return { ...note, regions: uniqueRegions(regions) };
 }
@@ -114,33 +137,24 @@ function uniqueRegions(regions: NoteRegion[]): NoteRegion[] {
 	return output;
 }
 
-function frontierRegions(
-	outline: Outline,
-	topLevels: Array<{ node: OutlineNode; key: string; label: string }>,
-): NoteRegion[] {
+function frontierRegions(outline: Outline): NoteRegion[] {
 	const output: NoteRegion[] = [];
 	for (const node of outline.nodes) {
 		if (node.scrollExtent && node.scrollExtent.seen < node.scrollExtent.total) {
 			const ancestor = topLevelAncestor(node, outline);
-			const top = topLevels.find((candidate) => candidate.node === ancestor);
-			output.push({
-				key: `${top?.key ?? regionKey(ancestor)}:scroll:${node.ref}`,
-				label: top?.label ?? regionLabel(ancestor),
-				status: "never-looked",
-				detail: `${node.scrollExtent.total} rows, ${node.scrollExtent.seen} seen`,
-				ref: ancestor.ref,
-			});
+			output.push(
+				nodeRegion(ancestor, {
+					status: "never-looked",
+					detail: `${node.scrollExtent.total} rows, ${node.scrollExtent.seen} seen`,
+					facet: `scroll:${node.ref}`,
+				}),
+			);
 		}
 		if (node.truncated) {
 			const ancestor = topLevelAncestor(node, outline);
-			const top = topLevels.find((candidate) => candidate.node === ancestor);
-			output.push({
-				key: `${top?.key ?? regionKey(ancestor)}:truncated:${node.ref}`,
-				label: top?.label ?? regionLabel(ancestor),
-				status: "never-looked",
-				detail: "subtree not walked",
-				ref: ancestor.ref,
-			});
+			output.push(
+				nodeRegion(ancestor, { status: "never-looked", detail: "subtree not walked", facet: `truncated:${node.ref}` }),
+			);
 		}
 	}
 	return output;
@@ -149,12 +163,7 @@ function frontierRegions(
 export function noteFromLook(prev: WindowNote | undefined, outline: Outline, window: NoteWindowInput): WindowNote {
 	const topLevels = topLevelRegions(outline);
 	const currentKeys = new Set(topLevels.map((region) => region.key));
-	const regions: NoteRegion[] = topLevels.map((region) => ({
-		key: region.key,
-		label: region.label,
-		status: "seen",
-		ref: region.node.ref,
-	}));
+	const regions: NoteRegion[] = topLevels.map((region) => nodeRegion(region.node, { status: "seen" }));
 
 	if (prev) {
 		for (const old of prev.regions) {
@@ -171,10 +180,11 @@ export function noteFromLook(prev: WindowNote | undefined, outline: Outline, win
 			label: "window capture",
 			status: "never-looked",
 			detail: "AX window without capture pairing",
+			source: "window",
 		});
 	}
 
-	regions.push(...frontierRegions(outline, topLevels));
+	regions.push(...frontierRegions(outline));
 
 	return {
 		windowRef: window.windowRef ?? "(unpaired)",
@@ -206,13 +216,7 @@ export function noteAfterAct(
 				region.status = "changed";
 				region.detail = detail;
 			} else {
-				note.regions.unshift({
-					key,
-					label: regionLabel(ancestor),
-					status: "changed",
-					detail,
-					ref: ancestor.ref,
-				});
+				note.regions.unshift(nodeRegion(ancestor, { status: "changed", detail }));
 			}
 		}
 	}
@@ -222,6 +226,7 @@ export function noteAfterAct(
 			label: `${delta.kind}${delta.title ? ` ${delta.title}` : ""}`,
 			status: delta.change === "closed" ? "changed" : "never-looked",
 			detail: `root ${delta.change}`,
+			source: "root",
 		});
 	}
 	if (refreshOutcome.windowChanged) {
@@ -233,6 +238,7 @@ export function noteAfterAct(
 			label: refreshOutcome.newWindowLabel ?? "new sheet/window",
 			status: "never-looked",
 			detail: "appeared after act",
+			source: "window",
 		});
 	}
 	return { ...note, regions: uniqueRegions(note.regions) };
