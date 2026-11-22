@@ -460,12 +460,13 @@ describe("ensureProtocol", () => {
 	 * relaunched or stopped, and the client drops its cached availability so the next command probes again.
 	 */
 	async function assertRefused(rig, reason) {
+		// `reason` is literal text: paths can hold regex metacharacters.
 		const { client, fake, spawn, HelperCommandError, HELPER_SOCKET_PATH, RESIDENT_MISMATCH_REPAIR } = rig;
 		await client.ensureDaemon();
 		await assert.rejects(client.ensureProtocol(), (error) => {
 			assert.ok(error instanceof HelperCommandError);
 			assert.equal(error.code, "helper_mismatch");
-			assert.match(error.message, reason);
+			assert.ok(error.message.includes(reason), error.message);
 			assert.equal(
 				error.message.startsWith(`pi-computer-use helper at ${HELPER_SOCKET_PATH} has this package's build but `),
 				true,
@@ -505,21 +506,18 @@ describe("ensureProtocol", () => {
 	});
 
 	test("refuses a matching-build daemon that reports another protocol", async () => {
-		await assertRefused(
-			await protocolRig({ diagnostics: { protocolVersion: 6 } }),
-			/ reports protocol 6 \(expected 8\)/,
-		);
+		await assertRefused(await protocolRig({ diagnostics: { protocolVersion: 6 } }), " reports protocol 6 (expected 8)");
 	});
 
 	test("refuses a daemon that reports no executable path", async () => {
 		const rig = await protocolRig({ diagnostics: { executablePath: undefined } });
-		await assertRefused(rig, new RegExp(`reports no executable path \\(expected ${rig.HELPER_APP_EXECUTABLE_PATH}\\)`));
+		await assertRefused(rig, `reports no executable path (expected ${rig.HELPER_APP_EXECUTABLE_PATH})`);
 	});
 
 	test("refuses a daemon launched from another executable (unresolvable paths compare resolved)", async () => {
 		const elsewhere = path.join(tmp, "elsewhere", "bridge");
 		const rig = await protocolRig({ install: false, diagnostics: { executablePath: elsewhere } });
-		await assertRefused(rig, new RegExp(`runs ${elsewhere} \\(expected ${rig.HELPER_APP_EXECUTABLE_PATH}\\)`));
+		await assertRefused(rig, `runs ${elsewhere} (expected ${rig.HELPER_APP_EXECUTABLE_PATH})`);
 	});
 });
 
