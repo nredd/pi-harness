@@ -469,10 +469,15 @@ outcome is otherwise `unknown`, say `Delivery of the action is unknown` and not 
   authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
   an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
-  `focused` only after one. A root without a CG window id is matched across listings by kind, role,
-  title and frame, so one whose title, role, subrole, position or size read failed, or that shares
-  that identity with another root, is left out of the comparison and makes its listing incomplete:
-  it never shows up as `closed` plus a new `appeared` root (#1287). Windows listings carry no completeness information, so an empty listing from
+  `focused` only after one. It matches a root across listings by its CG window id, or without one by
+  kind, role, title and frame. A root whose key may differ from one listing to the next is left out of
+  that comparison and makes its listing incomplete, so it never shows up as `closed` plus a new
+  `appeared` root (#1287): one whose CG pairing read its title or frame unsuccessfully (a later
+  successful read does not vouch for that pairing), and an unpaired one whose title, role, subrole,
+  position or size read failed (a sheet without its own title takes its window's, read or not). Apart
+  from that, a key two roots share is ambiguous: both are left out the same way, whether two unpaired
+  roots read alike or two roots carry one CG window id. Discovery and target resolution still list every
+  such root. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ### Ref lifecycle
@@ -2787,7 +2792,7 @@ Discovery combines three sources:
 
 Single-window lookups call `CGWindowListCreateDescriptionFromArray(_:)` for the requested window ID first and fall back to an all-window `CGWindowListCopyWindowInfo` query when that returns no match ([Apple: `CGWindowListCreateDescriptionFromArray`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcreatedescriptionfromarray%28_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3317)).
 
-Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed.
+Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed. A failed title or frame read adds nothing to a pairing score, so it can neither pair a window nor cost it its match. `rootDelta` keys a paired root by its `windowId` and an unpaired one by kind, role, title and frame; a root whose pairing or identity reads failed, or whose key another root shares, is excluded from that comparison and makes the listing incomplete, but it is not removed from discovery: it still resolves as a positive match.
 
 Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are identified by the Accessibility `AXMenu` role and Core Graphics popup-menu window level; a menu with no matching Accessibility element remains an outline-only, `pictureOnly` root ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1232), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3004)).
 
@@ -2919,10 +2924,15 @@ Terminal `act_ui` results say the action was delivered, name the timed-out or ot
   authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
   an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
-  `focused` only after one. A root without a CG window id is matched across listings by kind, role,
-  title and frame, so one whose title, role, subrole, position or size read failed, or that shares
-  that identity with another root, is left out of the comparison and makes its listing incomplete:
-  it never shows up as `closed` plus a new `appeared` root (#1287). Windows listings carry no completeness information, so an empty listing from
+  `focused` only after one. It matches a root across listings by its CG window id, or without one by
+  kind, role, title and frame. A root whose key may differ from one listing to the next is left out of
+  that comparison and makes its listing incomplete, so it never shows up as `closed` plus a new
+  `appeared` root (#1287): one whose CG pairing read its title or frame unsuccessfully (a later
+  successful read does not vouch for that pairing), and an unpaired one whose title, role, subrole,
+  position or size read failed (a sheet without its own title takes its window's, read or not). Apart
+  from that, a key two roots share is ambiguous: both are left out the same way, whether two unpaired
+  roots read alike or two roots carry one CG window id. Discovery and target resolution still list every
+  such root. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ## Ref lifecycle
