@@ -1,14 +1,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, normalize, sep } from "node:path";
+import { isAbsolute, join, normalize, resolve, sep } from "node:path";
 
 /** Retry transient removal errors such as EBUSY and EPERM. */
 export const CLEANUP_RETRY_OPTIONS = { maxRetries: 3, retryDelay: 50 } as const;
 
 /**
  * Allocate a scratch directory whose removal the caller owns, for helpers with their own lifecycle
- * (a `restore` or a `finally`) rather than a test hook. `remove` is idempotent. `baseDir` and the
- * prefix rules match `makeTestTempDir`.
+ * (a `restore` or a `finally`) rather than a test hook. `remove` is idempotent and targets the path
+ * resolved at allocation, so a later `cwd` change under a relative `TMPDIR` or `baseDir` cannot
+ * redirect it. `baseDir` and the prefix rules match `makeTestTempDir`.
  */
 export function makeOwnedTempDir(
 	prefix: string,
@@ -18,7 +19,8 @@ export function makeOwnedTempDir(
 		throw new Error(`Test temp dir prefix must stay inside baseDir: ${JSON.stringify(prefix)}`);
 	}
 	const dir = mkdtempSync(join(baseDir, prefix));
-	return { dir, remove: () => rmSync(dir, { recursive: true, force: true, ...CLEANUP_RETRY_OPTIONS }) };
+	const target = resolve(dir);
+	return { dir, remove: () => rmSync(target, { recursive: true, force: true, ...CLEANUP_RETRY_OPTIONS }) };
 }
 
 /**

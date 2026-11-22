@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { SANDBOX_PREFIX, sandboxAgentDir, sandboxConfigHome, sandboxTmpdir } from "../src/sandbox.ts";
+import { makeTestTempDir } from "../src/temp-dir.ts";
 
 const NAMES = ["TMPDIR", "PI_TEST_REAL_TMPDIR", "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME"] as const;
 let saved: Record<string, string | undefined>;
@@ -87,4 +88,22 @@ test("config home sandbox restores variables that were unset", () => {
 	fixture.restore();
 	expect(process.env.XDG_CONFIG_HOME).toBeUndefined();
 	expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+});
+
+test("sandboxes under a relative TMPDIR remove their own directories after a cwd change", ({ onTestFinished }) => {
+	const root = makeTestTempDir("pi-test-lib-", onTestFinished);
+	const elsewhere = makeTestTempDir("pi-test-lib-", onTestFinished);
+	mkdirSync(join(root, "tmp"));
+	const cwd = process.cwd();
+	onTestFinished(() => process.chdir(cwd));
+	process.chdir(root);
+	process.env.TMPDIR = "tmp";
+	const agent = sandboxAgentDir();
+	const home = sandboxConfigHome();
+	process.chdir(elsewhere);
+	for (const dir of [agent.dir, home.home]) mkdirSync(join(elsewhere, dir), { recursive: true });
+	agent.restore();
+	home.restore();
+	expect(readdirSync(join(root, "tmp"))).toEqual([]);
+	expect(readdirSync(join(elsewhere, "tmp")).sort()).toEqual([agent.dir, home.home].map((dir) => dir.slice(4)).sort());
 });

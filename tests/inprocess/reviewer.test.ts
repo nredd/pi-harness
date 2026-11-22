@@ -40,8 +40,11 @@ afterEach(async () => {
 	}
 });
 afterAll(async () => {
-	removeFixture?.();
-	await home.cleanup();
+	try {
+		removeFixture?.();
+	} finally {
+		await home.cleanup();
+	}
 });
 
 it("reviewer exposes exactly seven reads plus the refusal helper", async () => {

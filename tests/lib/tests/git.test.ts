@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { git, makeGitFixture } from "../src/git.ts";
+import { makeTestTempDir } from "../src/temp-dir.ts";
 
 test("fixture holds one of every working-tree state against a bare remote", ({ onTestFinished }) => {
 	const { repo, remote } = makeGitFixture(onTestFinished);
@@ -17,11 +18,19 @@ test("git commits with the fixed identity and no signing", ({ onTestFinished }) 
 	expect(git(repo, "log", "-1", "--format=%an <%ae>").trim()).toBe("h <h@h>");
 });
 
-test("fixture registers one cleanup that removes the clone and the remote", () => {
+test("fixture registers one cleanup that removes the clone and the remote", ({ onTestFinished }) => {
+	// An independently removed root, so a failed registration assertion cannot strand the fixture.
+	const scratch = makeTestTempDir("pi-test-lib-", onTestFinished);
+	for (const name of ["TMPDIR", "TMP", "TEMP"]) vi.stubEnv(name, scratch);
+	onTestFinished(() => {
+		vi.unstubAllEnvs();
+	});
 	const cleanups: (() => void)[] = [];
 	const { repo, remote } = makeGitFixture((cleanup) => cleanups.push(cleanup));
 	expect(dirname(remote)).toBe(dirname(repo));
+	expect(dirname(dirname(repo))).toBe(scratch);
 	expect(cleanups).toHaveLength(1);
 	for (const cleanup of cleanups) cleanup();
 	expect(existsSync(dirname(repo))).toBe(false);
+	expect(readdirSync(scratch)).toEqual([]);
 });
