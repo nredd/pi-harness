@@ -1573,7 +1573,8 @@ notice is sent while it waits, so a run that stops first does not start a turn i
 session, and a workflow launched meanwhile, through the tool or the flag, is refused with "The
 session is shutting down: no new workflow can start." On
 `/new`, `/resume`, `/fork` or `/reload` the run's `Stopped` notice is handed to the session you
-left and appears when you return to it; on quit it is dropped.
+left and appears when you return to it; on quit it is dropped. A second shutdown event while the
+first waits shares its teardown, reason included.
 
 ### The lifecycle
 

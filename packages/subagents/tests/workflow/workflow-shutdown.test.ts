@@ -259,6 +259,22 @@ it("fences a stalled flag-launched run's late completion", async () => {
 	expect(clock.pending).toBe(0);
 });
 
+it("tears down once when a second shutdown arrives while the first waits, as the first one asked", async () => {
+	const run = await startToolRun();
+	const handler = booted.lifecycle.get("session_shutdown")!;
+	const first = handler({ type: "session_shutdown", reason: "reload" }, context);
+	await run.aborted;
+	const second = handler({ type: "session_shutdown", reason: "quit" }, context);
+	run.complete();
+	await Promise.all([first, second]);
+	await handler({ type: "session_shutdown", reason: "quit" }, context);
+
+	expect(booted.emitted.filter((e) => e.event === "subagents:disposed")).toHaveLength(1);
+	expect(drainDetached(sessionFile)).toEqual([
+		expect.objectContaining({ details: expect.objectContaining({ id: run.taskId }) }),
+	]);
+});
+
 it("records a flag-launched run's outcome before shutdown returns", async () => {
 	const path = join(hermetic.dir, "flow.js");
 	writeFileSync(path, script);

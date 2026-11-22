@@ -1777,7 +1777,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	// agents are detached instead and hand their results back when the user returns
 	// to this session (see detached-results.ts). Only agents that cannot outlive the
 	// session are aborted.
-	pi.on("session_shutdown", async (event: { reason?: string }) => {
+	//
+	// Once per activation: a second event while the first waits (a quit signal during
+	// a pending /reload) gets the first one's teardown, reason and session file
+	// included, rather than tearing down again.
+	let shutdown: Promise<void> | undefined;
+	pi.on("session_shutdown", (event: { reason?: string }) => (shutdown ??= shutDown(event)));
+	async function shutDown(event: { reason?: string }): Promise<void> {
 		fleet.flushState(); // appendEntry must run before this activation loses its context
 		const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
 		unwatchDetached?.();
@@ -1886,7 +1892,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// point after which a synchronous final flush is complete. Synchronous:
 		// `emit` does not await listeners, and pi exits once this handler returns.
 		pi.events.emit("subagents:disposed", {});
-	});
+	}
 
 	// Live widget: show running agents above editor.
 	// widgetMode (default "background") selects what the widget shows: "all" =
