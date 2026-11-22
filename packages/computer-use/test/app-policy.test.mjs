@@ -1051,33 +1051,3 @@ test("Windows defaults and additive project entries match exact owner executable
 	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["powershell.exe"] }));
 	assert.deepEqual(await blocked(), [105, 106], "exact basename matching ignores case");
 });
-
-test("Linux maps the helper name but never treats it as a policy identity", async ({ onTestFinished }) => {
-	const { linuxHelper } = await import("../src/platform/linux/helper.ts");
-	const { linuxBackend } = await import("../src/platform/linux/backend.ts");
-	const { getComputerUseConfig } = await import("../src/config.ts");
-	const roots = [policyRoot(101, "Terminal label", "xterm"), policyRoot(102, "Vault label", "my-vault")];
-	const previousPort = process.env.PI_COMPUTER_USE_CDP_PORT;
-	process.env.PI_COMPUTER_USE_CDP_PORT = "9222";
-	const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected CDP discovery"));
-	const { find, userFile } = await useRootPolicyFixture("linux", linuxHelper, roots, (cleanup) => {
-		onTestFinished(() => {
-			cleanup();
-			fetch.mockRestore();
-			if (previousPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-			else process.env.PI_COMPUTER_USE_CDP_PORT = previousPort;
-		});
-	});
-	assert.equal((await linuxBackend.listRoots({}))[0].appId, "xterm");
-	assert.equal(
-		(await find()).some((root) => root.blocked),
-		false,
-	);
-	assert.equal(fetch.mock.calls.length, 0, "an inherited CDP port must not reach discovery");
-	assert.ok(getComputerUseConfig().blocked_apps.includes("xterm"));
-	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["my-vault"] }));
-	assert.equal(
-		(await find()).some((root) => root.blocked),
-		false,
-	);
-});

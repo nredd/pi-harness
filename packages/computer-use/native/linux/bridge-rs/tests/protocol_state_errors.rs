@@ -25,6 +25,8 @@ fn root(n: usize, frame: Option<Rect>) -> RootSnapshot {
         pid: n as u64,
         name: format!("root {n}"),
         app_name: "fixture".into(),
+        executable: None,
+        wm_class: None,
         role: "frame".into(),
         frame,
         x11_window: None,

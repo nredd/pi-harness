@@ -129,10 +129,7 @@ describe("/computer-use", () => {
 		],
 		[
 			"linux",
-			[
-				`blocked_apps: ${defaultBlockedApps("linux").join(", ")}`,
-				"blocklist: configured entries are listed but INACTIVE on Linux until #1180 (identity)",
-			],
+			[`blocked_apps: ${defaultBlockedApps("linux").join(", ")} (system authentication agents are always blocked)`],
 		],
 	])("%s: default status reports the host's blocklist enforcement", async (platform, blocklistStatus) => {
 		setPlatform(platform);

@@ -1324,6 +1324,8 @@ mod tests {
             pid: 42,
             name: "Editor".into(),
             app_name: "Editor".into(),
+            executable: None,
+            wm_class: None,
             role: "Dialog".into(),
             frame: Some(Rect {
                 x: 100,
@@ -1592,6 +1594,8 @@ mod tests {
             pid: 1,
             name: "Calculator".into(),
             app_name: "Calculator".into(),
+            executable: None,
+            wm_class: None,
             role: "frame".into(),
             frame: None,
             x11_window: None,
@@ -1836,6 +1840,70 @@ mod tests {
             },
         )
         .await;
+    }
+
+    /// A readable numeric role does not authorize text when its role name contradicts it or
+    /// cannot be read (#1189).
+    #[tokio::test]
+    async fn contradicting_or_unread_role_name_never_reads_text() {
+        for role_name in [
+            "unknown",
+            " Unknown ",
+            "PASSWORD TEXT",
+            "invalid",
+            "",
+            FAILING_ROLE_NAME,
+        ] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    peer.serve_at(
+                        "/window",
+                        PeerNode {
+                            name: "Fixture",
+                            role: watch::channel(Some(61)).1,
+                            role_name,
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: None,
+                            text: true,
+                        },
+                    )?
+                    .serve_at("/window", PeerText::new(Arc::clone(&reads)))
+                },
+                async |connection| {
+                    let look = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({"rootRef":root_ref,"includeImage":false}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    assert_eq!(look["outline"]["value"], "", "{role_name:?}");
+                    assert_eq!(look["outline"]["truncated"], true, "{role_name:?}");
+                    let blank = role_name.trim().is_empty() || role_name == FAILING_ROLE_NAME;
+                    let title = if blank { "Fixture" } else { "[protected]" };
+                    assert_eq!(look["outline"]["title"], title, "{role_name:?}");
+                    let reply = peer_request(
+                        &state,
+                        &connection,
+                        "atspiReadText",
+                        json!({"lookId":look["lookId"],"elementRef":look["outline"]["ref"]}),
+                    )
+                    .await;
+                    assert_eq!(
+                        reply.error.map(|error| error.code),
+                        Some(ErrorCode::SecureTextUnreadable),
+                        "{role_name:?}"
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), 0, "{role_name:?}");
+                },
+            )
+            .await;
+        }
     }
 
     #[tokio::test]
@@ -2659,6 +2727,8 @@ mod tests {
             pid: 1,
             name: "Window".into(),
             app_name: "App".into(),
+            executable: None,
+            wm_class: None,
             role: "frame".into(),
             frame: Some(Rect {
                 x: 100,

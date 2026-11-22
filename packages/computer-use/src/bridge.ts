@@ -813,8 +813,13 @@ class ComputerUseError extends Error {
 
 type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId">;
 
+/** Windows and Linux resolve an executable identity per root; a root without one is refused. */
+function requiresLiveIdentity(): boolean {
+	return currentPlatformBackend.name === "windows" || currentPlatformBackend.name === "linux";
+}
+
 function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: true } | undefined {
-	if (currentPlatformBackend.name === "windows" && !target.appId) return { identityUnresolved: true };
+	if (requiresLiveIdentity() && !target.appId) return { identityUnresolved: true };
 	return blockedAppId(currentPlatformBackend.name, target);
 }
 
@@ -888,8 +893,8 @@ function storeBrowserRootRef(contextId: string): string {
 }
 
 function windowAppId(app: HelperApp, window: HelperWindow): string | undefined {
-	// Windows resolves the owner on each root lookup. Never mask a failed lookup with a saved identity.
-	return currentPlatformBackend.name === "windows" ? window.appId : (window.appId ?? app.appId);
+	// Windows and Linux resolve the owner on each root lookup. Never mask a failed lookup with a saved identity.
+	return requiresLiveIdentity() ? window.appId : (window.appId ?? app.appId);
 }
 
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {

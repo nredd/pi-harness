@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,6 +33,13 @@ const MAX_ATSPI_ACTIONS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
 pub const TEXT: &str = "org.a11y.atspi.Text";
+/// The procfs mount that attributes an accessibility bus PID to its executable.
+pub const PROC_ROOT: &str = "/proc";
+/// Bus proxies whose connection PID is not the application's, e.g. Flatpak's
+/// accessibility bus proxy, which every sandboxed app shares.
+const BUS_PROXY_EXECUTABLES: [&str; 1] = ["xdg-dbus-proxy"];
+/// Role names that contradict a readable numeric role.
+const PROTECTED_ROLE_NAMES: [&str; 3] = ["unknown", "invalid", "password text"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AccessibleRef {
@@ -53,6 +61,10 @@ pub struct RootSnapshot {
     pub pid: u64,
     pub name: String,
     pub app_name: String,
+    /// The policy identity: the executable basename of `pid`, `None` when unattributable.
+    pub executable: Option<String>,
+    /// X11 `WM_CLASS` (instance, class) of the paired window. App-supplied metadata, not identity.
+    pub wm_class: Option<(String, String)>,
     pub role: String,
     pub frame: Option<Rect>,
     pub x11_window: Option<u32>,
@@ -116,6 +128,8 @@ pub struct AtspiClient {
     request_timeout: Duration,
     /// Its shutdown flag is checked at each semantic mutation.
     input: Arc<InputState>,
+    /// The procfs mount used to attribute root PIDs to executables.
+    proc_root: Arc<Path>,
 }
 
 impl AtspiClient {
@@ -146,12 +160,21 @@ impl AtspiClient {
             connection,
             request_timeout,
             input: InputState::shared(),
+            proc_root: Arc::from(Path::new(PROC_ROOT)),
         }
     }
 
     /// Check `input`'s shutdown flag at each semantic mutation instead, e.g. in tests.
     pub fn with_input_state(self, input: Arc<InputState>) -> Self {
         Self { input, ..self }
+    }
+
+    /// Attribute root PIDs through another procfs tree, e.g. a test fixture.
+    pub fn with_proc_root(self, proc_root: &Path) -> Self {
+        Self {
+            proc_root: Arc::from(proc_root),
+            ..self
+        }
     }
 
     /// Refuse a semantic mutation once shutdown began. Checked right before `DoAction`
@@ -305,6 +328,7 @@ impl AtspiClient {
                 })
                 .await
                 .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
+            let executable = process_executable(&self.proc_root, pid);
             let windows = scoped_inventory(filter_pid, self.children(&app).await, Vec::new())?;
             for window in windows {
                 let (role, name) = self
@@ -333,6 +357,8 @@ impl AtspiClient {
                         name
                     },
                     app_name: app_name.clone(),
+                    executable: executable.clone(),
+                    wm_class: None,
                     role,
                     x11_window: None,
                     is_focused: false,
@@ -416,8 +442,16 @@ impl AtspiClient {
                 let protected = access.protected_name().to_owned();
                 (protected, PROTECTED_LABEL.to_owned(), String::new())
             };
+            if readable.is_some() && contradicts_readable_role(&role) {
+                readable = None;
+                unread = true;
+                role = RoleAccess::Unclassified.protected_name().to_owned();
+                name = PROTECTED_LABEL.to_owned();
+                description.clear();
+            }
             if let Some(id) = readable {
-                let result = if interfaces.contains(TEXT) {
+                // Text content also needs a confirmed role name; a blank one is already `unread`.
+                let result = if interfaces.contains(TEXT) && !role.trim().is_empty() {
                     self.read_checked_text(&accessible, id).await
                 } else {
                     self.confirm_role(&accessible, id)
@@ -472,7 +506,8 @@ impl AtspiClient {
         })
     }
 
-    /// Authorize an explicit text read against the live role, never a cached look.
+    /// Authorize an explicit text read against the live role, never a cached look: a
+    /// readable numeric role plus a nonblank role name that does not contradict it.
     pub async fn read_live_text(
         &self,
         accessible: &AccessibleRef,
@@ -482,6 +517,10 @@ impl AtspiClient {
             .await
             .readable()
             .ok_or_else(unconfirmed_role)?;
+        let role_name = self.role_name(accessible).await.unwrap_or_default();
+        if role_name.trim().is_empty() || contradicts_readable_role(&role_name) {
+            return Err(unconfirmed_role());
+        }
         self.read_checked_text(accessible, id).await
     }
 
@@ -586,7 +625,9 @@ pub fn root_json(reference: &str, root: &RootSnapshot, z_order: usize) -> Value 
         "title": root.name,
         "pid": root.pid,
         "appName": root.app_name,
-        "processName": root.app_name,
+        // The accessible app name is presentation only; policy uses the executable (#1180).
+        "appId": root.executable,
+        "processName": root.executable,
         "role": root.role,
         "subrole": "",
         "zOrder": root.z_order.unwrap_or(z_order),
@@ -598,7 +639,12 @@ pub fn root_json(reference: &str, root: &RootSnapshot, z_order: usize) -> Value 
         "isMinimized": root.is_minimized,
         "isOnscreen": true,
         "isModal": kind == "dialog",
-        "metadata": {"backend":"at-spi2","busName":root.accessible.destination,"objectPath":root.accessible.path},
+        "metadata": {
+            "backend":"at-spi2",
+            "busName":root.accessible.destination,
+            "objectPath":root.accessible.path,
+            "wmClass":root.wm_class.as_ref().map(|(instance, class)| json!({"instance":instance,"class":class})),
+        },
         "isBrowser": false,
         "browserFamily": Value::Null
     })
@@ -804,6 +850,26 @@ fn classify_role(role_id: Option<u32>) -> RoleAccess {
         Some(id @ (1..=66 | 68..=69 | 71..=130)) => RoleAccess::Readable(id),
         _ => RoleAccess::Unclassified,
     }
+}
+
+/// Whether a role name contradicts a readable numeric role, e.g. a literal `unknown` (#1189).
+fn contradicts_readable_role(role_name: &str) -> bool {
+    let normalized = role_name.trim().to_lowercase();
+    PROTECTED_ROLE_NAMES.contains(&normalized.as_str())
+}
+
+/// The executable basename of `pid` under `proc_root`, or `None` when it cannot be attributed:
+/// PID 0, an unreadable or non-UTF-8 `exe` link, a relative target, or a shared bus proxy.
+/// A replaced executable keeps the name it was started from (the kernel's ` (deleted)` suffix).
+pub fn process_executable(proc_root: &Path, pid: u64) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let target = std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).ok()?;
+    let target = target.to_str()?;
+    let path = target.strip_suffix(" (deleted)").unwrap_or(target);
+    let name = path.strip_prefix('/')?.rsplit('/').next()?;
+    (!name.is_empty() && !BUS_PROXY_EXECUTABLES.contains(&name)).then(|| name.to_owned())
 }
 
 fn unconfirmed_role() -> ProtocolError {
@@ -1115,7 +1181,8 @@ mod tests {
                     )
             },
             async |connection| {
-                let client = peer_client(connection);
+                let proc = ProcFixture::new(&[(25361, "/usr/bin/fixture-editor")]);
+                let client = peer_client(connection).with_proc_root(&proc.0);
                 let roots = client.list_roots(None).await.unwrap();
                 let [window, dialog] = roots.as_slice() else {
                     panic!(
@@ -1128,6 +1195,10 @@ mod tests {
                 assert_eq!(window.pid, 25361);
                 assert_eq!(window.name, "Notes");
                 assert_eq!(window.app_name, "Editor");
+                // Identity comes from the bus PID's executable, never the accessible Name.
+                assert_eq!(window.executable.as_deref(), Some("fixture-editor"));
+                assert_eq!(dialog.executable.as_deref(), Some("fixture-editor"));
+                assert_eq!(root_json("@w1", window, 0)["appId"], "fixture-editor");
                 assert_eq!(window.role, "frame");
                 assert_eq!(
                     window.frame,
@@ -1153,6 +1224,12 @@ mod tests {
                     [WINDOW, DIALOG]
                 );
                 assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+
+                let unattributed = ProcFixture::new(&[]);
+                let client = client.with_proc_root(&unattributed.0);
+                let roots = client.list_roots(None).await.unwrap();
+                assert_eq!(roots.len(), 2);
+                assert!(roots.iter().all(|root| root.executable.is_none()));
             },
         )
         .await;
@@ -1572,6 +1649,8 @@ mod tests {
             pid: 42,
             name: "Editor".into(),
             app_name: "Text Editor".into(),
+            executable: Some("fixture-editor".into()),
+            wm_class: Some(("fixture".into(), "Fixture".into())),
             role: "frame".into(),
             frame: Some(Rect {
                 x: 1,
@@ -1591,10 +1670,72 @@ mod tests {
         assert_eq!(value["metadata"]["backend"], "at-spi2");
         assert_eq!(value["title"], "Editor");
         assert_eq!(value["appName"], "Text Editor");
-        assert_eq!(value["processName"], "Text Editor");
+        assert_eq!(value["appId"], "fixture-editor");
+        assert_eq!(value["processName"], "fixture-editor");
+        assert_eq!(
+            value["metadata"]["wmClass"],
+            json!({"instance":"fixture","class":"Fixture"})
+        );
 
         let mut wayland_root = root;
         wayland_root.x11_window = None;
-        assert!(root_json("@w2", &wayland_root, 0)["windowId"].is_null());
+        wayland_root.executable = None;
+        wayland_root.wm_class = None;
+        let wayland = root_json("@w2", &wayland_root, 0);
+        assert!(wayland["windowId"].is_null());
+        // An unattributed root has no identity: never the accessible app name.
+        assert!(wayland["appId"].is_null());
+        assert!(wayland["processName"].is_null());
+        assert!(wayland["metadata"]["wmClass"].is_null());
+    }
+
+    /// A unique fixture procfs tree under the system temp directory, removed on drop.
+    struct ProcFixture(std::path::PathBuf);
+
+    impl ProcFixture {
+        fn new(links: &[(u64, &str)]) -> Self {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let unique = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let root = std::env::temp_dir()
+                .join(format!("linux-bridge-proc-{}-{unique}", std::process::id()));
+            for (pid, target) in links {
+                let dir = root.join(pid.to_string());
+                std::fs::create_dir_all(&dir).unwrap();
+                std::os::unix::fs::symlink(target, dir.join("exe")).unwrap();
+            }
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    impl Drop for ProcFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn process_executable_is_the_exe_basename_or_unattributed() {
+        let fixture = ProcFixture::new(&[
+            (10, "/usr/bin/KeePassXC"),
+            (11, "/usr/libexec/gnome-terminal-server (deleted)"),
+            (12, "/usr/bin/xdg-dbus-proxy"),
+            (13, "relative/tool"),
+            (14, "/"),
+            (15, "/app/bin/fixture (deleted) (deleted)"),
+        ]);
+        let proc = fixture.0.as_path();
+        assert_eq!(process_executable(proc, 10).as_deref(), Some("KeePassXC"));
+        assert_eq!(
+            process_executable(proc, 11).as_deref(),
+            Some("gnome-terminal-server")
+        );
+        assert_eq!(
+            process_executable(proc, 15).as_deref(),
+            Some("fixture (deleted)")
+        );
+        for pid in [0, 12, 13, 14, 99] {
+            assert_eq!(process_executable(proc, pid), None, "pid {pid}");
+        }
     }
 }

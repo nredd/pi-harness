@@ -69,9 +69,9 @@ function assertNoSecret(result: Result, text: string, what: string): void {
 
 async function desktop(shape: Shape) {
 	const fake = await installFakeDesktop(onTestFinished, { platform: shape.platform });
-	if (shape.platform === "windows") {
-		// Windows admits a root only by its executable identity.
-		const root = desktopRoot({ appId: "notes.exe" });
+	if (shape.platform === "windows" || shape.platform === "linux") {
+		// Windows and Linux admit a root only by its executable identity.
+		const root = desktopRoot({ appId: shape.platform === "windows" ? "notes.exe" : "notes" });
 		fake.roots = [root];
 		fake.apps = [{ appName: root.appName, appId: root.appId, pid: root.pid, isFrontmost: true }];
 		fake.frontmost = { appName: root.appName, appId: root.appId, pid: root.pid, windowId: root.windowId };

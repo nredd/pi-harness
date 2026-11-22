@@ -12,7 +12,7 @@ afterEach(() => {
 /** `script(child, engine)` returns the handlers; every spawn yields a fresh fake child, collected in `children`. */
 async function clientFor(script) {
 	const children = [];
-	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 5, platform: "Linux" });
+	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 6, platform: "Linux" });
 	Object.assign(engine.handlers, script(children));
 	const spawn = createFakeSpawn({
 		"*": () => {

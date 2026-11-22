@@ -81,8 +81,8 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
 			pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
 			appName: toOptionalString(raw?.appName ?? raw?.processName),
-			// The helper currently copies the AT-SPI accessible Name into processName (#1180).
-			appId: toOptionalString(raw?.processName),
+			// The executable basename; the accessible app name is presentation only (#1180).
+			appId: toOptionalString(raw?.appId),
 			title: toOptionalString(raw?.title) ?? "",
 			role: toOptionalString(raw?.role),
 			subrole: toOptionalString(raw?.subrole),

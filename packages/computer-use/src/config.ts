@@ -277,8 +277,6 @@ export function effectiveBlockedBundleIds(): string[] {
 
 /** Compare only the host's policy identity, never the presentation name. */
 export function blockedAppId(platform: PlatformName, app: Pick<PlatformApp, "appId" | "bundleId">): string | undefined {
-	// #1180: Linux processName is an app-supplied accessible Name, not an executable identity.
-	if (platform === "linux") return undefined;
 	const id = app.appId ?? (platform === "macos" ? app.bundleId : undefined);
 	if (!id) return undefined;
 	const wanted = id.toLowerCase();
@@ -392,9 +390,9 @@ The activity glow appears in user screen recordings. Single-window `observe_ui` 
 
 ### `blocked_apps`
 
-Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename and X11 `WM_CLASS` once #1180 lands. Never use a display name, path, glob or regex. An unidentified root cannot match.
+Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename (the `/proc/<pid>/exe` of the process owning the root's accessibility bus connection). Never use a display name, path, glob or regex. An unidentified Windows or Linux root is refused rather than matched. Linux X11 `WM_CLASS` is reported in root metadata but is app-supplied and not matched.
 
-Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux presets cover common terminals, password managers, pinentry executables and polkit agents, but **Linux blocklist matching is disabled** until #1180 supplies a trusted identity. The helper's current `processName` is an app-controlled AT-SPI accessible name.
+Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux presets cover common terminals, password managers, pinentry executables and polkit agents; pinentry and polkit agents are always blocked. The AT-SPI accessible app name is app-controlled and only displayed, never matched. A Linux root whose executable cannot be read (another user's process, an unknown PID, or a Flatpak app behind the shared `xdg-dbus-proxy` connection) is unidentified and refused. Interpreter-hosted apps report the interpreter (e.g. `python3`), so they can only be blocked by that name.
 
 The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 

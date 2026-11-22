@@ -41,7 +41,7 @@ export interface PlatformRootQuery {
 }
 
 interface PlatformAppIdentity {
-	/** Host app identifier. Linux currently reports an untrusted AT-SPI name (#1180). */
+	/** Host app identifier: macOS bundle id, Windows or Linux executable basename. */
 	appId?: string;
 	/** macOS alias for the bundle identifier. */
 	bundleId?: string;

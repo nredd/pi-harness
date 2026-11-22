@@ -195,6 +195,8 @@ mod tests {
             pid: n as u64,
             name: format!("root {n}"),
             app_name: format!("app {n}"),
+            executable: None,
+            wm_class: None,
             role: "frame".into(),
             frame: None,
             x11_window: None,
