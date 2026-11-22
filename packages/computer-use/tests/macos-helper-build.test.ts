@@ -14,6 +14,8 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 assert.ok(platformDescriptor);
 const current = macosHelperBuild(fileURLToPath(new URL("../", import.meta.url)));
 const older = `0.0.0+${"0".repeat(64)}`;
+const staleMessage = (executable: string, build = "unknown") =>
+	`pi-computer-use helper at ${executable} is stale (helper build ${build}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`;
 
 afterEach(() => {
 	Object.defineProperty(process, "platform", platformDescriptor);
@@ -80,7 +82,7 @@ test.each([older, undefined])(
 		await client.ensureInstalled();
 		const error = {
 			code: "stale_helper",
-			message: `pi-computer-use helper at ${executable} is stale (helper build ${build ?? "unknown"}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`,
+			message: staleMessage(executable, build),
 		};
 		await assert.rejects(client.ensureProtocol(), error);
 		await assert.rejects(client.command("listApps"), error);
@@ -88,6 +90,17 @@ test.each([older, undefined])(
 		assert.equal(spawn.mock.calls.length, 0);
 	},
 );
+
+test("reports the resident helper's executable rather than the configured app on refusal", async () => {
+	const { client, fake, executable, commands } = await rig(older);
+	const reportedPath = path.join(path.dirname(executable), "old-bridge");
+	Object.assign(fake.diagnostics, { executablePath: reportedPath });
+	await assert.rejects(client.ensureProtocol(), {
+		code: "stale_helper",
+		message: staleMessage(reportedPath, older),
+	});
+	assert.deepEqual(commands(), ["diagnostics"]);
+});
 
 test("a relative, symlinked socket override still refuses a stale managed daemon", async () => {
 	const { client, commands, spawn } = await rig(older, { alias: true });
