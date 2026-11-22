@@ -674,6 +674,8 @@ describe("routing on the composed chain", () => {
 		clock.now = T0 + 59_000;
 		expect(await router.confirm(asModel(CARBON), env, undefined, T0, message)).toBe(true);
 		expect(tracker.active()).toMatchObject([{ until: T0 + 60_000, expiry: "hinted" }]);
+		// A deadline expiry without a deadline never falls back to a backoff either.
+		expect(tracker.record(NEON, { block: true, evidence: "inferred", expiry: "window-reset" })).toBeUndefined();
 	});
 
 	it("never confirms a cancelled failure", async () => {
