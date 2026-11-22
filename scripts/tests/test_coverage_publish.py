@@ -85,7 +85,8 @@ def test_sticky_comment_and_retry(tmp_path: Path, repository: str) -> None:
         ("issues/comments/17", "PATCH"),
     ]
     body = api.comments[-1]["body"]
-    assert "Ubuntu enforced signals: 34/34 zero uncovered (measured counters only)" in body
+    # The archived fixture predates the sweep guard's additional coverage signal.
+    assert "Ubuntu enforced signals: 34/35 zero uncovered (measured counters only); incomplete" in body
     assert (
         "Coverage numbers come from this PR's own CI run (PR-controlled code) and are not independently "
         "verified. Required checks, not this comment, are the merge gate."

@@ -32,6 +32,7 @@ from coverage_publish_fixtures import (
 )
 
 import coverage_publish as pub
+from coverage_accounting import Policy
 from coverage_provenance_record import SEMANTICS_FIELD, Provenance, producer_job
 
 REPOSITORY = {"id": 92, "full_name": REPO, "fork": False}
@@ -434,7 +435,16 @@ def test_invalid_host_does_not_fail_or_reuse_older_ubuntu(
     assert "Ubuntu measured main baseline: unavailable." in body
     if failure != "no-zip":
         assert "macOS measured main baseline (producer-reported" in body
-    assert "Ubuntu enforced signals: 34/34 zero uncovered" in body
+    policy = Policy.model_validate_json(POLICY.read_text())
+    enforced = {
+        f"{name}/{label}"
+        for name, package in policy.packages.items()
+        for label, sig in package.signals.items()
+        if "linux" in sig.platforms and sig.enforcement == "enforced"
+    }
+    # Only signals present in the archived zero-uncovered fixture can count toward the numerator.
+    measured = enforced.intersection(json.loads(FIXTURE.read_text())["packages"])
+    assert f"Ubuntu enforced signals: {len(measured)}/{len(enforced)} zero uncovered" in body
     assert summary.read_text() == body + "\n"
     assert len(api.reads) == 3
 

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -56,6 +56,40 @@ describe("stats CLI", () => {
 
 		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output];
 		await main();
+		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
+	});
+
+	it("reports a suspected stale lock on repeated exports while a fresh import works", async () => {
+		seed(source);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+		const lock = join(exported.snapshotDir, ".export.lock");
+		const path = join(exported.snapshotDir, "manifest.json");
+		const before = readFileSync(path);
+		const now = at("2026-11-02");
+		const old = new Date(now - 7_200_000);
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		mkdirSync(lock);
+		utimesSync(lock, old, old);
+		const diagnostic =
+			`Suspected stale export lock ${JSON.stringify(lock)} (age 7200s); ` +
+			"verify no export is running before removing the lock directory, then retry";
+		for (let attempt = 1; attempt <= 2; attempt++) {
+			process.exitCode = 0;
+			await run();
+			expect(process.exitCode).toBe(1);
+			expect(error).toHaveBeenNthCalledWith(attempt, diagnostic);
+			expect(readdirSync(exported.snapshotDir)).toContain(".export.lock");
+			expect(readFileSync(path)).toEqual(before);
+		}
+		expect(log).toHaveBeenCalledOnce();
+		process.exitCode = 0;
+		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", viewer, "--input", output];
+		await run();
+		expect(process.exitCode).toBe(0);
 		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
 	});
 
