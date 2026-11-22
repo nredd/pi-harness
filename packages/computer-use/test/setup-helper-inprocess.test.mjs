@@ -896,9 +896,7 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		const padded = await pendingReplacement();
 		padded.deps.execFile = (
 			(inner) => async (command, args, options) =>
-				command === "plutil"
-					? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" }
-					: inner(command, args, options)
+				command === "plutil" ? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" } : inner(command, args, options)
 		)(padded.deps.execFile);
 		rec = await runMain(padded, ["--runtime"]);
 		assert.deepEqual(rec.exit, [1]);
@@ -1196,26 +1194,22 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			const plist = path.join(host.dirs.app, "Contents", "Info.plist");
 			let lookups = 0;
 			// A second Developer ID lookup would run after the recheck: swap the plist there.
-			host.deps.execFile = (
-				(inner) => async (command, args, options) => {
-					if (command === "security" && args.includes("-v")) {
-						lookups += 1;
-						if (lookups === 2) writeFileSync(plist, infoPlist("com.example.other"));
-					}
-					return inner(command, args, options);
+			host.deps.execFile = ((inner) => async (command, args, options) => {
+				if (command === "security" && args.includes("-v")) {
+					lookups += 1;
+					if (lookups === 2) writeFileSync(plist, infoPlist("com.example.other"));
 				}
-			)(host.deps.execFile);
+				return inner(command, args, options);
+			})(host.deps.execFile);
 			const signedPlists = [];
 			const lookupsAtSign = [];
-			host.deps.spawn = (
-				(inner) => (command, args) => {
-					if (command === "codesign" && args[0] === "--force") {
-						signedPlists.push(readFileSync(plist, "utf8"));
-						lookupsAtSign.push(lookups);
-					}
-					return inner(command, args);
+			host.deps.spawn = ((inner) => (command, args) => {
+				if (command === "codesign" && args[0] === "--force") {
+					signedPlists.push(readFileSync(plist, "utf8"));
+					lookupsAtSign.push(lookups);
 				}
-			)(host.deps.spawn);
+				return inner(command, args);
+			})(host.deps.spawn);
 			const rec = await runMain(host, ["--runtime"]);
 			assert.deepEqual(rec.exit, [], rec.error.join("\n"));
 			assert.deepEqual(lookupsAtSign, [1], "the identity resolver ran once before codesign");
