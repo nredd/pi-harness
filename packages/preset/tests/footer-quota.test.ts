@@ -1857,3 +1857,67 @@ test("getState reuses its state until effective freshness changes", () => {
 	assert.equal(poller.getState(), expired);
 	poller.dispose();
 });
+
+test("overflowPointer always fits the width it is given", () => {
+	for (let width = 0; width <= 40; width++) {
+		for (const [more, blocked] of [
+			[3, 0],
+			[3, 2],
+			[120, 120],
+		] as const) {
+			const text = footer.overflowPointer(more, blocked, width);
+			assert.ok(text.length <= width, `${width}: ${text}`);
+			if (blocked && width > 0) assert.match(text, /!|blocked/);
+		}
+	}
+	assert.equal(footer.overflowPointer(120, 120, 4), "!");
+	assert.equal(footer.overflowPointer(120, 120, 5), "+120!");
+});
+
+test("every cell kind together: rows fit, blocks keep evidence and every blocked provider is accounted for", () => {
+	const generic = (id: string, extra: Record<string, unknown>) =>
+		view(id, { display: { full: `${id}-full`, compact: id }, ...extra });
+	const views = [
+		view("anthropic", {
+			display: LEGACY_ANTHROPIC,
+			snapshot: snap("anthropic", [resetWin("five_hour", 30, CLOCK + hour), resetWin("seven_day", 60, CLOCK + hour)], {
+				expiresAt: CLOCK + hour,
+			}),
+			marks: [mark(CLOCK + hour, "observed", ["claude-opus"])],
+		}),
+		view("openai-codex", {
+			display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }], placeholder: true } },
+			snapshot: snap("openai-codex", [span("x", 40, hour, "assumed", CLOCK + hour)], { expiresAt: CLOCK + hour }),
+		}),
+		generic("pct", {
+			display: { full: "pct", compact: "pct", footer: { show: [{ durationMs: WEEK }], placeholder: true } },
+			snapshot: snap("pct", [span("est", 10, hour, "inferred", CLOCK + hour)], { expiresAt: CLOCK + hour }),
+			marks: [mark(CLOCK + hour, "inferred")],
+		}),
+		generic("met", {
+			snapshot: snap("met", [], { expiresAt: CLOCK - 1 }),
+			meters: [meter("calls", 7, { spanSource: "inferred", durationMs: hour })],
+		}),
+		generic("pool", { snapshot: fresh("pool"), pools: [{ name: "wallet", unit: "usd", balance: 3 }] }),
+		generic("err", { snapshot: snap("err", [], { status: "error" }), marks: [mark(CLOCK + hour, "guessed")] }),
+		generic("una", { snapshot: snap("una", [], { status: "unavailable" }) }),
+	];
+	const state = projected(views);
+	const blockedIds = ["Anth", "pct", "err"];
+	for (let width = 0; width <= 160; width++) {
+		const rows = footer.fitQuotaRows(state, width, plain, fixed);
+		for (const row of rows) {
+			// Unmarked legacy rows keep pinned bytes and the caller clips them; every other row fits.
+			const legacy = /^(Left: )?OAI /.test(row);
+			if (!legacy) assert.ok(row.length <= width, `width ${width}: ${row}`);
+			if (row.includes("blocked")) assert.match(row, /blocked(->\S+)? (obs|inf|unk)\b/, `width ${width}`);
+			// Only the legacy Codex row may name an unknown span `quota?`; nothing lends `7d` to an estimate.
+			assert.doesNotMatch(row, legacy ? /7d~/ : /7d~|quota\?/, `width ${width}: ${row}`);
+		}
+		const pointer = rows.at(-1) ?? "";
+		const hidden = Number(/\((\d+) blocked\)|^\+(\d+)!$/.exec(pointer)?.slice(1).find(Boolean) ?? 0);
+		const shown = rows.filter((row) => row.includes("blocked") && !row.startsWith("+")).length;
+		if (width >= 60) assert.equal(shown + hidden, blockedIds.length, `width ${width}: ${JSON.stringify(rows)}`);
+	}
+	assert.match(footer.formatQuotaRow(state, "compact", plain, fixed), /OAI quota\? 60%/);
+});
