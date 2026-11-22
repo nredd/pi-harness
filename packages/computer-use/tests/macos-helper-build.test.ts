@@ -198,6 +198,67 @@ test("keeps the external socket override and shows its reported build in macOS s
 	assert.match(notify.mock.calls[0][0], new RegExp(`^helper build: ${older.replace("+", "\\+")}$`, "m"));
 });
 
+test("all registered macOS tools propagate the exact stale refusal without sending an effect", async () => {
+	Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
+	const { commands, executable, spawn } = await rig(older);
+	const { default: extension } = await import("../src/index.ts");
+	const { reconstructStateFromBranch } = await import("../src/bridge.ts");
+	const pi = createRecordingPi();
+	extension(pi.pi);
+	const stateId = "saved-fixture";
+	const ctx = {
+		cwd: makeTestTempDir("cu-stale-tools-", onTestFinished),
+		sessionManager: {
+			getBranch: () => [
+				{
+					type: "message",
+					message: {
+						role: "toolResult",
+						toolName: "observe_ui",
+						details: {
+							target: { app: "Fixture", pid: 42, windowId: 11 },
+							capture: { stateId, width: 100, height: 100, timestamp: 0 },
+							outline: { lookId: "fixture", root: { ref: "@e1", children: [] }, nodes: [] },
+						},
+					},
+				},
+			],
+		},
+	} as unknown as Parameters<typeof reconstructStateFromBranch>[0];
+	reconstructStateFromBranch(ctx);
+	const fixtures = {
+		find_roots: {},
+		observe_ui: { mode: "semantic" },
+		search_ui: { stateId, text: "button" },
+		expand_ui: { stateId, ref: "@e1" },
+		inspect_ui: { stateId, ref: "@e1" },
+		act_ui: { stateId, actions: [{ action: "press", ref: "@e1" }] },
+		read_text: { stateId, ref: "@e1" },
+		wait_for: { stateId, text: "button" },
+		launch_browser: {},
+		navigate_browser: { stateId, url: "https://example.invalid" },
+		evaluate_browser: { stateId, expression: "1" },
+		desktop_screenshot: {},
+		desktop_input: { action: "writeClipboard", text: "fixture" },
+	};
+	assert.deepEqual([...pi.tools.keys()].sort(), Object.keys(fixtures).sort());
+	for (const [name, params] of Object.entries(fixtures)) {
+		const tool = pi.tools.get(name);
+		assert.ok(tool?.execute, name);
+		const before = commands().length;
+		await assert.rejects(
+			Reflect.apply(tool.execute, tool, [name, params, undefined, undefined, ctx]),
+			{
+				code: "stale_helper",
+				message: staleMessage(executable, older),
+			},
+			name,
+		);
+		assert.deepEqual(commands().slice(before), ["diagnostics"], name);
+	}
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
 test("macOS status shows unchecked, then stale with the expected build, then the matching build", async () => {
 	Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
 	const { client, fake } = await rig(older);
