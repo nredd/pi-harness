@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseColor } from "@earendil-works/pi-tui";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { realClock } from "../../src/clock.ts";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/stats/index.ts";
 import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
@@ -59,7 +60,7 @@ function seed(): void {
 	});
 }
 
-function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir: join(dir, "home") }) {
+function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir: join(dir, "home") }, width = 100) {
 	let handler: Any;
 	const sendMessage = vi.fn();
 	register(
@@ -81,7 +82,7 @@ function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir
 			{},
 			() => {},
 		);
-		rendered.push(view.render(100));
+		rendered.push(view.render(width));
 	});
 	const ctx = {
 		mode,
@@ -92,7 +93,154 @@ function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir
 	return { run: (args: string) => handler(args, ctx), ctx, custom, sendMessage, rendered };
 }
 
+function seedRouterView(first: string, ...rest: string[]) {
+	const fixture = JSON.parse(
+		readFileSync(new URL("../../../subscription-router/tests/fixtures/views.json", import.meta.url), "utf8"),
+	) as { views: { name: string; now: number; usage: { views: unknown[] } }[] };
+	const readCase = (name: string) => {
+		const entry = fixture.views.find((view) => view.name === name);
+		if (!entry) throw new Error(`Missing router view fixture: ${name}`);
+		return entry;
+	};
+	const entry = readCase(first);
+	const root = join(dir, "router-state", "v1");
+	mkdirSync(root, { recursive: true });
+	writeFileSync(join(root, "view.json"), JSON.stringify([entry, ...rest.map(readCase)].flatMap((c) => c.usage.views)));
+	return { agentDir: dir, clock: { ...realClock, now: () => entry.now } };
+}
+
 describe("/stats command", () => {
+	it.each([
+		["legacy-assumed", "OpenAI 5h (assumed span)", "10%"],
+		["inferred-span", "faux-subscription short-quota (inferred span)", "100%"],
+	])("shows %s span provenance separately from the utilization basis", async (fixture, label, percent) => {
+		const opts = seedRouterView(fixture);
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		expect(rendered[0]?.join("\n")).toContain(label);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		expect(String(out.mock.calls[0]?.[0])).toContain(`${label}: ${percent} used · reported`);
+	});
+
+	it("shows router gauges, observed counts and inferred blocks without any session history", async () => {
+		const opts = seedRouterView("inferred-span", "metered");
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		expect(rendered).toHaveLength(1);
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/short-quota \(inferred span\) +██████████ +100% +reported/);
+		expect(overlay).toMatch(/rpd +37\/250 requests +observed · resets 00:00 PT/);
+		expect(overlay).toMatch(/blocked until 2026-01-16 08:00 UTC +inferred/);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toContain("short-quota (inferred span): 100% used · reported");
+		expect(printed).toContain("Google spend-10m: $1.24 · observed");
+		expect(printed).toContain("Google/faux-fast rpd: 37/250 requests · observed · resets 00:00 PT");
+		expect(printed).toContain("blocked until 2026-01-16 08:00 UTC · inferred");
+	});
+
+	it.each([
+		[
+			"legacy-stale-short-only",
+			/Anthropic seven_day \(stale\) +██░░░░░░░░ +20%/,
+			"Anthropic seven_day (stale): 20% used",
+		],
+		["legacy-error-unavailable", /Anthropic +quota read error/, "Anthropic: quota read error"],
+	])("shows %s status as text in the overlay and print", async (fixture, tui, print) => {
+		const opts = seedRouterView(fixture);
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		expect(rendered[0]?.join("\n")).toMatch(tui);
+		expect(String(out.mock.calls[0]?.[0])).toContain(print);
+	});
+
+	it("labels inferred and assumed meter spans apart from the reported quantity in the overlay and print", async () => {
+		const opts = seedRouterView("metered");
+		const file = join(dir, "router-state", "v1", "view.json");
+		const views = JSON.parse(readFileSync(file, "utf8")) as { meters: { spanSource?: string; basis?: string }[] }[];
+		const [rpd, spend] = views[0]?.meters ?? [];
+		Object.assign(rpd ?? {}, { spanSource: "inferred", basis: "reported" });
+		Object.assign(spend ?? {}, { spanSource: "assumed", basis: "reported" });
+		writeFileSync(file, JSON.stringify(views));
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/Google\/faux-fast rpd \(inferred span\) +37\/250 requests +reported/);
+		expect(overlay).toMatch(/Google spend-10m \(assumed span\) +\$1\.24 +reported/);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toContain("Google/faux-fast rpd (inferred span): 37/250 requests · reported");
+		expect(printed).toContain("Google spend-10m (assumed span): $1.24 · reported");
+	});
+
+	it("labels every row of a meters-only snapshot past its expiry as stale in the overlay and print", async () => {
+		const opts = seedRouterView("metered");
+		const expired = { ...opts, clock: { ...realClock, now: () => 1768478700000 } };
+		const { run, rendered } = setup("tui", expired);
+		await run("");
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/Google +quota read stale/);
+		expect(overlay).toMatch(/Google\/faux-fast rpd \(stale\) +37\/250 requests/);
+		expect(overlay).toMatch(/Google prepaid-credits \(stale\) +12 credits balance/);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", expired).run("");
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toContain("  Google: quota read stale\n");
+		expect(printed).toContain("Google spend-10m (stale): $1.24 · observed");
+		expect(printed).toContain("Google/faux-fast rpd (stale): 37/250 requests · observed");
+		expect(printed).toContain("Google prepaid-credits (stale): 12 credits balance\n");
+	});
+
+	it("shows prepaid pool balances as display-only text", async () => {
+		const opts = seedRouterView("metered");
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		expect(rendered[0]?.join("\n")).toMatch(/Google prepaid-credits +12 credits balance/);
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toMatch(/^\/stats: no usage recorded yet/);
+		expect(printed).toContain("Google prepaid-credits: 12 credits balance\n");
+	});
+
+	it("keeps every quota head visible in a narrow overlay with mixed label lengths", async () => {
+		const root = join(dir, "router-state", "v1");
+		mkdirSync(root, { recursive: true });
+		const now = 1768478400000;
+		writeFileSync(
+			join(root, "view.json"),
+			JSON.stringify([
+				{
+					provider: "vendor",
+					snapshot: {
+						status: "available",
+						windows: [
+							{ name: "weekly", families: ["family".repeat(14)], usedPercent: 40 },
+							{ name: "expired", usedPercent: 91, resetAt: now },
+						],
+					},
+					pools: [{ name: "prepaid", unit: "credits", balance: 12 }],
+					meters: [{ name: "day", quantity: { unit: "requests", used: 37, limit: 250 } }],
+					marks: [{ window: "blocked", until: 1768550400000, evidence: "inferred" }],
+				},
+			]),
+		);
+		const { run, rendered } = setup("tui", { agentDir: dir, clock: { ...realClock, now: () => now } }, 55);
+		await run("");
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/████░░░░░░ +40%/);
+		expect(overlay).toContain("37/250 requests");
+		expect(overlay).toContain("blocked until 2026-01-16 08:00 UTC");
+		expect(overlay).toContain("12 credits balance");
+		expect(overlay).toContain("reset 0s ago, no newer reading");
+		expect(overlay).not.toContain("91%");
+	});
+
 	it("opens a full-screen overlay, shows loading status, clears it, and writes the cache", async () => {
 		seed();
 		const { run, ctx, custom, rendered } = setup("tui");

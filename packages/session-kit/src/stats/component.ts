@@ -59,7 +59,17 @@ import {
 	valuationText,
 	valueCells,
 } from "./pricing.ts";
-import { claudeHasNoReading, gauge, NO_LOCAL_READING, quotaRows, usedLabel } from "./quota.ts";
+import {
+	claudeHasNoReading,
+	clipLabel,
+	gauge,
+	NO_LOCAL_READING,
+	QUOTA_LABEL_MAX,
+	type QuotaRow,
+	quotaDetails,
+	quotaRows,
+	usedLabel,
+} from "./quota.ts";
 import { timeAxis } from "./ticks.ts";
 
 type ThemeLike = Pick<Theme, "fg" | "bg" | "bold" | "style" | "colors">;
@@ -69,6 +79,8 @@ const TABS: readonly Tab[] = ["Overview", "Models", "Machines"];
 const SERIES = 3;
 /** The provider Claude Code's quota would belong to. */
 const ANTHROPIC = "anthropic (Claude Code)";
+/** Columns a quota head needs: a gauge, a space and `100%`, which `no local reading` also fits. */
+const QUOTA_HEAD_WIDTH = 16;
 /** The harness filter: every harness, or one. */
 type HarnessFilter = "all" | Harness;
 /** Narrowest plot `plot` can draw; only panes too narrow for a 6-week heatmap hit it. */
@@ -110,6 +122,8 @@ export interface StatsViewOptions {
 	valueCall?: ValueCall;
 	/** Merged subscription quota readings, shown at the end of Overview. */
 	quota?: readonly QuotaObservation[];
+	/** Local router view rows, never included in exported snapshots. */
+	routerQuota?: readonly QuotaRow[];
 	tab?: Tab;
 }
 
@@ -454,7 +468,7 @@ export class StatsView implements Component {
 	 */
 	private quotaBlock(inner: number): string[] {
 		const readings = this.o.quota ?? [];
-		const rows = quotaRows(readings, this.now);
+		const rows = [...quotaRows(readings, this.now), ...(this.o.routerQuota ?? [])];
 		const noClaude = claudeHasNoReading(
 			readings,
 			this.counted.some((c) => c.harness === "claude"),
@@ -462,24 +476,44 @@ export class StatsView implements Component {
 		if (rows.length === 0 && !noClaude) return [];
 		const t = this.o.theme;
 		const out = ["", t.bold("Quota") + this.paint("muted", "  latest reading per window · local files, never fetched")];
-		const labelWidth = Math.max(...rows.map((r) => visibleWidth(sanitize(r.label))), noClaude ? ANTHROPIC.length : 0);
-		const pad = (label: string) => `  ${padTo(sanitize(label), labelWidth)}  `;
-		for (const row of rows) {
+		const labels = rows.map((r) => clipLabel(r.label, QUOTA_LABEL_MAX));
+		const longest = labels.reduce((max, l) => Math.max(max, visibleWidth(l)), noClaude ? ANTHROPIC.length : 0);
+		// Cap padding before allocating it: one long label must not push every short row's head off screen.
+		const labelWidth = Math.min(longest, Math.max(0, inner - 4 - QUOTA_HEAD_WIDTH));
+		const pad = (label: string) => `  ${padTo(label, labelWidth)}  `;
+		// No argument spread: a narrow pane can wrap one label into very many lines.
+		const wrapped = (line: string) => {
+			for (const part of wrapTextWithAnsi(line, inner)) out.push(part);
+		};
+		for (const [i, row] of rows.entries()) {
 			const tone: ThemeColor = row.old || row.expired ? "dim" : "muted";
-			const detail = this.paint(tone, `${row.reset} · ${row.observed}`);
-			const head = row.expired
-				? ""
-				: `${this.paint(row.old ? "dim" : "accent", gauge(row.usedPercent))} ${this.paint(tone, usedLabel(row.usedPercent).padStart(5))}`;
-			const label = this.paint(row.old || row.expired ? "dim" : "text", pad(row.label));
-			const joined = `${label}${head}${head ? "  " : ""}${detail}`;
+			const detail = this.paint(tone, quotaDetails(row).join(" · "));
+			const head =
+				row.head.kind === "gauge"
+					? `${this.paint(row.old ? "dim" : "accent", gauge(row.head.percent))} ${this.paint(tone, usedLabel(row.head.percent).padStart(5))}`
+					: row.head.text && this.paint(tone, row.head.text);
+			const labelTone = row.old || row.expired ? "dim" : "text";
+			const label = this.paint(labelTone, pad(nth(labels, i)));
+			const left = `${label}${head}`;
+			const joined = `${left}${head ? "  " : ""}${detail}`;
 			if (visibleWidth(joined) <= inner) out.push(joined);
-			else
-				out.push(
-					truncateToWidth(`${label}${head}`.trimEnd(), inner, "…"),
-					truncateToWidth(`    ${detail}`, inner, "…"),
-				);
+			else {
+				// Do not spend the head’s width on padding to an unrelated quota label.
+				if (visibleWidth(left) > inner) {
+					wrapped(this.paint(labelTone, `  ${nth(labels, i)}`));
+					if (head) wrapped(`    ${head}`);
+				} else out.push(left.trimEnd());
+				if (detail) out.push(truncateToWidth(`    ${detail}`, inner, "…"));
+			}
 		}
-		if (noClaude) out.push(this.paint("muted", `${pad(ANTHROPIC)}${NO_LOCAL_READING}`));
+		if (noClaude) {
+			const claude = `${pad(ANTHROPIC)}${NO_LOCAL_READING}`;
+			if (visibleWidth(claude) <= inner) out.push(this.paint("muted", claude));
+			else {
+				wrapped(this.paint("muted", `  ${ANTHROPIC}`));
+				wrapped(this.paint("muted", `    ${NO_LOCAL_READING}`));
+			}
+		}
 		return out;
 	}
 
@@ -815,8 +849,13 @@ function spread(left: string, right: string, width: number): string | undefined 
 }
 
 /** `quota:` section for print output: one line per window, then Claude's missing reading; empty when neither. */
-function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], now: number): string[] {
-	const rows = quotaRows(quota, now);
+function quotaLines(
+	calls: readonly Call[],
+	quota: readonly QuotaObservation[],
+	now: number,
+	routerQuota: readonly QuotaRow[],
+): string[] {
+	const rows = [...quotaRows(quota, now), ...routerQuota];
 	const noClaude = claudeHasNoReading(
 		quota,
 		calls.some((c) => c.harness === "claude"),
@@ -824,10 +863,11 @@ function quotaLines(calls: readonly Call[], quota: readonly QuotaObservation[], 
 	if (rows.length === 0 && !noClaude) return [];
 	return [
 		"quota:",
-		...rows.map(
-			(r) =>
-				`  ${sanitize(r.label)}: ${r.expired ? "" : `${usedLabel(r.usedPercent)} used, `}${r.reset}, ${r.observed}`,
-		),
+		...rows.map((r) => {
+			const head = r.head.kind === "gauge" ? `${usedLabel(r.head.percent)} used` : r.head.text;
+			const detail = [...(head ? [head] : []), ...quotaDetails(r)];
+			return `  ${clipLabel(r.label, QUOTA_LABEL_MAX)}: ${detail.join(r.observed === undefined ? " · " : ", ")}`;
+		}),
 		...(noClaude ? [`  ${ANTHROPIC}: ${NO_LOCAL_READING}`] : []),
 	];
 }
@@ -847,9 +887,10 @@ export function summary(
 	quota: readonly QuotaObservation[] = [],
 	now = Date.now(),
 	valueCall?: ValueCall,
+	routerQuota: readonly QuotaRow[] = [],
 ): string {
 	const totals = modelTotals(calls);
-	const quotas = quotaLines(calls, quota, now);
+	const quotas = quotaLines(calls, quota, now, routerQuota);
 	if (totals.length === 0) return ["/stats: no usage recorded yet", ...quotas].join("\n");
 	const grand = totals.reduce((n, m) => n + tokensOf(m), 0);
 	const harnesses = harnessesOf(calls);
