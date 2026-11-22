@@ -418,11 +418,15 @@ describe("diagnostics", () => {
 		assert.equal(client.diagnostics, diagnostics);
 	});
 
-	test("tolerates an empty result with zero and false defaults", async () => {
-		const fake = await fakeOn({ handlers: { diagnostics: { kind: "reply", body: { ok: true } } } });
+	test("tolerates a sparse result with zero and false defaults, but an external helper needs its protocol", async () => {
+		const fake = await fakeOn({
+			handlers: { diagnostics: [{ kind: "reply", body: { ok: true } }, ok({ protocolVersion: 7 })] },
+		});
 		const { MacosHelperClient } = await load({ external: true, fake });
-		const diagnostics = await new MacosHelperClient().diagnosticsCommand();
-		assert.equal(diagnostics.protocolVersion, 0);
+		const client = new MacosHelperClient();
+		await assert.rejects(client.diagnosticsCommand(), { code: "helper_protocol", message: /reports protocol 0;/ });
+		const diagnostics = await client.diagnosticsCommand();
+		assert.equal(diagnostics.architectureVersion, 0);
 		assert.deepEqual(diagnostics.invariants, []);
 		assert.equal(diagnostics.parentPid, undefined);
 		assert.equal(diagnostics.accessibility, false);
@@ -439,7 +443,7 @@ test.each([7, 6])("external daemon from another executable with protocol %s is n
 	await assert.rejects(client.restart(), /restarted by its operator/);
 	assert.deepEqual(
 		fake.requests.map(({ cmd }) => cmd),
-		["diagnostics", "diagnostics"],
+		protocol === 7 ? ["diagnostics", "diagnostics"] : ["diagnostics"],
 	);
 	assert.deepEqual(spawn.calls, []);
 });
@@ -739,9 +743,10 @@ describe("activity glow connection", () => {
 			glow.map((request) => request.args.active),
 			[true, false, true],
 		);
+		// `activity_1` is the connection's own diagnostics check.
 		assert.deepEqual(
 			glow.map((request) => request.id),
-			["activity_1", "activity_2", "activity_3"],
+			["activity_2", "activity_3", "activity_4"],
 		);
 		// one probe connection from ensureDaemon, one persistent glow connection
 		assert.equal(fake.connections, 2);

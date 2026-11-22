@@ -215,6 +215,31 @@ test("a distinct override stays external while the default socket also exists", 
 	assert.deepEqual(await client.command("listApps"), []);
 });
 
+test("an incompatible replacement of an external helper receives no effect", async () => {
+	const { client, fake, commands, spawn } = await rig(older, { external: true });
+	await client.ensureProtocol();
+	assert.deepEqual(await client.command("listApps"), []);
+	fake.diagnostics.protocolVersion = 6;
+	await assert.rejects(client.command("listApps"), {
+		code: "helper_protocol",
+		message: `External helper at ${fake.socketPath} reports protocol 6; expected 7. Its operator must update and restart it.`,
+	});
+	assert.deepEqual(commands().slice(-1), ["diagnostics"]);
+	assert.equal(commands().filter((cmd: string) => cmd === "listApps").length, 1);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test("the activity glow checks an external helper's protocol before its first frame", async () => {
+	const { client, glow, fake, commands } = await rig(older, { external: true });
+	await client.ensureProtocol();
+	fake.diagnostics.protocolVersion = 6;
+	await assert.rejects(glow.setActive(true), { code: "helper_protocol" });
+	assert.ok(!commands().includes("setActivityGlow"));
+	fake.diagnostics.protocolVersion = 7;
+	await glow.setActive(true);
+	assert.deepEqual(commands().slice(-2), ["diagnostics", "setActivityGlow"]);
+});
+
 test("refuses a stale resident daemon before setup when the executable is missing", async () => {
 	const { client, spawn, commands } = await rig(older, { installed: false });
 	await assert.rejects(client.ensureInstalled(), { code: "stale_helper" });
@@ -409,7 +434,7 @@ test("keeps the external socket override and shows its reported build in macOS s
 	await client.ensureInstalled();
 	await client.ensureProtocol();
 	assert.deepEqual(await client.command("listApps"), []);
-	assert.deepEqual(commands(), ["diagnostics", "diagnostics", "listApps"]);
+	assert.deepEqual(commands(), ["diagnostics", "diagnostics", "diagnostics", "listApps"]);
 	assert.equal(spawn.mock.calls.length, 0);
 	Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
 	const { default: extension } = await import("../src/index.ts");

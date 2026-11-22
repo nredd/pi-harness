@@ -276,13 +276,25 @@ export class MacosHelperClient {
 	helperBuild?: string;
 	staleBuildMessage?: string;
 
+	/**
+	 * Check one connection's diagnostics before anything else is sent on it. A managed helper must report
+	 * exactly this package's build; an external one only the expected protocol (its build, path and age are
+	 * its operator's business).
+	 */
 	verifyBuild(
-		result: { buildIdentity?: unknown; executablePath?: unknown } | undefined,
+		result: { buildIdentity?: unknown; executablePath?: unknown; protocolVersion?: unknown } | undefined,
 		managed = connectionIsManaged(),
 	): void {
 		this.staleBuildMessage = undefined;
 		this.helperBuild = toOptionalString(result?.buildIdentity) ?? "unknown";
-		if (!managed) return;
+		if (!managed) {
+			const protocol = Math.trunc(toFiniteNumber(result?.protocolVersion, 0));
+			if (protocol === HELPER_PROTOCOL_VERSION) return;
+			throw new HelperCommandError(
+				`External helper at ${HELPER_SOCKET_PATH} reports protocol ${protocol}; expected ${HELPER_PROTOCOL_VERSION}. Its operator must update and restart it.`,
+				"helper_protocol",
+			);
+		}
 		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
 		if (this.helperBuild !== expectedBuild) {
 			this.staleBuildMessage = `pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper${macosSigningRefusal(HELPER_APP_PATH, expectedBuild)}`;
@@ -358,7 +370,8 @@ export class MacosHelperClient {
 			const probeId = `build_${id}`;
 			const socket = net.createConnection(HELPER_SOCKET_PATH);
 			let buffer = "";
-			let checkingBuild = false;
+			// Every effect connection is checked first: a replacement daemon gets no command before its own check.
+			let checkingBuild = cmd !== "diagnostics";
 			let managed = true;
 			let settled = false;
 			let connected = false;
@@ -393,7 +406,6 @@ export class MacosHelperClient {
 			const onConnect = () => {
 				connected = true;
 				managed = connectionIsManaged();
-				checkingBuild = managed && cmd !== "diagnostics";
 				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
 				else sendCommand();
 			};
@@ -572,15 +584,9 @@ export class MacosHelperClient {
 	}
 
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
+		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection.
 		let diagnostics = await this.diagnosticsCommand(signal);
-		if (usingExternalHelperSocket) {
-			if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION) {
-				throw new HelperTransportError(
-					`External helper at ${HELPER_SOCKET_PATH} reports protocol ${diagnostics.protocolVersion}; expected ${HELPER_PROTOCOL_VERSION}. Its operator must update and restart it.`,
-				);
-			}
-			return diagnostics;
-		}
+		if (usingExternalHelperSocket) return diagnostics;
 		const executableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
 		if (
 			diagnostics.protocolVersion === HELPER_PROTOCOL_VERSION &&
@@ -656,7 +662,7 @@ class MacosActivityGlowConnection {
 						if (this.socket === socket) this.socket = undefined;
 					});
 					const verify = async () => {
-						if (connectionIsManaged()) macosHelper.verifyBuild(await this.send(socket, "diagnostics"), true);
+						macosHelper.verifyBuild(await this.send(socket, "diagnostics"));
 						this.socket = socket;
 						resolve(socket);
 					};
@@ -675,7 +681,7 @@ class MacosActivityGlowConnection {
 		}
 	}
 
-	private async send(socket: net.Socket, cmd: string, args = {}): Promise<{ buildIdentity?: unknown }> {
+	private async send(socket: net.Socket, cmd: string, args = {}): Promise<Record<string, unknown> | undefined> {
 		return await new Promise((resolve, reject) => {
 			const id = `activity_${++this.requestSequence}`;
 			let buffer = "";
