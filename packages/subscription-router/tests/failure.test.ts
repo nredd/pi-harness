@@ -437,3 +437,27 @@ it.each([
 	expect(classify(text, NOW)).toStrictEqual(unknown);
 	expect(legacyGate(text)).toBe(true);
 });
+
+// Anthropic subscription window exhaustion arrives as statusless stream-error prose. It is a quota
+// verdict of unknown shape: it reaches the read, and infers only on the repeat threshold (S8).
+it.each([
+	"You have reached your weekly usage limit",
+	"You've reached your weekly usage limit. Resets Monday 9am",
+	"5-hour limit reached, resets 3pm",
+	"Five-hour usage limit reached",
+	"You've hit your session limit",
+	"Weekly limit exceeded",
+	"Claude AI usage limit reached|1750000000",
+	"You have hit your usage limit.",
+])("treats the window exhaustion %s as quota evidence", (text) => {
+	expect(classify(text, NOW)).toStrictEqual(unknown);
+	expect(legacyGate(text)).toBe(true);
+});
+
+it.each([
+	"You have not reached your weekly usage limit",
+	"You haven't hit your usage limit yet",
+	"weekly usage limit: 40% used",
+])("keeps non-affirmative window wording %s weak", (text) => {
+	expect(classify(text, NOW)).toStrictEqual(weak);
+});

@@ -243,6 +243,10 @@ per-minute or weak failure is never confirmed, whatever its wording, so not even
 provider's read can mark one. Per-minute means an explicit per-minute window, which beats billing
 and daily wording in the same error, or a hint under 60 seconds (under `minHintSeconds` when that
 is lower). Weak means the gate matched with no quota verdict, e.g. `processed 429 tokens` (S15).
+Affirmative window exhaustion prose is a verdict, not weak: Anthropic streams statusless
+`You have reached your weekly usage limit` or `5-hour limit reached`, so a usage, weekly, 5-hour
+or session limit followed by reached/hit/exceeded (or reached your ... limit, unnegated) reaches
+the read, and without a usage source counts as a bare quota status.
 A status counts only in leading (`429: ...`) or core's `<provider> API error (<status>): ` position;
 any other parenthesized number, e.g. `Request ID (402)`, is prose. Error types such as `SAFETY` or
 `UNAVAILABLE` veto only as a structured field or at the start of the message; inside a quota

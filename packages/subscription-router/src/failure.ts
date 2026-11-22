@@ -53,6 +53,11 @@ const OVERLOAD = /(?:^|[^a-z0-9])overloaded(?![a-z0-9])/i;
 const VERDICT = /\b(?:RESOURCE_EXHAUSTED|rate_limit_error|rate_limit_exceeded|too_many_requests|QUOTA_EXHAUSTED)\b/i;
 const LEGACY_LIMIT =
 	/\b(?:(?:Go|Free)?UsageLimitError|subscription_sharing_usage_limit_exceeded|hit your ChatGPT usage limit|exceeded your current quota|Monthly usage limit reached|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|out of extra[ _-]?usage|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
+// Anthropic subscription window exhaustion streams statusless prose (`You have reached your weekly
+// usage limit`, `5-hour limit reached`). Only affirmative wording counts: a usage or window limit
+// followed by reached/hit/exceeded, or reached/hit/exceeded your/the usage or window limit, unnegated.
+const WINDOW_EXHAUSTED =
+	/\b(?:(?:weekly|5[- ]hour|five[- ]hour|session)\s+(?:usage\s+)?|usage\s+)limit\s+(?:reached|hit|exceeded)\b|(?<!\bnot\s)(?<!n['\u2019]t\s)\b(?:reached|hit|exceeded)\s+(?:your|the)\s+(?:(?:weekly|5[- ]hour|five[- ]hour|session)\s+(?:usage\s+)?|usage\s+)limit\b/i;
 // Bare labels can be verdicts; the same words in arbitrary prose are only weak signals.
 const LEGACY_LABEL = /^(?:quota|rate.?limit|usage.?limit|extra.?usage|available balance)$/i;
 // Affirmative payment exhaustion only. A bare mention of billing is weak: it can be an address or a service name.
@@ -202,6 +207,7 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 		http === 429 ||
 		VERDICT.test(signal) ||
 		LEGACY_LIMIT.test(signal) ||
+		WINDOW_EXHAUSTED.test(signal) ||
 		LEGACY_LABEL.test(message) ||
 		interactionsDaily
 	) {

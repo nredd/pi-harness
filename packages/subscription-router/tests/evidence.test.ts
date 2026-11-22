@@ -480,6 +480,34 @@ describe("confirmEvidence", () => {
 		expect(await confirm({ model: CARBON, failedAt: T0 })).toBe(block);
 		expect(reads).toHaveLength(2);
 	});
+
+	// Anthropic window exhaustion streams statusless prose: no 429, no `rate_limit_error`.
+	it.each([
+		"You have reached your weekly usage limit",
+		"5-hour limit reached, resets 3pm",
+		"You've hit your session limit",
+	])("lets the statusless window exhaustion %s reach the read", async (text) => {
+		const SONNET = { provider: "anthropic", id: "claude-sonnet-5" };
+		const collected = reader({}, block);
+		expect(await confirmEvidence(collected.usage, new FailureHistory(), undefined)(failure(text, T0, SONNET))).toBe(
+			block,
+		);
+		expect(collected.reads).toHaveLength(1);
+		// An available read that shows no block stays authoritative (S2).
+		const clear = reader({});
+		expect(
+			await confirmEvidence(clear.usage, new FailureHistory(), undefined)(failure(text, T0, SONNET)),
+		).toBeUndefined();
+		// Without a usage source (API key) it infers only on the repeat threshold (S8).
+		const metered = reader(noSource(), block);
+		const confirm = confirmEvidence(metered.usage, new FailureHistory(), undefined);
+		expect(await confirm(failure(text, T0, SONNET))).toBeUndefined();
+		expect(await confirm(failure(text, T0 + MINUTE, SONNET))).toMatchObject({
+			block: true,
+			evidence: "inferred",
+			window: "inferred:backoff",
+		});
+	});
 });
 
 describe("evidenceChain", () => {
