@@ -17,7 +17,8 @@ private let forbiddenInputSink = NativeInputSink(
     prepareHID: { _ in forbidden("HID activation") },
     postHID: { _, _ in forbidden("HID event delivery") },
     sleep: { _ in forbidden("input pacing") },
-    keyboardInputSource: { forbidden("keyboard layout reads") }
+    keyboardInputSource: { forbidden("keyboard layout reads") },
+    eventTimestamp: { forbidden("event timestamp reads") }
 )
 
 /// Drive `Bridge.handleRequest` through request admission paths that settle before capture, input,
