@@ -443,6 +443,8 @@ describe("confirmEvidence", () => {
 		["503", "503: quota backend failed"],
 		["safety", "Provider stopped with: SAFETY (quota)"],
 		["per-minute", PER_MINUTE],
+		["weak (S15)", "processed 429 tokens"],
+		["weak billing mention", "400: Invalid billing address"],
 	])("applies the never-mark rules before a %s reaches the read", async (_name, text) => {
 		const { usage, reads } = reader({}, block);
 		expect(await confirmEvidence(usage, new FailureHistory(), undefined)(failure(text))).toBeUndefined();

@@ -342,6 +342,19 @@ describe("collected providers keep read-only confirmation", () => {
 		expect(s.tracker.active()).toEqual([]);
 	});
 
+	it("S15: a weak gate match never reads or marks, even when a fresh read would show the block", async () => {
+		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
+		const before = s.fetches.length;
+		s.usage = { percent: 100 };
+		const weak = "processed 429 tokens";
+		s.script(SONNET, fail(weak), fail(weak), fail(weak), OK);
+		const messages = await s.prompt();
+		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
+		expect(messages.at(-1)).toMatchObject({ stopReason: "stop" });
+		expect(s.fetches.length).toBe(before);
+		expect(s.tracker.active()).toEqual([]);
+	});
+
 	it("S2: a fresh read with room is authoritative; a daily token never reaches inference", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH, usage: { percent: 40 } });
 		s.script(SONNET, fail(DAILY), fail(DAILY), fail(DAILY), fail(DAILY));

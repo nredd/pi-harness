@@ -333,7 +333,7 @@ it.each([
 	expectQuotaClass(text);
 });
 
-// A bare billing mention still earns a confirming read, but alone it never infers a provider-wide block.
+// A bare billing mention still passes the gate, but it is weak: S15, never read or marked.
 it.each(["billing", "billing limit"])("keeps the legacy gate for the billing mention %s as weak evidence", (text) => {
 	expect(legacyGate(text)).toBe(true);
 	expect(classify(text, NOW)).toStrictEqual(weak);
@@ -423,4 +423,17 @@ it.each<[string, string, FailureClassification]>([
 	["daily wording with a per-minute token", "429: Daily quota exceeded (RequestsPerMinute)", perMinute],
 ])("lets explicit per-minute evidence win: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
+});
+
+// Core-generated quota messages are verdicts, not weak gate matches: S15 never reads or marks weak.
+it.each([
+	"You have hit your ChatGPT usage limit (plus plan). Try again in ~158 min.",
+	"You have hit your ChatGPT usage limit.",
+	"You exceeded your current quota, please check your plan and billing details.",
+	"Monthly usage limit reached",
+	"GoUsageLimitError",
+	"FreeUsageLimitError",
+])("treats the core quota message %s as quota evidence", (text) => {
+	expect(classify(text, NOW)).toStrictEqual(unknown);
+	expect(legacyGate(text)).toBe(true);
 });

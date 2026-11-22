@@ -52,7 +52,7 @@ const NON_QUOTA_CODE =
 const OVERLOAD = /(?:^|[^a-z0-9])overloaded(?![a-z0-9])/i;
 const VERDICT = /\b(?:RESOURCE_EXHAUSTED|rate_limit_error|rate_limit_exceeded|too_many_requests|QUOTA_EXHAUSTED)\b/i;
 const LEGACY_LIMIT =
-	/\b(?:UsageLimitError|subscription_sharing_usage_limit_exceeded|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|out of extra[ _-]?usage|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
+	/\b(?:(?:Go|Free)?UsageLimitError|subscription_sharing_usage_limit_exceeded|hit your ChatGPT usage limit|exceeded your current quota|Monthly usage limit reached|usage_limit_reached|insufficient_quota|quota exceeded|rate[ -]limit(?:ed| exceeded)|too many requests|out of budget|out of extra[ _-]?usage|extra[ -]usage (?:limit|disabled|exhausted)|(?:insufficient|no) available balance)\b/i;
 // Bare labels can be verdicts; the same words in arbitrary prose are only weak signals.
 const LEGACY_LABEL = /^(?:quota|rate.?limit|usage.?limit|extra.?usage|available balance)$/i;
 // Affirmative payment exhaustion only. A bare mention of billing is weak: it can be an address or a service name.
