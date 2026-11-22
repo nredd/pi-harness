@@ -220,10 +220,12 @@ test("explicit root is not replaced by a modal window behind it", () => {
 });
 
 test("macOS ScreenCaptureKit config sizes window screenshots", () => {
-	const captureFunction = swift.slice(
-		swift.indexOf("private func captureWindow"),
-		swift.indexOf("\tfunc jpegData("),
-	);
+	// Match the declarations whatever their access modifier, and require both in order before slicing.
+	const start = swift.search(/\bfunc captureWindow\b/);
+	const end = swift.search(/\bfunc jpegData\(/);
+	assert(start >= 0, "captureWindow declaration not found");
+	assert(end > start, "jpegData declaration not found after captureWindow");
+	const captureFunction = swift.slice(start, end);
 	assert(/config\.width\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.width");
 	assert(/config\.height\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.height");
 });
