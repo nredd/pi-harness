@@ -2444,6 +2444,38 @@ mod tests {
     }
 
     #[test]
+    fn scoped_wait_matches_role_and_value_below_the_owned_scope() {
+        let look_id = "scoped-wait-match";
+        let mut look = look_with_element(5.0);
+        look.pid = 7;
+        look.hwnd = 22;
+        helper_state()
+            .lock()
+            .unwrap()
+            .insert_look(look_id.to_owned(), look);
+        let walk = || {
+            Ok(vec![
+                json!({"runtimeId": [5], "parentRuntimeId": [1], "role": "group", "name": "Panel"}),
+                json!({"runtimeId": [6], "parentRuntimeId": [5], "role": "edit", "name": "Status", "value": " Done "}),
+                json!({"runtimeId": [9], "parentRuntimeId": [1], "role": "edit", "name": "Status", "value": "Done"}),
+                json!({"role": "edit", "name": "Status", "value": "Done"}),
+            ])
+        };
+        let args = json!({"pid": 7, "windowId": 22, "lookId": look_id, "scopeRef": "same-ref", "text": "status", "role": "edit", "value": "done"});
+        let (result, walks) = scripted_wait(args.clone(), &[Some(7), Some(7), Some(7)], walk);
+        assert_eq!(result.unwrap()["found"], json!(true));
+        assert_eq!(walks, 1);
+
+        // An exact scope excludes the descendant, so the matching element is gone.
+        let mut exact = args;
+        exact["scopeExact"] = json!(true);
+        exact["gone"] = json!(true);
+        let (result, walks) = scripted_wait(exact, &[Some(7), Some(7), Some(7)], walk);
+        assert_eq!(result.unwrap()["gone"], json!(true));
+        assert_eq!(walks, 1);
+    }
+
+    #[test]
     fn wait_refuses_to_infer_an_admitted_hwnd_or_pid() {
         for missing_identity in [
             json!({"pid": 7, "rootRef": "win:22", "text": "Ready"}),
