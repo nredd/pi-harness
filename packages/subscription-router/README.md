@@ -320,7 +320,11 @@ the current owner, so a getter that registers reentrantly is itself displaced an
 Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
 of `src/collectors.ts` has initialized it, even before the router extension loads. The frozen
 protocol object has `version: 1` and `register(adapter) -> unregister()`, not a mutable map. Check
-the version before using it; router copies reject incompatible versions without changing the object.
+the version before using it; router copies reject incompatible versions, and version 1 objects that
+lack `register`, `registrationFor`, `collectorFor` or `collectedProviders`, without changing the
+object. The first copy installs the registry in a non-writable, non-configurable global slot, so a
+later copy or a same-realm reload reuses it instead of replacing it. This only rejects buggy
+registries; it does not authenticate trusted in-process code that installed the slot first.
 The live `COLLECTED_PROVIDERS` export is retained; use `collectedProviders()` for an array snapshot.
 
 A collector receives the provider credential from Pi, so register only code you trust with that

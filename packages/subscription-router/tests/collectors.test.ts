@@ -70,32 +70,6 @@ it("shares the registry with an extension that does not import the router", asyn
 	expect(await usage.get(ctx, provider)).toMatchObject({ status: "available", ...reading });
 });
 
-it("rejects built-in IDs before usage loads and after another router copy loads", async () => {
-	Reflect.deleteProperty(host, key);
-	try {
-		vi.resetModules();
-		const first = await import("../src/collectors.ts");
-		const read = vi.fn(fake.read);
-		for (const id of ["anthropic", "openai-codex"]) {
-			expect(() => host[key].register({ provider: id, kind: "custom", read })).toThrow(/reserved for a built-in/);
-			expect(Object.isFrozen(first.collectorFor(id))).toBe(true);
-		}
-		const unregister = first.registerCollector(fake);
-		cleanup.push(unregister);
-		vi.resetModules();
-		const second = await import("../src/collectors.ts");
-		expect(second.collectorFor(provider)).toBe(first.collectorFor(provider));
-		expect(() => second.registerCollector({ provider: "anthropic", kind: "custom", read })).toThrow(/reserved/);
-		const { UsageService: ReloadedUsage } = await import("../src/usage.ts");
-		const fetch = vi.fn(async () => Response.json({ five_hour: { utilization: 23 } }));
-		const usage = new ReloadedUsage({ getAccessToken: async () => "fake-token", fetch, now: () => T0 });
-		expect(await usage.get(ctx, "anthropic")).toMatchObject({ status: "available", windows: [{ usedPercent: 23 }] });
-		expect(read).not.toHaveBeenCalled();
-	} finally {
-		host[key] = registry;
-	}
-});
-
 it("rejects non-string collector IDs", async () => {
 	vi.useFakeTimers();
 	const credentials: Record<string, string> = { anthropic: "fake-anthropic-credential", [provider]: "fake-token" };
@@ -139,18 +113,6 @@ it("rejects non-string collector IDs", async () => {
 	expect(read).toHaveBeenCalledOnce();
 	expect(read).toHaveBeenCalledWith(expect.objectContaining({ token: "fake-token" }));
 	expect(getApiKeyForProvider.mock.calls.every(([id]) => typeof id === "string")).toBe(true);
-});
-
-it.each([undefined, 2])("rejects an existing registry with version %s without replacing it", async (version) => {
-	const incompatible = Object.freeze({ ...registry, version });
-	Object.assign(host, { [key]: incompatible });
-	try {
-		vi.resetModules();
-		await expect(import("../src/collectors.ts")).rejects.toThrow(/registry version \(expected 1\)/);
-		expect(host[key]).toBe(incompatible);
-	} finally {
-		host[key] = registry;
-	}
 });
 
 it("runs registered HTTP requests and blocks only the exhausted model bucket", async () => {

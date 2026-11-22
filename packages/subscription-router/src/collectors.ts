@@ -106,12 +106,31 @@ function createRegistry(): CollectorRegistry {
 	});
 }
 
-const host = globalThis as typeof globalThis & { [COLLECTORS_KEY]?: CollectorRegistry };
-if (host[COLLECTORS_KEY] !== undefined && host[COLLECTORS_KEY]?.version !== 1) {
-	throw new Error("Unsupported pi-subscription-router.collectors registry version (expected 1).");
+const REGISTRY_METHODS = ["register", "registrationFor", "collectorFor", "collectedProviders"] as const;
+
+/**
+ * Reuse a compatible registry from another copy of this module, or install a fresh one in a
+ * non-writable, non-configurable slot so a later copy cannot split-brain it. This rejects buggy
+ * registries; it does not authenticate trusted in-process code that installed the slot first.
+ */
+function sharedRegistry(): CollectorRegistry {
+	const existing: unknown = Reflect.get(globalThis, COLLECTORS_KEY);
+	if (existing === undefined) {
+		const created = createRegistry();
+		Object.defineProperty(globalThis, COLLECTORS_KEY, { value: created, writable: false, configurable: false });
+		return created;
+	}
+	const candidate = existing as Partial<Record<string, unknown>> | null;
+	if (candidate?.version !== 1) {
+		throw new Error("Unsupported pi-subscription-router.collectors registry version (expected 1).");
+	}
+	if (REGISTRY_METHODS.some((method) => typeof candidate[method] !== "function")) {
+		throw new Error("Refusing a malformed pi-subscription-router.collectors registry (version 1).");
+	}
+	return candidate as unknown as CollectorRegistry;
 }
-host[COLLECTORS_KEY] ??= createRegistry();
-const registry = host[COLLECTORS_KEY];
+
+const registry = sharedRegistry();
 
 /** Register or replace an external collector. Cleanup never removes a later registration. */
 export function registerCollector(collector: Collector): () => void {
