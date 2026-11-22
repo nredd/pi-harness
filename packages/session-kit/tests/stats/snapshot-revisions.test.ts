@@ -1242,6 +1242,37 @@ it.each(["corrupt", "missing"])("keeps the active manifest when one shard among 
 	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([1, 2, 3]);
 });
 
+it("reports published history over the expansion budget apart from files to restore", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	sessionFile(path, {
+		startMs: at("2026-09-10"),
+		lines: ["2026-09-10", "2026-10-10"].map((day, i) =>
+			assistantLine({ ms: at(day), provider: "physical", model: "fixture", input: i + 1 }),
+		),
+	});
+	const first = await exportStats(agent, out);
+	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
+	const files = readdirSync(first.snapshotDir).sort();
+	const ref = manifest(first.snapshotDir).shards[0];
+	if (!ref) throw new Error("Missing shard");
+	const text = gunzipSync(readFileSync(join(first.snapshotDir, ref.file))).toString("utf8");
+	const measure = Buffer.byteLength;
+	// Charge one intact shard past the bound without allocating 128 MiB.
+	const spy = vi
+		.spyOn(Buffer, "byteLength")
+		.mockImplementation((value, encoding) => (value === text ? 128 * 1024 * 1024 + 1 : measure(value, encoding)));
+	try {
+		await expect(exportStats(agent, out)).rejects.toThrow(
+			`Published usage history exceeds the 128 MiB expanded machine budget (from ${ref.file}); those files ` +
+				"match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
+		);
+	} finally {
+		spy.mockRestore();
+	}
+	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(before);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+});
+
 it("names every unreadable shard and replaces history only when the owner asks", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	sessionFile(path, {

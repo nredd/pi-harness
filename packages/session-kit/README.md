@@ -713,7 +713,10 @@ shards are missing, corrupt or inconsistent with each other is kept: export fail
 naming every unreadable shard file (`Published usage history is unreadable (...)`), because
 publishing the scan alone would evict the intact archived months from the active snapshot. Restore
 the files from the sync checkout and export again, or pass `--replace-harnesses` to publish
-without that history. An unreadable manifest cannot name its history; that read failure freezes the
+without that history. Authenticated shards that together exceed the 128 MiB expanded machine budget
+are not damage: that export fails with `Published usage history exceeds the 128 MiB expanded machine
+budget (from <file>)`, where restoring files will not help, and only `--replace-harnesses` publishes
+(damaged files are reported first). An unreadable manifest cannot name its history; that read failure freezes the
 then-present recovery filenames before publication. Only that set is protected: later superseded
 active-month generations still prune normally, even while recovery remains pending. A genuinely
 new read failure can extend the protected set; ordinary exports cannot. Recovery copies therefore

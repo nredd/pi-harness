@@ -472,26 +472,32 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 	return decodeWithinBudget(bytes, manifest, month, MAX_BYTES).shard;
 }
 
+/** The machine's expansion budget is spent: authenticated bytes, too many of them, not damage. */
+class OverBudget extends Error {
+	constructor(options?: ErrorOptions) {
+		super("Machine snapshot exceeds 128 MiB expanded", options);
+	}
+}
+
 /** Charge actual wire bytes before parsing another shard or publishing its reference. */
 function expandWithinBudget(
 	bytes: Buffer,
 	version: number,
 	remaining: number,
 ): { text: string; expandedBytes: number } {
-	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	if (remaining <= 0) throw new OverBudget();
 	let text: string;
 	try {
 		text = (version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE")
-			throw new Error("Machine snapshot exceeds 128 MiB expanded", { cause: error });
+		if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE") throw new OverBudget({ cause: error });
 		throw error;
 	}
 	return { text, expandedBytes: chargeExpansion(Buffer.byteLength(text), remaining) };
 }
 
 function chargeExpansion(expandedBytes: number, remaining: number): number {
-	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	if (expandedBytes > remaining) throw new OverBudget();
 	return expandedBytes;
 }
 
@@ -801,9 +807,13 @@ const emptyContribution = (): Contribution => ({ calls: [], sessions: [], quota:
 /** This machine's last published snapshot: `null` if there is none, `"unreadable"` if it cannot be trusted. */
 type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unreadable";
 
-/** A readable manifest whose history is not: the unreadable shard files, empty when only their union is invalid. */
+/**
+ * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
+ * invalid), and the first authenticated shard the expansion budget could not hold.
+ */
 interface Damaged {
 	damaged: string[];
+	overBudget?: string;
 }
 
 async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
@@ -816,6 +826,7 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 	const shards: Shard[] = [];
 	const expandedSizes: number[] = [];
 	const damaged: string[] = [];
+	let overBudget: string | undefined;
 	let remaining = MAX_BYTES;
 	// Read every reference so the owner learns all the files to restore, not just the first.
 	for (const ref of manifest.shards) {
@@ -824,11 +835,12 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 			shards.push(read.shard);
 			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
-		} catch {
-			damaged.push(ref.file);
+		} catch (error) {
+			if (!(error instanceof OverBudget)) damaged.push(ref.file);
+			else overBudget ??= ref.file;
 		}
 	}
-	if (damaged.length > 0) return { damaged };
+	if (damaged.length > 0 || overBudget !== undefined) return { damaged, overBudget };
 	try {
 		validateSnapshot({ manifest, shards });
 	} catch {
@@ -844,6 +856,12 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 function intactPrevious(previous: Previous | Damaged, replace: boolean): Previous {
 	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
 	if (replace) return "unreadable";
+	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
+	if (previous.damaged.length === 0 && previous.overBudget !== undefined)
+		throw new Error(
+			`Published usage history exceeds the 128 MiB expanded machine budget (from ${previous.overBudget}); ` +
+				"those files match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
+		);
 	const what = previous.damaged.length > 0 ? previous.damaged.join(", ") : "shards inconsistent with each other";
 	throw new Error(
 		`Published usage history is unreadable (${what}); restore it from the sync checkout, ` +
