@@ -11,6 +11,25 @@ const helper = "tests/lib/src/temp-dir.ts";
 const baselinePath = "scripts/test-tempdirs-baseline.json";
 const rawAllocation = /\bmkdtemp(?:Sync)?\b/g;
 
+/**
+ * List the owned JS/TS test sources present in the `cwd` checkout, tracked or untracked: files under a
+ * test directory or named like a test, never Python or the `forks/pi` Gitlink.
+ */
+export function listOwnedTestSources(cwd) {
+	const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+		cwd,
+		encoding: "utf8",
+	}).split("\0");
+	return [...new Set(files)].filter(
+		(file) =>
+			!file.startsWith("forks/pi/") &&
+			scriptExtension.test(file) &&
+			(testDirectory.test(file) || testExtension.test(file)) &&
+			// A tracked file may have been deleted in the working tree.
+			existsSync(join(cwd, file)),
+	);
+}
+
 /** Check literal temp directory references in owned JS/TS tests, not Python or the `forks/pi` Gitlink. */
 export function checkTestTempdirs(cwd, compareRef) {
 	const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -30,21 +49,10 @@ export function checkTestTempdirs(cwd, compareRef) {
 			}
 		}
 	}
-	const files = git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0");
-
 	// Count references, not just calls, so named aliases and destructuring are checked too.
-	for (const file of new Set(files)) {
-		if (
-			file === helper ||
-			file.startsWith("forks/pi/") ||
-			!scriptExtension.test(file) ||
-			!(testDirectory.test(file) || testExtension.test(file))
-		) {
-			continue;
-		}
-		const source = join(cwd, file);
-		if (!existsSync(source)) continue; // A tracked file may have been deleted in the working tree.
-		const count = Array.from(readFileSync(source, "utf8").matchAll(rawAllocation)).length;
+	for (const file of listOwnedTestSources(cwd)) {
+		if (file === helper) continue;
+		const count = Array.from(readFileSync(join(cwd, file), "utf8").matchAll(rawAllocation)).length;
 		const previous = baseline[file] ?? 0;
 		remaining.delete(file);
 		if (count > previous) {

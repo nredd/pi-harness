@@ -9,6 +9,7 @@ const config = definePackageConfig("import-audit", {
 	root: fileURLToPath(new URL("..", import.meta.url)),
 	test: {
 		include: [
+			"scripts/tests/check-test-matchers.test.ts",
 			"scripts/tests/check-test-tempdirs.test.mjs",
 			"scripts/tests/commit-messages.test.mjs",
 			"scripts/tests/commit-policy.test.mjs",
