@@ -253,14 +253,20 @@ pub fn parse_wm_class(value: &[u8]) -> Option<(String, String)> {
     let (instance, class) = (parts.next()?, parts.next()?);
     (parts.next().is_none() && !class.is_empty()).then(|| (latin1(instance), latin1(class)))
 }
+/// The L1 distance between two frames, each edge widened to `i64` before it is subtracted:
+/// live AT-SPI extents are arbitrary `i32`s, and an `i32` difference could overflow and
+/// rank a farther window first.
 fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
     a.map(|a| {
-        i64::from(
-            (a.x - b.x).abs()
-                + (a.y - b.y).abs()
-                + (a.width - b.width).abs()
-                + (a.height - b.height).abs(),
-        )
+        [
+            (a.x, b.x),
+            (a.y, b.y),
+            (a.width, b.width),
+            (a.height, b.height),
+        ]
+        .into_iter()
+        .map(|(a, b)| (i64::from(a) - i64::from(b)).abs())
+        .fold(0, i64::saturating_add)
     })
     .unwrap_or(0)
 }

@@ -3356,6 +3356,21 @@ mod tests {
                 assert_eq!(class(&root), "KeePassXC");
                 assert_eq!(root["framePoints"]["x"], 600);
 
+                // Extreme live extents rank in i64: the closer blocked-class window still
+                // pairs, never the farther allowed one an overflowing distance would pick.
+                let at = |x| Rect { x, ..saved.clone() };
+                for (live, near, far) in [(i32::MIN, -1, 0), (i32::MAX, 0, -1)] {
+                    *extents.lock().unwrap() = Some(at(live));
+                    let root = lookup(vec![
+                        editor_window(81, &at(far), "Fixture"),
+                        editor_window(82, &at(near), "KeePassXC"),
+                    ])
+                    .await;
+                    assert_eq!(root["windowId"], 82, "{live}");
+                    assert_eq!(class(&root), "KeePassXC", "{live}");
+                    assert_eq!(root["metadata"]["x11Pairing"], "paired", "{live}");
+                }
+
                 // Without live extents the same-title siblings tie: no class is attributed,
                 // and every tied class is a block-only alias, so the blocked one still refuses.
                 *extents.lock().unwrap() = None;
