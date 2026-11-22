@@ -458,7 +458,8 @@ test("INV-17b macOS activity glow is configurable, headless-safe, and connection
 		"activity glow is not configurable or headless-safe",
 	);
 	assert(
-		macosHelperTs.includes("class MacosActivityGlowConnection") && macosHelperTs.includes('cmd: "setActivityGlow"'),
+		macosHelperTs.includes("class MacosActivityGlowConnection") &&
+			macosHelperTs.includes('this.send(socket, "setActivityGlow", { active })'),
 		"activity glow does not use a persistent helper connection",
 	);
 	assert(
