@@ -59,26 +59,36 @@ function statIfPresent(filePath: string): ReturnType<typeof statSync> | undefine
 }
 
 /**
- * Whether this connection reaches the managed socket. The import-time classification only decides who may
- * launch or install; it cannot see an alias that resolves later, a hard link, or a default pathname that links
- * to the override. Recheck the name rule and compare both endpoints' inodes now. Anything that cannot be
- * inspected counts as managed, so the build check applies.
+ * Whether the configured socket reaches the managed one right now. The import-time classification only decides
+ * who may launch or install; it cannot see an alias that resolves later, a hard link, or a default pathname that
+ * links to the override. Recheck the name rule and compare both endpoints' inodes. An override that cannot be
+ * inspected, or has vanished although a connection was just made through it, counts as managed, so the build
+ * check applies. An absent default alone keeps a distinct override external.
  */
 function connectionIsManaged(): boolean {
 	if (!usingExternalHelperSocket) return true;
 	try {
 		if (isManagedSocket(configuredSocketPath)) return true;
 		const configured = statIfPresent(configuredSocketPath);
+		if (configured === undefined) return true;
 		const managed = statIfPresent(DEFAULT_HELPER_SOCKET_PATH);
-		return (
-			configured !== undefined &&
-			managed !== undefined &&
-			configured.dev === managed.dev &&
-			configured.ino === managed.ino
-		);
+		return managed !== undefined && configured.dev === managed.dev && configured.ino === managed.ino;
 	} catch {
 		return true;
 	}
+}
+
+/**
+ * Open a helper connection and classify its endpoint before and at connect. The external exemption holds only
+ * when both agree, and the result is fixed at connect: a path retargeted while a reply is pending changes nothing.
+ * Every request socket and the activity glow connect through here.
+ * @param onConnect Called once connected, with whether the build check applies.
+ */
+function connectHelper(onConnect: (managed: boolean) => void): net.Socket {
+	const managedBefore = connectionIsManaged();
+	const socket = net.createConnection(HELPER_SOCKET_PATH);
+	socket.once("connect", () => onConnect(managedBefore || connectionIsManaged()));
+	return socket;
 }
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -290,10 +300,11 @@ export class MacosHelperClient {
 	 * Check one connection's diagnostics before anything else is sent on it. A managed helper must report
 	 * exactly this package's build; an external one only the expected protocol (its build, path and age are
 	 * its operator's business).
+	 * @param managed This connection's classification, fixed when it connected (see `connectHelper`).
 	 */
 	verifyBuild(
 		result: { buildIdentity?: unknown; executablePath?: unknown; protocolVersion?: unknown } | undefined,
-		managed = connectionIsManaged(),
+		managed: boolean,
 	): void {
 		this.staleBuild = undefined;
 		this.helperBuild = displayBuild(result?.buildIdentity);
@@ -314,6 +325,11 @@ export class MacosHelperClient {
 				"stale_helper",
 			);
 		}
+	}
+
+	/** Whether the configured socket is an external helper, run and restarted by its own operator. */
+	isExternal(): boolean {
+		return usingExternalHelperSocket;
 	}
 
 	get diagnostics(): PlatformDiagnostics | undefined {
@@ -374,7 +390,8 @@ export class MacosHelperClient {
 		return await new Promise<T>((resolve, reject) => {
 			const id = `req_${++this.requestSequence}`;
 			const probeId = `build_${id}`;
-			const socket = net.createConnection(HELPER_SOCKET_PATH);
+			// `onConnect` is declared below; `connectHelper` calls it only after this executor has returned.
+			const socket = connectHelper((managedAtConnect) => onConnect(managedAtConnect));
 			let buffer = "";
 			// Every effect connection is checked first: a replacement daemon gets no command before its own check.
 			let checkingBuild = cmd !== "diagnostics";
@@ -409,9 +426,9 @@ export class MacosHelperClient {
 			const keyboardDeadlineMs =
 				cmd === "desktopInput" || cmd === "act" || cmd === "actBatch" ? Date.now() + timeoutMs - 250 : undefined;
 			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
-			const onConnect = () => {
+			const onConnect = (managedAtConnect: boolean) => {
 				connected = true;
-				managed = connectionIsManaged();
+				managed = managedAtConnect;
 				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
 				else sendCommand();
 			};
@@ -473,7 +490,6 @@ export class MacosHelperClient {
 				});
 			signal?.addEventListener("abort", onAbort, { once: true });
 			socket.setEncoding("utf8");
-			socket.on("connect", onConnect);
 			socket.on("data", onData);
 			socket.on("error", onError);
 			socket.on("end", onDisconnect);
@@ -484,13 +500,15 @@ export class MacosHelperClient {
 	/**
 	 * Read-only diagnostics probe of the resident helper.
 	 * @returns true when a resident answered, false only on positive absence: `ENOENT` or `ECONNREFUSED`
-	 * before any connection. A resident that is slow to answer is retried within `READ_ONLY_PROBE_BUDGET_MS`.
+	 * before any connection. A resident that is slow to answer is retried within `READ_ONLY_PROBE_BUDGET_MS`;
+	 * once one attempt timed out, only a verified reply clears that evidence, never a later absence.
 	 * @throws The helper's own refusal (`stale_helper`, an error reply), an abort, or a `helper_inconclusive`
 	 * transport error for anything else: a timeout past the budget, a malformed reply, a disconnect or a
 	 * connect error such as `EACCES`. Callers must not launch or install after a throw.
 	 */
 	private async probeResident(signal?: AbortSignal): Promise<boolean> {
 		const deadline = Date.now() + READ_ONLY_PROBE_BUDGET_MS;
+		let timedOut = false;
 		while (true) {
 			try {
 				const remaining = Math.max(deadline - Date.now(), 1);
@@ -498,7 +516,8 @@ export class MacosHelperClient {
 				return true;
 			} catch (error) {
 				if (!(error instanceof HelperTransportError)) throw error;
-				if (error.code === "helper_not_listening") return false;
+				if (error.code === "helper_not_listening" && !timedOut) return false;
+				timedOut ||= error.code === "helper_timeout";
 				if (error.code === "helper_timeout" && Date.now() < deadline) continue;
 				throw new HelperTransportError(
 					`Cannot verify the pi-computer-use helper at ${HELPER_SOCKET_PATH}; it was not launched and setup was not run: ${String(error)}`,
@@ -642,20 +661,18 @@ class MacosActivityGlowConnection {
 				throw new HelperTransportError(`pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`);
 			}
 			return await new Promise<net.Socket>((resolve, reject) => {
-				const socket = net.createConnection(HELPER_SOCKET_PATH);
 				const onError = (error: Error) => {
 					socket.destroy();
 					reject(new HelperTransportError(error.message));
 				};
-				socket.once("error", onError);
-				socket.once("connect", () => {
+				const socket = connectHelper((managed) => {
 					socket.off("error", onError);
 					socket.on("error", () => socket.destroy());
 					socket.on("close", () => {
 						if (this.socket === socket) this.socket = undefined;
 					});
 					const verify = async () => {
-						macosHelper.verifyBuild(await this.send(socket, "diagnostics"));
+						macosHelper.verifyBuild(await this.send(socket, "diagnostics"), managed);
 						this.socket = socket;
 						resolve(socket);
 					};
@@ -664,6 +681,7 @@ class MacosActivityGlowConnection {
 						reject(error);
 					});
 				});
+				socket.once("error", onError);
 			});
 		})();
 

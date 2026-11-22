@@ -6,17 +6,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
+import {
+	macosHelperSourcePaths as macosSourcePaths,
+	writeMacosBuildStamp,
+} from "../src/platform/macos/helper-build.mjs";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// `scripts/package_contracts.py` parses this declaration from the packed script: keep it a plain literal list plus `.map`.
-const macosSourcePaths = [
-	"activity_glow.swift",
-	"agent_cursor.swift",
-	"agent_cursor_motion.swift",
-	"bridge.swift",
-	"helper_entry.swift",
-].map((file) => path.join("native", "macos", file));
 const linuxTargets = { x64: "x86_64-unknown-linux-gnu", arm64: "aarch64-unknown-linux-gnu" };
 const archTriples = {
 	arm64: "arm64-apple-macosx",

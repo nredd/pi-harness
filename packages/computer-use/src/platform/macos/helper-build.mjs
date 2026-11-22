@@ -1,23 +1,34 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 /** Shape of a build identity: package version, `+`, SHA-256 of the production Swift sources. */
 export const MACOS_HELPER_BUILD_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\+[0-9a-f]{64}$/;
 
 /**
- * Identity of the shipped production Swift sources, independent of architecture and checkout path.
- * @param {string} root Package root containing the manifest and shipped Swift sources.
+ * The production Swift compiler inputs, relative to the package root: `build:native` compiles exactly these and
+ * `scripts/package_contracts.py` parses this declaration from the packed module to require each one packed, so
+ * keep it a plain literal list plus `.map`. Any other Swift file in a checkout is neither compiled nor hashed.
+ */
+export const macosHelperSourcePaths = [
+	"activity_glow.swift",
+	"agent_cursor.swift",
+	"agent_cursor_motion.swift",
+	"bridge.swift",
+	"helper_entry.swift",
+].map((file) => path.join("native", "macos", file));
+
+/**
+ * Identity of the compiled production Swift sources, independent of architecture and checkout path.
+ * @param {string} root Package root containing the manifest and `macosHelperSourcePaths`.
  * @returns {string} Package version and source hash.
  */
 export function macosHelperBuild(root) {
 	const { version } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-	const directory = path.join(root, "native", "macos");
 	const hash = createHash("sha256");
-	const sources = readdirSync(directory).filter((name) => name.endsWith(".swift") && !name.endsWith("_tests.swift"));
-	for (const name of sources.sort()) {
-		const contents = Buffer.from(readFileSync(path.join(directory, name), "utf8").replaceAll("\r\n", "\n"));
-		hash.update(`${name}:${contents.length}:`).update(contents);
+	for (const source of macosHelperSourcePaths) {
+		const contents = Buffer.from(readFileSync(path.join(root, source), "utf8").replaceAll("\r\n", "\n"));
+		hash.update(`${path.basename(source)}:${contents.length}:`).update(contents);
 	}
 	return `${version}+${hash.digest("hex")}`;
 }

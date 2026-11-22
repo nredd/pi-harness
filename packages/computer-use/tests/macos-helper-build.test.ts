@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, onTestFinished, test, vi } from "vitest";
 import { main } from "../scripts/build-native.mjs";
-import { macosHelperBuild, writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
+import { macosHelperBuild, macosHelperSourcePaths, writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 import {
 	createFakeChild,
 	drop,
+	effect,
 	ok,
 	raw,
 	shortSocketPath,
@@ -27,12 +28,14 @@ const staleMessage = (executable: string, build = "none") =>
 	`pi-computer-use helper at ${executable} is stale (helper build ${build}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`;
 
 afterEach(() => {
+	vi.useRealTimers();
 	Object.defineProperty(process, "platform", platformDescriptor);
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	vi.doUnmock("node:net");
 	vi.doUnmock("node:os");
 	vi.doUnmock("node:child_process");
+	vi.doUnmock("node:fs/promises");
 	vi.resetModules();
 });
 
@@ -43,6 +46,8 @@ async function rig(
 		installed = true,
 		alias = "",
 		override: overrideFor = undefined as ((home: string, socketPath: string) => string) | undefined,
+		/** An `errno` code inspecting the helper executable fails with, independent of runner credentials. */
+		executableError = undefined as string | undefined,
 	} = {},
 ) {
 	const home = makeTestTempDir("cu-build-app-", onTestFinished);
@@ -79,7 +84,19 @@ async function rig(
 	}
 	vi.stubEnv("PI_CU_SOCKET_PATH", override);
 	vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", app);
+	if (executableError) {
+		vi.doMock("node:fs/promises", async (original) => {
+			const real = await original<typeof import("node:fs/promises")>();
+			const lstat = (async (target: string) => {
+				if (target === executable) throw Object.assign(new Error(executableError), { code: executableError });
+				return await real.lstat(target);
+			}) as typeof real.lstat;
+			return { ...real, lstat, default: { ...real, lstat } };
+		});
+	}
 	const connect = {
+		/** Runs synchronously when a socket connects, before the client classifies the endpoint. */
+		atConnect: undefined as (() => void) | undefined,
 		afterConnect: undefined as ((socket: import("node:net").Socket) => void) | undefined,
 		/** An `errno` code every connection emits instead of connecting. */
 		failWith: undefined as string | undefined,
@@ -98,7 +115,10 @@ async function rig(
 						return failing;
 					}
 					const socket = real.createConnection(socketPath);
-					socket.once("connect", () => queueMicrotask(() => connect.afterConnect?.(socket)));
+					socket.once("connect", () => {
+						connect.atConnect?.();
+						queueMicrotask(() => connect.afterConnect?.(socket));
+					});
 					return socket;
 				},
 			},
@@ -126,6 +146,7 @@ test.each([older, undefined])(
 	"refuses a same-protocol managed helper with build %s without restarting",
 	async (build) => {
 		const { client, commands, executable, spawn } = await rig(build);
+		assert.equal(client.isExternal(), false);
 		await client.ensureInstalled();
 		const error = {
 			code: "stale_helper",
@@ -192,6 +213,53 @@ test("an override that cannot be inspected fails closed to managed", async () =>
 	await assert.rejects(client.command("listApps"), { code: "stale_helper" });
 	assert.deepEqual(commands(), ["diagnostics"]);
 });
+
+test.each(["command", "glow"])(
+	"alias removed after connect: a connected override that vanishes is managed (%s)",
+	async (path_) => {
+		const { client, glow, fake, connect, commands } = await rig(older, { external: true });
+		assert.deepEqual(await client.command("listApps"), []);
+		connect.atConnect = () => rmSync(fake.socketPath);
+		await assert.rejects(path_ === "glow" ? glow.setActive(true) : client.command("listApps"), {
+			code: "stale_helper",
+		});
+		assert.deepEqual(commands().slice(-1), ["diagnostics"]);
+	},
+);
+
+test.each(["command", "glow"])(
+	"a managed alias removed at connect keeps the build check: both classifications must agree (%s)",
+	async (path_) => {
+		const { client, glow, home, fake, connect, commands } = await rig(older, { external: true });
+		assert.deepEqual(await client.command("listApps"), []);
+		mkdirSync(path.dirname(managedSocket(home)), { recursive: true });
+		symlinkSync(fake.socketPath, managedSocket(home));
+		connect.atConnect = () => rmSync(managedSocket(home));
+		await assert.rejects(path_ === "glow" ? glow.setActive(true) : client.command("listApps"), {
+			code: "stale_helper",
+		});
+		assert.deepEqual(commands().slice(-1), ["diagnostics"]);
+	},
+);
+
+test.each(["command", "glow"])(
+	"an alias retargeted while diagnostics is pending cannot exempt a stale helper (%s)",
+	async (path_) => {
+		const { client, glow, home, fake, commands } = await rig(older, { external: true });
+		assert.deepEqual(await client.command("listApps"), []);
+		mkdirSync(path.dirname(managedSocket(home)), { recursive: true });
+		symlinkSync(fake.socketPath, managedSocket(home));
+		fake.script(
+			"diagnostics",
+			effect(() => rmSync(managedSocket(home)), ok({ protocolVersion: 7, pid: 0, buildIdentity: older })),
+		);
+		await assert.rejects(path_ === "glow" ? glow.setActive(true) : client.command("listApps"), {
+			code: "stale_helper",
+		});
+		assert.ok(!commands().includes("setActivityGlow"));
+		assert.equal(commands().filter((cmd: string) => cmd === "listApps").length, 1);
+	},
+);
 
 test("a distinct override stays external while the default socket also exists", async () => {
 	const { client, home } = await rig(older, { external: true });
@@ -280,6 +348,51 @@ test.each(["ENOENT", "ECONNREFUSED"])("runs setup only after %s before connectin
 });
 
 test.each([
+	["ensureDaemon launch", "absent"],
+	["ensureDaemon launch", "reply"],
+	["ensureInstalled setup", "absent"],
+	["ensureInstalled setup", "reply"],
+])(
+	"absence after connected timeout: %s keeps the connected evidence when the retry finds %s",
+	async (caller, retry) => {
+		const setup = caller === "ensureInstalled setup";
+		const { client, fake, connect, spawn } = await rig(current, { installed: !setup });
+		fake.script("diagnostics", [silent(), ok({ protocolVersion: 7, pid: 0, buildIdentity: current })]);
+		if (retry === "absent")
+			connect.afterConnect = () => {
+				connect.failWith = "ENOENT";
+			};
+		const launch = vi.spyOn(client, "launchDaemon");
+		const run = setup ? client.ensureInstalled() : client.command("listApps");
+		if (retry === "absent") await assert.rejects(run, { code: "helper_inconclusive", message: /was not launched/ });
+		else await run;
+		assert.equal(launch.mock.calls.length, 0);
+		assert.equal(spawn.mock.calls.length, 0);
+	},
+	30_000,
+);
+
+test("a slow-starting helper is not refused permanently: a later call binds without another launch", async () => {
+	const { client, connect, spawn } = await rig(current);
+	connect.failWith = "ENOENT";
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+	const launch = vi.spyOn(client, "launchDaemon").mockImplementation(async () => {
+		setTimeout(() => {
+			connect.failWith = undefined;
+		}, 10_000);
+	});
+	const first = assert.rejects(client.command("listApps"), /daemon is unavailable/);
+	await vi.advanceTimersByTimeAsync(9_000);
+	await first;
+	assert.equal(connect.failWith, "ENOENT");
+	await vi.advanceTimersByTimeAsync(1_000);
+	vi.useRealTimers();
+	assert.deepEqual(await client.command("listApps"), []);
+	assert.equal(launch.mock.calls.length, 1);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test.each([
 	[1_200, false],
 	[3_000, false],
 	[1_200, true],
@@ -311,19 +424,19 @@ test.each([
 	["not executable", "EACCES", (exe: string) => writeFileSync(exe, "old\n", { mode: 0o644 })],
 	["a directory", "not a regular file", (exe: string) => mkdirSync(exe)],
 	["a dangling symlink", "ENOENT", (exe: string) => symlinkSync(`${exe}-gone`, exe)],
-	["behind an unreadable directory", "EACCES", (exe: string) => chmodSync(path.dirname(exe), 0o000)],
+	// Injected: a privileged runner can read a `chmod 000` directory, so the errno comes from the fs seam.
+	["behind an unreadable directory", "EACCES", undefined],
 ])("never runs setup over an existing helper executable that is %s", async (_name, reason, make) => {
-	const { client, fake, spawn, executable } = await rig(current, { installed: false });
+	const { client, fake, spawn, executable } = await rig(current, {
+		installed: false,
+		executableError: make ? undefined : reason,
+	});
 	await fake.stop();
 	mkdirSync(path.dirname(executable), { recursive: true });
-	make(executable);
-	try {
-		await assert.rejects(client.ensureInstalled(), {
-			message: `pi-computer-use helper executable at ${executable} exists but is unusable (${reason}); setup was not run. Inspect it, then repair it explicitly with \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
-		});
-	} finally {
-		chmodSync(path.dirname(executable), 0o755);
-	}
+	make?.(executable);
+	await assert.rejects(client.ensureInstalled(), {
+		message: `pi-computer-use helper executable at ${executable} exists but is unusable (${reason}); setup was not run. Inspect it, then repair it explicitly with \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
+	});
 	assert.equal(spawn.mock.calls.length, 0);
 });
 
@@ -395,6 +508,7 @@ test("refuses the wrong build even on a newly launched daemon", async () => {
 
 test("keeps the external socket override and shows its reported build in macOS status", async () => {
 	const { client, commands, spawn } = await rig(older, { external: true, installed: false });
+	assert.equal(client.isExternal(), true);
 	await client.ensureInstalled();
 	await client.ensureProtocol();
 	assert.deepEqual(await client.command("listApps"), []);
@@ -521,7 +635,7 @@ test.each([
 	if (typeof reported === "string") assert.ok(!status.includes(reported.split("\n")[0]));
 });
 
-test("passes a version and production source hash to swiftc", async () => {
+test("uncompiled Swift file: the stamp hashes the compiled production sources only", async () => {
 	const root = makeTestTempDir("cu-build-stamp-", onTestFinished);
 	const dir = path.join(root, "native", "macos");
 	mkdirSync(dir, { recursive: true });
@@ -530,6 +644,8 @@ test("passes a version and production source hash to swiftc", async () => {
 	const fixture = ["activity_glow", "agent_cursor", "agent_cursor_motion", "bridge", "helper_entry"];
 	for (const file of fixture.toReversed()) writeFileSync(path.join(dir, `${file}.swift`), "// v1\n");
 	writeFileSync(path.join(dir, "headless_tests.swift"), "// ignored\n");
+	// Uncompiled Swift file: scratch in the build checkout is neither compiled nor packed.
+	writeFileSync(path.join(dir, "scratch.swift"), "// not compiled\n");
 	const digest = createHash("sha256")
 		.update(fixture.map((file) => `${file}.swift:6:// v1\n`).join(""))
 		.digest("hex");
@@ -542,6 +658,11 @@ test("passes a version and production source hash to swiftc", async () => {
 		log: () => {},
 		run: async (command: string, args: string[]) => {
 			assert.equal(command, "xcrun");
+			assert.deepEqual(
+				args.filter((arg) => arg.startsWith(dir)),
+				macosHelperSourcePaths.map((file: string) => path.join(root, file)),
+				"the stamp hashes exactly the compiler input list",
+			);
 			const stamp = args.find((arg) => arg.endsWith("/HelperBuildStamp.swift"));
 			assert.ok(stamp);
 			assert.equal(readFileSync(stamp, "utf8"), `let helperBuildIdentity = "1.2.3+${digest}"\n`);

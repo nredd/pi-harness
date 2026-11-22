@@ -10,6 +10,7 @@ const fakes = vi.hoisted(() => ({
 		ensureDaemon: vi.fn(),
 		ensureProtocol: vi.fn(),
 		restart: vi.fn(),
+		isExternal: vi.fn(),
 	},
 	runProcess: vi.fn(),
 }));
@@ -320,6 +321,38 @@ describe("ensureMacosReady", () => {
 		const bare = makeCtx(["Cancel"]);
 		await assert.rejects(ensureMacosReady(bare, readyState), /incomplete/);
 		assert.doesNotMatch(bare.prompts[0].prompt, /Warning: the helper is not running/);
+	});
+
+	test("external permission recheck reads the operator's new grants with zero shutdowns", async () => {
+		const signal = new AbortController().signal;
+		const recheck = "Recheck (restart the external helper first if needed)";
+		fakes.macos.isExternal.mockReturnValue(true);
+		fakes.macos.restart.mockRejectedValue(new Error("External helper must be restarted by its operator."));
+		let reads = 0;
+		fakes.macos.command.mockImplementation(async (command) => {
+			if (command !== "checkPermissions") return {};
+			// The operator grants and restarts the external helper before the second Recheck.
+			const granted = ++reads >= 4;
+			return reply({ accessibility: granted, screenRecordingCapturable: granted });
+		});
+		const ctx = makeCtx([recheck, recheck]);
+		const next = await ensureMacosReady(ctx, readyState, signal);
+		assert.equal(next.permissionStatus.accessibility, true);
+		assert.deepEqual(ctx.prompts[0].options, [
+			"Open Accessibility Settings (missing)",
+			"Open Screen Recording Settings (missing)",
+			recheck,
+			"Cancel",
+		]);
+		assert.equal(fakes.macos.restart.mock.calls.length, 0);
+		assert.ok(!fakes.macos.command.mock.calls.some(([command]) => command === "shutdown"));
+		assert.deepEqual(ctx.notices, [
+			[
+				"Still missing: accessibility and screenRecording. Grant them to the external helper, have its operator restart it if needed, then choose Recheck again.",
+				"warning",
+			],
+			["pi-computer-use is ready.", "info"],
+		]);
 	});
 });
 
