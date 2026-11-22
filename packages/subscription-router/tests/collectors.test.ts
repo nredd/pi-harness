@@ -25,7 +25,11 @@ const reading: CollectorReading = {
 const ctx = { modelRegistry: {} } as RegistryContext;
 const key = Symbol.for("pi-subscription-router.collectors");
 const host = globalThis as typeof globalThis & {
-	[key]: { version: number; register(collector: Collector): () => void };
+	[key]: {
+		version: number;
+		register(collector: Collector): () => void;
+		collectorFor(id: string): Readonly<Collector> | undefined;
+	};
 };
 const registry = host[key];
 const fake: Collector = { provider, kind: "custom", read: async () => reading };
@@ -53,6 +57,7 @@ it("shares the registry with an extension that does not import the router", asyn
 	cleanup.push(registry.register(fake));
 	const { usage } = harness();
 	expect(collectorFor(provider)).toEqual(fake);
+	expect(registry.collectorFor(provider)).toBe(collectorFor(provider));
 	expect(Object.isFrozen(collectorFor(provider))).toBe(true);
 	expect(COLLECTED_PROVIDERS).toEqual(["anthropic", "openai-codex", provider]);
 	expect(Object.keys(COLLECTED_PROVIDERS)).toEqual(["0", "1", "2"]);
@@ -345,7 +350,9 @@ it("selects configured collector IDs without changing the credential provider", 
 	expect(snapshot).toMatchObject({ provider: alias, status: "available", windows: reading.windows });
 	expect(getAccessToken).toHaveBeenCalledWith(ctx, alias);
 	expect(read).not.toHaveBeenCalled();
-	usage.configureCollectors({});
+	usage.configureCollectors({ [alias]: { collector: { id: provider } } });
+	expect(usage.peek(alias)).toBe(snapshot);
+	usage.configureCollectors();
 	expect(usage.peek(alias)).toBeUndefined();
 	expect(await usage.get(ctx, alias)).toMatchObject({ status: "available" });
 	expect(read).toHaveBeenCalledOnce();

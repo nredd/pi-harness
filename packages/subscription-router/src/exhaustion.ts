@@ -57,7 +57,7 @@ export class ExhaustionTracker {
 			resetKnown,
 			confirmations,
 		};
-		this.remove(key);
+		this.detach(key);
 		this.marks.set(key, mark);
 		const signal = decision[COLLECTOR_EVIDENCE];
 		if (signal)
@@ -109,8 +109,12 @@ export class ExhaustionTracker {
 	}
 
 	private remove(key: string): void {
+		this.detach(key);
+		this.marks.delete(key);
+	}
+
+	private detach(key: string): void {
 		this.lifetimes.get(key)?.[Symbol.dispose]();
 		this.lifetimes.delete(key);
-		this.marks.delete(key);
 	}
 }

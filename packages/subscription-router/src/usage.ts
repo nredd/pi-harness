@@ -207,7 +207,7 @@ export class UsageService {
 		{ registration: CollectorRegistration; binding: CollectorRegistration; unbind: AbortController }
 	>();
 	private providers: Readonly<Record<string, ProviderConfig>> = {};
-	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration>();
+	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration | undefined>();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly generations = new Map<string, number>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
@@ -399,16 +399,14 @@ export class UsageService {
 
 	private stale(cached: UsageSnapshot, now: number, message: string | undefined): UsageSnapshot {
 		const stale = staleSnapshot(cached, now, message);
-		const registration = this.evidence.get(cached);
-		if (registration) this.evidence.set(stale, registration);
+		this.evidence.set(stale, this.evidence.get(cached));
 		return stale;
 	}
 
 	private currentCollector(provider: string): CollectorRegistration | undefined {
 		const registration = registrationFor(collectorIdFor(provider, this.providers));
 		const current = this.collectors.get(provider);
-		if (current?.registration === registration) return current?.binding;
-		current?.unbind.abort();
+		if (current) return current.binding;
 		if (!registration) return undefined;
 		const unbind = new AbortController();
 		const binding = {
@@ -446,7 +444,6 @@ export class UsageService {
 					// is acyclic. The caller's total wait is bounded across supersessions.
 					const newer = this.inFlight.get(provider);
 					const latest = newer ? await newer.read : this.cache.get(provider);
-					if (registration.signal.aborted) return retired();
 					const freshEnough = (snapshot: UsageSnapshot | undefined): snapshot is UsageSnapshot =>
 						snapshot?.status === "available" && snapshot.retrievedAt >= Math.max(now, notBefore ?? now);
 					if (freshEnough(latest)) return latest;
@@ -553,8 +550,10 @@ export class UsageService {
 						retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
 					);
 				}
-				const payload = await readUsageJson(response, signal);
-				signal.throwIfAborted();
+				// Real fetch rejects on abort. Keep the legacy late-response behavior for
+				// injected transports that resolve despite abort, but still bound the body.
+				const payload = await readUsageJson(response, timedOut ? lifetime : signal);
+				lifetime.throwIfAborted();
 				parsed = collector.parse(payload);
 			} else {
 				// Custom reads get the same deadline even if the adapter ignores abort.

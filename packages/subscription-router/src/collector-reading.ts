@@ -60,7 +60,6 @@ const schema = Type.Object({
 });
 
 function copyBucket({
-	name,
 	resetAt,
 	durationMs,
 	spanSource,
@@ -70,7 +69,6 @@ function copyBucket({
 	resetRule,
 }: CollectorReading["windows"][number] | NonNullable<CollectorReading["meters"]>[number]) {
 	return {
-		name,
 		resetAt: Math.abs(resetAt ?? Infinity) <= 8.64e15 ? resetAt : undefined,
 		durationMs,
 		spanSource: spanSource as "reported" | "assumed" | undefined,
@@ -89,8 +87,9 @@ export function normalizeReading(reading: unknown): CollectorReading | undefined
 		windows: windows.map((window) => {
 			const { usedPercent, quantity } = window;
 			return {
-				...copyBucket(window),
+				name: window.name,
 				usedPercent,
+				...copyBucket(window),
 				quantity: quantity && {
 					unit: quantity.unit,
 					used: quantity.used,
@@ -101,7 +100,7 @@ export function normalizeReading(reading: unknown): CollectorReading | undefined
 		}),
 		meters: meters?.map((meter) => {
 			const { unit, used, limit, remaining } = meter.quantity;
-			return { ...copyBucket(meter), quantity: { unit, used, limit, remaining } };
+			return { name: meter.name, ...copyBucket(meter), quantity: { unit, used, limit, remaining } };
 		}),
 		pools: pools?.map(({ name, unit, role, balance, unlimited, appliesAfter }) => ({
 			name,
