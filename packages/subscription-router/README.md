@@ -241,7 +241,8 @@ collected provider used with an API key, never failed over.
 Never-mark rules run first, for every provider: an auth (401/403), 5xx, transport, safety,
 per-minute or weak failure is never confirmed, whatever its wording, so not even a collected
 provider's read can mark one. Per-minute means an explicit per-minute window, which beats billing
-and daily wording in the same error, or a hint under 60 seconds (under `minHintSeconds` when that
+and daily wording in the same error (against billing only a structured window or unquoted wording:
+`402: payment required for plan "PerMinute"` stays billing), or a hint under 60 seconds (under `minHintSeconds` when that
 is lower). Weak means the gate matched with no quota verdict, e.g. `processed 429 tokens` (S15).
 Affirmative window exhaustion prose is a verdict, not weak: Anthropic streams statusless
 `You have reached your weekly usage limit` or `5-hour limit reached`, so a usage, weekly, 5-hour

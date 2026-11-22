@@ -194,6 +194,12 @@ describe("failure-inferred evidence", () => {
 			expect(await decide(adapter, failure(text, T0 + index * MINUTE))).toEqual({ kind: "clear" });
 	});
 
+	it("marks a 402 whose quoted plan name merely contains PerMinute", async () => {
+		expect(
+			await decide(failureEvidence(new FailureHistory()), failure('402: payment required for plan "PerMinute"')),
+		).toMatchObject({ kind: "block", decision: { window: "inferred:billing", scope: "provider", cause: "billing" } });
+	});
+
 	it("abstains without a failed message", async () => {
 		const adapter = failureEvidence(new FailureHistory());
 		expect(await decide(adapter, { model: CARBON, failedAt: T0 })).toEqual({ kind: "abstain" });

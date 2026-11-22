@@ -215,7 +215,10 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 		const windows = quotaIds.join(" ");
 		// S7: per-minute never marks, so an explicit per-minute window beats billing and daily wording.
 		// The prose fallback accepts explicit window tokens, not arbitrary mentions of the word daily.
-		if (PER_MINUTE.test(windows) || PER_MINUTE_TOKEN.test(message)) return { class: "per-minute", ...quota };
+		// Against billing only a structured window or unquoted wording counts: a quoted value (a plan
+		// named "PerMinute") echoes the request and must not veto a payment failure.
+		const throttleText = billing ? message.replace(QUOTED, " ") : message;
+		if (PER_MINUTE.test(windows) || PER_MINUTE_TOKEN.test(throttleText)) return { class: "per-minute", ...quota };
 		if (billing) return { class: "billing", scope: "provider", cause: "billing" };
 		if (interactionsDaily || DAILY.test(windows) || DAILY_TOKEN.test(message)) {
 			return { class: "daily", resetAt: nextPacificMidnight(now), ...quota };

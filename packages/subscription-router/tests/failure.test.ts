@@ -428,6 +428,9 @@ it.each<[string, string, FailureClassification]>([
 	["credits depleted for a per-minute window", "Credits depleted for RequestsPerMinute", perMinute],
 	["402 naming a per-minute window", "402: payment required, PerMinute", perMinute],
 	["daily wording with a per-minute token", "429: Daily quota exceeded (RequestsPerMinute)", perMinute],
+	["402 with a quoted PerMinute plan", '402: payment required for plan "PerMinute"', billing],
+	["402 with a single-quoted per-minute value", "402: payment required for tier 'RequestsPerMinute'", billing],
+	["429 quoting a per-minute metric stays a throttle", "429: Quota exceeded for metric 'RequestsPerMinute'", perMinute],
 ])("lets explicit per-minute evidence win: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
 });
