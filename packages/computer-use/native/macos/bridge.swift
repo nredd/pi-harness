@@ -5696,7 +5696,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or say its delivery is unknown when the settled outcome is `unknown` without a stop (and not to replay it). A stopped transaction (`stoppedAt`, a keyboard stop or a timed-out or otherwise indeterminate action) is never called delivered, in a terminal or a successor result: its first line names the stopped action and its literal refusal or error code, the root observation follows on its own line, and the replay decision comes once. Only a first action refused with a code or `0` posted units says nothing was posted and a retry is safe; every other stop says not to replay the transaction (#1281). The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.

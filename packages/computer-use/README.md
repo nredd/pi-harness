@@ -446,13 +446,18 @@ confirmed foreground modal, so they can disagree with `act_ui` about which root 
 
 ### Post-action outcomes
 
-Terminal `act_ui` results say the action was delivered, or, after a timed-out or otherwise indeterminate action, name it
-(`Action N timed out; whether it was delivered is unknown.`) and say not to replay the transaction, or, when the settled
-outcome is otherwise `unknown`, say `Delivery of the action is unknown` and not to replay the transaction. A
-transaction that stopped (`stoppedAt`) never reads as delivered: its first line names the stopped action and any refusal
-code, says not to replay when an earlier action ran (`Stopped at action N (code); whether the transaction was delivered is
-unknown.`), or says a refused first action did not take effect, and the root observation follows on its own line (#1281).
-The result is also:
+Terminal `act_ui` results say the action was delivered, or, when the settled outcome is `unknown` without a stop, say
+`Delivery of the action is unknown` and not to replay the transaction. A transaction that stopped (`stoppedAt`, a
+keyboard stop or an indeterminate step) never reads as delivered, in a terminal or a successor result: one stop
+formatter opens with the stopped action and its literal refusal or error code, e.g. `Stopped at action N (code); whether
+the transaction was delivered is unknown.`, or, after a timed-out or otherwise indeterminate action, `Action N timed out;
+whether it was delivered is unknown.` (with its code, e.g. `ax_delivery_unknown`, when that is not `timeout`). It names
+earlier actions that may have delivered input, keeps the root observation of a terminal result on its own line, and
+gives the replay decision once. Only a first action refused with a code or `0` posted units, with no uncertain delivery
+or unconfirmed release, says `nothing was posted, so a retry is safe`; an errorless `didnt` does not prove that, and
+every other stop says not to replay the transaction (#1281). A successor result of an unstopped transaction reads
+`Executed N checked UI actions`. An abort during the follow-up observation of a stopped transaction throws the same stop
+text with its `execution` trace. The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new window, dialog or sheet
   roots of the same pid appeared and are still live (menus and popovers do not count). Observe a successor via `find_roots`.
@@ -2901,7 +2906,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results say the action was delivered, name the timed-out or otherwise indeterminate action and say its delivery is unknown, or say its delivery is unknown when the settled outcome is otherwise `unknown` (and not to replay it). A stopped transaction (`stoppedAt`) is never called delivered: its first line names the stopped action and any refusal code, and says not to replay when an earlier action ran, and the root observation follows on its own line (#1281). The result is also:
+Terminal `act_ui` results say the action was delivered, or say its delivery is unknown when the settled outcome is `unknown` without a stop (and not to replay it). A stopped transaction (`stoppedAt`, a keyboard stop or a timed-out or otherwise indeterminate action) is never called delivered, in a terminal or a successor result: its first line names the stopped action and its literal refusal or error code, the root observation follows on its own line, and the replay decision comes once. Only a first action refused with a code or `0` posted units says nothing was posted and a retry is safe; every other stop says not to replay the transaction (#1281). The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.

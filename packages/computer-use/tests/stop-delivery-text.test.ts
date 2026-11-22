@@ -11,6 +11,12 @@ afterEach(() => {
 const press = { action: "press", ref: "@e2" };
 const ROOT_LINE = "Its source root App1 \u2014 Main could not be observed afterward: capture failed";
 const CHECK = "Do not replay the transaction: call find_roots, then observe_ui to check whether it took effect.";
+const CONTINUE = "Call find_roots, then observe_ui to continue.";
+
+/** The replay guidance appears once, never repeated by the stop line. */
+function assertOneReplayWarning(text: string) {
+	assert.equal(text.match(/Do not replay/g)?.length, 1, text);
+}
 
 /** A non-headless macOS fake desktop with one button, observed, whose successor capture then fails. */
 async function failingCapture(onTestFinished: Parameters<typeof installFakeDesktop>[0]) {
@@ -38,10 +44,82 @@ test.for(["input_unsafe", "cancelled"])(
 		assert.equal(result.details.execution.stoppedAt, 1);
 		assert.equal(
 			fake.text(result),
-			`Stopped at action 2 (${code}); whether the transaction was delivered is unknown. Action 1 ran before it and may have delivered input. Do not replay the transaction.\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`,
+			`Stopped at action 2 (${code}); whether the transaction was delivered is unknown. Action 1 ran before it and may have delivered input.\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`,
 		);
+		assertOneReplayWarning(fake.text(result));
 	},
 );
+
+/** A non-headless macOS fake desktop with one button, observed, whose successor capture succeeds. */
+async function capturing(onTestFinished: Parameters<typeof installFakeDesktop>[0]) {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "0");
+	const fake = await installFakeDesktop(onTestFinished, { platform: "macos" });
+	const { stateId } = await fake.observe();
+	return { fake, act: (actions: unknown[]) => fake.call(fake.bridge.executeAct, { stateId, actions }) };
+}
+
+const SUCCESSOR_CHECK =
+	/Do not replay the transaction: check state [\w-]+ for whether it took effect before retrying it\./;
+
+test("a stop thrown after a delivered step names itself when the successor capture succeeds", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await capturing(onTestFinished);
+	fake.actHook = () => {
+		if (fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "hid" } };
+		throw Object.assign(new Error("Refused: input_unsafe"), { code: "input_unsafe" });
+	};
+	const result = await act([press, press, press]);
+	const text = fake.text(result);
+	assert.equal(result.details.execution.stoppedAt, 1);
+	assert.doesNotMatch(text, /Executed \d+ checked UI action/);
+	assert.ok(
+		text.startsWith(
+			"Stopped at action 2 (input_unsafe); whether the transaction was delivered is unknown. Action 1 ran before it and may have delivered input. Do not replay the transaction: check state ",
+		),
+		text,
+	);
+	assertOneReplayWarning(text);
+});
+
+test("an errorless didnt after a worked step names the stop when the successor capture succeeds", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await capturing(onTestFinished);
+	fake.actHook = () =>
+		fake.actCalls.length === 1
+			? { outcome: "worked", performed: { delivery: "hid" } }
+			: { outcome: "didnt", performed: { delivery: "ax" } };
+	const result = await act([press, press, press]);
+	const text = fake.text(result);
+	assert.equal(fake.actCalls.length, 2, "action 3 never runs");
+	assert.equal(result.details.execution.stoppedAt, 1);
+	assert.doesNotMatch(text, /Executed \d+ checked UI action/);
+	assert.ok(
+		text.startsWith(
+			"Stopped at action 2; whether the transaction was delivered is unknown. Action 1 ran before it and may have delivered input. Do not replay",
+		),
+		text,
+	);
+	assert.match(text, SUCCESSOR_CHECK);
+});
+
+test("a first-step refusal that posted nothing says a retry is safe when the successor capture succeeds", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await capturing(onTestFinished);
+	fake.actResult = {
+		outcome: "didnt",
+		performed: { delivery: "ax" },
+		error: { code: "ax_write_failed", message: "AXSelectedTextRange write failed" },
+	};
+	const text = fake.text(await act([press, press]));
+	assert.match(
+		text,
+		/^Stopped at action 1 \(ax_write_failed\): nothing was posted, so a retry is safe\. Returned state [\w-]+\./,
+	);
+	assert.doesNotMatch(text, /Do not replay/);
+});
 
 test("a refusal returned on the stopped step keeps its code on the transaction and in the text", async ({
 	onTestFinished,
@@ -68,35 +146,62 @@ test("a stop after several delivered steps names the whole prefix", async ({ onT
 	assert.doesNotMatch(text, /was delivered,/);
 	assert.ok(
 		text.startsWith(
-			"Stopped at action 3; whether the transaction was delivered is unknown. Actions 1-2 ran before it and may have delivered input. Do not replay the transaction.\n",
+			"Stopped at action 3; whether the transaction was delivered is unknown. Actions 1-2 ran before it and may have delivered input.\n",
 		),
 		text,
 	);
 });
 
 test.for([
-	{ name: "an errorless didnt", hook: () => ({ outcome: "didnt", performed: { delivery: "ax" } }), refusal: "" },
+	{
+		// An errorless `didnt` does not establish that nothing was posted, e.g. a scroll that saw no change.
+		name: "an errorless didnt",
+		hook: () => ({ outcome: "didnt", performed: { delivery: "ax" } }),
+		expected: `Stopped at action 1; whether the transaction was delivered is unknown.\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`,
+	},
 	{
 		name: "a refusal with evidence",
 		hook: () => {
 			throw Object.assign(new Error("Refused"), { code: "input_unsafe", evidence: { held: [] } });
 		},
-		refusal: " (input_unsafe)",
+		expected: `Stopped at action 1 (input_unsafe): nothing was posted, so a retry is safe.\n${ROOT_LINE}\nNo successor state was created. ${CONTINUE}`,
+	},
+	{
+		name: "a keyboard refusal with zero posted units",
+		hook: () => {
+			throw Object.assign(new Error("Deadline"), { code: "input_deadline_expired", evidence: { postedUnits: 0 } });
+		},
+		expected: `Stopped at action 1 (input_deadline_expired): nothing was posted, so a retry is safe.\n${ROOT_LINE}\nNo successor state was created. ${CONTINUE}`,
 	},
 ])(
 	"a first-step stop by $name never claims delivery when the capture fails",
-	async ({ hook, refusal }, { onTestFinished }) => {
+	async ({ hook, expected }, { onTestFinished }) => {
 		const { fake, act } = await failingCapture(onTestFinished);
 		fake.actHook = hook;
 		const result = await act([press, press]);
 		assert.equal(fake.actCalls.length, 1);
 		assert.equal(result.details.execution.outcome, "didnt");
-		assert.equal(
-			fake.text(result),
-			`Stopped at action 1${refusal}: it did not take effect.\n${ROOT_LINE}\nNo successor state was created. Call find_roots, then observe_ui to continue.`,
-		);
+		assert.equal(fake.text(result), expected);
 	},
 );
+
+test("web stale readback: posted replacement text the readback did not confirm is never called not delivered", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await failingCapture(onTestFinished);
+	fake.actResult = {
+		outcome: "unknown",
+		performed: { delivery: "pid", grounding: "keyboard-events", selectionGrounding: "ax" },
+		evidence: { deliveryUnknown: true, value: "before" },
+	};
+	const result = await act([{ action: "setText", ref: "@e2", text: "new" }, press]);
+	assert.equal(fake.actCalls.length, 1);
+	assert.equal(result.details.execution.outcome, "unknown");
+	assert.equal(
+		fake.text(result),
+		`Action 1 posted input that its readback did not confirm; whether it was delivered is unknown.\n${ROOT_LINE}\nNo successor state was created. Do not replay the transaction: call find_roots, then observe_ui to check whether action 1 took effect.`,
+	);
+});
 
 test("a keyboard stop keeps the root observation on its own line", async ({ onTestFinished }) => {
 	const { fake, act } = await failingCapture(onTestFinished);
@@ -108,7 +213,7 @@ test("a keyboard stop keeps the root observation on its own line", async ({ onTe
 	const text = fake.text(await act([press, { action: "keypress", ref: "@e2", keys: ["tab"] }]));
 	assert.equal(
 		text,
-		`Stopped at action 2 (app_blocked). 1 key pair posted. Do not replay the transaction.\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`,
+		`Stopped at action 2 (app_blocked). 1 key pair posted.\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`,
 	);
 });
 
@@ -165,6 +270,32 @@ test("a strict-headless batch keeps the stale write unknown and its readback val
 	assert.deepEqual(execution.steps[0].evidence, { deliveryUnknown: true, value: "before" });
 });
 
+test("abort after accepted AX write keeps the stop text and the unknown trace on the thrown error", async ({
+	onTestFinished,
+}) => {
+	const { fake, stateId } = await textField(onTestFinished, false);
+	fake.actResult = STALE_WRITE;
+	const abort = new AbortController();
+	fake.lookPayload = () => {
+		abort.abort();
+		throw new Error("capture aborted");
+	};
+	await assert.rejects(
+		() => fake.call(fake.bridge.executeAct, { stateId, actions: setTwice }, abort.signal),
+		(error: Error & { code: string; execution: { outcome: string; stoppedAt: number } }) => {
+			assert.equal(
+				error.message,
+				"Action 1 posted input that its readback did not confirm; whether it was delivered is unknown. The follow-up observation was aborted. Do not replay the transaction: call find_roots, then observe_ui to check whether action 1 took effect.",
+			);
+			assert.equal(error.code, "aborted");
+			assert.equal(error.execution.outcome, "unknown");
+			assert.equal(error.execution.stoppedAt, 0);
+			return true;
+		},
+	);
+	assert.equal(fake.actCalls.length, 1, "one dispatch, never resent");
+});
+
 test.for([
 	{
 		outcome: "didnt",
@@ -194,9 +325,6 @@ test.for([
 			steps: steps.map((step) => ({ ...step, performed: { delivery: "ax" } })),
 		};
 		const result = await fake.call(fake.bridge.executeAct, { stateId, actions: [press, press] });
-		assert.equal(
-			fake.text(result),
-			`${stop} Do not replay the transaction.\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`,
-		);
+		assert.equal(fake.text(result), `${stop}\n${ROOT_LINE}\nNo successor state was created. ${CHECK}`);
 	},
 );
