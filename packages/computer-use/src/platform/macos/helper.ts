@@ -221,49 +221,10 @@ async function isResolvedHelperExecutable(filePath: string): Promise<boolean> {
 	return actualPath === expectedPath;
 }
 
-/** True when the daemon process started before the installed binary was last written (it runs old code). */
-export function helperPredatesBinary(processStartMs: number, binaryChangeMs: number): boolean {
-	return Number.isFinite(processStartMs) && Number.isFinite(binaryChangeMs) && processStartMs + 1_000 < binaryChangeMs;
-}
-
-/** `ps -o etime=` output, `[[dd-]hh:]mm:ss`, in seconds; `undefined` for anything else. */
-export function parseElapsedSeconds(elapsed: string): number | undefined {
-	const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(elapsed.trim());
-	if (!match) return undefined;
-	const [, days = "0", hours = "0", minutes, seconds] = match;
-	return ((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds);
-}
-
-/**
- * Compare the daemon's start time with the installed binary's `ctime`.
- * @returns `old` when it started before the binary was last written, `current` when not, and `unknown` when the
- * pid, `ps` or the binary cannot be read. Unknown is never proof of current.
- */
-async function daemonAge(pid: number): Promise<"old" | "current" | "unknown"> {
-	if (!Number.isSafeInteger(pid) || pid <= 1) return "unknown";
-	try {
-		const elapsed = await new Promise<string>((resolve, reject) => {
-			const child = spawn("ps", ["-o", "etime=", "-p", String(pid)], { stdio: ["ignore", "pipe", "ignore"] });
-			let out = "";
-			child.stdout.on("data", (chunk) => {
-				out += chunk;
-			});
-			child.on("error", reject);
-			child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`ps exited ${code}`))));
-		});
-		const seconds = parseElapsedSeconds(elapsed);
-		if (seconds === undefined) return "unknown";
-		// ctime, not mtime: ditto preserves mtime, but any install changes ctime.
-		const { ctimeMs } = await stat(HELPER_APP_EXECUTABLE_PATH);
-		return helperPredatesBinary(Date.now() - seconds * 1_000, ctimeMs) ? "old" : "current";
-	} catch {
-		return "unknown";
-	}
-}
-
 /**
  * Why a managed daemon whose build already matched is still not the installed helper, or `undefined` when it is.
- * Missing or unreadable evidence is a mismatch, never a match.
+ * Missing evidence is a mismatch, never a match. Its start time is not compared with the installed binary: the
+ * build check already refuses stale code.
  */
 async function residentMismatch(diagnostics: PlatformDiagnostics): Promise<string | undefined> {
 	if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION) {
@@ -272,11 +233,6 @@ async function residentMismatch(diagnostics: PlatformDiagnostics): Promise<strin
 	if (!diagnostics.executablePath) return `reports no executable path (expected ${HELPER_APP_EXECUTABLE_PATH})`;
 	if (!(await isResolvedHelperExecutable(diagnostics.executablePath))) {
 		return `runs ${diagnostics.executablePath} (expected ${HELPER_APP_EXECUTABLE_PATH})`;
-	}
-	const age = await daemonAge(diagnostics.pid);
-	if (age === "old") return `its process (pid ${diagnostics.pid}) started before the installed binary was last written`;
-	if (age === "unknown") {
-		return `its start time (pid ${diagnostics.pid}) could not be compared with the installed binary`;
 	}
 	return undefined;
 }
@@ -654,9 +610,9 @@ export class MacosHelperClient {
 	}
 
 	/**
-	 * Check that a managed daemon whose build matched is the installed helper: expected protocol, executable path and
-	 * a process no older than the installed binary. A mismatch, or evidence that cannot be read, is refused with
-	 * `helper_mismatch`; the daemon is never shut down, relaunched or stopped here.
+	 * Check that a managed daemon whose build matched is the installed helper: expected protocol and executable path.
+	 * A mismatch, or a missing path, is refused with `helper_mismatch`; the daemon is never shut down, relaunched or
+	 * stopped here.
 	 */
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
 		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection.

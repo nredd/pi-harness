@@ -64,8 +64,8 @@ async function rig(
 	const socketPath = shortSocketPath();
 	const fake = await startFakeHelper({
 		socketPath,
-		// The installed helper as `ensureProtocol` expects it: its executable and a pid that `ps` reads below.
-		diagnostics: { protocolVersion: 8, pid: 4242, executablePath: executable, buildIdentity },
+		// The installed helper as `ensureProtocol` expects it: its protocol and executable.
+		diagnostics: { protocolVersion: 8, pid: 0, executablePath: executable, buildIdentity },
 		handlers: { listApps: ok([]), setActivityGlow: ok({}) },
 	});
 	onTestFinished(() => fake.stop());
@@ -128,12 +128,7 @@ async function rig(
 	const spawn = vi.fn(() => {
 		throw new Error("Unexpected helper process launch");
 	});
-	// `ps` answers the start-time check with a just-started daemon; every other spawn is a launch and goes to `spawn`.
-	const routed = (command: string, ...rest: unknown[]) =>
-		command === "ps"
-			? createFakeChild({ stdout: "00:00\n", exitCode: 0 })
-			: (spawn as (...a: unknown[]) => unknown)(command, ...rest);
-	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn: routed }));
+	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn }));
 	const { macosHelper, macosActivityGlow } = await import("../src/platform/macos/helper.ts");
 	onTestFinished(() => macosActivityGlow.close());
 	return {

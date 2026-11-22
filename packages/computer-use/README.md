@@ -462,7 +462,7 @@ Measured, not assumed:
   Window refs persist until their AX element dies or the helper restarts. The daemon does not exit when idle.
 - Refs carry a per-process epoch, so a ref from before a helper restart never resolves; it used to be possible
   for `w3` from an old helper to name a different window in a new one.
-- Helper restarts happen on reinstall and permission relaunch; a protocol, executable or binary-age mismatch is refused, not restarted. The extension's `@rN`
+- Helper restarts happen on reinstall and permission relaunch; a protocol or executable mismatch is refused, not restarted. The extension's `@rN`
   records survive them, so `@rN` can outlive its native ref: expect `root_not_found` / "stale", then rediscover
   with `find_roots`. Refs from earlier sessions, pids and state ids are stale.
 - Root deltas in `act_ui` results carry helper-native refs until `normalizeRootDeltaRefs()` maps them, once per
@@ -487,7 +487,7 @@ The helper daemon outlives pi, so a reinstall alone leaves old code running. Two
 - The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the Swift sources `build:native` compiles (line endings normalized; any other `.swift` file in the checkout is ignored). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
 - The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched; once a probe timed out, a later absence is not proof either, only a verified reply is. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
 - `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
-- After the build matches, `ensureProtocol()` refuses a managed daemon with `helper_mismatch` when it reports another protocol, no executable path or another executable, or its process started before the installed binary was last written (`helperPredatesBinary`). A start time it cannot read (invalid pid, `ps` failure, unparseable `etime`, unreadable binary) is refused too. It never shuts down, relaunches or stops that daemon: quit it, and the next command launches the installed app
+- After the build matches, `ensureProtocol()` refuses a managed daemon with `helper_mismatch` when it reports another protocol, no executable path or another executable. It never shuts down, relaunches or stops that daemon: quit it, and the next command launches the installed app. It does not compare the daemon's start time with the installed binary; the build check refuses stale code
 
 ### Whole-desktop control
 
@@ -595,9 +595,7 @@ Notes: desktop tools and `act_ui` share one lock. An `act_ui` transaction takes 
 (physical HID) step (the `needsForeground`/current-focus case, the side-effect-free foreground retry, the
 `foreground_required` fallback) and keeps it until the transaction ends, so a later step relying on focus set by an
 earlier one is never interleaved with `desktop_input`. Transactions that stay background/pid/AX never take it. Lock order is window write lock, then
-desktop lock; the desktop tools take only the desktop lock. A queued call that is aborted never runs. A helper process that started before the
-installed binary's `ctime` is refused with `helper_mismatch`, so anything that touches the binary's metadata
-needs one manual helper quit (which invalidates native refs) before the next session start.
+desktop lock; the desktop tools take only the desktop lock. A queued call that is aborted never runs.
 
 ## License
 
@@ -1512,7 +1510,7 @@ From the installed package root, explicitly repair a missing or stale helper wit
 node scripts/setup-helper.mjs --runtime
 ```
 
-Setup stops the old daemon only when it replaces or re-signs the bundle, and never under npm `--postinstall`. If it reports the app already current but the refusal persists, e.g. `helper_mismatch` for a daemon launched from a legacy path or started before the binary changed, quit that daemon by hand; the next command launches the installed helper.
+Setup stops the old daemon only when it replaces or re-signs the bundle, and never under npm `--postinstall`. If it reports the app already current but the refusal persists, e.g. `helper_mismatch` for a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
 
 For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 

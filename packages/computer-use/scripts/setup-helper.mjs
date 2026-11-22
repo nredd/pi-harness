@@ -920,7 +920,7 @@ function createSetup(argv, deps) {
 			// require permission review after native code changes.
 			const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 			if (signingIdentity !== "-" && (await helperHasAdhocSignature())) {
-				// Re-signing rewrites the binary, so a resident daemon would predate it and be refused.
+				// A resident daemon keeps the ad-hoc signature it launched with: stop it so the next command runs the re-signed app.
 				await stopRunningHelper();
 				await signHelper(helperAppPath, helperBundleId);
 				await registerHelperApp();

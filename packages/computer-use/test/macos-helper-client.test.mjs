@@ -447,12 +447,10 @@ test.each([8, 6])("external daemon from another executable with protocol %s is n
 });
 
 describe("ensureProtocol", () => {
-	const psFor = (etime, exitCode = 0) => ({ ps: { stdout: `${etime}\n`, exitCode } });
-
-	async function protocolRig({ diagnostics = {}, etime = "00:00", ps, install = true } = {}) {
+	async function protocolRig({ diagnostics = {}, install = true } = {}) {
 		if (install) installExecutable();
 		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...diagnostics } });
-		const spawn = createFakeSpawn(ps ?? psFor(etime));
+		const spawn = createFakeSpawn({});
 		const mod = await load({ external: false, fake, spawn });
 		return { fake, spawn, ...mod, client: new mod.MacosHelperClient() };
 	}
@@ -488,14 +486,14 @@ describe("ensureProtocol", () => {
 		);
 	}
 
-	test("accepts a current daemon without restarting", async () => {
+	test("accepts a current daemon without restarting or reading its start time", async () => {
 		const { client, fake, spawn } = await protocolRig({ diagnostics: { pid: 77 } });
 		assert.equal((await client.ensureProtocol()).protocolVersion, 8);
 		assert.equal(
 			fake.requests.some((request) => request.cmd === "shutdown"),
 			false,
 		);
-		assert.deepEqual(spawn.calls[0].args, ["-o", "etime=", "-p", "77"]);
+		assert.deepEqual(spawn.calls, [], "no `ps`: start time is not compared");
 	});
 
 	test("accepts a daemon whose executable is a symlink to the installed one", async () => {
@@ -522,59 +520,6 @@ describe("ensureProtocol", () => {
 		const elsewhere = path.join(tmp, "elsewhere", "bridge");
 		const rig = await protocolRig({ install: false, diagnostics: { executablePath: elsewhere } });
 		await assertRefused(rig, new RegExp(`runs ${elsewhere} \\(expected ${rig.HELPER_APP_EXECUTABLE_PATH}\\)`));
-	});
-
-	test("refuses a daemon whose process predates the installed binary", async () => {
-		const rig = await protocolRig({ diagnostics: { pid: 77 }, etime: "00:01" });
-		await rig.client.ensureDaemon();
-		// 100 s before the binary's ctime: started + 1 s < ctime.
-		vi.spyOn(Date, "now").mockReturnValue(Date.now() - 100_000);
-		await assertRefused(rig, /its process \(pid 77\) started before the installed binary was last written/);
-	});
-
-	test("reads day-prefixed elapsed times: a daemon running for days predates the binary", async () => {
-		await assertRefused(
-			await protocolRig({ diagnostics: { pid: 5 }, etime: "2-00:00:01" }),
-			/\(pid 5\) started before/,
-		);
-	});
-
-	test.each([
-		["no pid", { diagnostics: { pid: 0 } }],
-		["a negative pid", { diagnostics: { pid: -3 } }],
-		["pid 1", { diagnostics: { pid: 1 } }],
-		["non-numeric elapsed time", { diagnostics: { pid: 5 }, etime: "garbage" }],
-		["empty elapsed time (no such process)", { diagnostics: { pid: 5 }, etime: "" }],
-		["ps exiting non-zero", { diagnostics: { pid: 5 }, ps: psFor("00:00", 1) }],
-		["ps failing to spawn", { diagnostics: { pid: 5 }, ps: { ps: { spawnError: new Error("ENOENT") } } }],
-	])("refuses when the start time is unknown: %s", async (_name, options) => {
-		await assertRefused(
-			await protocolRig(options),
-			/its start time \(pid -?\d+\) could not be compared with the installed binary/,
-		);
-	});
-
-	test("refuses when the installed binary cannot be stat'ed", async () => {
-		const rig = await protocolRig({ install: false, diagnostics: { pid: 5 } });
-		await assertRefused(rig, /its start time \(pid 5\) could not be compared/);
-	});
-
-	test("helperPredatesBinary allows a 1 s grace and rejects non-finite times", async () => {
-		const { helperPredatesBinary } = await load({ external: true, fake: await fakeOn() });
-		assert.equal(helperPredatesBinary(0, 1_001), true);
-		assert.equal(helperPredatesBinary(0, 1_000), false);
-		assert.equal(helperPredatesBinary(Number.NaN, 5_000), false);
-		assert.equal(helperPredatesBinary(0, Number.POSITIVE_INFINITY), false);
-	});
-
-	test("parseElapsedSeconds reads every `etime` form and nothing else", async () => {
-		const { parseElapsedSeconds } = await load({ external: true, fake: await fakeOn() });
-		assert.equal(parseElapsedSeconds("  00:07\n"), 7);
-		assert.equal(parseElapsedSeconds("03:07"), 187);
-		assert.equal(parseElapsedSeconds("01:03:07"), 3_787);
-		assert.equal(parseElapsedSeconds("2-01:03:07"), 2 * 86_400 + 3_787);
-		for (const bad of ["", "7", "garbage", "1-2", "00:0x", "-1:00"])
-			assert.equal(parseElapsedSeconds(bad), undefined, bad);
 	});
 });
 
