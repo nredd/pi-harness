@@ -440,7 +440,11 @@ async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Val
 /// The live root of `lookId`'s retained look, found by the AT-SPI bus name and object path
 /// the look retains, never by an inventory `@w` handle a later listing may reissue (#1300).
 /// `root` is `null` only when the bounded lookup proved it absent. The owner PID and
-/// executable are live; X11 enrichment adds at most a `WM_CLASS` block alias.
+/// executable are live, and the X11 pairing ranks against the root's own live name and
+/// extents, never the frame or title an earlier pairing saved in the look. Without X11 the
+/// root carries no class evidence.
+/// `metadata.x11Pairing` says which: `paired`, `ambiguous` (tied windows' classes are
+/// block-only aliases), `unpaired` or `unavailable`.
 async fn look_root(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
@@ -449,17 +453,39 @@ async fn look_root(
 ) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "atspiLookRoot requires lookId")?;
     let mut root = lock(state)?.look(look_id)?.root;
-    let Some((pid, executable)) = connect().await?.exact_root(&root.accessible).await? else {
+    let Some(live) = connect().await?.exact_root(&root.accessible).await? else {
         return Ok(json!({ "root": Value::Null }));
     };
-    root.pid = pid;
-    root.executable = executable;
-    root.wm_class = None;
-    if let Ok(windows) = windows() {
-        x11::enrich_roots(std::slice::from_mut(&mut root), &windows);
-    }
+    root = RootSnapshot {
+        pid: live.pid,
+        executable: live.executable,
+        name: live.name,
+        frame: live.frame,
+        wm_class: None,
+        class_candidates: Vec::new(),
+        x11_window: None,
+        is_focused: false,
+        is_minimized: false,
+        z_order: None,
+        ..root
+    };
+    let pairing = match windows() {
+        Ok(windows) => {
+            x11::enrich_roots(std::slice::from_mut(&mut root), &windows);
+            if !root.class_candidates.is_empty() {
+                "ambiguous"
+            } else if root.x11_window.is_some() {
+                "paired"
+            } else {
+                "unpaired"
+            }
+        }
+        Err(_) => "unavailable",
+    };
     let reference = lock(state)?.root_ref(&root.accessible).unwrap_or_default();
-    Ok(json!({ "root": root_json(&reference, &root, 0) }))
+    let mut json = root_json(&reference, &root, 0);
+    json["metadata"]["x11Pairing"] = json!(pairing);
+    Ok(json!({ "root": json }))
 }
 
 async fn resolve_root(
@@ -1382,6 +1408,7 @@ mod tests {
             app_name: "Editor".into(),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "Dialog".into(),
             frame: Some(Rect {
                 x: 100,
@@ -1652,6 +1679,7 @@ mod tests {
             app_name: "Calculator".into(),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "frame".into(),
             frame: None,
             x11_window: None,
@@ -2941,6 +2969,7 @@ mod tests {
             app_name: "App".into(),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "frame".into(),
             frame: Some(Rect {
                 x: 100,
@@ -3156,6 +3185,34 @@ mod tests {
         }
     }
 
+    /// A live root window named `Editor` as a readable frame.
+    struct LiveWindow;
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl LiveWindow {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Editor"
+        }
+
+        fn get_role(&self) -> u32 {
+            23
+        }
+    }
+
+    /// Live screen extents the test moves; `None` fails the read.
+    struct LiveExtents(Arc<Mutex<Option<Rect>>>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Component")]
+    impl LiveExtents {
+        fn get_extents(&self, _coordinate_type: u32) -> zbus::fdo::Result<(i32, i32, i32, i32)> {
+            let frame = self.0.lock().unwrap().clone();
+            frame
+                .map(|frame| (frame.x, frame.y, frame.width, frame.height))
+                .ok_or_else(|| zbus::fdo::Error::Failed("extents unavailable".into()))
+        }
+    }
+
     /// A bus daemon reporting PID 42 for every connection.
     struct OwnerPid;
 
@@ -3164,6 +3221,20 @@ mod tests {
         #[zbus(name = "GetConnectionUnixProcessID")]
         fn get_connection_unix_process_id(&self, _name: &str) -> u32 {
             42
+        }
+    }
+
+    /// An `Editor` window of PID 42 at `frame` with class `class`.
+    fn editor_window(id: u32, frame: &Rect, class: &str) -> x11::WindowInfo {
+        x11::WindowInfo {
+            id,
+            pid: 42,
+            title: "Editor".into(),
+            wm_class: Some((class.to_lowercase(), class.into())),
+            frame: frame.clone(),
+            focused: false,
+            minimized: false,
+            z_order: 0,
         }
     }
 
@@ -3179,7 +3250,13 @@ mod tests {
         let a_ref = lock(&state).unwrap().replace_roots(vec![observed_root()])[0]
             .0
             .clone();
-        // The class the look saw is never carried over: only a live pairing reports one.
+        // The look saved its X11-enriched frame, title and class: none is carried over or
+        // ranked against, only the root's live metadata is.
+        let saved = observed_root().frame.unwrap();
+        let moved = Rect {
+            x: 600,
+            ..saved.clone()
+        };
         let mut looked = observed_root();
         looked.wm_class = Some(("stale".into(), "Stale".into()));
         let (look_id, _) = lock(&state)
@@ -3188,22 +3265,15 @@ mod tests {
         let (closed_look, _) = lock(&state).unwrap().insert_look(closed, vec![], None);
         lock(&state).unwrap().replace_roots(vec![other]);
         assert!(lock(&state).unwrap().root(&a_ref).is_none());
-        let paired = x11::WindowInfo {
-            id: 71,
-            pid: 42,
-            title: "Editor".into(),
-            wm_class: Some(("keepassxc".into(), "KeePassXC".into())),
-            frame: observed_root().frame.unwrap(),
-            focused: true,
-            minimized: false,
-            z_order: 0,
-        };
+        let extents = Arc::new(Mutex::new(Some(saved.clone())));
         with_peer(
             |server| {
                 server
                     .serve_at("/org/freedesktop/DBus", OwnerPid)?
                     .serve_at("/org/a11y/atspi/accessible/root", Inventory(&["/app"]))?
-                    .serve_at("/app", Inventory(&["/window"]))
+                    .serve_at("/app", Inventory(&["/window"]))?
+                    .serve_at("/window", LiveWindow)?
+                    .serve_at("/window", LiveExtents(Arc::clone(&extents)))
             },
             async |connection| {
                 let connect = async || {
@@ -3213,25 +3283,69 @@ mod tests {
                     ))
                 };
                 let args = json!({ "lookId": look_id });
-                let found = look_root(&state, &args, connect, || Ok(vec![paired]))
-                    .await
-                    .unwrap();
-                let root = &found["root"];
+                let lookup = async |windows: Vec<x11::WindowInfo>| {
+                    look_root(&state, &args, connect, move || Ok(windows))
+                        .await
+                        .unwrap()["root"]
+                        .clone()
+                };
+                let class = |root: &Value| root["metadata"]["wmClass"]["class"].clone();
+
+                // Unchanged inventory: the listing and the look's lookup pair the same window.
+                let unchanged = vec![
+                    editor_window(71, &saved, "Fixture"),
+                    editor_window(72, &moved, "Other"),
+                ];
+                let mut listed = [observed_root()];
+                listed[0].frame = Some(saved.clone());
+                listed[0].x11_window = None;
+                x11::enrich_roots(&mut listed, &unchanged);
+                let root = lookup(unchanged).await;
+                assert_eq!(listed[0].x11_window, Some(71));
+                assert_eq!(root["windowId"], 71);
+                assert_eq!(class(&root), "Fixture");
+                assert_eq!(root["metadata"]["x11Pairing"], "paired");
                 assert_eq!(root["pid"], 42);
                 assert_eq!(root["metadata"]["busName"], ":1.1");
                 assert_eq!(root["metadata"]["objectPath"], "/window");
-                assert_eq!(
-                    root["metadata"]["wmClass"],
-                    json!({"instance":"keepassxc","class":"KeePassXC"})
-                );
                 // No inventory handle names it any more; the look still does.
                 assert_eq!(root["rootRef"], "");
+
+                // The same-title siblings swapped places and the root's own window gained a
+                // blocked class: the live extents pair it, never the sibling at the saved frame.
+                *extents.lock().unwrap() = Some(moved.clone());
+                let swapped = vec![
+                    editor_window(71, &moved, "KeePassXC"),
+                    editor_window(72, &saved, "Fixture"),
+                ];
+                let root = lookup(swapped.clone()).await;
+                assert_eq!(root["windowId"], 71);
+                assert_eq!(class(&root), "KeePassXC");
+                assert_eq!(root["framePoints"]["x"], 600);
+
+                // Without live extents the same-title siblings tie: no class is attributed,
+                // and every tied class is a block-only alias, so the blocked one still refuses.
+                *extents.lock().unwrap() = None;
+                let root = lookup(swapped).await;
+                assert!(root["metadata"]["wmClass"].is_null());
+                assert_eq!(root["metadata"]["x11Pairing"], "ambiguous");
+                assert_eq!(
+                    root["blockAliases"],
+                    json!(["keepassxc", "KeePassXC", "fixture", "Fixture"])
+                );
+                // No same-PID window: unpaired, and no stale window id survives.
+                let root = lookup(vec![]).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "unpaired");
+                assert!(root["windowId"].is_null());
+
                 // Without X11 there is no class evidence, and the root is still found.
                 let found = look_root(&state, &args, connect, || Err(capability("no X11")))
                     .await
                     .unwrap();
                 assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
                 assert_eq!(found["root"]["pid"], 42);
+
                 // Its application no longer lists the closed root: proven absent.
                 let reply = peer_request(
                     &state,

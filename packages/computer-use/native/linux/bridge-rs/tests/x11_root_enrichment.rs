@@ -23,6 +23,7 @@ fn root(pid: u64, name: &str, frame: Option<Rect>) -> RootSnapshot {
         app_name: "Fixture".into(),
         executable: None,
         wm_class: None,
+        class_candidates: Vec::new(),
         role: "frame".into(),
         frame,
         x11_window: None,
@@ -151,6 +152,12 @@ fn an_equally_ranked_sibling_window_leaves_the_class_unattributed() {
         roots.each_ref().map(|root| root.wm_class.clone()),
         [None, None]
     );
+    // Blocking is additive: every tied class stays a block-only candidate of both roots.
+    let tied = vec![class("keepassxc").unwrap(), class("fixture").unwrap()];
+    assert_eq!(
+        roots.each_ref().map(|root| root.class_candidates.clone()),
+        [tied.clone(), tied]
+    );
 
     // A distinct best rank still carries its class, even beside a lower-ranked sibling.
     let mut roots = [root(7, "Editor", Some(frame(0)))];
@@ -167,6 +174,7 @@ fn an_equally_ranked_sibling_window_leaves_the_class_unattributed() {
     enrich_roots(&mut roots, &windows);
     assert_eq!(roots[0].x11_window, Some(1));
     assert_eq!(roots[0].wm_class, class("fixture"));
+    assert!(roots[0].class_candidates.is_empty());
 }
 
 #[test]

@@ -27,6 +27,7 @@ fn root(n: usize, frame: Option<Rect>) -> RootSnapshot {
         app_name: "fixture".into(),
         executable: None,
         wm_class: None,
+        class_candidates: Vec::new(),
         role: "frame".into(),
         frame,
         x11_window: None,

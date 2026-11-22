@@ -86,12 +86,26 @@ pub struct RootSnapshot {
     pub executable: Option<Executable>,
     /// X11 `WM_CLASS` (instance, class) of the paired window. App-supplied metadata, not identity.
     pub wm_class: Option<(String, String)>,
+    /// `WM_CLASS` of every window tied for an ambiguous pairing: never attributed to the root,
+    /// only reported as block-only aliases, since a class can add a block but never admit.
+    pub class_candidates: Vec<(String, String)>,
     pub role: String,
     pub frame: Option<Rect>,
     pub x11_window: Option<u32>,
     pub is_focused: bool,
     pub is_minimized: bool,
     pub z_order: Option<usize>,
+}
+
+/// The live owner of an exact root and the fresh metadata its X11 pairing ranks against.
+#[derive(Debug, Clone)]
+pub struct LiveRoot {
+    pub pid: u64,
+    pub executable: Option<Executable>,
+    /// The live accessible name, empty when unreadable or protected: no title evidence.
+    pub name: String,
+    /// The live screen extents, `None` when unreadable: no geometry evidence.
+    pub frame: Option<Rect>,
 }
 
 #[derive(Debug, Clone)]
@@ -402,6 +416,7 @@ impl AtspiClient {
                     app_name: app_name.clone(),
                     executable,
                     wm_class: None,
+                    class_candidates: Vec::new(),
                     role,
                     x11_window: None,
                     is_focused: false,
@@ -416,18 +431,32 @@ impl AtspiClient {
     /// The live bus owner of `root`, found by its bus name and object path alone (#1300): one
     /// registry read, then only the window lists of applications on `root`'s own connection,
     /// never another application's metadata. `None` only when every read completed without
-    /// listing it; a failed or timed-out read is an error, never absence.
+    /// listing it; a failed or timed-out read is an error, never absence. The root's own live
+    /// name and extents follow, so an X11 pairing ranks against the root as it is now, never
+    /// against what an earlier pairing saved; an unreadable one is simply no evidence.
     pub async fn exact_root(
         &self,
         root: &AccessibleRef,
-    ) -> Result<Option<(u64, Option<Executable>)>, ProtocolError> {
+    ) -> Result<Option<LiveRoot>, ProtocolError> {
         let registry = AccessibleRef {
             destination: REGISTRY_DESTINATION.to_owned(),
             path: REGISTRY_ROOT.to_owned(),
         };
         for app in self.children(&registry).await? {
             if app.destination == root.destination && self.children(&app).await?.contains(root) {
-                return self.bus_owner(root).await.map(Some);
+                let (pid, executable) = self.bus_owner(root).await?;
+                let name = self
+                    .checked_metadata(root, async || {
+                        self.string_property(root, "Name").await.unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default();
+                return Ok(Some(LiveRoot {
+                    pid,
+                    executable,
+                    name,
+                    frame: self.bounds(root).await,
+                }));
             }
         }
         Ok(None)
@@ -676,6 +705,24 @@ impl AtspiClient {
     }
 }
 
+/// The executable's block-only aliases, then the non-empty names of every ambiguous class
+/// candidate, each once.
+fn block_aliases(root: &RootSnapshot) -> Vec<&str> {
+    let mut aliases = root
+        .executable
+        .as_ref()
+        .map(Executable::block_aliases)
+        .unwrap_or_default();
+    for (instance, class) in &root.class_candidates {
+        for name in [instance.as_str(), class.as_str()] {
+            if !name.is_empty() && !aliases.contains(&name) {
+                aliases.push(name);
+            }
+        }
+    }
+    aliases
+}
+
 pub fn root_json(reference: &str, root: &RootSnapshot, z_order: usize) -> Value {
     let kind = if root.role.to_lowercase().contains("dialog") {
         "dialog"
@@ -699,8 +746,9 @@ pub fn root_json(reference: &str, root: &RootSnapshot, z_order: usize) -> Value 
         // The accessible app name is presentation only; policy uses the executable (#1180).
         "appId": root.executable.as_ref().map(|executable| &executable.name),
         "processName": root.executable.as_ref().map(|executable| &executable.name),
-        // Block-only names: they can refuse a root, never admit one.
-        "blockAliases": root.executable.as_ref().map(Executable::block_aliases).unwrap_or_default(),
+        // Block-only names: they can refuse a root, never admit one. An ambiguous X11 pairing
+        // reports every tied window's class here, so a blocked sibling blocks conservatively.
+        "blockAliases": block_aliases(root),
         "role": root.role,
         "subrole": "",
         "zOrder": root.z_order.unwrap_or(z_order),
@@ -1752,6 +1800,7 @@ mod tests {
                 link_name: "fixture-editor".into(),
             }),
             wm_class: Some(("fixture".into(), "Fixture".into())),
+            class_candidates: Vec::new(),
             role: "frame".into(),
             frame: Some(Rect {
                 x: 1,
@@ -1919,6 +1968,14 @@ mod tests {
                     .serve_at(
                         "/app",
                         node("Editor", "application", &[(":1.42", "/app/window")]),
+                    )?
+                    .serve_at("/app/window", node("Live title", "frame", &[]))?
+                    .serve_at(
+                        "/app/window",
+                        WindowExtents {
+                            width: 640,
+                            coordinate_requests: Arc::default(),
+                        },
                     )
             },
             async |connection| {
@@ -1929,13 +1986,24 @@ mod tests {
                     destination: destination.into(),
                     path: path.into(),
                 };
-                let (pid, executable) = client
+                let live = client
                     .exact_root(&at(":1.42", "/app/window"))
                     .await
                     .unwrap()
                     .unwrap();
-                assert_eq!(pid, 25361);
-                assert_eq!(executable.unwrap().name, "fixture-editor");
+                assert_eq!(live.pid, 25361);
+                assert_eq!(live.executable.unwrap().name, "fixture-editor");
+                // The root's own live name and extents, for an X11 pairing to rank against.
+                assert_eq!(live.name, "Live title");
+                assert_eq!(
+                    live.frame,
+                    Some(Rect {
+                        x: -20,
+                        y: 40,
+                        width: 640,
+                        height: 480
+                    })
+                );
                 // Absent only once its own application's window list completed without it.
                 assert!(client
                     .exact_root(&at(":1.42", "/app/closed"))

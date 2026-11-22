@@ -187,7 +187,8 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
 /// Pair each root with its best-ranked X11 window of the same PID, title first, then
 /// geometry; each window pairs once. Pairing is a heuristic, so `WM_CLASS` is copied only
 /// when no other window of that PID ranks equally (#1300): a tie is no class evidence,
-/// never proof that one sibling's class belongs to the root.
+/// never proof that one sibling's class belongs to the root. Blocking is additive, so a tie
+/// reports every tied window's class in `class_candidates` and any blocked one refuses it.
 pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
     let mut used = Vec::new();
     for root in roots {
@@ -207,7 +208,17 @@ pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
             .min_by_key(|w| rank(w));
         if let Some(w) = best {
             // A window already paired elsewhere still ties: that pairing was a choice too.
-            let ambiguous = owned().any(|other| other.id != w.id && rank(other) == rank(w));
+            let tied = owned()
+                .filter(|other| rank(other) == rank(w))
+                .collect::<Vec<_>>();
+            let ambiguous = tied.len() > 1;
+            root.class_candidates = if ambiguous {
+                tied.iter()
+                    .filter_map(|other| other.wm_class.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             used.push(w.id);
             root.x11_window = Some(w.id);
             root.frame = Some(w.frame.clone());

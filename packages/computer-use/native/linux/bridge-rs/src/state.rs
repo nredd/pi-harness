@@ -202,6 +202,7 @@ mod tests {
             app_name: format!("app {n}"),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "frame".into(),
             frame: None,
             x11_window: None,
