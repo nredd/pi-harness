@@ -2,10 +2,11 @@
 
 # One Python gate: ruff, ty, then pytest across cores (`--dist loadfile` keeps each test file on one worker)
 # with branch-measured LCOV written under `<dir>/coverage/python/` for `scripts/coverage_accounting.py`.
-# $(1) project dir (cwd, so LCOV paths are project-relative), $(2) extra uv flags, $(3) pytest paths, $(4) --cov source.
+# $(1) project dir, $(2) extra uv flags, $(3) pytest paths, $(4) --cov source,
+# $(5) LCOV option override, $(6) optional post-pytest suffix, $(7) optional pre-pytest commands.
 define PY_GATE
 cd $(1) && uv run --locked $(2) ruff format --check . && uv run --locked $(2) ruff check --no-fix --ignore-noqa . && uv run --locked $(2) ty check
-cd $(1) && uv run --locked $(2) pytest $(3) -n 2 --dist loadfile -p no:cacheprovider --cov=$(4) --cov-branch --cov-report=lcov:coverage/python/lcov.info --cov-report=term:skip-covered --cov-fail-under=100
+cd $(1) || exit $$?; $(7) uv run --locked $(2) pytest $(3) -n 2 --dist loadfile -p no:cacheprovider --cov=$(4) --cov-branch $(or $(5),--cov-report=lcov:coverage/python/lcov.info) --cov-report=term:skip-covered --cov-fail-under=100$(6)
 endef
 
 help:  ## List targets
@@ -44,12 +45,38 @@ check-ts:  ## Test temp contract, Biome, tsc and Vitest (WORKSPACES can narrow t
 	node scripts/check-test-tempdirs.mjs "$(or $(BASE),origin/main)"
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
+SWEEP_GUARD := ../packages/preset/skills/ship-issue/sweep_guard.py
+
 check-scripts: check-changelog-fragments check-native-lint  ## Format/lint/type/tests for scripts/ (real disposable git repos), then the package layout gate (allowlist may only shrink vs BASE; unset or empty BASE means origin/main)
 	$(MAKE) build
-	$(call PY_GATE,scripts,--project ../tests/integration,,.)
+	$(MAKE) check-scripts-python
 	uv run --locked --project tests/integration python scripts/package_contracts.py --packed-files-only
 	uv run --locked --project tests/integration python scripts/package_layout.py --compare-ref "$(or $(BASE),origin/main)"
 	$(MAKE) check-import-audit
+
+# Only publish fresh coverage. Report after a pytest failure without masking its status.
+SCRIPT_COVERAGE_BEFORE_TEST = rm -f .coverage .coverage.* coverage/python/lcov.info \
+	../packages/preset/coverage/sweep-guard/lcov.info || exit $$?; pytest_rc=0;
+SCRIPT_COVERAGE_AFTER_TEST =  || pytest_rc=$$?; report_rc=0; \
+	if [ -f .coverage ]; then $(MAKE) -C "$(CURDIR)" report-script-coverage || report_rc=$$?; \
+	elif [ "$$pytest_rc" -eq 0 ]; then printf "%s\n" "pytest produced no fresh coverage" >&2; report_rc=1; fi; \
+	if [ "$$pytest_rc" -ne 0 ]; then exit "$$pytest_rc"; fi; exit "$$report_rc"
+
+.PHONY: check-scripts-python
+check-scripts-python:
+	cd scripts && uv run --locked --project ../tests/integration ruff format --check --line-length 88 --target-version py38 $(SWEEP_GUARD)
+	cd scripts && uv run --locked --project ../tests/integration ruff check --config pyproject.toml --no-fix --ignore-noqa --target-version py38 $(SWEEP_GUARD)
+	cd scripts && uv run --locked --project ../tests/integration ty check --python-version 3.8 $(SWEEP_GUARD)
+	$(call PY_GATE,scripts,--project ../tests/integration,,. --cov=../packages/preset/skills/ship-issue,--cov-report=,$(SCRIPT_COVERAGE_AFTER_TEST),$(SCRIPT_COVERAGE_BEFORE_TEST))
+
+# Render from each source root; an SF tied to the producer checkout cannot replay in fan-in.
+.PHONY: report-script-coverage
+COVERAGE_REPORT ?= uv run --locked --project "$(CURDIR)/tests/integration" coverage
+report-script-coverage:
+	@scripts_rc=0; \
+	(cd scripts && $(COVERAGE_REPORT) lcov --data-file=.coverage --omit='*/ship-issue/sweep_guard.py' -o coverage/python/lcov.info) || scripts_rc=$$?; \
+	(cd packages/preset && $(COVERAGE_REPORT) lcov --data-file=../../scripts/.coverage --include='*/ship-issue/sweep_guard.py' -o coverage/sweep-guard/lcov.info) || exit $$?; \
+	exit "$$scripts_rc"
 
 # Unset BASE: compare against where HEAD diverged from origin/main. Any explicit BASE, even empty, is passed unchanged.
 check-coverage:  ## Account for existing reports without running any tests; compare budgets to BASE, else HEAD's merge base with origin/main; COVERAGE_OS=darwin|linux names the reports' OS, COVERAGE_HOST the CI host class, COVERAGE_SKIPPED_GATES the gates the CI plan skipped
