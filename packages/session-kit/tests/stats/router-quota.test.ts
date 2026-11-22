@@ -114,7 +114,7 @@ it("ignores expired blocks and counts, and never uses an expired percentage", as
 			old: true,
 		},
 		{
-			label: "future-provider remaining",
+			label: "future-provider remaining (stale)",
 			head: { kind: "text", text: "12 credits left" },
 			basis: "reported",
 			expired: false,

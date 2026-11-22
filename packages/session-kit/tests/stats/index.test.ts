@@ -158,6 +158,24 @@ describe("/stats command", () => {
 		expect(String(out.mock.calls[0]?.[0])).toContain(print);
 	});
 
+	it("labels every row of a meters-only snapshot past its expiry as stale in the overlay and print", async () => {
+		const opts = seedRouterView("metered");
+		const expired = { ...opts, clock: { ...realClock, now: () => 1768478700000 } };
+		const { run, rendered } = setup("tui", expired);
+		await run("");
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/Google +quota read stale/);
+		expect(overlay).toMatch(/Google\/faux-fast rpd \(stale\) +37\/250 requests/);
+		expect(overlay).toMatch(/Google prepaid-credits \(stale\) +12 credits balance/);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", expired).run("");
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toContain("  Google: quota read stale\n");
+		expect(printed).toContain("Google spend-10m (stale): $1.24 · observed");
+		expect(printed).toContain("Google/faux-fast rpd (stale): 37/250 requests · observed");
+		expect(printed).toContain("Google prepaid-credits (stale): 12 credits balance\n");
+	});
+
 	it("shows prepaid pool balances as display-only text", async () => {
 		const opts = seedRouterView("metered");
 		const { run, rendered } = setup("tui", opts);

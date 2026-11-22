@@ -21,6 +21,9 @@ function label(provider: string, families: unknown, window: string): string {
 	return `${provider}${models ? `/${models}` : ""} ${window}`;
 }
 
+/** Stale rows say so in their label, so dimming is never the only signal and print output carries it too. */
+const staleName = (name: string, old: boolean): string => (old ? `${name} (stale)` : name);
+
 function resetDetail(window: Fields, now: number): string | undefined {
 	if (!timestamp(window.resetAt)) return undefined;
 	if (window.resetAt <= now) return `reset ${duration(now - window.resetAt)} ago, no newer reading`;
@@ -64,7 +67,8 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			(timestamp(snapshot.expiresAt) && snapshot.expiresAt <= now) ||
 			(timestamp(snapshot.retrievedAt) && now - snapshot.retrievedAt > QUOTA_DIM_AFTER_MS);
 		const start = rows.length;
-		if (snapshot.status === "available" || snapshot.status === "stale") {
+		const read = snapshot.status === "available" || snapshot.status === "stale";
+		if (read) {
 			for (const window of list(snapshot.windows).map(asRecordOf)) {
 				const utilization = basis(window.basis);
 				if (!text(window.name) || !number(window.usedPercent) || utilization === undefined) continue;
@@ -72,7 +76,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 				const source = window.spanSource;
 				const name = source === "assumed" || source === "inferred" ? `${window.name} (${source} span)` : window.name;
 				rows.push({
-					label: label(provider, window.families, old ? `${name} (stale)` : name),
+					label: label(provider, window.families, staleName(name, old)),
 					head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: window.usedPercent },
 					basis: utilization,
 					reset: resetDetail(window, now),
@@ -81,10 +85,11 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 				});
 			}
 		}
-		if (snapshot.status === "error" || (snapshot.status === "stale" && rows.length === start)) {
+		// One staleness predicate for every row kind: an aged snapshot without windows still says so.
+		if (snapshot.status === "error" || (read && old && rows.length === start)) {
 			rows.push({
 				label: provider,
-				head: { kind: "text", text: `quota read ${snapshot.status}` },
+				head: { kind: "text", text: `quota read ${snapshot.status === "error" ? "error" : "stale"}` },
 				expired: false,
 				old: true,
 			});
@@ -95,7 +100,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			const utilization = basis(meter.basis);
 			if (count === undefined || utilization === undefined) continue;
 			rows.push({
-				label: label(provider, meter.families, meter.name),
+				label: label(provider, meter.families, staleName(meter.name, old)),
 				head: { kind: "text", text: count },
 				basis: utilization,
 				reset: resetDetail(meter, now),
@@ -108,7 +113,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			const balance = meterText({ unit: pool.unit, used: pool.balance });
 			if (pool.unlimited !== true && balance === undefined) continue;
 			rows.push({
-				label: `${provider} ${pool.name}`,
+				label: `${provider} ${staleName(pool.name, old)}`,
 				head: { kind: "text", text: pool.unlimited === true ? "unlimited balance" : `${balance} balance` },
 				expired: false,
 				old,
