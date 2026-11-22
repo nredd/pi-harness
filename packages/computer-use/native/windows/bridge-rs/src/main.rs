@@ -2226,9 +2226,9 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_bind_guarded_helper_capability_to_protocol_5() {
+    fn diagnostics_bind_guarded_helper_capability_to_protocol_6() {
         let value = diagnostics();
-        assert_eq!(value["protocolVersion"], 5);
+        assert_eq!(value["protocolVersion"], 6);
         assert_eq!(value["architectureVersion"], 1);
         assert_eq!(value["capabilities"], json!(["fail-closed-live-target-v1"]));
     }
@@ -2456,10 +2456,11 @@ mod tests {
     }
 
     #[test]
-    fn helper_refuses_protocol_4_clients_without_owner_bound_reads() {
-        assert_eq!(PROTOCOL_VERSION, 5);
+    fn helper_refuses_protocol_5_clients_without_instance_bound_roots() {
+        // A v5 client neither carries instance-specific root refs nor expects them.
+        assert_eq!(PROTOCOL_VERSION, 6);
         let response = handle_request(&Request {
-            protocol_version: 4,
+            protocol_version: 5,
             id: "old".to_owned(),
             cmd: "uiaReadText".to_owned(),
             args: json!({"lookId": "look_1", "elementRef": "same-ref"}),
@@ -2467,7 +2468,7 @@ mod tests {
         assert!(!response.ok);
         let error = response.error.unwrap();
         assert_eq!(error.code, ErrorCode::InvalidRequest);
-        assert!(error.message.contains("protocol 4; expected 5"));
+        assert!(error.message.contains("protocol 5; expected 6"));
     }
 
     /// Deterministic stand-in for `RandomState`, keyed by an explicit seed.
