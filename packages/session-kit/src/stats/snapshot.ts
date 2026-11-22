@@ -4,7 +4,7 @@ import { link, lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
-import { mergeQuota, type QuotaObservation } from "./harness/common.ts";
+import { compareFreshness, mergeQuota, type QuotaObservation } from "./harness/common.ts";
 import {
 	EXTERNAL_HARNESSES,
 	type ExternalHarness,
@@ -902,7 +902,7 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 	for (const rows of byKey.values()) {
 		// The freshest row wins once all are expired. Before then, every less fresh row
 		// is dominated unless it stays active beyond all higher-ranked rows.
-		rows.sort((a, b) => b.observedAt - a.observedAt || codeUnits(JSON.stringify(b), JSON.stringify(a)));
+		rows.sort((a, b) => compareFreshness(b, a));
 		let latestReset = 0;
 		let slot = 0;
 		for (const q of rows) {
