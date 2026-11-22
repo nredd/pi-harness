@@ -554,6 +554,7 @@ CONTRACTS = (
             "src/codex-reset-command.ts",
             "src/codex-resets.ts",
             "src/codex-session.ts",
+            "src/collectors.ts",
             "src/config.ts",
             "src/exhaustion.ts",
             "src/failure.ts",

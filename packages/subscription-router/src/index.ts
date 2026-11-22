@@ -19,6 +19,7 @@ import {
 import { Type } from "typebox";
 import { showCodexResets } from "./codex-reset-command.ts";
 import { CodexResets } from "./codex-resets.ts";
+import { collectedProviders, collectorFor } from "./collectors.ts";
 import {
 	type ChainEntry,
 	type ConfigResult,
@@ -35,7 +36,15 @@ import { ResetView, refreshSchedules } from "./reset-view.ts";
 import { formatResets } from "./resets.ts";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.ts";
 import { formatScore } from "./selection.ts";
-import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.ts";
+import { type RegistryContext, UsageService } from "./usage.ts";
+
+export {
+	type Collector,
+	type CollectorReading,
+	collectedProviders,
+	collectorFor,
+	registerCollector,
+} from "./collectors.ts";
 
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const DECISIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.decisions");
@@ -165,7 +174,7 @@ function sessionProviders(ctx: ExtensionContext, profiles: readonly Profile[]): 
 	const providers = new Set<string>(profiles.flatMap((profile) => profile.chain.map((entry) => entry.provider)));
 	for (const { model } of ctx.scopedModels) providers.add(model.provider);
 	if (ctx.model) providers.add(ctx.model.provider);
-	return [...providers].filter((provider) => COLLECTED_PROVIDERS.includes(provider));
+	return [...providers].filter((provider) => collectorFor(provider) !== undefined);
 }
 
 /** Name the usage tool only when this session can call it or discover it through tool search. */
@@ -483,10 +492,10 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		handleRpc(pi, RPC_USAGE, async (params) => {
 			const ctx = registry;
 			if (params.refresh === true && ctx) {
-				await Promise.all(COLLECTED_PROVIDERS.map((provider) => usage.get(ctx, provider)));
+				await Promise.all(collectedProviders().map((provider) => usage.get(ctx, provider)));
 			}
 			return {
-				snapshots: COLLECTED_PROVIDERS.flatMap((provider) => {
+				snapshots: collectedProviders().flatMap((provider) => {
 					const snapshot = usage.peek(provider);
 					return snapshot ? [snapshot] : [];
 				}),

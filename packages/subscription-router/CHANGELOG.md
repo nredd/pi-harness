@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Let trusted extensions register and unregister quota collectors by provider ID, with HTTP and custom reads sharing the existing cache and routing decisions (#1178)
+
 - Parse optional per-provider labels, quota groups, evidence settings, declared limits and collector IDs without changing profile configs that omit the newly reserved `providers` key (#1178)
 
 - Guard asynchronous recovery with requester-owned selection generations, durable model-change identities and cancellation; prove same-child routed failover, retained mutation results, finite budgets and sibling isolation. Abort handling requires the active-run signal from core `v1.3.0-nredd.12` (#971)

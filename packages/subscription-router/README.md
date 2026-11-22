@@ -267,7 +267,7 @@ destination once. It never hides partial text, thinking or tool calls. Confirmat
 precede the context edit and continuation; manual changes or aborts while it waits suppress both
 the edit and notice. Hosts older than core `v1.3.0-nredd.12` lack the cancellation signal this depends on.
 
-Usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
+Built-in usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
 auth has no subscription window and is never blocked. Codex window names follow the reported
 `limit_window_seconds`, not their primary/secondary position: some plans expose only a weekly
 primary window. Missing durations retain the legacy positional fallback; other durations stay
@@ -286,7 +286,7 @@ Surfaces:
 - `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all LOCAL confirmed blocks. `reset` does not reset provider quota, redeem a grant, or modify usage counters. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
 - `pi.events` RPC with the pi-subagents envelope (`{ requestId, ... }`, reply on `<channel>:reply:<requestId>` as `{ success, data | error }`):
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
-  - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads both collected providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
+  - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads registered providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
 
 Usage and block state is process-global, so in-process subagent sessions share it. A newer
 confirmation read supersedes older in-flight reads for cache and backoff writes, even when the older
@@ -299,8 +299,31 @@ resolve credentials. Out-of-range reset timestamps normalize to an unknown reset
 
 Core owns OAuth acquisition, refresh and persistence. The router bounds its wait for credential
 lookup to 10 seconds, then reports a sanitized error and backs off; it cannot cancel core's lookup.
-The subsequent usage HTTP request has its own 10-second timeout. No token or response body appears
+The subsequent usage read has its own 10-second timeout. No token or response body appears
 in usage errors. These bounds do not prove live OAuth refresh or revocation behavior.
+
+### Collector extensions
+
+Trusted extensions can call `registerCollector` from `src/collectors.ts` in the installed package.
+Register by Pi provider ID before or after the router loads; the process-global registry is shared
+across extension copies. Keep the returned cleanup function to unregister. Registration replaces the
+previous adapter for that ID; cleanup removes only that registration and does not restore the one it replaced.
+The live `COLLECTED_PROVIDERS` export in `src/usage.ts` is retained for compatibility; new callers should
+use `collectedProviders()` to get an array snapshot.
+Without an import, initialize or reuse `globalThis[Symbol.for("pi-subscription-router.collectors")]`
+as a `Map` and set the provider ID to a unique `{ collector }` entry. On cleanup, delete the ID
+only if its entry is still yours.
+
+A collector receives the provider credential from Pi, so register only code you trust with that
+credential. A `kind: "http"` adapter defines `request(token)` and `parse(payload)`; a `kind: "custom"`
+adapter defines `read({ token, signal, now })` and should stop on abort. Return normalized `windows`
+(and optional `meters`, `pools` or `credits`), or `undefined` for unsupported data. Only matching
+percentage windows can block models. Provider declarations do not override the provider-ID lookup yet.
+
+No Google subscription collector or OAuth client is bundled. A user-supplied Google subscription
+collector must be read-only, use local first-party client state or a documented first-party client
+surface, never send Gemini CLI or Antigravity OAuth credentials from third-party code, and label its
+window spans `assumed` until a first-party contract exists.
 
 ## Reset schedules and free Codex resets
 

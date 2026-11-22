@@ -2,17 +2,20 @@
  * OAuth-backed subscription usage: the Anthropic and ChatGPT Codex collectors,
  * a normalized per-provider cache, and the per-model block decision built on it.
  *
- * Ported from the nredd/pi-subagents fork (`src/subscription-usage.ts`), minus
- * the cross-extension collector registry and provider aliases, which had no user.
+ * The built-in adapters were ported from the nredd/pi-subagents fork
+ * (`src/subscription-usage.ts`). Additional adapters can register in-process.
  *
  * Fetching is deliberately conservative: successful reads are cached for five
  * minutes, `fresh` reads within a minute share one response, and a failed read
  * backs the provider off (1m, 2m, 5m, then 15m) so a throttled endpoint is not
- * hammered. OAuth secrets never leave this module.
+ * hammered. Credentials are passed only to the registered adapter for the provider.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type Collector, type CollectorReading, collectorFor, registerDefaultCollector } from "./collectors.ts";
 import { type ModelRef, refKey } from "./model-ref.ts";
+
+export { COLLECTED_PROVIDERS } from "./collectors.ts";
 
 /** How long a successful read is served from cache to plain `get` calls. */
 const CACHE_TTL_MS = 5 * 60_000;
@@ -121,21 +124,6 @@ export interface UsageTransport {
 	getAccessToken(ctx: RegistryContext, provider: string): Promise<string | undefined>;
 }
 
-interface ParsedUsage {
-	windows: UsageWindow[];
-	credits?: UsageSnapshot["credits"];
-}
-
-/** A usage endpoint for one subscription provider. */
-interface Collector {
-	url: string;
-	headers(token: string): Record<string, string>;
-	/** Normalize a 2xx JSON payload; `undefined` marks an unsupported shape. */
-	parse(payload: unknown): ParsedUsage | undefined;
-	/** False for credentials the endpoint cannot serve (e.g. API keys); no request is made. */
-	acceptsToken?(token: string): boolean;
-}
-
 /** Whether a model must not be dispatched on included quota right now, and why. */
 export interface UsageDecision {
 	block: boolean;
@@ -197,7 +185,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Parse the Anthropic `/api/oauth/usage` payload. */
-export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
+export function parseAnthropic(payload: unknown): CollectorReading | undefined {
 	const root = asRecord(payload);
 	if (!root) return undefined;
 	const windows: UsageWindow[] = [];
@@ -265,7 +253,7 @@ function anthropicScopedLimits(limits: unknown): UsageWindow[] {
 }
 
 /** Parse the ChatGPT Codex `wham/usage` payload. */
-export function parseCodex(payload: unknown): ParsedUsage | undefined {
+export function parseCodex(payload: unknown): CollectorReading | undefined {
 	const root = asRecord(payload);
 	const limits = asRecord(root?.rate_limit);
 	if (!root || !limits) return undefined;
@@ -319,31 +307,38 @@ function codexAccountId(token: string): string | undefined {
 	}
 }
 
-const COLLECTORS: Readonly<Record<string, Collector>> = {
-	anthropic: {
+registerDefaultCollector({
+	provider: "anthropic",
+	kind: "http",
+	display: {
+		full: "Anthropic",
+		compact: "Anth",
+		footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true },
+	},
+	request: (token) => ({
 		url: "https://api.anthropic.com/api/oauth/usage",
-		headers: (token) => ({
+		headers: {
 			Authorization: `Bearer ${token}`,
 			"anthropic-beta": ANTHROPIC_OAUTH_BETA,
 			"User-Agent": ANTHROPIC_USER_AGENT,
-		}),
-		parse: parseAnthropic,
-		acceptsToken: (token) => !token.startsWith(ANTHROPIC_API_KEY_PREFIX),
-	},
-	"openai-codex": {
-		url: "https://chatgpt.com/backend-api/wham/usage",
-		headers: (token): Record<string, string> => {
-			const accountId = codexAccountId(token);
-			return accountId
-				? { Authorization: `Bearer ${token}`, "ChatGPT-Account-Id": accountId }
-				: { Authorization: `Bearer ${token}` };
 		},
-		parse: parseCodex,
-	},
-};
+	}),
+	parse: parseAnthropic,
+	acceptsCredential: (token) => !token.startsWith(ANTHROPIC_API_KEY_PREFIX),
+});
 
-/** Providers with a usage collector. */
-export const COLLECTED_PROVIDERS: readonly string[] = Object.keys(COLLECTORS);
+registerDefaultCollector({
+	provider: "openai-codex",
+	kind: "http",
+	display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK_MS }], placeholder: true } },
+	request: (token) => {
+		const accountId = codexAccountId(token);
+		const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+		if (accountId) headers["ChatGPT-Account-Id"] = accountId;
+		return { url: "https://chatgpt.com/backend-api/wham/usage", headers };
+	},
+	parse: parseCodex,
+});
 
 /** `Retry-After` as milliseconds from `now`: delta-seconds or an HTTP-date. */
 function retryAfterMs(header: string | null, now: number): number | undefined {
@@ -386,6 +381,7 @@ interface UsageRead {
 
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
+	private readonly collectors = new Map<string, Collector>();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly generations = new Map<string, number>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
@@ -409,6 +405,9 @@ export class UsageService {
 	async get(ctx: RegistryContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		const now = this.transport.now();
 		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
+		const collector = this.currentCollector(provider);
+		if (!collector)
+			return errorSnapshot(provider, "unavailable", now, "No subscription usage collector exists for this provider.");
 		const generation = this.generations.get(provider) ?? 0;
 		const cached = this.cache.get(provider);
 		const force = options.force === true;
@@ -428,7 +427,7 @@ export class UsageService {
 			}
 			this.lastManualRefreshAt.set(provider, now);
 		}
-		const refresh = this.refresh(ctx, provider, now, options.notBefore);
+		const refresh = this.refresh(ctx, provider, collector, now, options.notBefore);
 		const snapshot = await waitForCaller(refresh.read, options.signal, () => {
 			// The one outer deadline owns fallback selection. Inner waits must not
 			// race it with separate timers or extend it for each newer owner.
@@ -445,6 +444,9 @@ export class UsageService {
 			consider(this.cache.get(provider));
 			return fallback;
 		});
+		if (!options.signal?.aborted && this.currentCollector(provider) !== collector) {
+			return errorSnapshot(provider, "unavailable", now, "Usage collector changed during the read.");
+		}
 		if (generation !== (this.generations.get(provider) ?? 0) && !options.signal?.aborted) {
 			const current = this.peek(provider);
 			return current?.status === "available" && current.retrievedAt >= (options.notBefore ?? 0)
@@ -477,6 +479,7 @@ export class UsageService {
 
 	/** Cached snapshot without any network read; expired data is reported `stale`. */
 	peek(provider: string): UsageSnapshot | undefined {
+		this.currentCollector(provider);
 		const cached = this.cache.get(provider);
 		if (!cached) return undefined;
 		const now = this.transport.now();
@@ -557,10 +560,28 @@ export class UsageService {
 		return cached ? staleSnapshot(cached, now, message) : errorSnapshot(provider, "error", now, message);
 	}
 
-	private refresh(ctx: RegistryContext, provider: string, now: number, notBefore?: number): UsageRead {
+	private currentCollector(provider: string): Collector | undefined {
+		const registered = collectorFor(provider);
+		const previous = this.collectors.get(provider);
+		if (previous && previous !== registered) {
+			this.invalidate(provider);
+			this.lastManualRefreshAt.delete(provider);
+			this.collectors.delete(provider);
+		}
+		if (registered) this.collectors.set(provider, registered);
+		return registered;
+	}
+
+	private refresh(
+		ctx: RegistryContext,
+		provider: string,
+		collector: Collector,
+		now: number,
+		notBefore?: number,
+	): UsageRead {
 		const existing = this.inFlight.get(provider);
 		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing;
-		const refresh = this.fetchSnapshot(ctx, provider, now)
+		const refresh = this.fetchSnapshot(ctx, provider, collector, now)
 			.then(async (outcome) => {
 				entry.snapshot = outcome.snapshot;
 				// A post-failure read may supersede a slow warm-up. Only the newest
@@ -615,13 +636,16 @@ export class UsageService {
 		this.backoff.set(provider, { failures, until: this.transport.now() + delay });
 	}
 
-	private async fetchSnapshot(ctx: RegistryContext, provider: string, now: number): Promise<FetchOutcome> {
+	private async fetchSnapshot(
+		ctx: RegistryContext,
+		provider: string,
+		collector: Collector,
+		now: number,
+	): Promise<FetchOutcome> {
 		const unfetched = (status: "error" | "unavailable", message: string): FetchOutcome => ({
 			snapshot: errorSnapshot(provider, status, now, message),
 			failed: false,
 		});
-		const collector = Object.hasOwn(COLLECTORS, provider) ? COLLECTORS[provider] : undefined;
-		if (!collector) return unfetched("unavailable", "No subscription usage collector exists for this provider.");
 		let token: string | undefined;
 		const lookupTimedOut = Symbol("credential lookup timeout");
 		let lookupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -644,9 +668,6 @@ export class UsageService {
 			clearTimeout(lookupTimer);
 		}
 		if (!token) return unfetched("unavailable", "No OAuth credential is available for this provider.");
-		if (collector.acceptsToken?.(token) === false) {
-			return unfetched("unavailable", "API-key auth has no subscription usage window.");
-		}
 
 		const failure = (message: string, retryAfter?: number): FetchOutcome => ({
 			snapshot: errorSnapshot(provider, "error", now, message),
@@ -660,17 +681,28 @@ export class UsageService {
 			controller.abort();
 		}, REQUEST_TIMEOUT_MS);
 		try {
-			const response = await this.transport.fetch(collector.url, {
-				headers: collector.headers(token),
-				signal: controller.signal,
-			});
-			if (!response.ok) {
-				return failure(
-					`Usage request failed (${response.status}).`,
-					retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
-				);
+			if (collector.acceptsCredential?.(token) === false) {
+				return unfetched("unavailable", "API-key auth has no subscription usage window.");
 			}
-			const parsed = collector.parse(await response.json());
+			let parsed: CollectorReading | undefined;
+			if (collector.kind === "http") {
+				const { url, ...init } = collector.request(token);
+				const response = await this.transport.fetch(url, { ...init, signal: controller.signal });
+				if (!response.ok) {
+					return failure(
+						`Usage request failed (${response.status}).`,
+						retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
+					);
+				}
+				parsed = collector.parse(await response.json());
+			} else {
+				// Custom reads get the same deadline even if the adapter ignores abort.
+				const { signal } = controller;
+				const deadline = new Promise<never>((_, reject) => {
+					signal.addEventListener("abort", () => reject(new DOMException("Timed out", "AbortError")), { once: true });
+				});
+				parsed = await Promise.race([collector.read({ token, signal, now: () => this.transport.now() }), deadline]);
+			}
 			if (!parsed) return failure("Usage response had an unsupported shape.");
 			return {
 				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...parsed },
