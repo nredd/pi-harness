@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, type TestContext, test, vi } from "vitest";
 import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
-import { ok, shortSocketPath, startFakeHelper } from "../test/support/fake-helper.mjs";
+import { defaultDiagnostics, ok, shortSocketPath, startFakeHelper } from "../test/support/fake-helper.mjs";
 
 const matchingBuild = macosHelperBuild(fileURLToPath(new URL("../", import.meta.url)));
 
@@ -13,12 +13,16 @@ const HELPER_UPTIME_MS = 5_000_000;
 const PROTOCOL = 8;
 
 /** A fresh `helper.ts` bound to an external fake helper whose diagnostics report `diagnostics`. */
-async function external(onTestFinished: TestContext["onTestFinished"], diagnostics: Record<string, unknown>) {
+async function external(
+	onTestFinished: TestContext["onTestFinished"],
+	diagnostics: Record<string, unknown>,
+	handlers: Record<string, unknown> = {},
+) {
 	const fake = await startFakeHelper({
 		socketPath: shortSocketPath(),
 		protocolVersion: PROTOCOL,
 		diagnostics: { buildIdentity: matchingBuild, ...diagnostics },
-		handlers: { desktopInput: ok({ performed: "type" }), look: ok({ roots: [] }) },
+		handlers: { desktopInput: ok({ performed: "type" }), look: ok({ roots: [] }), ...handlers },
 	});
 	const home = makeTestTempDir("cu-clock-", onTestFinished);
 	onTestFinished(async () => {
@@ -44,21 +48,27 @@ async function external(onTestFinished: TestContext["onTestFinished"], diagnosti
 const sent = (fake: { requests: Array<{ cmd: string; args: Record<string, unknown> }> }, cmd: string) =>
 	fake.requests.filter((request) => request.cmd === cmd).map((request) => request.args);
 
-test("the deadline is the helper's own uptime plus the remaining budget, whatever the wall clock says", async ({
+test("the deadline is the helper's uptime plus the budget left when the probe reply arrives, whatever the wall clock says", async ({
 	onTestFinished,
 }) => {
-	const { fake, client } = await external(onTestFinished, { uptimeMs: HELPER_UPTIME_MS });
-	// A wall clock stepped back an hour, and stuck there, must not move the deadline.
+	// A fake monotonic clock that advances a known amount while the build probe is in flight.
+	let clock = 10_000;
+	const PROBE_MS = 400;
+	const diagnostics = { buildIdentity: matchingBuild, uptimeMs: HELPER_UPTIME_MS };
+	const { fake, client } = await external(onTestFinished, diagnostics, {
+		diagnostics: (request: { id: string }) => {
+			if (request.id.startsWith("build_")) clock += PROBE_MS;
+			return ok(defaultDiagnostics(PROTOCOL, diagnostics));
+		},
+	});
+	vi.spyOn(performance, "now").mockImplementation(() => clock);
+	// A wall clock stepped back years, and stuck there, must not move the deadline.
 	vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2020, 0, 1));
-	const before = performance.now();
 	await client.command("desktopInput", { action: "type", text: "x" }, { timeoutMs: 30_000 });
-	const elapsed = performance.now() - before;
 	const [args] = sent(fake, "desktopInput");
 	expect(args.keyboardDeadlineMs).toBeUndefined();
-	const deadline = args.keyboardDeadlineUptimeMs as number;
-	// Probe-to-reply time is charged against the budget, so the deadline can only be earlier than uptime + budget.
-	expect(deadline).toBeLessThanOrEqual(HELPER_UPTIME_MS + 29_750);
-	expect(deadline).toBeGreaterThanOrEqual(HELPER_UPTIME_MS + 29_750 - elapsed);
+	// 30 s budget, 250 ms margin, and the probe's 400 ms charged against it.
+	expect(args.keyboardDeadlineUptimeMs).toBe(HELPER_UPTIME_MS + 30_000 - 250 - PROBE_MS);
 });
 
 test("commands that post no keys carry no deadline", async ({ onTestFinished }) => {

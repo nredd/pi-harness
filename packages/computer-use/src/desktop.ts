@@ -226,21 +226,41 @@ export function desktopInputText(result: DesktopInputResult): string {
 	}
 }
 
+/** Fixed wording per keyboard stop code. Helper prose can quote the keys or text, so none of it is rendered. */
+const KEYBOARD_STOP_REASONS: Readonly<Record<string, string>> = {
+	app_blocked: "a blocked app was frontmost or held key focus",
+	input_deadline_expired: "the keyboard delivery deadline expired",
+	input_failed: "a key event could not be created",
+	invalid_args: "the key sequence was rejected before delivery",
+};
+
+/** A helper error code as rendered: a plain identifier as is, anything else as `unknown`. */
+function renderedStopCode(code: string): string {
+	return /^[a-z][a-z0-9_]{0,63}$/.test(code) ? code : "unknown";
+}
+
+function isPostedCount(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 /**
  * Restate a keyboard stop so the model can see it: Pi's tool dispatcher keeps only `error.message`, which would drop
- * the helper's code and `evidence.postedUnits`. Names both and, when any key pair was posted, warns against replaying
- * the call. The input text and keys are never included.
+ * the helper's code and `evidence.postedUnits`. Built only from fixed wording, the code and the count, and warns
+ * against replaying the call when any key pair was posted. The helper's message, input text and keys never appear.
  * @returns A `HelperCommandError` keeping code and evidence, or the same error when it is not a coded keyboard stop.
  */
 function desktopInputFailure(error: unknown): unknown {
 	const units = error instanceof HelperCommandError ? error.evidence?.postedUnits : undefined;
-	if (!(error instanceof HelperCommandError) || error.code === undefined || typeof units !== "number") return error;
+	if (!(error instanceof HelperCommandError) || error.code === undefined || !isPostedCount(units)) return error;
+	const reason = Object.hasOwn(KEYBOARD_STOP_REASONS, error.code)
+		? KEYBOARD_STOP_REASONS[error.code]
+		: "keyboard delivery stopped";
 	const posted =
 		units === 0
 			? "No key pairs posted."
 			: `${units} key ${units === 1 ? "pair" : "pairs"} posted. Do not replay this call; take a desktop_screenshot to see what arrived.`;
 	return new HelperCommandError(
-		`desktop_input stopped (${error.code}): ${error.message.replace(/\.$/, "")}. ${posted}`,
+		`desktop_input stopped (${renderedStopCode(error.code)}): ${reason}. ${posted}`,
 		error.code,
 		error.evidence,
 	);

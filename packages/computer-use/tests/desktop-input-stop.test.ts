@@ -44,26 +44,43 @@ test.for([
 	const failure = new HelperCommandError("app_blocked: 'Vault' is blocked", "app_blocked", { postedUnits: units });
 	const error = await rendered({ action: "keypress", keys: ["cmd+s", "tab"] }, failure);
 	expect(error.message).toBe(
-		`desktop_input stopped (app_blocked): app_blocked: 'Vault' is blocked. ${posted}. Do not replay this call; take a desktop_screenshot to see what arrived.`,
+		`desktop_input stopped (app_blocked): a blocked app was frontmost or held key focus. ${posted}. Do not replay this call; take a desktop_screenshot to see what arrived.`,
 	);
 	expect(error).toBeInstanceOf(HelperCommandError);
 	expect((error as HelperCommandError).code).toBe("app_blocked");
 	expect((error as HelperCommandError).evidence).toEqual({ postedUnits: units });
 });
 
-test("a stop before any key-down says nothing was posted", async () => {
-	const failure = new HelperCommandError("Keyboard delivery deadline expired.", "input_deadline_expired", {
-		postedUnits: 0,
-	});
+test.for([
+	{ code: "input_deadline_expired", reason: "the keyboard delivery deadline expired" },
+	{ code: "input_failed", reason: "a key event could not be created" },
+	{ code: "invalid_args", reason: "the key sequence was rejected before delivery" },
+	{ code: "focus_not_acquired", reason: "keyboard delivery stopped" },
+	{ code: "toString", reason: "keyboard delivery stopped" },
+])("$code renders fixed wording, never the helper's message", async ({ code, reason }) => {
+	// A helper message can quote the keys or the text; none of it may reach the model-visible message.
+	const failure = new HelperCommandError(`Unsupported key 'cmd+s' after '${SECRET}'`, code, { postedUnits: 0 });
+	const error = await rendered({ action: "typeText", text: SECRET }, failure);
+	const shown = code === "toString" ? "unknown" : code;
+	expect(error.message).toBe(`desktop_input stopped (${shown}): ${reason}. No key pairs posted.`);
+	expect(error.message).not.toContain("Unsupported");
+});
+
+test("a code that is not a plain identifier is not rendered", async () => {
+	const failure = new HelperCommandError("x", `typed ${SECRET}`, { postedUnits: 2 });
 	const error = await rendered({ action: "typeText", text: SECRET }, failure);
 	expect(error.message).toBe(
-		"desktop_input stopped (input_deadline_expired): Keyboard delivery deadline expired. No key pairs posted.",
+		"desktop_input stopped (unknown): keyboard delivery stopped. 2 key pairs posted. Do not replay this call; take a desktop_screenshot to see what arrived.",
 	);
 });
 
-test("refusals without keyboard evidence, uncoded errors and transport failures pass through unchanged", async () => {
+test("refusals without a usable posted count, uncoded errors and transport failures pass through unchanged", async () => {
 	const pointer = new HelperCommandError("app_blocked: 'Vault' is blocked", "app_blocked");
 	expect(await rendered({ action: "click", x: 1, y: 2 }, pointer)).toBe(pointer);
+	for (const postedUnits of [-1, 1.5, Number.NaN, "1"]) {
+		const odd = new HelperCommandError("app_blocked: 'Vault' is blocked", "app_blocked", { postedUnits });
+		expect(await rendered({ action: "typeText", text: "x" }, odd)).toBe(odd);
+	}
 	const uncoded = new HelperCommandError("Daemon command 'desktopInput' failed.", undefined, { postedUnits: 1 });
 	expect(await rendered({ action: "typeText", text: SECRET }, uncoded)).toBe(uncoded);
 	const timeout = new HelperTransportError("Daemon command 'desktopInput' timed out after 30000ms.", "helper_timeout");

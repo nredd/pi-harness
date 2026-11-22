@@ -115,7 +115,7 @@ describe("daemon commands over the socket", () => {
 		assert.equal(fake.requests[0].cmd, "diagnostics", "command() probes the daemon first");
 	});
 
-	test("keyboard stops carry a deadline and the posted prefix without retry", async () => {
+	test("keyboard stops carry the posted prefix without retry", async () => {
 		const fake = await fakeOn({
 			handlers: {
 				desktopInput: {
@@ -125,17 +125,12 @@ describe("daemon commands over the socket", () => {
 			},
 		});
 		const { MacosHelperClient } = await load({ external: true, fake });
-		const start = performance.now();
 		await assert.rejects(new MacosHelperClient().command("desktopInput", { action: "key" }, { timeoutMs: 30_000 }), {
 			code: "app_blocked",
 			evidence: { postedUnits: 1 },
 		});
-		const elapsed = performance.now() - start;
-		const requests = fake.requests.filter(({ cmd }) => cmd === "desktopInput");
-		assert.equal(requests.length, 1);
-		// In the fake helper's `uptimeMs` clock (1_000_000), never the wall clock (#1198).
-		assert.ok(requests[0].args.keyboardDeadlineUptimeMs >= 1_000_000 + 29_750 - elapsed);
-		assert.ok(requests[0].args.keyboardDeadlineUptimeMs <= 1_000_000 + 29_750);
+		// Sent once, never retried; the deadline's value is `tests/keyboard-deadline-clock.test.ts`'s job.
+		assert.equal(fake.requests.filter(({ cmd }) => cmd === "desktopInput").length, 1);
 	});
 
 	test("error replies become HelperCommandError with the helper's code and message", async () => {

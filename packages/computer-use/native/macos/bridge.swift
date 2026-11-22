@@ -702,27 +702,58 @@ typealias FocusCheck = (Bool) throws -> Void
 // The second argument marks a real down, not an early check after a layout query.
 typealias BeforeKeyDown = (Bool, Bool) throws -> Void
 
-private func trackKeyboardPosts(_ check: @escaping FocusCheck) -> BeforeKeyDown {
-	var postedUnits = 0
-	return { force, posting in
-		do {
-			try check(force)
-		} catch var failure as BridgeFailure {
-			failure.evidence = ["postedUnits": postedUnits]
-			throw failure
+/// Counts the key pairs one keyboard action posts, so every failure after a posted prefix reports it as
+/// `evidence.postedUnits`: admission refusals through `beforeKeyDown`, anything else through `deliver`.
+final class KeyboardPostCounter {
+	private(set) var postedUnits = 0
+	private let check: FocusCheck
+
+	init(_ check: @escaping FocusCheck) {
+		self.check = check
+	}
+
+	private func withPostedUnits(_ failure: BridgeFailure) -> BridgeFailure {
+		var failure = failure
+		var evidence = failure.evidence ?? [:]
+		evidence["postedUnits"] = postedUnits
+		failure.evidence = evidence
+		return failure
+	}
+
+	/// Admission before each key-down; the second argument marks a real down, which counts once admitted.
+	var beforeKeyDown: BeforeKeyDown {
+		return { force, posting in
+			do {
+				try self.check(force)
+			} catch let failure as BridgeFailure {
+				throw self.withPostedUnits(failure)
+			}
+			// Posting the down and release cannot throw after admission succeeds.
+			if posting { self.postedUnits += 1 }
 		}
-		// Posting the down and release cannot throw after admission succeeds.
-		if posting { postedUnits += 1 }
+	}
+
+	/// Runs keyboard delivery; any `BridgeFailure` it throws, e.g. a failed event allocation, carries the count.
+	func deliver(_ body: () throws -> Void) throws {
+		do {
+			try body()
+		} catch let failure as BridgeFailure {
+			throw withPostedUnits(failure)
+		}
 	}
 }
 
+/// The longest keyboard delivery `desktopInput` allows: its client's own socket timeout is a fixed 30 s.
+let desktopInputKeyboardCeiling: TimeInterval = 30
+
 /// The absolute keyboard deadline in `systemUptime` seconds, the boot-relative clock `diagnostics` reports as
 /// `uptimeMs`. The client sends `keyboardDeadlineUptimeMs` in that clock, so no wall-clock step can move it.
-/// A missing or non-finite deadline, or one more than 30 s past `now`, is bounded to 30 s.
-func keyboardDeadline(_ request: [String: Any], now: TimeInterval) -> TimeInterval {
-	let bound = now + 30
-	guard let ms = (request["keyboardDeadlineUptimeMs"] as? NSNumber)?.doubleValue, ms.isFinite else { return bound }
-	return min(ms / 1000, bound)
+/// A missing or non-finite deadline falls back to 30 s from `now`. `ceiling` bounds a present one: `desktopInput`
+/// passes its client's fixed 30 s; `act` passes nil, because `act_ui` budgets its timeout by text length.
+func keyboardDeadline(_ request: [String: Any], now: TimeInterval, ceiling: TimeInterval?) -> TimeInterval {
+	guard let ms = (request["keyboardDeadlineUptimeMs"] as? NSNumber)?.doubleValue, ms.isFinite else { return now + 30 }
+	guard let ceiling else { return ms / 1000 }
+	return min(ms / 1000, now + ceiling)
 }
 
 final class KeyboardAdmission {
@@ -2786,7 +2817,7 @@ final class Bridge {
 
 	func act(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let deadline = keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime)
+		let deadline = keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime, ceiling: nil)
 		let lookId = try stringArg(request, "lookId")
 		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
@@ -2903,7 +2934,8 @@ final class Bridge {
 			try world.refuseBlockedPoints(points, blockedBundleIdList(request))
 		}
 
-		let admitKeyboard = trackKeyboardPosts(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
+		let keyboard = KeyboardPostCounter(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
+		let admitKeyboard = keyboard.beforeKeyDown
 		func recheckBlockedKeyboard() throws {
 			try admitKeyboard(true, false)
 		}
@@ -3012,11 +3044,11 @@ final class Bridge {
 				} ?? false
 				if !selected {
 					try recheckBlockedKeyboard()
-					try world.postKeyPress(["cmd", "a"], pid, delivery, admitKeyboard)
+					try keyboard.deliver { try world.postKeyPress(["cmd", "a"], pid, delivery, admitKeyboard) }
 					world.sleep(20_000)
 				}
 				try recheckBlockedKeyboard()
-				try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard)
+				try keyboard.deliver { try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard) }
 				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
 				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
@@ -3052,7 +3084,7 @@ final class Bridge {
 			// HID keys reach the focused app, which a non-activating panel of a blocked app can be.
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			let text = params["text"] as? String ?? ""
-			try world.postUnicodeText(text, pid, delivery, admitKeyboard)
+			try keyboard.deliver { try world.postUnicodeText(text, pid, delivery, admitKeyboard) }
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
 				world.sleep(30_000)
@@ -3139,7 +3171,7 @@ final class Bridge {
 				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) })
+				try keyboard.deliver { try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) }) }
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
 					world.sleep(30_000)
@@ -3180,7 +3212,7 @@ final class Bridge {
 			}
 			acquirePhysicalInputIfNeeded()
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
-			try world.postKeyPress(keys, pid, delivery, admitKeyboard)
+			try keyboard.deliver { try world.postKeyPress(keys, pid, delivery, admitKeyboard) }
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
 			let cursorPoint = try? coordinatePoint()
@@ -3329,12 +3361,14 @@ final class Bridge {
 		if mayUsePhysicalInput { world.lockInput() }
 		defer { if mayUsePhysicalInput { world.unlockInput() } }
 
+		// Resolved once for the whole transaction, so a missing deadline cannot restart its 30 s fallback per step.
+		let deadlineMs = keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime, ceiling: nil) * 1000
 		var steps: [[String: Any]] = []
 		var stoppedAt: Int?
 		for (index, action) in actions.enumerated() {
 			var deferred = action
 			deferred["deferRootDelta"] = true
-			deferred["keyboardDeadlineUptimeMs"] = request["keyboardDeadlineUptimeMs"]
+			deferred["keyboardDeadlineUptimeMs"] = deadlineMs
 			do {
 				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
@@ -4137,7 +4171,8 @@ final class Bridge {
 		func refuseBlockedWindow(at point: CGPoint) throws {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
-		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime)))
+		let keyboard = KeyboardPostCounter(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime, ceiling: desktopInputKeyboardCeiling)))
+		let refuseBlockedKeyboard = keyboard.beforeKeyDown
 		var vertices: [CGPoint] = []
 		switch action {
 		case "type", "key":
@@ -4183,12 +4218,13 @@ final class Bridge {
 		case "drag":
 			try postMouseDrag(points: vertices, pid: 0)
 		case "type":
-			try postUnicodeText(try stringArg(request, "text"), pid: 0, beforeKeyDown: refuseBlockedKeyboard)
+			let text = try stringArg(request, "text")
+			try keyboard.deliver { try postUnicodeText(text, pid: 0, beforeKeyDown: refuseBlockedKeyboard) }
 		case "key":
 			guard let keys = request["keys"] as? [String], !keys.isEmpty else {
 				throw BridgeFailure(message: "keypress requires keys", code: "invalid_args")
 			}
-			try postKeyPress(keys: keys, pid: 0, beforeKeyDown: refuseBlockedKeyboard)
+			try keyboard.deliver { try postKeyPress(keys: keys, pid: 0, beforeKeyDown: refuseBlockedKeyboard) }
 		default:
 			throw BridgeFailure(message: "Unknown desktop action '\(action)'", code: "invalid_args")
 		}
@@ -5005,38 +5041,43 @@ final class Bridge {
 		return (flags, keys.last ?? "")
 	}
 
-	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		if let chord = keyChord(keys) {
-			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-			return
-		}
+	/// One stroke of a keypress: a key code with its modifiers, or a single character typed as text.
+	private enum KeyStroke {
+		case code(CGKeyCode, CGEventFlags)
+		case character(String)
+	}
 
-		for key in keys {
+	/// Resolves every stroke of `keys` before any is posted, so an unsupported key refuses the whole sequence with
+	/// nothing posted. The message names the key's position, never the key.
+	private func keyStrokes(_ keys: [String]) throws -> [KeyStroke] {
+		func stroke(_ key: String, flags: CGEventFlags, index: Int) throws -> KeyStroke {
+			if let code = keyCode(key) { return .code(code, flags) }
+			if key.count == 1 { return .character(key) }
+			throw BridgeFailure(message: "Unsupported key at keys[\(index)]; no key was posted", code: "invalid_args")
+		}
+		if let chord = keyChord(keys) { return [try stroke(chord.key, flags: chord.flags, index: keys.count - 1)] }
+		return try keys.enumerated().map { index, key in
 			let parts = key
 				.split(separator: "+")
 				.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
 				.filter { !$0.isEmpty }
-			if let chord = keyChord(parts) {
-				try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-			} else {
-				try postKey(key, flags: [], pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-			}
+			if let chord = keyChord(parts) { return try stroke(chord.key, flags: chord.flags, index: index) }
+			return try stroke(key, flags: [], index: index)
 		}
 	}
 
-	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
+	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
+		let strokes = try keyStrokes(keys)
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let code = keyCode(key) else {
-			if key.count == 1 {
-				try postUnicodeText(key, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-				return
+		for stroke in strokes {
+			switch stroke {
+			case let .code(code, flags):
+				try postKeyCode(code, flags: flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
+			case let .character(character):
+				try postUnicodeText(character, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 			}
-			throw BridgeFailure(message: "Unsupported key '\(key)'", code: "invalid_args")
 		}
-		try postKeyCode(code, flags: flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 	}
 
 	private func postKeyCode(_ code: CGKeyCode, flags: CGEventFlags, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
@@ -5059,7 +5100,7 @@ final class Bridge {
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
-				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
+				try postKeyCode(stroke.code, flags: stroke.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 				continue
 			}
 			guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
@@ -5098,11 +5139,11 @@ final class Bridge {
 	/// path as a user keystroke. Unicode synthesis remains the fallback for text
 	/// that has no direct key representation, and for any character the active
 	/// layout or input method would not type from that US key.
-	private func physicalKeyStroke(for character: String, inputSource: KeyboardInputSource) -> (key: String, flags: CGEventFlags)? {
+	private func physicalKeyStroke(for character: String, inputSource: KeyboardInputSource) -> (code: CGKeyCode, flags: CGEventFlags)? {
 		guard let stroke = usLayoutKeyStroke(for: character), let code = keyCode(stroke.key) else { return nil }
 		let produced = inputSource.layoutData.flatMap { keyboardLayoutCharacter(layoutData: $0, keyCode: code, shift: stroke.shift) }
 		guard physicalKeyStrokeTypes(character, isKeyboardLayout: inputSource.isKeyboardLayout, layoutProduces: produced) else { return nil }
-		return (stroke.key, stroke.shift ? [.maskShift] : [])
+		return (code, stroke.shift ? [.maskShift] : [])
 	}
 
 	private func setUnicodeString(event: CGEvent, text: String) {

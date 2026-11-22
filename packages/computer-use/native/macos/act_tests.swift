@@ -35,6 +35,9 @@ private final class ActFixture {
     var scrollPositions = ["before", "after"]
     var bar: ActWorld.ScrollBarWrite?
     var admissionOverride: FocusCheck?
+    /// Builds the admission from the deadline `act` resolved, e.g. a `KeyboardAdmission` on a simulated clock.
+    var clockedAdmission: ((TimeInterval) -> FocusCheck)?
+    var deadlines: [TimeInterval] = []
     var blocked = false
     var blockDuringSnapshot = false
     var blockDuringLayout = false
@@ -102,13 +105,17 @@ private final class ActFixture {
                 self.trace.append("require:\(pid)")
                 if self.focusFails { throw BridgeFailure(message: "focus fixture", code: "focus_not_acquired") }
             },
-            keyboardAdmission: { blocked, _ in { force in
+            keyboardAdmission: { blocked, deadline in
+                self.deadlines.append(deadline)
+                if let clocked = self.clockedAdmission { return clocked(deadline) }
+                return { force in
                 if let override = self.admissionOverride { return try override(force) }
                 guard let blocked else { return }
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "keyboard refusal receives request and built-in blocks")
                 self.trace.append("keyboard")
                 try self.checkBlocked()
-            } },
+                }
+            },
             refuseBlockedPoints: { points, blocked in
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "pointer refusal receives request and built-in blocks")
                 self.trace.append("pointer")
@@ -202,7 +209,7 @@ private func actionFailure(_ code: String, message: String? = nil, postedUnits: 
         _ = try body()
         expect(false, "expected action failure \(code)")
     } catch let error as BridgeFailure {
-        expect(error.code == code, "expected \(code), got \(error.code)")
+        expect(error.code == code, "expected \(code), got \(error.code): \(error.message)")
         if let message { expect(error.message == message, "expected '\(message)', got '\(error.message)'") }
         if let postedUnits {
             let bytes = try JSONSerialization.data(withJSONObject: error.wireError)
@@ -220,6 +227,7 @@ func runActAssertions() throws {
     try runScrollAssertions()
     runAXScrollAssertions()
     try runBatchAssertions()
+    try runBatchDeadlineAssertions()
     try runRootPIDAssertions()
     try runWindowIDAssertions()
     try runPIDAdmissionAssertions()
@@ -906,11 +914,51 @@ private func runEventAssertions() throws {
     onHIDPrepare = { preparations += 1; return false }
     keys.blocked = false
     onHIDPost = { if $0 == .keyDown { keys.blocked = true } }
-    try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd+a", "tab", "b"]]) }
+    try actionFailure("app_blocked", postedUnits: 1) { try keys.act("keypress", coords: true, params: ["keys": ["cmd+a", "tab", "b"]]) }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && events.map(\.flags) == [.maskCommand, .maskCommand], "keypress releases the posted chord after focus moves and refuses the next key")
     expect(preparations == 2, "prepare each attempted key-down but never prepare its owed release")
     onHIDPrepare = { false }
     onHIDPost = { _ in }
+
+    // An unsupported key anywhere refuses the whole sequence before its first key-down, and names no key.
+    keys.blocked = false
+    for sequence in [["cmd+s", "not-a-key"], ["tab", "not-a-key"], ["cmd", "not-a-key"]] {
+        events = []; keyAllocations = 0
+        try actionFailure("invalid_args", message: "Unsupported key at keys[1]; no key was posted", postedUnits: 0) {
+            try keys.act("keypress", coords: true, params: ["keys": sequence])
+        }
+        expect(events.isEmpty && keyAllocations == 0, "an invalid sequence \(sequence) allocates and posts nothing")
+    }
+
+    // A failure after admission, here the second pair's event allocation, still reports the posted prefix.
+    events = []; keyAllocations = 0
+    rejectKeyAllocation = 3
+    try actionFailure("input_failed", message: "Failed to create key event", postedUnits: 1) {
+        try keys.act("keypress", coords: true, params: ["keys": ["cmd+s", "tab"]])
+    }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [1, 1], "allocation failure after cmd+s posts only that pair")
+    events = []; keyAllocations = 0
+    try actionFailure("input_failed", message: "Failed to create unicode key event", postedUnits: 1) {
+        try keys.act("typeText", coords: true, params: ["text": "a🙂"])
+    }
+    expect(events.map(\.text) == ["a", "a"], "typing allocation failure after one pair reports it")
+    rejectKeyAllocation = nil
+
+    // act_ui's length-based deadline: 5,000 characters at 8 ms per pair run 40 s, past any 30 s bound.
+    let longTyping = ActFixture(inputSink: sink)
+    var typingClock = ProcessInfo.processInfo.systemUptime
+    longTyping.clockedAdmission = { deadline in
+        let gate = KeyboardAdmission(now: { typingClock }, deadline: deadline)
+        return { _ in try gate.checkDeadline() }
+    }
+    onInputSleep = { typingClock += 0.008 }
+    events = []
+    let text = String(repeating: "a", count: 5_000)
+    var longRequest = longTyping.request("typeText", coords: true, params: ["text": text])
+    longRequest["keyboardDeadlineUptimeMs"] = (typingClock + 129) * 1000
+    _ = try longTyping.bridge.act(longRequest, world: longTyping.world, supportsAgentCursor: false)
+    expect(events.count == 10_000, "a valid long act typeText is not cut mid-string: \(events.count / 2) of 5000 pairs")
+    onInputSleep = {}
 
     events = []
     try runWebReplacementRefusals(sink: sink) { events.map(\.type) }
@@ -961,12 +1009,55 @@ private func runWebReplacementRefusals(sink: NativeInputSink, posted: () -> [CGE
 
 private func runKeyboardDeadlineAssertions() {
     let now = 1_000.0
-    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_012_500], now: now) == 1_012.5, "the uptime deadline is used as is, with no wall-clock conversion")
-    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 999_000], now: now) == 999, "a deadline already past stays past")
-    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_031_000], now: now) == 1_030, "a deadline beyond 30 s is bounded")
-    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": Double.nan], now: now) == 1_030, "a non-finite deadline is bounded to 30 s")
-    expect(keyboardDeadline(["keyboardDeadlineMs": 1_012_500], now: now) == 1_030, "the retired wall-clock field grants nothing")
-    expect(keyboardDeadline([:], now: now) == 1_030, "a missing deadline is bounded to 30 s")
+    for ceiling in [desktopInputKeyboardCeiling, nil] {
+        expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_012_500], now: now, ceiling: ceiling) == 1_012.5, "the uptime deadline is used as is, with no wall-clock conversion")
+        expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 999_000], now: now, ceiling: ceiling) == 999, "a deadline already past stays past")
+        expect(keyboardDeadline(["keyboardDeadlineUptimeMs": Double.nan], now: now, ceiling: ceiling) == 1_030, "a non-finite deadline falls back to 30 s")
+        expect(keyboardDeadline(["keyboardDeadlineMs": 1_012_500], now: now, ceiling: ceiling) == 1_030, "the retired wall-clock field grants nothing")
+        expect(keyboardDeadline([:], now: now, ceiling: ceiling) == 1_030, "a missing deadline falls back to 30 s")
+    }
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_031_000], now: now, ceiling: desktopInputKeyboardCeiling) == 1_030, "desktopInput bounds a deadline to its client's fixed 30 s")
+    // act_ui budgets 25 ms per character: 5,000 characters get about 129 s, which a 30 s bound would cut mid-string.
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_129_000], now: now, ceiling: nil) == 1_129, "act keeps the client's length-based deadline")
+}
+
+/// The batch resolves its keyboard deadline once and every step inherits it.
+private func runBatchDeadlineAssertions() throws {
+    func keypressBatch(_ fixture: ActFixture, deadlineMs: Double?, count: Int = 1) throws -> [String: Any] {
+        var request: [String: Any] = ["actions": Array(repeating: fixture.request("keypress", coords: true, params: ["keys": ["tab"]]), count: count)]
+        if let deadlineMs { request["keyboardDeadlineUptimeMs"] = deadlineMs }
+        return try fixture.bridge.actBatch(request, world: fixture.world, supportsAgentCursor: false)
+    }
+    func realClock(_ fixture: ActFixture) {
+        fixture.clockedAdmission = { deadline in
+            let gate = KeyboardAdmission(now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
+            return { _ in try gate.checkDeadline() }
+        }
+    }
+
+    let expired = ActFixture()
+    realClock(expired)
+    let stopped = try keypressBatch(expired, deadlineMs: (ProcessInfo.processInfo.systemUptime - 1) * 1000)
+    let step = (stopped["steps"] as? [[String: Any]])?.first
+    expect(stopped["stoppedAt"] as? Int == 0 && (step?["error"] as? [String: String])?["code"] == "input_deadline_expired", "an expired batch deadline stops the first keyboard step: \(stopped)")
+    expect((step?["evidence"] as? [String: Int])?["postedUnits"] == 0 && !expired.trace.contains { $0.hasPrefix("key:") }, "an expired batch deadline posts no key-down: \(expired.trace)")
+
+    let live = ActFixture()
+    realClock(live)
+    let posted = try keypressBatch(live, deadlineMs: (ProcessInfo.processInfo.systemUptime + 60) * 1000)
+    expect(posted["stoppedAt"] == nil && live.trace.contains("key:tab:1234:hid"), "a future batch deadline posts the key: \(live.trace)")
+
+    // Real time passes between steps, so a per-step fallback would give each step a later deadline.
+    let missing = ActFixture()
+    missing.onSleep = { _ in Thread.sleep(forTimeInterval: 0.002) }
+    let before = ProcessInfo.processInfo.systemUptime
+    _ = try keypressBatch(missing, deadlineMs: nil, count: 2)
+    expect(missing.deadlines.count == 2 && missing.deadlines[0] == missing.deadlines[1], "a missing batch deadline falls back once, not per step: \(missing.deadlines)")
+    expect(missing.deadlines.allSatisfy { $0 >= before + 30 && $0 <= ProcessInfo.processInfo.systemUptime + 30 }, "the batch fallback is 30 s from batch entry")
+
+    let long = ActFixture()
+    _ = try keypressBatch(long, deadlineMs: 5_000_129_000, count: 2)
+    expect(long.deadlines == [5_000_129, 5_000_129], "a batch keeps the client's length-based deadline for every step: \(long.deadlines)")
 }
 
 /// The production sink with activation, its settle wait and the final OS post injected one at a time.
