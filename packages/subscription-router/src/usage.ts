@@ -570,6 +570,8 @@ export class UsageService {
 				const { url, ...init } = collector.request(token);
 				const response = await this.transport.fetch(url, { ...init, signal });
 				if (!response.ok) {
+					// The byte cap and deadline stop here; never wait for the source to stop.
+					void response.body?.cancel().catch(() => {});
 					return failure(
 						`Usage request failed (${response.status}).`,
 						retryAfterMs(response.headers.get("retry-after"), this.transport.now()),

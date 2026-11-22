@@ -598,6 +598,24 @@ it("cancels an oversized streamed response before parsing without trusting conte
 	expect(cancel).toHaveBeenCalledOnce();
 });
 
+it.each([
+	["hangs", () => new Promise<void>(() => undefined)],
+	["rejects", () => Promise.reject(new Error("fake cancel error"))],
+])("cancels non-success response bodies when cancellation %s", async (_label, cancelled) => {
+	const { usage, fetch } = harness();
+	const cancel = vi.fn(cancelled);
+	const body = new ReadableStream<Uint8Array>({ pull: () => new Promise(() => undefined), cancel });
+	fetch.mockResolvedValueOnce(new Response(body, { status: 503 }));
+	install({
+		provider,
+		kind: "http",
+		request: () => ({ url: "https://quota.example.invalid", headers: {} }),
+		parse: vi.fn(),
+	});
+	expect(await usage.get(ctx, provider)).toMatchObject({ status: "error", message: "Usage request failed (503)." });
+	expect(cancel).toHaveBeenCalledOnce();
+});
+
 it("rejects a missing HTTP body", async () => {
 	const { usage, fetch } = harness();
 	fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));

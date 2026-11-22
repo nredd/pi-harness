@@ -330,7 +330,8 @@ The live `COLLECTED_PROVIDERS` export is retained; use `collectedProviders()` fo
 A collector receives the provider credential from Pi, so register only code you trust with that
 credential. A `kind: "http"` adapter defines `request(token)` and `parse(payload)`; a `kind: "custom"`
 adapter defines `read({ token, signal, now })` and should stop on abort. HTTP response bodies are
-streamed and capped at `MAX_USAGE_RESPONSE_BYTES` (256 KiB after decoding HTTP content encoding).
+streamed and capped at `MAX_USAGE_RESPONSE_BYTES` (256 KiB after decoding HTTP content encoding). A
+non-success response's unread body is cancelled without waiting for the source.
 Extensions run as trusted code in the same process; this API is not a sandbox or a credential
 isolation boundary. Deadlines bound asynchronous waits, not time spent in synchronous callbacks
 (`acceptsCredential`, `request`, `parse`, or `read` before it yields). Return normalized `windows`
