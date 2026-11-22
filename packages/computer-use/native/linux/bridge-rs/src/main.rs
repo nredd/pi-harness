@@ -652,15 +652,16 @@ fn focus_window(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, 
         .or_else(|| args.get("windowRef"))
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("focusWindow requires rootRef"))?;
-    let root = lock(state)?
-        .root(reference)
-        .ok_or_else(|| ProtocolError::new("Root not found", ErrorCode::TargetNotFound))?;
     let policy = if args.get("policy").is_some() {
         PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?
     } else {
         PhysicalPolicy::Foreground
     };
+    // Before the root lookup: a refusal never says whether the handle exists (#1298).
     policy.refuse_strict_headless()?;
+    let root = lock(state)?
+        .root(reference)
+        .ok_or_else(|| ProtocolError::new("Root not found", ErrorCode::TargetNotFound))?;
     let window = root
         .x11_window
         .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
@@ -690,6 +691,16 @@ type PhysicalAct = fn(
     ActionGeometry,
 ) -> Result<Value, ProtocolError>;
 
+/// Element actions `act` tries semantically (`press`, `setText`) before any physical fallback;
+/// every other action, and every coordinate target, needs physical delivery.
+const SEMANTIC_ACTIONS: [&str; 4] = ["press", "click", "setText", "typeText"];
+
+/// What an `act` request targets: an outline element, or a point in its look image.
+enum ActTarget<'a> {
+    Element(&'a str),
+    Point(f64, f64),
+}
+
 async fn act(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
@@ -703,80 +714,96 @@ async fn act(
         .ok_or_else(|| invalid("act requires target"))?;
     let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
     let policy = PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?;
+    let target = match target.get("ref").and_then(Value::as_str) {
+        Some(reference) => ActTarget::Element(reference),
+        None => ActTarget::Point(
+            target
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("coordinate target requires x"))?,
+            target
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("coordinate target requires y"))?,
+        ),
+    };
+    // Physical-only delivery is refused before any look, target or bus lookup, so neither a
+    // missing target nor an unavailable bus can stand in for `foreground_required` (#1298).
+    let physical_only = match target {
+        ActTarget::Element(_) => !SEMANTIC_ACTIONS.contains(&action),
+        ActTarget::Point(..) => true,
+    };
+    if physical_only {
+        policy.refuse_strict_headless()?;
+    }
     let record = lock(state)?.look(look_id)?;
     let client = connect().await?;
 
-    if let Some(reference) = target.get("ref").and_then(Value::as_str) {
-        let node = lock(state)?.element(look_id, reference)?;
-        let text = params.get("text").and_then(Value::as_str).unwrap_or("");
-        let semantic = match action {
-            "press" | "click" => Some(client.press(&node).await.map(|worked| (worked, None))),
-            "setText" | "typeText" => Some(
-                client
-                    .set_text(&node, text)
-                    .await
-                    .map(|worked| (worked, Some(json!({"value":text})))),
-            ),
-            _ => None,
-        };
-        match semantic {
-            Some(Ok((worked, evidence))) => {
-                let mut result = json!({"outcome": if worked {"worked"} else {"didnt"}, "performed": semantic_performed()});
-                if let Some(evidence) = evidence {
-                    result["evidence"] = evidence;
+    let (x, y) = match target {
+        ActTarget::Point(x, y) => (x, y),
+        ActTarget::Element(reference) => {
+            let node = lock(state)?.element(look_id, reference)?;
+            let text = params.get("text").and_then(Value::as_str).unwrap_or("");
+            let semantic = match action {
+                "press" | "click" => Some(client.press(&node).await.map(|worked| (worked, None))),
+                "setText" | "typeText" => Some(
+                    client
+                        .set_text(&node, text)
+                        .await
+                        .map(|worked| (worked, Some(json!({"value":text})))),
+                ),
+                _ => None,
+            };
+            match semantic {
+                Some(Ok((worked, evidence))) => {
+                    let mut result = json!({"outcome": if worked {"worked"} else {"didnt"}, "performed": semantic_performed()});
+                    if let Some(evidence) = evidence {
+                        result["evidence"] = evidence;
+                    }
+                    return Ok(result);
                 }
-                return Ok(result);
+                // Shutdown began before the mutation: nothing ran, and nothing may fall back.
+                Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
+                Some(Err(error)) if error.code == ErrorCode::Timeout => {
+                    return Err(ProtocolError::new(
+                        format!("{}; semantic action outcome is unknown", error.message),
+                        ErrorCode::Timeout,
+                    ));
+                }
+                _ => {}
             }
-            // Shutdown began before the mutation: nothing ran, and nothing may fall back.
-            Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
-            Some(Err(error)) if error.code == ErrorCode::Timeout => {
-                return Err(ProtocolError::new(
-                    format!("{}; semantic action outcome is unknown", error.message),
-                    ErrorCode::Timeout,
-                ));
-            }
-            _ => {}
+            // Semantic delivery was attempted first. Only an explicitly physical-capable
+            // policy may fall back to the element centre.
+            policy.refuse_strict_headless()?;
+            let bounds = node.bounds.ok_or_else(|| {
+                ProtocolError::new(
+                    "Element has no coordinate fallback",
+                    ErrorCode::CoordinateUnavailableForRoot,
+                )
+            })?;
+            let frame = record.root.frame.clone().ok_or_else(|| {
+                ProtocolError::new(
+                    "Root has no coordinate geometry",
+                    ErrorCode::CoordinateUnavailableForRoot,
+                )
+            })?;
+            let owning_window = record.root.x11_window.ok_or_else(|| {
+                capability("Observed root is not correlated with an owning X11 window")
+            })?;
+            return physical(
+                action,
+                &params,
+                policy,
+                owning_window,
+                (bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+                ActionGeometry {
+                    frame,
+                    image_width: record.image_width,
+                    image_height: record.image_height,
+                },
+            );
         }
-        // Semantic delivery was attempted first. Only an explicitly physical-capable
-        // policy may fall back to the element centre.
-        policy.refuse_strict_headless()?;
-        let bounds = node.bounds.ok_or_else(|| {
-            ProtocolError::new(
-                "Element has no coordinate fallback",
-                ErrorCode::CoordinateUnavailableForRoot,
-            )
-        })?;
-        let frame = record.root.frame.clone().ok_or_else(|| {
-            ProtocolError::new(
-                "Root has no coordinate geometry",
-                ErrorCode::CoordinateUnavailableForRoot,
-            )
-        })?;
-        let owning_window = record.root.x11_window.ok_or_else(|| {
-            capability("Observed root is not correlated with an owning X11 window")
-        })?;
-        return physical(
-            action,
-            &params,
-            policy,
-            owning_window,
-            (bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-            ActionGeometry {
-                frame,
-                image_width: record.image_width,
-                image_height: record.image_height,
-            },
-        );
-    }
-    let x = target
-        .get("x")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| invalid("coordinate target requires x"))?;
-    let y = target
-        .get("y")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| invalid("coordinate target requires y"))?;
-    policy.refuse_strict_headless()?;
+    };
     let owning_window = record
         .root
         .x11_window
@@ -3226,6 +3253,11 @@ mod tests {
         .await;
     }
 
+    /// A bus connector for requests that must be refused before reaching AT-SPI.
+    async fn no_bus() -> Result<AtspiClient, ProtocolError> {
+        panic!("connected to AT-SPI before refusing")
+    }
+
     #[tokio::test]
     async fn strict_headless_refuses_physical_fallback_in_every_session_kind() {
         // An X11 root, and one with no X11 window (Wayland or no graphical session).
@@ -3262,6 +3294,74 @@ mod tests {
                 }
             })
             .await;
+        }
+
+        // Unknown handles and no bus: physical-only delivery is refused before any target
+        // lookup or bus connection, so the refusal says nothing about either (#1298).
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let unknown = "linux:look_999:@e1";
+        let physical_only = [
+            json!({"action":"click","target":{"x":1,"y":1}}),
+            json!({"action":"scroll","target":{"ref":unknown},"params":{"scrollY":1}}),
+            json!({"action":"keypress","target":{"ref":unknown},"params":{"keys":["a"]}}),
+        ];
+        for mut args in physical_only.clone() {
+            args["lookId"] = json!("look_999");
+            args["policy"] = json!("ax_only");
+            let error = act(&state, &args, no_bus, |_, _, _, _, _, _| {
+                panic!("attempted physical input")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{args}");
+        }
+        let error =
+            focus_window(&state, &json!({"rootRef":"@w999","policy":"ax_only"})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        // Batch steps take the same path.
+        let steps = physical_only
+            .iter()
+            .map(|step| {
+                let mut step = step.clone();
+                step["lookId"] = json!("look_999");
+                step["policy"] = json!("ax_only");
+                step
+            })
+            .collect::<Vec<_>>();
+        let reply = handle_request_with(
+            &state,
+            &Request {
+                protocol_version: PROTOCOL_VERSION,
+                id: "batch".into(),
+                cmd: "actBatch".into(),
+                args: json!({ "actions": steps }),
+            },
+            &InputState::default(),
+            no_bus,
+            |_, _, _, _, _, _| panic!("attempted physical input"),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(reply["steps"][0]["error"]["code"], "foreground_required");
+        // Request shape is still checked first, and an action an AT-SPI element can take
+        // semantically still resolves its target to try that first.
+        for (args, code) in [
+            (
+                json!({"lookId":"look_999","action":"click","target":{"x":1},"policy":"ax_only"}),
+                ErrorCode::InvalidRequest,
+            ),
+            (
+                json!({"lookId":"look_999","action":"press","target":{"ref":unknown},"policy":"ax_only"}),
+                ErrorCode::StaleLook,
+            ),
+        ] {
+            let error = act(&state, &args, no_bus, |_, _, _, _, _, _| {
+                panic!("attempted physical input")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, code, "{args}");
         }
     }
 
