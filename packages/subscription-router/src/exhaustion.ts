@@ -94,6 +94,13 @@ export class ExhaustionTracker {
 			confirmations,
 		};
 		if (decision.evidence) {
+			// Late or weaker evidence counts, but never shortens a live mark: keep the later deadline.
+			if (previous !== undefined && previous.until > now && previous.until >= mark.until) {
+				const kept = { ...previous, confirmations };
+				this.marks.set(key, kept);
+				if (failure !== undefined) this.counted.set(key, new Set(counted).add(failure));
+				return kept;
+			}
 			mark.evidence = decision.evidence;
 			if (decision.expiry) mark.expiry = decision.expiry;
 			if (decision.cause) mark.cause = decision.cause;

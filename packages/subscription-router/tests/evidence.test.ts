@@ -569,6 +569,59 @@ describe("inferred marks", () => {
 		});
 	});
 
+	it("counts an older, shorter confirmation but never shortens the live mark", () => {
+		const { clock, tracker } = tracked();
+		const scope = { block: true, scope: "model", families: [CARBON.id], evidence: "inferred" } as const;
+		const midnight = nextPacificMidnight(T0);
+		clock.now = T0 + 2000;
+		// The newer daily 429 confirms first; the older 95 s hint confirms while its deadline is live.
+		tracker.record(CARBON, {
+			...scope,
+			window: "inferred:daily",
+			expiry: "window-reset",
+			resetAt: midnight,
+			evidenceAt: T0 + 1000,
+		});
+		const late = tracker.record(CARBON, {
+			...scope,
+			window: "inferred:hint",
+			expiry: "hinted",
+			resetAt: T0 + 95_000,
+			evidenceAt: T0,
+		});
+		expect(late).toMatchObject({ window: "inferred:daily", until: midnight, expiry: "window-reset", confirmations: 2 });
+		clock.now = T0 + 96_000;
+		expect(tracker.blocking(CARBON)).toMatchObject({ window: "inferred:daily", until: midnight });
+		// A backoff confirmed later cannot shorten it either; the same failure still counts once.
+		expect(
+			tracker.record(CARBON, { ...scope, window: "inferred:backoff", expiry: "backoff", evidenceAt: T0 + 3000 }),
+		).toMatchObject({ until: midnight, confirmations: 3 });
+		expect(
+			tracker.record(CARBON, { ...scope, window: "inferred:backoff", expiry: "backoff", evidenceAt: T0 + 3000 })
+				?.confirmations,
+		).toBe(3);
+		// Stronger evidence still extends a live mark.
+		const hinted = tracker.record(NEON, {
+			...scope,
+			families: [NEON.id],
+			window: "inferred:hint",
+			expiry: "hinted",
+			resetAt: T0 + 200_000,
+			evidenceAt: T0,
+		});
+		expect(hinted?.until).toBe(T0 + 200_000);
+		expect(
+			tracker.record(NEON, {
+				...scope,
+				families: [NEON.id],
+				window: "inferred:daily",
+				expiry: "window-reset",
+				resetAt: midnight,
+				evidenceAt: T0 + 1000,
+			}),
+		).toMatchObject({ window: "inferred:daily", until: midnight });
+	});
+
 	it("re-counts after the mark lapses, and never dedupes read marks", () => {
 		const { clock, tracker } = tracked();
 		const decision = { block: true, window: "inferred:backoff", evidence: "inferred", evidenceAt: T0 } as const;
