@@ -148,7 +148,7 @@ const EVERY_STEP: ReadonlySet<Step> = new Set(["id", "run", "workflow-run", "nam
  * Resolve one handle in a fixed order: the successor chain, the exact id (this
  * manager, then survivors), a run id, a workflow run id, a handle or alias
  * (lowercase, as typed before its `agent-` form), then saved history (a
- * tombstone by name or id, else an eviction note by id). Id beats name, and
+ * tombstone by id, then by name, else an eviction note by id). Id beats name, and
  * live beats saved. Reads memory only.
  */
 export function resolveAgent(input: string, asker: Asker, sources: AgentSources): AgentRef {
@@ -192,10 +192,11 @@ function lookup(
 	}
 
 	if (!steps.has("saved")) return { ...base("none"), state: "unknown" };
+	// Id beats name here too: another conversation's alias must not take a saved id.
 	const tombstone =
+		sources.tombstoneById(latest) ??
 		sources.tombstoneByName(handle.key) ??
-		(prefixed ? sources.tombstoneByName(prefixed) : undefined) ??
-		sources.tombstoneById(latest);
+		(prefixed ? sources.tombstoneByName(prefixed) : undefined);
 	const note = sources.getEvictedNote(tombstone?.id ?? latest);
 	if (!tombstone && !note) return { ...base("none"), state: "unknown" };
 	return { ...base("saved"), state: "saved", note, tombstone, resume: savedResume(tombstone, note) };

@@ -201,6 +201,20 @@ it("reports restart history as saved and a session-switch survivor as live, live
 	expect(at("historical")).toMatchObject({ state: "saved", resume: { mode: "none", why: "historical" } });
 	expect(at("bounded")).toMatchObject({ state: "saved", resume: { mode: "none", why: "tombstone-bound" } });
 	expect(at("taken")).toMatchObject({ state: "saved", resume: { mode: "none", why: "name-taken" } });
+	// A saved id beats another saved conversation's alias spelling it.
+	const tomb = (id: string, handle: string, alias?: string) => ({
+		id,
+		handle,
+		alias,
+		type: "general-purpose",
+		description: id,
+		sessionFile: `/sessions/${id}.jsonl`,
+		completedAt: 0,
+	});
+	after.rememberTombstone(tomb("alpha-id", "alpha"));
+	after.rememberTombstone(tomb("beta-id", "beta", "alpha-id"));
+	expect(at("alpha-id")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "alpha-id" } } });
+	expect(at("beta")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "beta-id" } } });
 	for (const input of [survivor.id, survivor.handle!, survivor.runId!])
 		expect(at(input)).toMatchObject({ state: "live", home: "survivor", record: survivor });
 
