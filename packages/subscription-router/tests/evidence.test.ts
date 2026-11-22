@@ -18,7 +18,7 @@ import {
 	type UsageRead,
 } from "../src/evidence.ts";
 import { ExhaustionTracker, markEvidence } from "../src/exhaustion.ts";
-import { nextPacificMidnight } from "../src/failure.ts";
+import { classify, nextPacificMidnight } from "../src/failure.ts";
 import { isQuotaError, type RouteEnv, Router } from "../src/router.ts";
 import {
 	NO_USAGE_SOURCE,
@@ -700,6 +700,16 @@ describe("the confirmation gate", () => {
 		"Credits exhausted",
 		"No prepayment credits",
 	])("confirms %s", (errorMessage) => {
+		expect(isQuotaError({ stopReason: "error", errorMessage })).toBe(true);
+	});
+
+	// S9: every affirmative payment phrase the classifier accepts must reach it through the gate.
+	it.each([
+		"Your credit balance is too low to access the API",
+		"Insufficient prepayment credits",
+		'{"error":{"code":"insufficient_credits","message":"x"}}',
+	])("confirms the standalone billing wording %s", (errorMessage) => {
+		expect(classify(errorMessage, T0).class).toBe("billing");
 		expect(isQuotaError({ stopReason: "error", errorMessage })).toBe(true);
 	});
 
