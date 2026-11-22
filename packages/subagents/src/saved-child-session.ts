@@ -50,18 +50,24 @@ function validChildPath(file: string): boolean {
 }
 
 /**
- * A memoized `realpathSync` for paths every row of one startup shares (child
- * session directories, the parent file). Failures are not cached and rethrow.
+ * A memoized `realpathSync` for paths the rows of one startup share (child
+ * session directories, the parent file a header names). A failure is cached
+ * too and rethrown, so a missing directory costs one lookup, not one per row.
  */
 export function canonicalPaths(): (path: string) => string {
-	const resolved = new Map<string, string>();
+	const resolved = new Map<string, { canonical: string } | { error: unknown }>();
 	return (path) => {
-		let canonical = resolved.get(path);
-		if (canonical === undefined) {
-			canonical = realpathSync(path);
-			resolved.set(path, canonical);
+		let entry = resolved.get(path);
+		if (entry === undefined) {
+			try {
+				entry = { canonical: realpathSync(path) };
+			} catch (error) {
+				entry = { error };
+			}
+			resolved.set(path, entry);
 		}
-		return canonical;
+		if ("error" in entry) throw entry.error;
+		return entry.canonical;
 	};
 }
 
@@ -139,26 +145,25 @@ function lastWrite(mtimeMs: number, now: number): string | undefined {
 }
 
 /**
- * Whether `canonicalFile` lies in one of `directories`. Throws when none holds
- * it and one did not resolve, so an unresolvable configured directory keeps
- * the "missing or unreadable" refusal it always had.
+ * Whether `canonicalFile` lies in one of `directories`, or `"unresolved"` when
+ * none holds it and one did not resolve (the caller keeps the "missing or
+ * unreadable" refusal an unresolvable configured directory always had).
  */
 function insideDirectory(
 	canonicalFile: string,
 	directories: readonly (string | undefined)[],
 	canonical: (path: string) => string,
-): boolean {
-	let unresolved: unknown;
+): boolean | "unresolved" {
+	let inside: boolean | "unresolved" = false;
 	for (const directory of directories) {
 		if (directory === undefined) continue;
 		try {
 			if (canonicalFile.startsWith(canonical(directory).replace(/[\\/]?$/, sep))) return true;
-		} catch (error) {
-			unresolved ??= error;
+		} catch {
+			inside = "unresolved";
 		}
 	}
-	if (unresolved) throw unresolved;
-	return false;
+	return inside;
 }
 
 /** Check the saved file without opening a writable SessionManager on untrusted history. */
@@ -169,9 +174,9 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 	}
 	try {
 		const canonicalFile = realpathSync(file);
-		if (!insideDirectory(canonicalFile, options.directories, canonical)) {
-			return { refusal: `child session is outside its configured directory: ${file}` };
-		}
+		const inside = insideDirectory(canonicalFile, options.directories, canonical);
+		if (inside === "unresolved") return { refusal: `child session is missing or unreadable: ${file}` };
+		if (!inside) return { refusal: `child session is outside its configured directory: ${file}` };
 		// A retargeted link inside the directory must not swap in another (valid) transcript.
 		if (options.boundFile !== undefined && canonicalFile !== options.boundFile) {
 			return { refusal: `child session no longer resolves to its recorded transcript: ${file}` };
@@ -191,7 +196,7 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 		if (!parentFile || header?.type !== "session" || !header.parentSession) return wrongParent;
 		let parentPath = header.parentSession;
 		try {
-			const recordedParent = realpathSync(parentPath);
+			const recordedParent = canonical(parentPath);
 			parentPath = parentFile;
 			if (recordedParent !== canonical(parentPath)) return wrongParent;
 		} catch {

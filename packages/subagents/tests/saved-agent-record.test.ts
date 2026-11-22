@@ -249,6 +249,11 @@ describe("saved child validation", () => {
 		expect(checkSavedChild({ ...options, canonical: canonicalPaths() })).toEqual({
 			refusal: `child session is missing or unreadable: ${file}`,
 		});
-		expect(() => canonical(join(directory, "missing"))).toThrow();
+		const missing = join(directory, "missing");
+		expect(() => canonical(missing)).toThrow();
+		mkdirSync(missing);
+		// A failure is cached too: a missing directory costs one lookup per startup, not one per row.
+		expect(() => canonical(missing)).toThrow();
+		expect(canonicalPaths()(missing)).toBe(realpathSync(missing));
 	});
 });
