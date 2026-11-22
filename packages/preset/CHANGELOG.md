@@ -6,6 +6,7 @@
 
 - Render any provider's router quota views in the footer, including Gemini usage counts and inferred blocks, without changing legacy Anthropic or Codex rows. (#1178)
 - Qualify inferred and assumed quota spans, keep count reset times, label stale counts and pools, keep rows for failed views, rank blocked providers ahead of the footer's provider cap and fit fallback rows to the width without cutting a block's evidence. (#1178)
+- Rank blocked providers by lowest remaining quota under the footer's provider cap, bound quota labels, fit the `+N more` pointer to any width while keeping the hidden blocked count, report failed views unless a cached value is visible, budget legacy-selection rows that carry a block and reuse the effective quota state between renders. (#1178)
 
 ### Changed
 

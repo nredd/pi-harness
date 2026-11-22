@@ -136,19 +136,29 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   unknown limits have no denominator. Model buckets appear for the routed or directly selected
   model and for models with active blocks. No Google collector or credentials are needed by the footer.
   Provenance is never promoted: an inferred span reads `10m~` (full: `span inferred`) and an
-  assumed or unrecognized one `name?` (full: `window unknown`), on percentages and counts alike.
-  A count with an unrecognized basis is skipped; a block with unrecognized evidence shows `unk`
-  (full: `unknown`). Counts keep their reset time, and only an observed zero is hidden (no calls,
-  no row). Legacy rules apply only to v1 replies and views that keep the built-in Anthropic or
-  Codex selection. Staleness covers percentages, counts and pools: an expired or failed snapshot
-  says `(stale)`, never on an active block, and a failed view with nothing cached shows
-  `quota error`, `quota unavailable` or `quota stale`.
+  assumed or unrecognized one `name?` (full: `window unknown`), on percentages and counts alike;
+  only the legacy Codex row keeps `quota?`. A selector never lends its duration to an assumed or
+  inferred fallback reading: one with no duration shows its own name, e.g. `est~`. A count with an
+  unrecognized basis is skipped; a block with unrecognized evidence shows `unk` (full: `unknown`).
+  Counts keep their reset time, and only an observed zero is hidden (no calls, no row). Legacy
+  rules apply only to v1 replies and views that keep the built-in Anthropic or Codex selection.
+  Freshness is the snapshot status and expiry against the clock (a legacy row with no counts or
+  pools also needs a percentage window). Staleness covers percentages, counts and pools: an
+  expired or failed snapshot says `(stale)`, never on an active block. A failed view whose render
+  shows no cached value (only `--` placeholders, unknown pools or another model's buckets) shows
+  `quota error`, `quota unavailable` or `quota stale` beside any active block.
+  Provider, bucket, pool and family labels are cut to 48 characters (`...`), and a block names at
+  most four families, then `+N`; matching always uses the full ids.
   The layout tries one full or compact row, then compact provider rows, then removes reset times
-  and drops counts and pools if needed. The fallback shows at most four provider rows, blocked
-  providers first and then the lowest remaining quota, and points to `/router status` for the
-  rest, e.g. `+2 more (1 blocked)`. Each fallback row fits the width: the label shortens first,
-  then whole lower cells drop behind ` ...`; a block shortens to `blocked inf` (or `model blocked inf`)
-  and is omitted rather than clipped away from its evidence. Deferred
+  and drops counts and pools if needed. The fallback shows at most four provider rows: blocked
+  providers first, each group by lowest remaining quota. Each fallback row fits the width: the
+  label shortens first, then whole lower cells drop behind ` ...`; a block shortens to `blocked inf`
+  (or `model blocked inf`) and is omitted rather than clipped away from its evidence. A legacy row
+  keeps its pinned bytes unless it carries a block; then it is budgeted the same way, its
+  percentages in legacy order. The last row points to the rest and always fits, keeping the hidden
+  blocked count longest: `+2 more (1 blocked): /router status`, `+2 more (1 blocked)`, `+1!`
+  (blocked providers hidden), `!`; without hidden blocks `+2 more: /router status`, `+2 more`,
+  `+2`, `+`. Deferred
   startup, 60s polling, one outstanding request, unique reply channel, 12s timeout, expiry repaint,
   stale retained readings and recovery. Without a valid reply the row stays hidden. Disposal
   cancels listeners and timers; unreferenced default timers do not keep the process alive.
