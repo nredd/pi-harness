@@ -112,17 +112,12 @@ async fn main() {
 /// exit status: nonzero, with the releases named on stderr, while any stay owed. Nothing
 /// records them past this exit, so the client must refuse physical input from then on.
 async fn settle_before_exit() -> i32 {
-    let state = InputState::shared();
-    let owed = state.unconfirmed_releases();
-    if owed.is_empty() {
-        return 0;
-    }
-    let attempt = tokio::task::spawn_blocking(|| x11::settle_released(InputState::shared()));
-    let left = match tokio::time::timeout(EXIT_SETTLE_LIMIT, attempt).await {
-        Ok(Ok(_)) => state.unconfirmed_releases(),
-        // Still running or panicked: its outcome is unknown.
-        _ => owed,
-    };
+    let left = tokio::task::spawn_blocking(|| {
+        x11::exit_settlement(InputState::shared(), EXIT_SETTLE_LIMIT)
+    })
+    .await
+    // The settlement catches its own panics; a join failure leaves the debt as it was.
+    .unwrap_or_else(|_| InputState::shared().unconfirmed_releases());
     if left.is_empty() {
         return 0;
     }

@@ -7,6 +7,7 @@ use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::xproto::{
@@ -617,6 +618,27 @@ impl Owed {
             format!("keycode {}", self.detail)
         }
     }
+    /// What stays owed after posting this release: nothing once confirmed, the same
+    /// resendable release after a definite rejection, else a delivery-unknown one.
+    fn after_post(self, result: &Result<(), PostFailure>) -> Option<Self> {
+        match result {
+            Ok(()) => None,
+            Err(PostFailure::Rejected(_)) => Some(Self {
+                ambiguous: false,
+                ..self
+            }),
+            Err(PostFailure::Uncertain(_)) => Some(Self {
+                ambiguous: true,
+                ..self
+            }),
+        }
+    }
+    fn unknown(self) -> Self {
+        Self {
+            ambiguous: true,
+            ..self
+        }
+    }
 }
 
 /// Helper-wide physical input state shared by every action: releases a cleanup
@@ -671,15 +693,73 @@ impl InputState {
             None => error,
         }
     }
+    /// Owed releases for an exit report: delivery-unknown ones say so.
+    fn exit_report(&self) -> Vec<String> {
+        self.debt()
+            .iter()
+            .map(|owed| {
+                let name = owed.describe();
+                if owed.ambiguous {
+                    format!("{name} (delivery unknown, never resent)")
+                } else {
+                    name
+                }
+            })
+            .collect()
+    }
+    /// The one transition for an owed release in the debt: replace the entry for the
+    /// same input with `left`, or remove it when `left` is `None`.
+    fn resolve(&self, owed: Owed, left: Option<Owed>) {
+        let mut debt = self.debt();
+        let same = |entry: &Owed| entry.event == owed.event && entry.detail == owed.detail;
+        if let Some(index) = debt.iter().rposition(same) {
+            match left {
+                Some(left) => debt[index] = left,
+                None => {
+                    debt.remove(index);
+                }
+            }
+        }
+    }
     fn debt(&self) -> std::sync::MutexGuard<'_, Vec<Owed>> {
         // Debt is plain data: a panic elsewhere cannot leave it inconsistent.
         self.debt.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// Settle owed releases on a fresh X11 connection with no target window, e.g.
-/// before the helper exits. Fails without touching the debt when X11 is unreachable.
-pub fn settle_released(state: Arc<InputState>) -> Result<(), ProtocolError> {
+/// Before the helper exits, try to settle owed releases on a fresh X11 connection
+/// with no target window, waiting at most `limit`. Returns what stays owed, named for
+/// stderr. See [`settle_for_exit`].
+pub fn exit_settlement(state: Arc<InputState>, limit: Duration) -> Vec<String> {
+    settle_for_exit(state, open_root_sink, limit)
+}
+
+/// Settle owed releases through [`Input::settle`] on a sink from `open`, waiting at
+/// most `limit`. A release submitted when the wait ends was already marked
+/// delivery-unknown by `settle`, so it is reported and kept that way, never resendable.
+pub fn settle_for_exit<S, F>(state: Arc<InputState>, open: F, limit: Duration) -> Vec<String>
+where
+    S: InputSink + 'static,
+    F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
+{
+    if state.debt().is_empty() {
+        return Vec::new();
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = Arc::clone(&state);
+    std::thread::spawn(move || {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(sink) = open() {
+                let _ = Input::with_state(sink, worker).settle();
+            }
+        }));
+        let _ = done.send(());
+    });
+    let _ = finished.recv_timeout(limit);
+    state.exit_report()
+}
+
+fn open_root_sink() -> Result<XtestSink, ProtocolError> {
     if SessionKind::detect() != SessionKind::X11 {
         return Err(err(
             "No X11 session to settle owed releases on",
@@ -687,15 +767,11 @@ pub fn settle_released(state: Arc<InputState>) -> Result<(), ProtocolError> {
         ));
     }
     let (conn, root) = connect_xtest()?;
-    Input::with_state(
-        XtestSink {
-            conn,
-            root,
-            target: root,
-        },
-        state,
-    )
-    .settle()
+    Ok(XtestSink {
+        conn,
+        root,
+        target: root,
+    })
 }
 
 /// Guarded physical input. Every event is admitted against the live target first,
@@ -764,39 +840,17 @@ impl<S: InputSink> Input<S> {
     /// may hold that input now. These posts belong to the earlier action and are not
     /// counted.
     pub fn settle(&self) -> Result<(), ProtocolError> {
-        let owed = std::mem::take(&mut *self.state.debt());
-        let mut left = Vec::new();
-        for owed in owed.into_iter().rev() {
-            let attempt = catch_unwind(AssertUnwindSafe(|| {
-                match self.sink.is_down(owed.button(), owed.detail) {
-                    Ok(Some(false)) => None,
-                    // Down, or unobservable: only a confirmed release post settles it.
-                    Ok(Some(true) | None) if !owed.ambiguous => {
-                        match self.sink.post(owed.event, owed.detail, 0, 0) {
-                            Ok(()) => None,
-                            Err(PostFailure::Rejected(_)) => Some(owed),
-                            Err(PostFailure::Uncertain(_)) => Some(Owed {
-                                ambiguous: true,
-                                ..owed
-                            }),
-                        }
-                    }
-                    Ok(Some(true) | None) | Err(_) => Some(owed),
-                }
-            }));
-            if let Some(owed) = attempt.unwrap_or(Some(Owed {
-                ambiguous: true,
-                ..owed
-            })) {
-                left.push(owed);
-            }
+        let pending = self.state.debt().clone();
+        for owed in pending.into_iter().rev() {
+            let left = catch_unwind(AssertUnwindSafe(|| self.settle_one(owed)))
+                // A panic mid-post leaves its delivery unknown.
+                .unwrap_or(Some(owed.unknown()));
+            self.state.resolve(owed, left);
         }
-        if left.is_empty() {
+        let names = self.state.unconfirmed_releases();
+        if names.is_empty() {
             return Ok(());
         }
-        left.reverse();
-        let names = left.iter().map(|owed| owed.describe()).collect::<Vec<_>>();
-        self.state.debt().splice(0..0, left);
         Err(err(
             format!(
                 "Refusing physical input: the release of {} is unconfirmed and it may still be held. Release it, then retry.",
@@ -804,6 +858,20 @@ impl<S: InputSink> Input<S> {
             ),
             ErrorCode::InputUnsafe,
         ))
+    }
+    /// Settle one owed release; returns it again while it stays owed.
+    fn settle_one(&self, owed: Owed) -> Option<Owed> {
+        match self.sink.is_down(owed.button(), owed.detail) {
+            Ok(Some(false)) => None,
+            // Down, or unobservable: only a confirmed release post settles it.
+            Ok(Some(true) | None) if !owed.ambiguous => {
+                // Delivery-unknown in the shared debt from submission on: a caller that
+                // stops waiting now, e.g. an exit, must never see it as resendable.
+                self.state.resolve(owed, Some(owed.unknown()));
+                owed.after_post(&self.sink.post(owed.event, owed.detail, 0, 0))
+            }
+            Ok(Some(true) | None) | Err(_) => Some(owed),
+        }
     }
     /// Pointer actions check their point up front, then recheck it before the motion
     /// and before every button press: a point can become covered while the same
@@ -949,14 +1017,7 @@ impl<S: InputSink> Input<S> {
                 Ok(Some(true) | None) | Err(_) => Some(owed),
             };
         }
-        match self.post_checked(owed.event, owed.detail, 0, 0) {
-            Ok(()) => None,
-            Err(PostFailure::Rejected(_)) => Some(owed),
-            Err(PostFailure::Uncertain(_)) => Some(Owed {
-                ambiguous: true,
-                ..owed
-            }),
-        }
+        owed.after_post(&self.post_checked(owed.event, owed.detail, 0, 0))
     }
 }
 
@@ -1070,13 +1131,9 @@ impl<S: InputSink> Drop for Held<'_, S> {
         let mut unconfirmed = Vec::new();
         while let Some(owed) = self.owed.pop() {
             let input = self.input;
-            let left = catch_unwind(AssertUnwindSafe(|| input.release_owed(owed))).unwrap_or(
+            let left = catch_unwind(AssertUnwindSafe(|| input.release_owed(owed)))
                 // A panic mid-post leaves its delivery unknown.
-                Some(Owed {
-                    ambiguous: true,
-                    ..owed
-                }),
-            );
+                .unwrap_or(Some(owed.unknown()));
             unconfirmed.extend(left);
         }
         unconfirmed.reverse();
@@ -1825,6 +1882,64 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    fn owing(detail: u8) -> Arc<InputState> {
+        let state = Arc::new(InputState::default());
+        state.debt().push(Owed {
+            event: KEY_RELEASE_EVENT,
+            detail,
+            ambiguous: false,
+        });
+        state
+    }
+
+    #[test]
+    fn exit_settlement_that_times_out_keeps_the_release_delivery_unknown() {
+        // The release is submitted, then the exit stops waiting before it confirms.
+        let state = owing(8);
+        let left = settle_for_exit(
+            Arc::clone(&state),
+            || {
+                Ok(RecordingSink::scripted(
+                    &json!({"delayMs": 2000, "held": [[false, 8]]}),
+                ))
+            },
+            Duration::from_millis(50),
+        );
+        assert_eq!(left, ["keycode 8 (delivery unknown, never resent)"]);
+        assert!(state.debt()[0].ambiguous, "never resendable in-process");
+        let later = Input::with_state(RecordingSink::default().held(false, 8), state);
+        assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(later.sink().events().is_empty(), "never resent");
+
+        // One that confirms in time is settled.
+        let state = owing(8);
+        let left = settle_for_exit(
+            Arc::clone(&state),
+            || Ok(RecordingSink::default().held(false, 8)),
+            Duration::from_secs(5),
+        );
+        assert!(left.is_empty(), "{left:?}");
+        assert!(state.unconfirmed_releases().is_empty());
+
+        // No connection: nothing was submitted, so it stays a plain owed release.
+        let state = owing(9);
+        let left = settle_for_exit(
+            Arc::clone(&state),
+            || Err::<RecordingSink, _>(err("no display", ErrorCode::CapabilityDeferred)),
+            Duration::from_secs(5),
+        );
+        assert_eq!(left, ["keycode 9"]);
+        assert!(!state.debt()[0].ambiguous);
+
+        // Nothing owed: no attempt.
+        let left = settle_for_exit(
+            Arc::new(InputState::default()),
+            || -> Result<RecordingSink, ProtocolError> { panic!("must not connect") },
+            Duration::from_secs(5),
+        );
+        assert!(left.is_empty());
     }
 
     #[test]
