@@ -658,8 +658,8 @@ function isEssential(cell: QuotaCell): cell is Extract<QuotaCell, { kind: "mark"
 	return cell.kind === "mark" || cell.kind === "percent" || cell.kind === "status";
 }
 
+/** Clip priority among a row's data cells: lowest remaining first. Marks lead and a status stands alone. */
 function priority(cell: QuotaCell): number {
-	if (cell.kind === "mark" || cell.kind === "status") return -1;
 	return cell.kind === "percent" ? (cell.remaining ?? 101) : 102;
 }
 
@@ -771,7 +771,7 @@ function budgetRow(
 ): string {
 	const dim = (text: string) => colorize("dim", text);
 	const draw = (label: string, chosen: Piece[], more: boolean) =>
-		dim(`${lead}${label}${chosen.length ? suffix : ""}`) +
+		dim(`${lead}${label}${suffix}`) +
 		chosen.map((piece) => dim(piece.sep) + cellText(piece.cell, piece.layout, colorize, opts)).join("") +
 		(more ? dim(MORE) : "");
 	const all: Piece[] = pieces.map((piece) => ({ ...piece, layout }));
