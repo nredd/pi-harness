@@ -48,7 +48,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 			const tui = ctx.mode === "tui";
 			if (tui) ctx.ui.setStatus(STATUS_KEY, "stats: loading...");
 			let loaded: Combined;
-			let routerQuota: QuotaRow[];
+			let routerQuota: readonly QuotaRow[];
 			let now: number;
 			try {
 				const agentDir = resolveAgentDir(options);

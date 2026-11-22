@@ -213,3 +213,17 @@ it.each([
 		{ label, head: { kind: "text", text: "3 requests" }, basis: "reported", expired: false, old: false },
 	]);
 });
+
+it("returns rows that callers cannot mutate", async () => {
+	writeFileSync(view, validView);
+	const rows = await readRouterQuota(dir, NOW);
+	const row = rows[0];
+	if (row?.head.kind !== "text") throw new Error("expected one text row");
+	expect(row.head.text).toMatch(/^blocked until /);
+	// @ts-expect-error the reader result is readonly
+	rows.push(row);
+	// @ts-expect-error row fields are readonly
+	row.label = "changed";
+	// @ts-expect-error head variants are readonly
+	row.head.text = "changed";
+});

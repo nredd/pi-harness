@@ -144,7 +144,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 }
 
 /** Optional local view. Missing, oversized, unreadable and malformed files contribute no rows. */
-export async function readRouterQuota(agentDir: string, now: number): Promise<QuotaRow[]> {
+export async function readRouterQuota(agentDir: string, now: number): Promise<readonly QuotaRow[]> {
 	try {
 		const file = await open(
 			join(agentDir, "router-state", "v1", "view.json"),

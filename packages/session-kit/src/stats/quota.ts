@@ -15,17 +15,19 @@ const BAR_CELLS = 10;
 
 export interface QuotaRow {
 	/** `provider[/limit] window`, plus an account tag when the same window has readings for several. */
-	label: string;
+	readonly label: string;
 	/** The window has reset since the reading: no percentage is known. */
-	expired: boolean;
-	head: { kind: "gauge"; percent: number } | { kind: "text"; text: string };
-	basis?: "reported" | "observed" | "inferred";
+	readonly expired: boolean;
+	readonly head:
+		| { readonly kind: "gauge"; readonly percent: number }
+		| { readonly kind: "text"; readonly text: string };
+	readonly basis?: "reported" | "observed" | "inferred";
 	/** `resets in 3h 12m`, or `reset 5m ago, no newer reading`. */
-	reset?: string;
+	readonly reset?: string;
 	/** Legacy harness provenance, e.g. `observed 12m ago via codex`. */
-	observed?: string;
+	readonly observed?: string;
 	/** Observed more than `QUOTA_DIM_AFTER_MS` ago. */
-	old: boolean;
+	readonly old: boolean;
 }
 
 /** `[#####-----]`-style gauge, `BAR_CELLS` cells wide; out-of-range percentages clamp. */
