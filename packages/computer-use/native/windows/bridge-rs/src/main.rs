@@ -381,7 +381,7 @@ fn handle_focus_window(args: &Value) -> Result<Value, ProtocolError> {
         .ok_or_else(|| invalid("focusWindow requires rootRef"))?;
     let wref = windows_bridge::refs::WindowRef::parse(root_ref)
         .ok_or_else(|| invalid(format!("Invalid root ref '{root_ref}'")))?;
-    let (store, expected_pid) = {
+    let (store, expected_pid, root_instances) = {
         let state = helper_state()
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
@@ -392,19 +392,24 @@ fn handle_focus_window(args: &Value) -> Result<Value, ProtocolError> {
             .and_then(|root| root.get("pid"))
             .and_then(Value::as_u64)
             .ok_or_else(|| ProtocolError::new("Focus root is stale", ErrorCode::StaleRef))?;
-        (state.store.clone(), pid)
+        (state.store.clone(), pid, state.root_instances.clone())
     };
     with_physical_input(|| {
         #[cfg(windows)]
-        windows_bridge::desktop::validated_bounds(
-            store
+        {
+            let hwnd = store
                 .get_window(&wref)
                 .ok_or_else(|| ProtocolError::new("Focus root is stale", ErrorCode::StaleRef))?
-                .raw(),
-            Some(expected_pid),
-        )?;
+                .raw();
+            // Never raise a replacement window that reuses the saved root's HWND.
+            let instance = root_instances
+                .get(&hwnd)
+                .ok_or_else(window::unverified_instance)?;
+            window::ensure_instance(hwnd, *instance)?;
+            windows_bridge::desktop::validated_bounds(hwnd, Some(expected_pid))?;
+        }
         #[cfg(not(windows))]
-        let _ = expected_pid;
+        let _ = (expected_pid, root_instances);
         window::focus_window(&store, &wref)
     })
 }

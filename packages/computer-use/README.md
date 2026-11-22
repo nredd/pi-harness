@@ -240,7 +240,7 @@ before walking it, and again after the walk, discarding the result as `root_stal
 detects drift. These are samples, not continuous monitoring. A text read whose desktop access check
 refuses a closed or reassigned HWND also reports `root_stale`; `coordinate_blocked` means the
 instance still matched. Looks check the instance before capture and discard elements captured
-across a replacement. Semantic `act_ui` delivery checks the instance before and after resolving the
+across a replacement, and focusing a saved root refuses a replacement before raising it. Semantic `act_ui` delivery checks the instance before and after resolving the
 element, not after acquiring the UIA root. An owning process that copies the tag onto its own
 replacement window is not detected.
 
