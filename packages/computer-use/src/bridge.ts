@@ -1625,7 +1625,7 @@ async function performListWindows(
 	params: FindParams,
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<ListWindowsDetails>> {
-	const query = normalizeFindParams(params);
+	const query = normalizeFindParams(params, currentPlatformBackend.name);
 	const config = getComputerUseConfig();
 	const desktopForest = await windowDetailsForFind(query, config, signal);
 	const includeBrowserPages =

@@ -178,12 +178,30 @@ describe("macOS backend", () => {
 
 	test("listRoots forwards only a finite pid and a non-blank trimmed title", async () => {
 		fakes.macos.command.mockResolvedValue([]);
-		await macosBackend.listRoots({ pid: 42.8, title: "  Doc  " }, signal);
+		await macosBackend.listRoots({ pid: 42, title: "  Doc  " }, signal);
 		assert.deepEqual(lastCall(fakes.macos), ["listRoots", { pid: 42, title: "Doc" }, { signal }]);
-		await macosBackend.listRoots({ pid: Number.NaN, title: "   " });
-		assert.deepEqual(lastCall(fakes.macos)[1], {});
+		// Absent, null and non-finite PIDs keep unfiltered discovery (pre-#1209 compatibility).
+		for (const pid of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, null, "42"]) {
+			await macosBackend.listRoots({ pid, title: "   " });
+			assert.deepEqual(lastCall(fakes.macos)[1], {});
+		}
 		await macosBackend.listRoots({});
 		assert.deepEqual(lastCall(fakes.macos)[1], {});
+	});
+
+	test("listRoots rejects a finite fractional or out-of-range pid before the helper call", async () => {
+		// #1209 deliberately replaces the old truncation (42.8 -> 42): a fraction could select another process.
+		fakes.macos.command.mockResolvedValue([]);
+		const before = fakes.macos.command.mock.calls.length;
+		for (const pid of [42.8, 0.5, 0, -1, -42.8]) {
+			await rejectsWith(macosBackend.listRoots({ pid }), /pid must be a positive integer/);
+		}
+		for (const pid of [2147483648, Number.MAX_SAFE_INTEGER]) {
+			await rejectsWith(macosBackend.listRoots({ pid }), /pid must be at most 2147483647 on macOS/);
+		}
+		assert.equal(fakes.macos.command.mock.calls.length, before);
+		await macosBackend.listRoots({ pid: 2147483647 });
+		assert.deepEqual(lastCall(fakes.macos)[1], { pid: 2147483647 });
 	});
 
 	test("getFrontmost normalizes the helper reply and rejects a missing pid", async () => {
