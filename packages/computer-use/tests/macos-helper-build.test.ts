@@ -192,6 +192,30 @@ test("a default socket pathname that links to the override is managed", async ()
 	assert.deepEqual(commands().slice(-2), ["diagnostics", "diagnostics"]);
 });
 
+test.each([
+	["protocol", { protocolVersion: 7 }, "reports protocol 7 (expected 8)"],
+	["executable", { executablePath: "/elsewhere/bridge" }, "runs /elsewhere/bridge (expected "],
+])(
+	"rejects %s on managed alias: ensureProtocol follows the connection's classification",
+	async (_name, diagnostics, reason) => {
+		const { client, home, fake, commands, spawn } = await rig(current, { external: true });
+		assert.equal(client.isExternal(), true);
+		mkdirSync(path.dirname(managedSocket(home)), { recursive: true });
+		symlinkSync(fake.socketPath, managedSocket(home));
+		Object.assign(fake.diagnostics, diagnostics);
+		await assert.rejects(client.ensureProtocol(), (error: Error & { code?: string }) => {
+			assert.equal(error.code, "helper_mismatch");
+			assert.ok(error.message.includes(reason), error.message);
+			return true;
+		});
+		assert.ok(
+			commands().every((cmd: string) => cmd === "diagnostics"),
+			"no shutdown",
+		);
+		assert.equal(spawn.mock.calls.length, 0);
+	},
+);
+
 test("an override alias that resolves after import is managed", async () => {
 	const { client, home, commands } = await rig(older, {
 		override: (home) => path.join(home, "later", "bridge.sock"),

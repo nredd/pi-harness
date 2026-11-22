@@ -299,6 +299,11 @@ export async function runProcess(
 	});
 }
 
+/** Out-parameter for one connection's classification; starts as managed, so the stricter checks apply by default. */
+interface ConnectionClass {
+	managed: boolean;
+}
+
 export class MacosHelperClient {
 	private daemonAvailable = false;
 	private requestSequence = 0;
@@ -391,11 +396,17 @@ export class MacosHelperClient {
 		);
 	}
 
+	/**
+	 * Send one command on a fresh connection, after that connection's own build check.
+	 * @param connection Receives the connection's classification, fixed at connect (see `connectHelper`), for a
+	 * caller whose later checks depend on it.
+	 */
 	async daemonCommand<T>(
 		cmd: string,
 		args: Record<string, unknown>,
 		timeoutMs: number,
 		signal?: AbortSignal,
+		connection?: ConnectionClass,
 	): Promise<T> {
 		// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.
 		throwIfAborted(signal);
@@ -441,6 +452,7 @@ export class MacosHelperClient {
 			const onConnect = (managedAtConnect: boolean) => {
 				connected = true;
 				managed = managedAtConnect;
+				if (connection) connection.managed = managedAtConnect;
 				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
 				else sendCommand();
 			};
@@ -559,14 +571,14 @@ export class MacosHelperClient {
 	async command<T>(
 		cmd: string,
 		args: Record<string, unknown> = {},
-		options?: { timeoutMs?: number; signal?: AbortSignal },
+		options?: { timeoutMs?: number; signal?: AbortSignal; connection?: ConnectionClass },
 	): Promise<T> {
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		if (!(await this.ensureDaemon(options?.signal))) {
 			throw new HelperTransportError(`pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`);
 		}
 		try {
-			return await this.daemonCommand<T>(cmd, args, timeoutMs, options?.signal);
+			return await this.daemonCommand<T>(cmd, args, timeoutMs, options?.signal, options?.connection);
 		} catch (error) {
 			this.daemonAvailable = false;
 			throw error instanceof Error ? error : new Error(String(error));
@@ -586,8 +598,9 @@ export class MacosHelperClient {
 		}
 	}
 
-	async diagnosticsCommand(signal?: AbortSignal): Promise<PlatformDiagnostics> {
-		const result = await this.command<any>("diagnostics", {}, { signal });
+	/** @param connection Receives the classification of the connection that answered (see `daemonCommand`). */
+	async diagnosticsCommand(signal?: AbortSignal, connection?: ConnectionClass): Promise<PlatformDiagnostics> {
+		const result = await this.command<any>("diagnostics", {}, { signal, connection });
 		const diagnostics = {
 			protocolVersion: Math.trunc(toFiniteNumber(result?.protocolVersion, 0)),
 			architectureVersion: Math.trunc(toFiniteNumber(result?.architectureVersion, 0)),
@@ -615,9 +628,12 @@ export class MacosHelperClient {
 	 * stopped here.
 	 */
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
-		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection.
-		const diagnostics = await this.diagnosticsCommand(signal);
-		if (usingExternalHelperSocket) return diagnostics;
+		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection. The
+		// exemption follows that connection's classification, not the import-time one: an override that aliases the
+		// managed socket is managed.
+		const connection: ConnectionClass = { managed: true };
+		const diagnostics = await this.diagnosticsCommand(signal, connection);
+		if (!connection.managed) return diagnostics;
 		const mismatch = await residentMismatch(diagnostics);
 		if (mismatch === undefined) return diagnostics;
 		this.daemonAvailable = false;
