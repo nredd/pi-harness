@@ -38,6 +38,8 @@ import { sanitizeTerminalText } from "../tool/sanitize.ts";
 import {
 	EMPTY_REMINDER_MESSAGE_TYPE,
 	HELD_REMINDER_MESSAGE_TYPE,
+	NUDGE_BUDGET_ENTRY_TYPE,
+	type NudgeBudgetEntry,
 	PLAN_APPROVED_EVENT,
 	PLAN_APPROVED_VERSION,
 	PLAN_REMINDER_MESSAGE_TYPE,
@@ -60,6 +62,18 @@ const STALE_REMINDER_MESSAGE_TYPE = "rpiv-todo-stale-reminder";
 export const STALE_REMINDER_MARKER = "[rpiv-todo] The open todo list went stale.";
 
 export const EMPTY_REMINDER_MARKER = "[rpiv-todo] Autonomous work continued without a todo list.";
+
+type SessionBranch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
+
+/** Whether the branch records a spent `nudge` budget. Transcript markers do not count. */
+function budgetSpent(branch: SessionBranch, nudge: NudgeBudgetEntry["nudge"]): boolean {
+	return branch.some(
+		(entry) =>
+			entry.type === "custom" &&
+			entry.customType === NUDGE_BUDGET_ENTRY_TYPE &&
+			(entry.data as Partial<NudgeBudgetEntry> | undefined)?.nudge === nudge,
+	);
+}
 
 function hasEmptyList(state: TaskState): boolean {
 	return selectVisibleTasks(state).length === 0;
@@ -496,9 +510,18 @@ export function registerPlanHooks(
 	// Core needs a persisted non-assistant tail to accept a continuation after a normal reply.
 	// Keep the permission to expand that placeholder request-local, not in the restored branch.
 	const pendingNudges = new Map<string, string>();
-	const nudge = (id: string, event: AgentBeforeSettleEvent, type: string, marker: string) => {
+	// The spent budget is bookkeeping: a custom entry outside the projected context, ahead of the marker.
+	const nudge = (
+		id: string,
+		event: AgentBeforeSettleEvent,
+		kind: NudgeBudgetEntry["nudge"],
+		type: string,
+		marker: string,
+	): AgentBeforeSettleEventResult => {
 		pendingNudges.set(id, type);
-		return reminderDraft(event, type, marker, {});
+		const data: NudgeBudgetEntry = { persistenceVersion: 1, nudge: kind };
+		const budget: SessionBoundaryDraft = { type: "custom", customType: NUDGE_BUDGET_ENTRY_TYPE, data };
+		return reminderDraft({ ...event, entries: [...event.entries, budget] }, type, marker, {});
 	};
 	const emptyConfig = getEmptyReminderConfig(options.homeDir);
 	const childActivation = isChildActivation();
@@ -512,7 +535,7 @@ export function registerPlanHooks(
 		if (completed && !planning) refreshSurvivors(id);
 		const state = getState(id);
 		if (emptyTrackers.get(id)?.beforeSettle(completed, planning, hasEmptyList(state))) {
-			return nudge(id, event, EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER);
+			return nudge(id, event, "empty", EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER);
 		}
 		if (!completed || planning) return undefined;
 		if (!remindedSinceLastPrompt(messages)) {
@@ -535,7 +558,7 @@ export function registerPlanHooks(
 		staleAge.set(state, age);
 		if (age < threshold || staleReminded.has(id)) return undefined;
 		staleReminded.add(id);
-		return nudge(id, event, STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER);
+		return nudge(id, event, "stale", STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER);
 	};
 	pi.on("agent_before_settle", onSettle);
 
@@ -612,18 +635,11 @@ export function registerPlanHooks(
 			if (parentTui) {
 				parentTuiSessions.add(sessionId);
 				// A persisted user message could be an extension prompt; only a live
-				// human input event can safely rearm after restoring a reminder.
-				if (
-					branch.some((entry) => entry.type === "custom_message" && entry.customType === STALE_REMINDER_MESSAGE_TYPE)
-				) {
-					staleReminded.add(sessionId);
-				}
+				// human input event can safely rearm after restoring a spent budget.
+				if (budgetSpent(branch, "stale")) staleReminded.add(sessionId);
 			} else parentTuiSessions.delete(sessionId);
 			if (parentTui && emptyConfig.toolCalls > 0) {
-				const previouslyReminded = branch.some(
-					(entry) => entry.type === "custom_message" && entry.customType === EMPTY_REMINDER_MESSAGE_TYPE,
-				);
-				emptyTrackers.set(sessionId, trackEmptyReminder(emptyConfig, previouslyReminded));
+				emptyTrackers.set(sessionId, trackEmptyReminder(emptyConfig, budgetSpent(branch, "empty")));
 			} else {
 				emptyTrackers.delete(sessionId);
 			}

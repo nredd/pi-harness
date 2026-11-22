@@ -131,7 +131,7 @@ In parent TUI sessions only, an unchanged list with `pending` or `in_progress` t
 background agent is armed. It asks the parent to run `todo list` and reconcile actual progress.
 A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
-On resume or `/reload`, a restored marker blocks another nudge until fresh human input.
+On resume or `/reload`, a restored spent budget blocks another nudge until fresh human input.
 
 In an interactive TUI session, when a parent works without any visible todos
 (deleted todos do not count), the next completed run about to settle nudges it after
@@ -142,11 +142,13 @@ trigger it. Any `todo` call resets the work count. The nudge requires fresh tool
 a new human prompt after the last nudge, and `emptyReminderCooldownSettles` completed
 settles outside Plan mode (default 10) between nudges. Continuation boundaries and
 aborted or failed runs do not count toward the cooldown. On resume or `/reload`, a
-restored nudge waits for new human input and starts a fresh cooldown. Both nudges
-expand into instructions only on the immediate follow-up request. A restored
-marker does not expand again. Core still needs a persisted `custom_message` to
-continue after an assistant reply, so these markers remain visible in `/tree` and
-in the generic `entry_appended` event. JSON, RPC and print sessions do not emit
+restored spent budget waits for new human input and starts a fresh cooldown. Both nudges
+expand into instructions only on the immediate follow-up request. Each nudge records
+its spent budget in a `rpiv-todo-nudge-budget` custom entry (`nudge`: `stale` or
+`empty`), which is bookkeeping outside the model context; restore reads only that
+entry, never the transcript marker. A restored marker does not expand again. Core
+still needs a persisted `custom_message` to continue after an assistant reply, so
+these markers remain visible in `/tree` and in the generic `entry_appended` event. JSON, RPC and print sessions do not emit
 either nudge. An earlier extension handler that delays only a `todo`
 completion can reorder the reset, making the nudge late or missed until the next
 tool call, but cannot cause an extra nudge.
