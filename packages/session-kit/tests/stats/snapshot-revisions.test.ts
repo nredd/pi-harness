@@ -650,6 +650,34 @@ it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", 
 	expect(await read(fresh)).toEqual(before);
 });
 
+it("keeps reader quota order when compacting a reverse-month manifest", async () => {
+	const november = at("2026-11-01");
+	vi.mocked(Date.now).mockReturnValue(at("2026-12-01"));
+	const { before, snapshotDir } = await sealedFixture([
+		{ month: "2026-11", quota: [{ ...quotaRow(5, at("2026-12-01"), "z-november"), observedAt: november }] },
+		{ quota: [quotaRow(6, at("2026-10-03"), "a-october")] },
+		{ quota: [quotaRow(7, at("2026-10-02"), "a-october")] },
+		...filler,
+		{ quota: [quotaRow(31, undefined, "filler")] },
+	]);
+	expect(before.shards.map((ref) => ref.month).slice(0, 2)).toEqual(["2026-11", "2026-10"]);
+	const read = async (dir: string) => {
+		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
+		return Promise.all(
+			[at("2026-10-01"), at("2026-10-02"), at("2026-12-01")].map(
+				async (now) => (await loadCombined(dir, undefined, now)).quota,
+			),
+		);
+	};
+	const uncompacted = await read(viewer);
+	await exportStats(agent, out);
+	expect(manifest(snapshotDir).shards.length).toBeLessThan(before.shards.length);
+	expect(await read(join(root, "fresh"))).toEqual(uncompacted);
+	expect(uncompacted.map((rows) => rows.map((row) => row.limitId))).toEqual(
+		Array.from({ length: 3 }, () => ["a-october", "filler", "z-november"]),
+	);
+});
+
 it("preserves equal-timestamp call order and totals across compaction", async () => {
 	const meta = session(1);
 	const [a, b] = [event(1, meta.id), event(2, meta.id)].sort((a, b) => b.id.localeCompare(a.id));

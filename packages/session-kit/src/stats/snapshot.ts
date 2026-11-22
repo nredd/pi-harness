@@ -1450,7 +1450,7 @@ export async function loadCombined(
 	return {
 		...local,
 		calls,
-		quota: mergeQuota(quotaCandidates, now),
+		quota: mergeQuota(quotaCandidates, now).sort((a, b) => codeUnits(quotaKey(a), quotaKey(b))),
 		harnessProblems,
 		sessionMetadata: [...sessions.values()],
 		sessions: [...sessions.values()].filter((s) => !s.child && owners.has(s.path)),

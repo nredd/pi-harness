@@ -698,7 +698,9 @@ and compacts later shards and any new delta. It keeps archived calls and the max
 even after transcripts leave the scan. The viewer orders equal-time imported calls within a session
 by event ID regardless of shard boundaries. Compaction keeps quota readings that can win as windows
 reset, using separate shards for readings of the same key. Base readings participate without
-occupying any delta slots. If the quota history cannot fit the cap
+occupying any delta slots. The combined reader orders quota by the serialized
+`[provider, limitId, window, account]` key in UTF-16 code-unit order, independent of manifest order.
+If the quota history cannot fit the cap
 or the candidate exceeds the reader's cumulative expansion budget, export fails without publishing
 or pruning. No format change is required; readers still accept older, larger manifests.
 
