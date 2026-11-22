@@ -458,8 +458,8 @@ pub trait InputSink {
     /// Resolve a keysym to a keycode, or `None` when the keymap lacks it.
     fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError>;
     /// Whether the key (or, when `button`, the pointer button) `detail` is down now,
-    /// whoever pressed it.
-    fn is_down(&self, button: bool, detail: u8) -> Result<bool, ProtocolError>;
+    /// whoever pressed it, or `None` when the state source cannot observe that input.
+    fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError>;
     /// Post one event unconditionally.
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure>;
 }
@@ -534,11 +534,24 @@ impl InputSink for XtestSink {
             .position(|s| s.contains(&sym))
             .map(|i| min + i as u8))
     }
-    fn is_down(&self, button: bool, detail: u8) -> Result<bool, ProtocolError> {
+    fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError> {
         if button {
-            // Core pointer state carries buttons 1 to 5 as mask bits 8 to 12.
-            if !(1..=5).contains(&detail) {
-                return Ok(false);
+            // XTEST posts physical buttons; core pointer state carries logical buttons 1
+            // to 5 as mask bits 8 to 12. Map through the pointer mapping, and report any
+            // button outside those five (e.g. horizontal scroll 6 and 7) as unobservable.
+            let map = self
+                .conn
+                .get_pointer_mapping()
+                .map_err(xerr)?
+                .reply()
+                .map_err(xerr)?
+                .map;
+            let logical = usize::from(detail)
+                .checked_sub(1)
+                .and_then(|index| map.get(index).copied())
+                .unwrap_or(0);
+            if !(1..=5).contains(&logical) {
+                return Ok(None);
             }
             let mask = self
                 .conn
@@ -547,7 +560,7 @@ impl InputSink for XtestSink {
                 .reply()
                 .map_err(xerr)?
                 .mask;
-            return Ok(u16::from(mask) & (1 << (7 + detail)) != 0);
+            return Ok(Some(u16::from(mask) & (1 << (7 + logical)) != 0));
         }
         let keys = self
             .conn
@@ -556,7 +569,9 @@ impl InputSink for XtestSink {
             .reply()
             .map_err(xerr)?
             .keys;
-        Ok(keys[usize::from(detail / 8)] & (1 << (detail % 8)) != 0)
+        Ok(Some(
+            keys[usize::from(detail / 8)] & (1 << (detail % 8)) != 0,
+        ))
     }
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
         // A send failure may follow a partial write; only an X11 error reply proves the
@@ -587,7 +602,8 @@ struct Owed {
     event: u8,
     detail: u8,
     /// A release was submitted but its delivery is unknown. Never resent blindly:
-    /// it is settled only by observing the input up.
+    /// it is settled only by observing the input up, so one on an input the state
+    /// source cannot observe stays owed.
     ambiguous: bool,
 }
 impl Owed {
@@ -704,8 +720,9 @@ impl<S: InputSink> Input<S> {
         for owed in owed.into_iter().rev() {
             let attempt = catch_unwind(AssertUnwindSafe(|| {
                 match self.sink.is_down(owed.button(), owed.detail) {
-                    Ok(false) => None,
-                    Ok(true) if !owed.ambiguous => {
+                    Ok(Some(false)) => None,
+                    // Down, or unobservable: only a confirmed release post settles it.
+                    Ok(Some(true) | None) if !owed.ambiguous => {
                         match self.sink.post(owed.event, owed.detail, 0, 0) {
                             Ok(()) => None,
                             Err(PostFailure::Rejected(_)) => Some(owed),
@@ -715,7 +732,7 @@ impl<S: InputSink> Input<S> {
                             }),
                         }
                     }
-                    Ok(true) | Err(_) => Some(owed),
+                    Ok(Some(true) | None) | Err(_) => Some(owed),
                 }
             }));
             if let Some(owed) = attempt.unwrap_or(Some(Owed {
@@ -894,8 +911,8 @@ impl<S: InputSink> Input<S> {
     fn release_owed(&self, owed: Owed) -> Option<Owed> {
         if owed.ambiguous {
             return match self.sink.is_down(owed.button(), owed.detail) {
-                Ok(false) => None,
-                Ok(true) | Err(_) => Some(owed),
+                Ok(Some(false)) => None,
+                Ok(Some(true) | None) | Err(_) => Some(owed),
             };
         }
         match self.post_checked(owed.event, owed.detail, 0, 0) {
@@ -928,11 +945,12 @@ impl<'a, S: InputSink> Held<'a, S> {
         }
     }
     /// Refuse an input that is already down, since its release would end another
-    /// client's hold, then admit and press. A rejected press is not owed; an uncertain
-    /// one is, because the server may have executed it.
+    /// client's hold, then admit and press. An input whose state cannot be observed is
+    /// pressed. A rejected press is not owed; an uncertain one is, because the server
+    /// may have executed it.
     fn press(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
         let button = release == BUTTON_RELEASE_EVENT;
-        if self.input.sink.is_down(button, detail)? {
+        if self.input.sink.is_down(button, detail)? == Some(true) {
             let name = Owed {
                 event: release,
                 detail,
@@ -1793,6 +1811,45 @@ mod tests {
             [("key+", 8, true), ("key+", 9, true), ("key-", 8, false)]
         );
         assert_eq!(input.state().unconfirmed_releases(), ["keycode 9"]);
+    }
+
+    #[test]
+    fn unobservable_buttons_never_settle_debt_by_query() {
+        // Horizontal scroll buttons have no core pointer state: the momentary press and
+        // release still run, since no state can prove another client holds them.
+        let input = Input::with_sink(RecordingSink::default().held(true, 7));
+        input.scroll(0, 0, 1.0, 0.0).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 7, true),
+                ("button-", 7, true)
+            ]
+        );
+
+        // A release whose delivery is unknown is never settled by a query that cannot see it.
+        let state = Arc::new(InputState::default());
+        let sink = RecordingSink::default().lose_ack(2, true);
+        let input = Input::with_state(sink, Arc::clone(&state));
+        input.scroll(0, 0, 1.0, 0.0).unwrap_err();
+        assert_eq!(state.unconfirmed_releases(), ["button 7"]);
+        let later = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(later.sink().events().is_empty(), "never resent");
+        assert_eq!(state.unconfirmed_releases(), ["button 7"]);
+
+        // An owed release that was never submitted settles only by a confirmed post.
+        let state = Arc::new(InputState::default());
+        state.debt().push(Owed {
+            event: BUTTON_RELEASE_EVENT,
+            detail: 6,
+            ambiguous: false,
+        });
+        let settled = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        settled.settle().unwrap();
+        assert_eq!(trace(&settled), [("button-", 6, false)]);
+        assert!(state.unconfirmed_releases().is_empty());
     }
 
     #[test]

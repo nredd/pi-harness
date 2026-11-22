@@ -228,14 +228,18 @@ impl InputSink for RecordingSink {
             });
         Ok(Some(8 + index as u8))
     }
-    fn is_down(&self, button: bool, detail: u8) -> Result<bool, ProtocolError> {
+    /// Like the live adapter, buttons outside 1 to 5 are unobservable.
+    fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError> {
         if self.query_fails {
             return Err(ProtocolError::new(
                 "Recorded state query failed",
                 ErrorCode::InternalError,
             ));
         }
-        Ok(self.down.borrow().contains(&(button, detail)))
+        if button && !(1..=5).contains(&detail) {
+            return Ok(None);
+        }
+        Ok(Some(self.down.borrow().contains(&(button, detail))))
     }
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
         let admitted = self.pending_admission.replace(false);
