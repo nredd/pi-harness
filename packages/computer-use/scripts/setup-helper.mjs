@@ -32,6 +32,31 @@ export const GROUP_TERM_GRACE_MS = 800;
 export const GROUP_KILL_WAIT_MS = 500;
 /** Bound on one `ps` listing; a timeout or kill throws and reads as inconclusive. */
 export const PS_TIMEOUT_MS = 250;
+/** Deadline of one helper lifecycle probe (`pgrep`, `pkill`, `plutil`); past it the probe is killed and failed. */
+export const LIFECYCLE_PROBE_TIMEOUT_MS = 1_000;
+/** Output cap of one helper lifecycle probe; more output fails the probe, it is never read truncated. */
+export const LIFECYCLE_PROBE_MAX_BUFFER = 64 * 1024;
+/** `execFile` options for every helper lifecycle probe. */
+const lifecycleProbeOptions = {
+	encoding: "utf8",
+	timeout: LIFECYCLE_PROBE_TIMEOUT_MS,
+	maxBuffer: LIFECYCLE_PROBE_MAX_BUFFER,
+	killSignal: "SIGKILL",
+};
+/** The operator's repair after a lifecycle refusal. */
+const LIFECYCLE_REPAIR = "Quit the helper, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
+
+/**
+ * Setup refused to stop, replace or re-sign the macOS helper. Final for this invocation: no fallback install
+ * (e.g. a source build after a release download) may retry the replacement.
+ */
+export class HelperLifecycleRefusal extends Error {
+	/** @param {string} message Why, with the repair command. */
+	constructor(message) {
+		super(message);
+		this.name = "HelperLifecycleRefusal";
+	}
+}
 
 /**
  * List the `ps` state of every member of `pgid`, zombies included.
@@ -794,12 +819,12 @@ function createSetup(argv, deps) {
 	 */
 	async function helperIsRunning() {
 		try {
-			await execFile("pgrep", ["-f", runningHelperPattern]);
+			await execFile("pgrep", ["-f", runningHelperPattern], lifecycleProbeOptions);
 			return true;
 		} catch (error) {
 			if (noProcessMatched(error)) return false;
-			throw new Error(
-				`Cannot tell whether the helper at ${helperAppExecutablePath} is running (pgrep: ${errorText(error)}); it was not replaced.`,
+			throw new HelperLifecycleRefusal(
+				`Cannot tell whether the helper at ${helperAppExecutablePath} is running (pgrep: ${errorText(error)}); it was not replaced. ${LIFECYCLE_REPAIR}`,
 			);
 		}
 	}
@@ -807,25 +832,30 @@ function createSetup(argv, deps) {
 	/**
 	 * A running helper keeps its old code after the bundle is replaced; stop it so the next command relaunches the
 	 * new one. npm `--postinstall` never stops a resident helper: it refuses instead, and the operator repairs with
-	 * `--runtime`. Only a `pgrep` that reports no match proves the helper stopped.
+	 * `--runtime`. Only a `pgrep` that reports no match proves the helper stopped. Every probe is bounded by
+	 * `lifecycleProbeOptions`; a timeout or output overflow is a failure.
+	 *
+	 * Limit (#1285): `pgrep -f` matches the literal argv. A helper launched through a symlinked app path has another
+	 * argv, so exit 1 proves no match, not absence; kernel executable identity needs the shared lifecycle machinery.
 	 * @returns {Promise<void>} Resolves once no helper daemon from this bundle is running.
-	 * @throws {Error} When `--postinstall` finds a running helper, `pkill` or `pgrep` fails, or the helper outlives the wait.
+	 * @throws {HelperLifecycleRefusal} When `--postinstall` finds a running helper, `pkill` or `pgrep` fails, or the
+	 * helper outlives the wait.
 	 */
 	async function stopRunningHelper() {
 		if (isPostinstall) {
 			if (await helperIsRunning()) {
-				throw new Error(
+				throw new HelperLifecycleRefusal(
 					`The helper at ${helperAppExecutablePath} is running; postinstall does not stop it. Quit it, then run \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
 				);
 			}
 			return;
 		}
 		try {
-			await execFile("pkill", ["-f", runningHelperPattern]);
+			await execFile("pkill", ["-f", runningHelperPattern], lifecycleProbeOptions);
 		} catch (error) {
 			if (!noProcessMatched(error)) {
-				throw new Error(
-					`Could not stop the helper at ${helperAppExecutablePath} (pkill: ${errorText(error)}); it was not replaced.`,
+				throw new HelperLifecycleRefusal(
+					`Could not stop the helper at ${helperAppExecutablePath} (pkill: ${errorText(error)}); it was not replaced. ${LIFECYCLE_REPAIR}`,
 				);
 			}
 		}
@@ -833,32 +863,67 @@ function createSetup(argv, deps) {
 			if (!(await helperIsRunning())) return;
 			await sleep(100);
 		}
-		throw new Error(`The helper at ${helperAppExecutablePath} is still running after pkill; it was not replaced.`);
+		throw new HelperLifecycleRefusal(
+			`The helper at ${helperAppExecutablePath} is still running after pkill; it was not replaced. ${LIFECYCLE_REPAIR}`,
+		);
+	}
+
+	/**
+	 * Why an existing override destination is not provably this helper's bundle, or `undefined` when it is or when
+	 * nothing exists there. The bundle, `Contents` and `Contents/Info.plist` must be real entries (no symlinks), and
+	 * `plutil` (XML or binary plist) must read `CFBundleIdentifier` as exactly `helperBundleId`. This guards against
+	 * accidental overwrites; it is not authentication.
+	 * @returns {Promise<string | undefined>} The reason, or `undefined`.
+	 * @throws {never} Every failure is a reason.
+	 */
+	async function foreignDestinationReason() {
+		const infoPlistPath = path.join(helperAppPath, "Contents", "Info.plist");
+		/** @type {[string, string, boolean][]} Entry, label and whether it must be a directory. */
+		const entries = [
+			[helperAppPath, "the bundle", true],
+			[path.dirname(infoPlistPath), "Contents", true],
+			[infoPlistPath, "Contents/Info.plist", false],
+		];
+		for (const [entry, label, directory] of entries) {
+			let stats;
+			try {
+				stats = await fs.lstat(entry);
+			} catch (error) {
+				if (entry === helperAppPath && error?.code === "ENOENT") return undefined;
+				return `${label} cannot be inspected: ${String(error?.code)}`;
+			}
+			if (stats.isSymbolicLink()) return `${label} is a symbolic link`;
+			if (directory ? !stats.isDirectory() : !stats.isFile()) {
+				return `${label} is not a ${directory ? "directory" : "file"}`;
+			}
+		}
+		let identifier;
+		try {
+			const { stdout } = await execFile(
+				"plutil",
+				["-extract", "CFBundleIdentifier", "raw", "-o", "-", "--", infoPlistPath],
+				lifecycleProbeOptions,
+			);
+			identifier = String(stdout).replace(/\n$/, "");
+		} catch (error) {
+			return `plutil cannot read its CFBundleIdentifier: ${errorText(error)}`;
+		}
+		return identifier === helperBundleId ? undefined : `its CFBundleIdentifier is ${JSON.stringify(identifier)}`;
 	}
 
 	/**
 	 * Automatic setup (`--postinstall`, `--runtime`) with a `PI_COMPUTER_USE_HELPER_APP_PATH` override replaces only
-	 * nothing or this helper's own bundle: an existing destination whose `Contents/Info.plist` does not name
-	 * `helperBundleId` is refused, as is one that cannot be read. A binary plist stores the ID as plain ASCII too.
+	 * nothing or this helper's own bundle (see `foreignDestinationReason`). Called before anything else and again
+	 * right before each mutation of the destination.
 	 * @returns {Promise<void>} Resolves when the destination may be replaced.
-	 * @throws {Error} When the override names an existing directory that is not provably this helper.
+	 * @throws {HelperLifecycleRefusal} When the override names an entry that is not provably this helper.
 	 */
 	async function assertReplaceableDestination() {
 		if (!isAutomatic || !env.PI_COMPUTER_USE_HELPER_APP_PATH?.trim()) return;
-		let plist;
-		try {
-			plist = await fs.readFile(path.join(helperAppPath, "Contents", "Info.plist"));
-		} catch {
-			// No readable Info.plist: only a destination that provably does not exist may be created.
-			try {
-				await fs.lstat(helperAppPath);
-			} catch (error) {
-				if (error?.code === "ENOENT") return;
-			}
-		}
-		if (plist?.includes(helperBundleId)) return;
-		throw new Error(
-			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle; automatic setup does not replace it. Remove it or fix the override, then run \`node scripts/setup-helper.mjs\` from the package root.`,
+		const reason = await foreignDestinationReason();
+		if (reason === undefined) return;
+		throw new HelperLifecycleRefusal(
+			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle (${reason}); automatic setup does not replace it. Remove it or fix the override, then run \`node scripts/setup-helper.mjs\` from the package root.`,
 		);
 	}
 
@@ -881,6 +946,7 @@ function createSetup(argv, deps) {
 		// the user's TCC grants on an identity that can never validate.
 		await run("codesign", ["--verify", "--strict", sourceAppPath]);
 		await stopRunningHelper();
+		await assertReplaceableDestination();
 		await fs.rm(helperAppPath, { force: true, recursive: true });
 		// ditto preserves the bundle byte-for-byte (signature + stapled
 		// notarization ticket). The sealed app is NEVER re-signed here: its
@@ -922,6 +988,7 @@ function createSetup(argv, deps) {
 			if (signingIdentity !== "-" && (await helperHasAdhocSignature())) {
 				// A resident daemon keeps the ad-hoc signature it launched with: stop it so the next command runs the re-signed app.
 				await stopRunningHelper();
+				await assertReplaceableDestination();
 				await signHelper(helperAppPath, helperBundleId);
 				await registerHelperApp();
 				return true;
@@ -937,9 +1004,11 @@ function createSetup(argv, deps) {
 			);
 		}
 
+		// Nothing inside the destination changes until the resident helper is gone and the destination rechecked.
+		await stopRunningHelper();
+		await assertReplaceableDestination();
 		await fs.mkdir(path.dirname(helperAppExecutablePath), { recursive: true });
 		await fs.mkdir(path.dirname(helperSourceHashPath), { recursive: true });
-		await stopRunningHelper();
 		await fs.copyFile(sourcePath, helperAppExecutablePath);
 		await fs.chmod(helperAppExecutablePath, 0o755);
 		await fs.writeFile(infoPlistPath, infoPlist);
@@ -1124,6 +1193,8 @@ function createSetup(argv, deps) {
 			}
 			return;
 		} catch (error) {
+			// A lifecycle refusal is final: a fallback build would only retry the same replacement.
+			if (error instanceof HelperLifecycleRefusal) throw error;
 			console.warn(
 				`[pi-computer-use] signed helper release download unavailable: ${error instanceof Error ? error.message : String(error)}`,
 			);
