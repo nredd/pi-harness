@@ -27,7 +27,8 @@ import {
 	runCancellable,
 	withDirectoryLock,
 } from "../scripts/setup-helper.mjs";
-import { shortSocketPath, startFakeHelper } from "./support/fake-helper.mjs";
+import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
+import { drop, fail, malformed, ok, shortSocketPath, silent, split, startFakeHelper } from "./support/fake-helper.mjs";
 
 const LSREGISTER =
 	"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
@@ -752,6 +753,90 @@ describe("automatic runtime setup never stops a running helper", () => {
 		assert.deepEqual(rec.exit, []);
 		assert.ok(rec.exec.some(([command]) => command === "pkill"));
 		assert.equal(await realFs.readFile(bridge(host), "utf8"), "two");
+	});
+});
+
+describe("operator stop of a stale daemon (--stop-stale-daemon)", () => {
+	const universal = (host) => path.join(host.dirs.root, "prebuilt", "macos", "universal", "pi-computer-use.app");
+	const managed = (host) => path.join(host.dirs.home, "Library", "Caches", "pi-computer-use", "bridge.sock");
+
+	/** A current installed bundle and a resident fake reporting `diagnostics`, with real pauses. */
+	async function residentHost(diagnostics, handlers = {}) {
+		const host = await makeHost();
+		await makeApp(universal(host), "current");
+		await runMain(host, []);
+		host.deps.sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+		const fake = await startFakeHelper({ socketPath: host.state.socketPath, diagnostics, handlers });
+		onTestFinished(() => fake.stop());
+		return { host, fake, cmds: () => fake.requests.map(({ cmd }) => cmd) };
+	}
+
+	test("an already-current bundle with a stale resident: setup is a no-op, the stop flag stops only the daemon", async () => {
+		const { host, fake, cmds } = await residentHost({ buildIdentity: undefined, pid: 31 });
+		let rec = await runMain(host, ["--runtime"]);
+		assert.equal(rec.log[0], `[pi-computer-use] pre-signed helper app (arm64) already current at ${host.dirs.app}`);
+		assert.deepEqual(cmds(), [], "setup alone never reaches the stale daemon");
+		rec = await runMain(host, ["--stop-stale-daemon"]);
+		assert.deepEqual(rec.exit, []);
+		assert.deepEqual(cmds(), ["diagnostics", "shutdown"]);
+		assert.deepEqual(
+			fake.requests.map(({ id }) => id),
+			["stop_probe", "stop_shutdown"],
+		);
+		assert.deepEqual(rec.log, [
+			`[pi-computer-use] stopped stale helper daemon (pid 31, build unknown, expected ${macosHelperBuild(host.dirs.root)}); the next command launches the installed helper`,
+		]);
+		assert.deepEqual(rec.connect.slice(-1), [managed(host)]);
+		assert.deepEqual(rec.spawn, [], "the bundle is never verified, copied or registered");
+		assert.deepEqual(rec.exec, [], "no pkill, pgrep or lockf");
+		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "current");
+	});
+
+	test("a resident with the current build, or no resident, is left alone", async () => {
+		const { host, fake, cmds } = await residentHost({ pid: undefined });
+		fake.diagnostics.buildIdentity = macosHelperBuild(host.dirs.root);
+		let rec = await runMain(host, ["--stop-stale-daemon"]);
+		assert.deepEqual(rec.exit, []);
+		assert.deepEqual(cmds(), ["diagnostics"]);
+		assert.match(rec.log[0], /helper daemon \(pid unknown\) runs the current build .*; not stopped$/);
+		await fake.stop();
+		rec = await runMain(host, ["--stop-stale-daemon"]);
+		assert.deepEqual(rec.log, [`[pi-computer-use] no helper daemon is listening at ${managed(host)}; nothing to stop`]);
+	});
+
+	test.each([
+		["a malformed reply", { diagnostics: malformed() }, /malformed reply$/],
+		["a disconnect", { diagnostics: drop() }, /disconnected before replying$/],
+		["an error reply", { diagnostics: fail("busy") }, /unexpected probe reply: .*busy/],
+		["a refused shutdown", { shutdown: fail("cannot stop") }, /unexpected shutdown reply: .*cannot stop/],
+		["a daemon that ignores shutdown", { shutdown: ok() }, /accepted shutdown but still listens; quit it manually\.$/],
+	])("fails without replacing anything on %s", async (_name, handlers, message) => {
+		const { host } = await residentHost({ buildIdentity: "old" }, handlers);
+		const rec = await runMain(host, ["--stop-stale-daemon"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], message);
+		assert.deepEqual(rec.spawn, []);
+	});
+
+	test("joins a split reply, and times out on a silent daemon", async () => {
+		const { host, fake, cmds } = await residentHost({ buildIdentity: "old" });
+		fake.script("diagnostics", split(ok({ buildIdentity: macosHelperBuild(host.dirs.root) }), 3));
+		let rec = await runMain(host, ["--stop-stale-daemon"]);
+		assert.match(rec.log[0], /runs the current build/);
+		fake.script("diagnostics", silent());
+		rec = await runMain(host, ["--stop-stale-daemon"]);
+		assert.match(rec.error[0], /^Cannot verify the helper daemon at .*: no reply within 5000ms$/);
+		assert.ok(!cmds().includes("shutdown"));
+	}, 15_000);
+
+	test("never runs from postinstall or automatic setup", async () => {
+		const { host, cmds } = await residentHost({ buildIdentity: "old" });
+		const message = "--stop-stale-daemon is an operator action; it never runs with --postinstall or --automatic.";
+		let rec = await runMain(host, ["--stop-stale-daemon", "--automatic"]);
+		assert.deepEqual(rec.error, [message]);
+		rec = await runMain(host, ["--stop-stale-daemon", "--postinstall"]);
+		assert.deepEqual(rec.warn, [`[pi-computer-use] postinstall helper setup skipped: ${message}`]);
+		assert.deepEqual(cmds(), []);
 	});
 });
 

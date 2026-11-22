@@ -24,7 +24,7 @@ assert.ok(platformDescriptor);
 const current = macosHelperBuild(fileURLToPath(new URL("../", import.meta.url)));
 const older = `0.0.0+${"0".repeat(64)}`;
 const staleMessage = (executable: string, build = "unknown") =>
-	`pi-computer-use helper at ${executable} is stale (helper build ${build}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`;
+	`pi-computer-use helper at ${executable} is stale (helper build ${build}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`, then \`node scripts/setup-helper.mjs --stop-stale-daemon\` if a stale daemon is still running (setup reports the app already current). For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`;
 
 afterEach(() => {
 	Object.defineProperty(process, "platform", platformDescriptor);

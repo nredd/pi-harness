@@ -8,7 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
-- Refuse stale managed macOS helpers, including older helpers with no build stamp, without reinstalling or restarting them. Show the reported build and, on refusal, the expected build in `/computer-use`. Launch the daemon or run setup only when the socket provably has no listener, under a shared lifecycle lock; automatic setup refuses rather than stopping a running helper, and inconclusive or slow probes never launch (#1211).
+- Refuse stale managed macOS helpers, including older helpers with no build stamp, without reinstalling or restarting them. Show the reported build and, on refusal, the expected build in `/computer-use`. Launch the daemon or run setup only when the socket provably has no listener, under a shared lifecycle lock; automatic setup refuses rather than stopping a running helper, and inconclusive or slow probes never launch. Add `setup-helper.mjs --stop-stale-daemon` to stop a stale daemon that an already-current setup cannot see (#1211).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).
 - On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).
 - Bound Linux AT-SPI2 D-Bus requests, refuse text reads when the role is unknown, and do not confirm absence from incomplete snapshots. A timed-out semantic action has an unknown outcome and is not retried (#1167).

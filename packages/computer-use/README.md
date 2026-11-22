@@ -1445,6 +1445,14 @@ From the installed package root, explicitly repair a missing or stale helper wit
 node scripts/setup-helper.mjs --runtime
 ```
 
+Setup stops the old daemon only when it replaces the bundle, and only a daemon started from this bundle (`pkill -f '<bridge> serve'`). If setup reports the app already current but the client still refuses a stale helper, for example a daemon launched from a legacy path, stop that daemon explicitly:
+
+```bash
+node scripts/setup-helper.mjs --stop-stale-daemon
+```
+
+It asks the daemon on the managed socket for its build and sends `shutdown` on that same connection only when the build differs from this package's. It never replaces the bundle, refuses to run with `--postinstall` or `--automatic`, and fails rather than stops anything when the daemon cannot be verified. The next command launches the installed helper.
+
 For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
 ```bash
