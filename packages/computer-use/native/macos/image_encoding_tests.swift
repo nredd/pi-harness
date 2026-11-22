@@ -3,7 +3,8 @@ import Foundation
 import ImageIO
 
 /// Drive the screenshot encoding helpers (`downscaledImage`, `jpegData`) on in-memory bitmaps. Nothing
-/// is captured from a display or window.
+/// is captured from a display or window. Quality is pinned by behavior: a noise bitmap must encode
+/// strictly larger at a high quality than at a low one, which fails if the quality never reaches ImageIO.
 func runImageEncodingAssertions() {
     let bridge = Bridge(activityGlow: nil, readSession: { nil }, inputSink: forbiddenInputSink)
     guard let image = solidImage(width: 40, height: 20) else {
@@ -31,8 +32,13 @@ func runImageEncodingAssertions() {
     expect(source.flatMap(CGImageSourceGetType) as String? == "public.jpeg", "ImageIO reads the data as JPEG")
     let decoded = source.flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
     expect(decoded?.width == 40 && decoded?.height == 20, "the JPEG keeps the bitmap's size")
-    let small = bridge.jpegData(image: image, quality: 0.0)
-    expect(small.map { $0.count <= jpeg.count } == true, "a lower quality never encodes larger")
+    guard let noise = noiseImage(side: 64) else {
+        expect(false, "a 64x64 noise bitmap builds")
+        return
+    }
+    let low = bridge.jpegData(image: noise, quality: 0.1)?.count ?? 0
+    let high = bridge.jpegData(image: noise, quality: 1.0)?.count ?? 0
+    expect(low > 0 && high > low, "the quality reaches the encoder: noise at 1.0 encodes larger than at 0.1 (\(high) vs \(low) bytes)")
     print("macos image encoding assertions passed")
 }
 
@@ -43,6 +49,20 @@ private func solidImage(width: Int, height: Int) -> CGImage? {
     ) else { return nil }
     context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
     context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return context.makeImage()
+}
+
+/// A square of deterministic pseudo-random pixels: detail JPEG cannot drop without the quality setting.
+private func noiseImage(side: Int) -> CGImage? {
+    guard let context = CGContext(
+        data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+    ), let pixels = context.data?.bindMemory(to: UInt8.self, capacity: context.bytesPerRow * side) else { return nil }
+    var state: UInt32 = 0x9E37_79B9
+    for offset in 0..<(context.bytesPerRow * side) {
+        state = state &* 1_664_525 &+ 1_013_904_223
+        pixels[offset] = UInt8(truncatingIfNeeded: state >> 24)
+    }
     return context.makeImage()
 }
 
