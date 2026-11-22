@@ -189,8 +189,10 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
 /// when no other window of that PID ranks equally (#1300): a tie is no class evidence,
 /// never proof that one sibling's class belongs to the root. Blocking is additive, so a tie
 /// reports every tied window's class in `class_candidates` and any blocked one refuses it.
-pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
+/// Returns each root's [`Pairing`]: a tie is `Ambiguous` even when no tied window has a class.
+pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) -> Vec<Pairing> {
     let mut used = Vec::new();
+    let mut pairings = Vec::with_capacity(roots.len());
     for root in roots {
         let rank = |w: &WindowInfo| {
             let title = if !root.name.is_empty()
@@ -229,6 +231,37 @@ pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
             if root.name.is_empty() {
                 root.name.clone_from(&w.title);
             }
+            pairings.push(if ambiguous {
+                Pairing::Ambiguous
+            } else {
+                Pairing::Paired
+            });
+        } else {
+            pairings.push(Pairing::Unpaired);
+        }
+    }
+    pairings
+}
+
+/// How confidently [`enrich_roots`] paired a root with an X11 window, reported apart from
+/// its class aliases: a tie of classless windows has no aliases but is no clean pairing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pairing {
+    /// One window ranked best; its `WM_CLASS`, if any, is the root's.
+    Paired,
+    /// Several windows ranked equally; none of their classes is attributed.
+    Ambiguous,
+    /// No window of the root's PID.
+    Unpaired,
+}
+
+impl Pairing {
+    /// The `metadata.x11Pairing` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Paired => "paired",
+            Self::Ambiguous => "ambiguous",
+            Self::Unpaired => "unpaired",
         }
     }
 }

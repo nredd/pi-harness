@@ -484,14 +484,7 @@ async fn look_root(
     };
     let pairing = match bounded(enrichment, windows).await {
         Some(Ok(windows)) => {
-            x11::enrich_roots(std::slice::from_mut(&mut root), &windows);
-            if !root.class_candidates.is_empty() {
-                "ambiguous"
-            } else if root.x11_window.is_some() {
-                "paired"
-            } else {
-                "unpaired"
-            }
+            x11::enrich_roots(std::slice::from_mut(&mut root), &windows)[0].as_str()
         }
         _ => "unavailable",
     };
@@ -3374,13 +3367,25 @@ mod tests {
                 // Without live extents the same-title siblings tie: no class is attributed,
                 // and every tied class is a block-only alias, so the blocked one still refuses.
                 *extents.lock().unwrap() = None;
-                let root = lookup(swapped).await;
+                let root = lookup(swapped.clone()).await;
                 assert!(root["metadata"]["wmClass"].is_null());
                 assert_eq!(root["metadata"]["x11Pairing"], "ambiguous");
                 assert_eq!(
                     root["blockAliases"],
                     json!(["keepassxc", "KeePassXC", "fixture", "Fixture"])
                 );
+                // A tie of classless windows has no aliases at all, and is still ambiguous.
+                let classless = swapped
+                    .iter()
+                    .cloned()
+                    .map(|window| x11::WindowInfo {
+                        wm_class: None,
+                        ..window
+                    })
+                    .collect();
+                let root = lookup(classless).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "ambiguous");
+                assert_eq!(root["blockAliases"], json!([]));
                 // No same-PID window: unpaired, and no stale window id survives.
                 let root = lookup(vec![]).await;
                 assert_eq!(root["metadata"]["x11Pairing"], "unpaired");

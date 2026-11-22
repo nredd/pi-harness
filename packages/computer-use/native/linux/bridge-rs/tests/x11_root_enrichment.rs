@@ -1,7 +1,7 @@
 //! Exercise production X11 root matching using snapshots, without a display server.
 
 use linux_bridge::atspi::{AccessibleRef, Rect, RootSnapshot};
-use linux_bridge::x11::{enrich_roots, parse_wm_class, wm_class_property, WindowInfo};
+use linux_bridge::x11::{enrich_roots, parse_wm_class, wm_class_property, Pairing, WindowInfo};
 
 fn frame(x: i32) -> Rect {
     Rect {
@@ -171,7 +171,7 @@ fn an_equally_ranked_sibling_window_leaves_the_class_unattributed() {
             ..window(2, 7, "Editor", 30)
         },
     ];
-    enrich_roots(&mut roots, &windows);
+    assert_eq!(enrich_roots(&mut roots, &windows), [Pairing::Paired]);
     assert_eq!(roots[0].x11_window, Some(1));
     assert_eq!(roots[0].wm_class, class("fixture"));
     assert!(roots[0].class_candidates.is_empty());
@@ -220,8 +220,9 @@ fn reads_only_complete_8_bit_wm_class_properties() {
 fn rejects_unknown_process_ids_even_when_both_are_zero() {
     let mut roots = [root(0, "Editor", Some(frame(10)))];
 
-    enrich_roots(&mut roots, &[window(1, 0, "Editor", 0)]);
+    let pairings = enrich_roots(&mut roots, &[window(1, 0, "Editor", 0)]);
 
+    assert_eq!(pairings, [Pairing::Unpaired]);
     assert_eq!(roots[0].x11_window, None);
     assert_eq!(roots[0].frame, Some(frame(10)));
 }
