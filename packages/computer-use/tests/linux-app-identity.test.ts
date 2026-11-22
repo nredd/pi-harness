@@ -2,10 +2,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, test, vi } from "vitest";
+import { effect, silent } from "../test/support/fake-helper.mjs";
 import { executeFind, executeObserve, executeReadText, executeSearchUi } from "../src/bridge.ts";
 import { currentPlatformBackend, platformBackendForRuntime } from "../src/platform/index.ts";
 import { linuxBackend } from "../src/platform/linux/backend.ts";
 import { linuxHelper } from "../src/platform/linux/helper.ts";
+import { linuxHelperClient } from "./fixtures/linux-helper.mjs";
 
 type Root = Record<string, unknown> & { pid: number; metadata: { busName: string; objectPath: string } };
 
@@ -50,13 +52,18 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	Object.assign(currentPlatformBackend, platformBackendForRuntime("linux"), {
 		ensureReady: async (_ctx: unknown, state: unknown) => state,
 	});
-	const state: { roots: Root[]; lookRootError?: Error } = { roots: initial };
+	// `lookRootClient` answers `atspiLookRoot` through a real helper client instead, e.g. over a no-reply transport.
+	const state: {
+		roots: Root[];
+		lookRootError?: Error;
+		lookRootClient?: Pick<typeof linuxHelper, "command">;
+	} = { roots: initial };
 	// Like the helper, every listing replaces the handle table: a root it omits loses its `@w` handle, and a
 	// later listing issues a new one (#1300).
 	let handles = new Map<string, string>();
 	let minted = 0;
 	const lookRoots = new Map<string, string>();
-	const command = vi.spyOn(linuxHelper, "command").mockImplementation(async (name, args) => {
+	const command = vi.spyOn(linuxHelper, "command").mockImplementation(async (name, args, options) => {
 		switch (name) {
 			case "listRoots": {
 				const pid = (args as { pid?: number } | undefined)?.pid;
@@ -71,6 +78,7 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 				return { roots };
 			}
 			case "atspiLookRoot": {
+				if (state.lookRootClient) return await state.lookRootClient.command(name, args, options);
 				if (state.lookRootError) throw state.lookRootError;
 				const identity = lookRoots.get(String(args?.lookId));
 				const root = state.roots.find((candidate) => nativeIdentity(candidate) === identity);
@@ -112,8 +120,8 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	const looks = () => calls("look");
 	const search = async (stateId: string) =>
 		(await executeSearchUi("t", { stateId, text: "Body" }, undefined, undefined, ctx)).details.matches![0].ref;
-	const readText = async (stateId: string, ref: string) =>
-		await executeReadText("t", { stateId, ref }, undefined, undefined, ctx);
+	const readText = async (stateId: string, ref: string, signal?: AbortSignal) =>
+		await executeReadText("t", { stateId, ref }, signal, undefined, ctx);
 	return { state, userFile, find, observe, looks, calls, search, readText };
 }
 
@@ -337,6 +345,52 @@ test("Linux read_text never reads an unfinished root lookup as absence", async (
 	});
 	state.lookRootError = Object.assign(new Error("Owning look is no longer available"), { code: "stale_look" });
 	await expect(readText(stateId, ref)).rejects.toMatchObject({ code: "stale_look" });
+	expect(calls("atspiReadText")).toBe(0);
+});
+
+test("Linux read_text reads only a client deadline on its root lookup as inventory_incomplete", async ({
+	onTestFinished,
+}) => {
+	const { state, find, observe, calls, search, readText } = useLinuxRoots(onTestFinished, [
+		linuxRoot(101, "Editor", "fixture-editor"),
+	]);
+	const [{ windowRef }] = await find();
+	const { stateId } = (await observe(windowRef)).details.capture;
+	const ref = await search(stateId);
+	// A real client over a helper that never answers the lookup, e.g. one stalled in X11 enrichment.
+	let sent = 0;
+	const { client, children } = await linuxHelperClient(() => ({
+		atspiLookRoot: effect(() => sent++, silent()),
+	}));
+	onTestFinished(() => {
+		vi.useRealTimers();
+		vi.doUnmock("node:child_process");
+		vi.resetModules();
+	});
+	state.lookRootClient = client;
+
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+	const expired = expect(readText(stateId, ref)).rejects.toMatchObject({
+		code: "inventory_incomplete",
+		message: expect.stringMatching(/could not be verified: Helper command 'atspiLookRoot' timed out after 15000ms\./),
+	});
+	await vi.advanceTimersByTimeAsync(15_000);
+	await expired;
+	vi.useRealTimers();
+
+	// An abort and a helper exit are lost replies, never an unfinished lookup.
+	const controller = new AbortController();
+	const aborted = readText(stateId, ref, controller.signal);
+	await vi.waitFor(() => expect(sent).toBe(2));
+	controller.abort();
+	await expect(aborted).rejects.toMatchObject({ code: "reply_lost", message: "Operation aborted." });
+	const orphaned = readText(stateId, ref);
+	await vi.waitFor(() => expect(sent).toBe(3));
+	children[0].exit(1);
+	await expect(orphaned).rejects.toMatchObject({
+		code: "reply_lost",
+		message: expect.stringMatching(/Linux helper exited with code 1\./),
+	});
 	expect(calls("atspiReadText")).toBe(0);
 });
 

@@ -277,7 +277,8 @@ export interface ComputerUsePlatformBackend {
 	): Promise<PlatformReadTextResponse>;
 	/**
 	 * The live root of a retained native look, found by the native identity the look holds rather than an inventory
-	 * handle: `undefined` only when the lookup proved it absent; an incomplete lookup rejects (Linux, #1300).
+	 * handle: `undefined` only when the lookup proved it absent; an incomplete lookup, the helper's or the client's
+	 * deadline, rejects with code `timeout` (Linux, #1300).
 	 */
 	lookRoot?(lookId: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformRoot | undefined>;
 	waitFor(

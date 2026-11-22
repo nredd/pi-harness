@@ -20,7 +20,7 @@ import type {
 	PlatformWaitForRequest,
 	PlatformWaitForResponse,
 } from "../types.ts";
-import { LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
+import { isHelperDeadline, LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
 import { wslNoWindowsHint } from "./wsl.ts";
 
 function normalizedProcessName(appName: string): string {
@@ -235,7 +235,14 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 		lookId: string,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformRoot | undefined> {
-		const result = await linuxHelper.command<{ root?: unknown }>("atspiLookRoot", { lookId }, options);
+		const result = await linuxHelper
+			.command<{ root?: unknown }>("atspiLookRoot", { lookId }, options)
+			.catch((error: unknown) => {
+				// No reply by the client deadline (e.g. a stalled lookup) is an unfinished lookup like a helper
+				// `timeout`; an abort or a helper exit stays a lost reply.
+				if (!isHelperDeadline(error)) throw error;
+				throw Object.assign(new Error((error as Error).message, { cause: error }), { code: "timeout" });
+			});
 		// Only an explicit `null` proves absence; a malformed reply is not evidence either way.
 		if (result?.root === null) return undefined;
 		if (typeof result?.root !== "object") throw new Error("Linux helper atspiLookRoot reply has no root.");

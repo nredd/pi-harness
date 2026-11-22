@@ -315,7 +315,16 @@ async fn handle_request_with(
             })
             .await
         }
-        "atspiLookRoot" => look_root(state, &request.args, &connect, x11::list_windows).await,
+        "atspiLookRoot" => {
+            look_root(
+                state,
+                &request.args,
+                &connect,
+                x11::list_windows,
+                X11_ENRICHMENT_TIMEOUT,
+            )
+            .await
+        }
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
@@ -437,19 +446,23 @@ async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Val
     }))
 }
 
+/// How long `atspiLookRoot` waits for the X11 window listing that may add a class alias.
+const X11_ENRICHMENT_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The live root of `lookId`'s retained look, found by the AT-SPI bus name and object path
 /// the look retains, never by an inventory `@w` handle a later listing may reissue (#1300).
 /// `root` is `null` only when the bounded lookup proved it absent. The owner PID and
 /// executable are live, and the X11 pairing ranks against the root's own live name and
-/// extents, never the frame or title an earlier pairing saved in the look. Without X11 the
-/// root carries no class evidence.
+/// extents, never the frame or title an earlier pairing saved in the look. The X11 listing
+/// gets `enrichment` at most: past it, or without X11, the root carries no class evidence.
 /// `metadata.x11Pairing` says which: `paired`, `ambiguous` (tied windows' classes are
 /// block-only aliases), `unpaired` or `unavailable`.
 async fn look_root(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
     connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
-    windows: impl FnOnce() -> Result<Vec<x11::WindowInfo>, ProtocolError>,
+    windows: impl FnOnce() -> Result<Vec<x11::WindowInfo>, ProtocolError> + Send + 'static,
+    enrichment: Duration,
 ) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "atspiLookRoot requires lookId")?;
     let mut root = lock(state)?.look(look_id)?.root;
@@ -469,8 +482,8 @@ async fn look_root(
         z_order: None,
         ..root
     };
-    let pairing = match windows() {
-        Ok(windows) => {
+    let pairing = match bounded(enrichment, windows).await {
+        Some(Ok(windows)) => {
             x11::enrich_roots(std::slice::from_mut(&mut root), &windows);
             if !root.class_candidates.is_empty() {
                 "ambiguous"
@@ -480,12 +493,26 @@ async fn look_root(
                 "unpaired"
             }
         }
-        Err(_) => "unavailable",
+        _ => "unavailable",
     };
     let reference = lock(state)?.root_ref(&root.accessible).unwrap_or_default();
     let mut json = root_json(&reference, &root, 0);
     json["metadata"]["x11Pairing"] = json!(pairing);
     Ok(json!({ "root": json }))
+}
+
+/// Run a blocking `read` on its own thread for at most `deadline`; `None` past it. A read
+/// still blocked is left behind rather than awaited, so it cannot hold the reply.
+async fn bounded<T: Send + 'static>(
+    deadline: Duration,
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("x11-enrichment".into())
+        .spawn(move || sender.send(read()))
+        .ok()?;
+    tokio::time::timeout(deadline, receiver).await.ok()?.ok()
 }
 
 async fn resolve_root(
@@ -3284,9 +3311,15 @@ mod tests {
                 };
                 let args = json!({ "lookId": look_id });
                 let lookup = async |windows: Vec<x11::WindowInfo>| {
-                    look_root(&state, &args, connect, move || Ok(windows))
-                        .await
-                        .unwrap()["root"]
+                    look_root(
+                        &state,
+                        &args,
+                        connect,
+                        move || Ok(windows),
+                        X11_ENRICHMENT_TIMEOUT,
+                    )
+                    .await
+                    .unwrap()["root"]
                         .clone()
                 };
                 let class = |root: &Value| root["metadata"]["wmClass"]["class"].clone();
@@ -3339,12 +3372,40 @@ mod tests {
                 assert!(root["windowId"].is_null());
 
                 // Without X11 there is no class evidence, and the root is still found.
-                let found = look_root(&state, &args, connect, || Err(capability("no X11")))
-                    .await
-                    .unwrap();
+                let found = look_root(
+                    &state,
+                    &args,
+                    connect,
+                    || Err(capability("no X11")),
+                    X11_ENRICHMENT_TIMEOUT,
+                )
+                .await
+                .unwrap();
                 assert!(found["root"]["metadata"]["wmClass"].is_null());
                 assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
                 assert_eq!(found["root"]["pid"], 42);
+
+                // A stalled X11 listing never holds the reply: the membership result comes
+                // back past the enrichment deadline, without class evidence.
+                let (release, stalled) = std::sync::mpsc::channel::<()>();
+                let started = Instant::now();
+                let found = look_root(
+                    &state,
+                    &args,
+                    connect,
+                    move || {
+                        let _ = stalled.recv_timeout(Duration::from_secs(5));
+                        Ok(vec![editor_window(71, &saved, "KeePassXC")])
+                    },
+                    Duration::from_millis(50),
+                )
+                .await
+                .unwrap();
+                assert!(started.elapsed() < Duration::from_secs(2));
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
+                assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["pid"], 42);
+                drop(release);
 
                 // Its application no longer lists the closed root: proven absent.
                 let reply = peer_request(

@@ -122,6 +122,15 @@ function replyLost(error: unknown): Error & { code: string } {
 	return Object.assign(new Error(message, { cause: error }), { code: "reply_lost" });
 }
 
+/** The `cause.code` of a reply lost to the client's own deadline, as opposed to an abort or a helper exit. */
+const DEADLINE_EXCEEDED = "deadline_exceeded";
+
+/** Whether `error` is a reply lost because the client's deadline expired with no reply. */
+export function isHelperDeadline(error: unknown): boolean {
+	const lost = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
+	return lost?.code === "reply_lost" && lost.cause?.code === DEADLINE_EXCEEDED;
+}
+
 /** Commands that can post XTEST input or move focus: everything but `act`/`actBatch` steps limited to `ax_only`. */
 function isPhysicalCommand(cmd: string, args: Record<string, unknown>): boolean {
 	const semantic = (action: unknown) => (action as { policy?: unknown } | undefined)?.policy === "ax_only";
@@ -561,7 +570,8 @@ export class LinuxHelperClient {
 			const timer = setTimeout(() => {
 				signal?.removeEventListener("abort", onAbort);
 				this.pending.delete(id);
-				reject(replyLost(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)));
+				const deadline = new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`);
+				reject(replyLost(Object.assign(deadline, { code: DEADLINE_EXCEEDED })));
 			}, timeoutMs);
 			this.pending.set(id, {
 				child,
