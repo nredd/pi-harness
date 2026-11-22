@@ -1451,8 +1451,11 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 					// Same transcript, so the same creation directory.
 					note.sessionDir ??= previous.sessionDir;
 				}
-				// An update row of a reopened run journals no directory either.
-				note.sessionDir ??= saved.get(note.id)?.sessionDir;
+				// An update row of a reopened run journals no directory either. Only one
+				// naming the same transcript (`sameSavedChild`) may carry it forward: a
+				// directory journaled for one file never vouches for another.
+				const earlier = saved.get(note.id);
+				if (earlier && sameSavedChild(earlier, note)) note.sessionDir ??= earlier.sessionDir;
 				saved.set(note.id, note);
 			}
 		}

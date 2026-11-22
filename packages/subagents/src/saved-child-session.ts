@@ -78,7 +78,13 @@ export function canonicalChildPath(file: string): string | undefined {
 	}
 }
 
-/** A reopen can journal the canonical spelling of a predecessor's symlinked transcript. */
+/**
+ * Whether two saved rows name the same transcript: the same spelling, either
+ * row's write-time canonical form matching the other's spelling or canonical
+ * form, or (legacy rows, file still present) both spellings resolving to one
+ * file now. A reopen can journal the canonical spelling of a predecessor's
+ * symlinked transcript.
+ */
 export function sameSavedChild(previous: SavedChildPaths, next: SavedChildPaths): boolean {
 	if (!previous.sessionFile || !next.sessionFile) return false;
 	// Keep exact or write-time canonical links even when the transcript has since disappeared.
