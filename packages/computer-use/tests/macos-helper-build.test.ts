@@ -7,7 +7,7 @@ import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, onTestFinished, test, vi } from "vitest";
 import { main } from "../scripts/build-native.mjs";
-import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
+import { macosHelperBuild, writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 import { drop, ok, raw, shortSocketPath, silent, startFakeHelper } from "../test/support/fake-helper.mjs";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -309,6 +309,8 @@ test("passes a version and production source hash to swiftc", async () => {
 		},
 	});
 	assert.ok(compiled);
+	const sharedStamp = writeMacosBuildStamp(root, root);
+	assert.equal(readFileSync(sharedStamp, "utf8"), `let helperBuildIdentity = "1.2.3+${digest}"\n`);
 	writeFileSync(versionFile, '{"version":"1.2.4"}');
 	assert.equal(macosHelperBuild(root), `1.2.4+${digest}`);
 	for (const file of fixture) writeFileSync(path.join(dir, `${file}.swift`), "// v1\r\n");

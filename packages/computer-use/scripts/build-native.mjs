@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { realpathSync, writeFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
+import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // `scripts/package_contracts.py` parses this declaration from the packed script: keep it a plain literal list plus `.map`.
@@ -86,13 +86,6 @@ function normalizeArch(arch) {
 
 function defaultOutputPath(ctx, arch) {
 	return path.join(ctx.rootDir, "prebuilt", "macos", arch, "bridge");
-}
-
-/** Compile the identity into the running binary, not a replaceable file beside it. */
-export function writeMacosBuildStamp(root, directory) {
-	const stamp = path.join(directory, "HelperBuildStamp.swift");
-	writeFileSync(stamp, `let helperBuildIdentity = ${JSON.stringify(macosHelperBuild(root))}\n`);
-	return stamp;
 }
 
 function swiftArgsForArch(ctx, arch, outputPath, moduleCachePath) {

@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeMacosBuildStamp } from "./build-native.mjs";
+import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 export const sources = [

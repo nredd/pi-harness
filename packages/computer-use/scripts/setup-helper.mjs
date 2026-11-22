@@ -10,7 +10,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
-import { writeMacosBuildStamp } from "./build-native.mjs";
+import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 
 const execFile = promisify(execFileCallback);
 const helperBundleId = "com.injaneity.pi-computer-use";

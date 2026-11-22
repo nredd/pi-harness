@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 /**
@@ -17,4 +17,11 @@ export function macosHelperBuild(root) {
 		hash.update(`${name}:${contents.length}:`).update(contents);
 	}
 	return `${version}+${hash.digest("hex")}`;
+}
+
+/** Compile the identity into the running binary, not a replaceable file beside it. */
+export function writeMacosBuildStamp(root, directory) {
+	const stamp = path.join(directory, "HelperBuildStamp.swift");
+	writeFileSync(stamp, `let helperBuildIdentity = ${JSON.stringify(macosHelperBuild(root))}\n`);
+	return stamp;
 }
