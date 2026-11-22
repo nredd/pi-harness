@@ -20,7 +20,13 @@ import {
 import { ExhaustionTracker, markEvidence } from "../src/exhaustion.ts";
 import { nextPacificMidnight } from "../src/failure.ts";
 import { isQuotaError, type RouteEnv, Router } from "../src/router.ts";
-import type { UsageDecision, UsageSnapshot } from "../src/usage.ts";
+import {
+	NO_USAGE_SOURCE,
+	type RegistryContext,
+	type UsageDecision,
+	UsageService,
+	type UsageSnapshot,
+} from "../src/usage.ts";
 
 const T0 = Date.parse("2030-07-01T18:00:00Z");
 const MINUTE = 60_000;
@@ -208,12 +214,25 @@ describe("failure-inferred evidence", () => {
 	});
 });
 
+/** An `unavailable` read for a provider without any usage source. */
+function noSource(): Partial<UsageSnapshot> {
+	return Object.defineProperty({ status: "unavailable" as const }, NO_USAGE_SOURCE, { value: true });
+}
+
 function reader(snapshot: Partial<UsageSnapshot>, decision: UsageDecision = { block: false }) {
 	const reads: unknown[] = [];
 	const usage: UsageRead = {
 		get: async (provider, options) => {
 			reads.push({ provider, options });
-			return { provider, status: "available", windows: [], retrievedAt: T0, expiresAt: T0, ...snapshot };
+			const read: UsageSnapshot = {
+				provider,
+				status: "available",
+				windows: [],
+				retrievedAt: T0,
+				expiresAt: T0,
+				...snapshot,
+			};
+			return NO_USAGE_SOURCE in snapshot ? Object.defineProperty(read, NO_USAGE_SOURCE, { value: true }) : read;
 		},
 		decisionFor: () => decision,
 	};
@@ -234,19 +253,43 @@ describe("read evidence", () => {
 		expect(await readEvidence(reader({}).usage, true).decide(failure(BARE))).toEqual({ kind: "clear" });
 	});
 
-	it("abstains without a collector", async () => {
-		expect(await readEvidence(reader({ status: "unavailable" }).usage).decide(failure(BARE))).toEqual({
-			kind: "abstain",
-		});
+	it("abstains only when the provider has no usage source", async () => {
+		expect(await readEvidence(reader(noSource()).usage).decide(failure(BARE))).toEqual({ kind: "abstain" });
 	});
 
 	it.each([
+		["unavailable (no credential, or a retired collector)", { status: "unavailable" as const }],
 		["error", { status: "error" as const }],
 		["stale", { status: "stale" as const }],
 		["older than the failure", { retrievedAt: T0 - 1 }],
 	])("clears on an %s read unless fallbackOnReadError", async (_name, snapshot) => {
 		expect(await readEvidence(reader(snapshot).usage).decide(failure(BARE))).toEqual({ kind: "clear" });
 		expect(await readEvidence(reader(snapshot).usage, true).decide(failure(BARE))).toEqual({ kind: "abstain" });
+	});
+});
+
+describe("usage sources", () => {
+	const ctx = { modelRegistry: {} } as RegistryContext;
+
+	it("flags only a missing collector or an incompatible credential as no usage source", async () => {
+		const tokens: Record<string, string> = { anthropic: "sk-ant-api03-synthetic" };
+		const usage = new UsageService({
+			now: () => T0,
+			getAccessToken: async (_ctx, provider) => tokens[provider],
+			fetch: async () => new Response("{}"),
+		});
+		const flagged = async (provider: string) => {
+			const snapshot = await usage.get(ctx, provider, { fresh: true, notBefore: T0 });
+			return [snapshot.status, NO_USAGE_SOURCE in snapshot];
+		};
+		expect(await flagged("google")).toEqual(["unavailable", true]);
+		expect(await flagged("anthropic")).toEqual(["unavailable", true]);
+		// A registered collector without a credential is a failed read, not a missing source.
+		expect(await flagged("openai-codex")).toEqual(["unavailable", false]);
+		// The flag never changes snapshot equality.
+		expect(Object.getOwnPropertyDescriptor(await usage.get(ctx, "google"), NO_USAGE_SOURCE)).toMatchObject({
+			enumerable: false,
+		});
 	});
 });
 
@@ -451,7 +494,7 @@ describe("routing on the composed chain", () => {
 		const tracker = new ExhaustionTracker(() => clock.now);
 		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => clock.now);
 		const history = new FailureHistory();
-		const confirm = composeEvidence(evidenceChain(reader({ status: "unavailable" }).usage, history, undefined));
+		const confirm = composeEvidence(evidenceChain(reader(noSource()).usage, history, undefined));
 		const env: RouteEnv = {
 			resolve: (entry) => asModel(entry),
 			refresh: (model, signal, failedAt, message) => confirm({ model, signal, failedAt, message }),

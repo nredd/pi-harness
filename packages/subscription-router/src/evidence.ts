@@ -18,7 +18,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderConfig } from "./config.ts";
 import { classify } from "./failure.ts";
 import { type ModelRef, refKey } from "./model-ref.ts";
-import type { UsageDecision, UsageSnapshot } from "./usage.ts";
+import { NO_USAGE_SOURCE, type UsageDecision, type UsageSnapshot } from "./usage.ts";
 
 const MINUTE = 60_000;
 /** Longest inferred mark for a daily (calendar) window. */
@@ -89,15 +89,16 @@ export interface UsageRead {
 
 /**
  * A fresh usage read taken at or after the failure. An available read is authoritative either
- * way. No collector abstains. A failed, stale or older read clears, unless `fallbackOnReadError`
- * lets the next adapter decide.
+ * way. No usage source (no collector, or an API-key credential) abstains. Any other read, failed,
+ * stale, older, credential-less or from a collector retired mid-read, clears, unless
+ * `fallbackOnReadError` lets the next adapter decide.
  */
 export function readEvidence(usage: UsageRead, fallbackOnReadError = false): ConfirmationEvidence {
 	return {
 		name: "read",
 		async decide({ model, failedAt, signal }) {
 			const snapshot = await usage.get(model.provider, { fresh: true, notBefore: failedAt, signal });
-			if (snapshot.status === "unavailable") return ABSTAIN;
+			if (NO_USAGE_SOURCE in snapshot) return ABSTAIN;
 			if (snapshot.status !== "available" || snapshot.retrievedAt < failedAt) {
 				return fallbackOnReadError ? ABSTAIN : CLEAR;
 			}

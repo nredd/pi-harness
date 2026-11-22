@@ -9,6 +9,7 @@ import {
 	registerFauxProvider,
 } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it } from "vitest";
+import { type CollectorHandle, registerCollector } from "../../src/collectors.ts";
 import type { ChainEntry, Profile, ProviderConfig } from "../../src/config.ts";
 import { ExhaustionTracker, markEvidence } from "../../src/exhaustion.ts";
 import { nextPacificMidnight } from "../../src/failure.ts";
@@ -347,6 +348,37 @@ describe("collected providers keep read-only confirmation", () => {
 		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
 		expect(s.fetches.length).toBeGreaterThan(0);
 		expect(s.tracker.active()).toEqual([]);
+	});
+
+	it("S3: a registered collector without a usage credential confirms nothing", async () => {
+		const s = await run({ chain: [SONNET, NEON] });
+		s.script(SONNET, DAILY, DAILY, DAILY, DAILY);
+		await s.prompt();
+		expect(s.calls).toEqual(Array(4).fill("anthropic/claude-sonnet-5-5"));
+		expect(s.tracker.active()).toEqual([]);
+	});
+
+	it("S3: a collector replaced during confirmation confirms nothing", async () => {
+		let handle: CollectorHandle | undefined;
+		const replacement = { provider: "google", kind: "custom", read: async () => ({ windows: [] }) } as const;
+		// Warm-ups before the failure read normally; the confirmation read retires its own registration.
+		handle = registerCollector({
+			provider: "google",
+			kind: "custom",
+			read: async () => {
+				if (scenario?.calls.length) handle?.replace(replacement);
+				return { windows: [] };
+			},
+		});
+		try {
+			const s = await run({ chain: [CARBON, NEON], tokens: { google: "synthetic-oauth" } });
+			s.script(CARBON, DAILY);
+			await s.prompt();
+			expect(s.calls).toEqual(["google/gemini-4-carbon", "google/gemini-4-carbon"]);
+			expect(s.tracker.active()).toEqual([]);
+		} finally {
+			handle();
+		}
 	});
 
 	it("S3: fallbackOnReadError lets the failure adapter infer the block", async () => {
