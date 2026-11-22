@@ -850,3 +850,40 @@ test("an output ref skips the state lookup entirely", async ({ onTestFinished })
 		/Output ref '@o99' is unavailable or was evicted\./,
 	);
 });
+
+test("a refusal after a delivered physical step keeps the transaction unknown and skips upgrades", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await observed(onTestFinished);
+	const results = () => [
+		{ outcome: "worked", performed: { delivery: "hid", mechanism: "xtest" } },
+		{ outcome: "didnt", performed: { delivery: "ax" } },
+	];
+	let queue = results();
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		return queue.shift() ?? { outcome: "worked", performed: { delivery: "hid" } };
+	};
+	const result = await act([press, press, press], { expect: { text: "Done", timeoutMs: 250 } });
+	const { execution } = result.details;
+	assert.equal(fake.actCalls.length, 2, "nothing after the refusal is dispatched");
+	assert.equal(execution.outcome, "unknown", "the delivered prefix is not relabeled didnt");
+	assert.equal(execution.stoppedAt, 1);
+	assert.equal(execution.actionCount, 2);
+	assert.equal(fake.waits.length, 0, "no postcondition can upgrade a partial transaction");
+	assert.equal(execution.verification, undefined);
+
+	// Matching observed values cannot upgrade it either.
+	queue = results();
+	fake.tree = [wireButton("b1", "Go", { value: "typed" })];
+	const { stateId } = await fake.observe();
+	const typed = await fake.call(fake.bridge.executeAct, {
+		stateId,
+		actions: [
+			{ action: "setText", ref: "@e2", text: "typed" },
+			{ action: "setText", ref: "@e2", text: "typed" },
+		],
+	});
+	assert.equal(typed.details.execution.outcome, "unknown");
+	assert.equal(typed.details.execution.stoppedAt, 1);
+});

@@ -2498,7 +2498,8 @@ async function dispatchUiTransaction(
 		try {
 			const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 			steps.push(step);
-			if (step.outcome === "didnt") break;
+			// The stop index is recorded whether or not the refusal carries an error.
+			if (step.outcome === "didnt") return { ...aggregateExecutions(steps), stoppedAt: steps.length - 1 };
 			// A helper that stopped after posting part of the action reports the count; never run the next action.
 			if (step.error && typeof step.evidence?.deliveredUnits === "number")
 				return {
@@ -2542,13 +2543,14 @@ function replyLostStop(error: Error & { code: "reply_lost" }): Pick<ExecutionTra
 	return { error: { code: error.code, message: error.message }, evidence: { deliveryUncertain: true } };
 }
 
+/**
+ * A transaction is `didnt` only when its first step stopped as `didnt`: any step before a stop ran and
+ * may have delivered input, so a later refusal leaves it `unknown`, never `didnt`.
+ */
 function aggregateExecutions(steps: ExecutionTrace[]): ExecutionTrace {
 	const outcomes = steps.map((step) => step.outcome);
-	const outcome: ActOutcome = outcomes.includes("didnt")
-		? "didnt"
-		: outcomes.includes("unknown")
-			? "unknown"
-			: "worked";
+	const stop = outcomes.indexOf("didnt");
+	const outcome: ActOutcome = stop === 0 ? "didnt" : stop > 0 || outcomes.includes("unknown") ? "unknown" : "worked";
 	const fallback = steps.find((step) => step.escalatedToForeground);
 	return executionTrace("act", steps.every((step) => step.variant === "stealth") ? "stealth" : "default", {
 		outcome,
@@ -2815,8 +2817,10 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
+			// A stop after an earlier step, or with an error, may have delivered more than any check shows.
+			const partial = execution.error !== undefined || (execution.stoppedAt ?? 0) > 0;
 			try {
-				if (condition && !execution.error) {
+				if (condition && !partial) {
 					const {
 						text: expectedText,
 						role: expectedRole,
@@ -2868,7 +2872,7 @@ async function performDesktopTransaction(
 					target.windowId > 0,
 				);
 				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
-				if (!execution.error)
+				if (!partial)
 					execution.outcome = outcomeAfterObservedValues(
 						execution.outcome ?? "unknown",
 						executedActions,
