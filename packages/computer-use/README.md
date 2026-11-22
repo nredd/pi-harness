@@ -359,6 +359,10 @@ The child is reaped before assertions; a source-level guard forbids AX queries/a
 Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
 Its AX traversal fixture returns a fresh equivalent node on the cycle's back edge, so identity-only
 dedupe fails it; the walk dedupes by AX equivalence (hash buckets, then `CFEqual`).
+`native/macos/root_pairing_tests.swift` feeds synthetic CG window lists and detached `LookNode`
+trees to root ranking, CG candidate and owner filters, AX/CG pairing, look rect scaling and OCR
+placement. Its only AX handles target PIDs above the macOS range, so pairing there sees empty titles
+and frames; geometry and title pairing are checked on the scoring functions directly.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 

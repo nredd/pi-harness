@@ -31,6 +31,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Added
 
+- Headless Swift tests cover root ranking and kinds, CG window-list candidates and owners (layer, size, popup and on-screen filters, the 128 cap), AX/CG pairing scores, confidence and one-to-one assignment, look rect scaling and clamping, OCR duplicate filtering and placement, and root identities and closure deltas, from synthetic window lists and detached look trees. Delete four unreferenced `bridge.swift` helpers. Runtime behavior is unchanged (#645).
 - Headless Swift tests drive `Bridge.handleRequest` through request admission for discovery, focus, frame, wait, text-read, look, hit-test and desktop-input commands: argument checks, absent PIDs, stale refs and look ids, CG-only menu looks and look-record eviction. Capture and input go through stubs that fail the test if reached; clipboard, permission-pane and activation cases stop at argument checks or on names no app can hold. Runtime behavior is unchanged (#645).
 - Add tests for Linux X11 root matching and window metadata using synthetic snapshots without a display server (nredd/pi-harness#696).
 - Run the full JS/TS runtime suite on Bun with an independent report-only Istanbul signal (#645).

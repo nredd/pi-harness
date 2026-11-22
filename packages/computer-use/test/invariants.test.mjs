@@ -552,7 +552,7 @@ test("INV-19 macOS root identity resolution", () => {
 
 test("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("private func broadRootCandidateApps"), "macOS helper lacks a broad root-candidate preflight");
-	assert(swift.includes("private func cgBroadRootOwners"), "macOS helper lacks a dedicated broad-owner preflight");
+	assert(swift.includes("\tfunc cgBroadRootOwners("), "macOS helper lacks a dedicated broad-owner preflight");
 	assert(
 		swift.includes("layer == 0 || layer == popupLevel"),
 		"broad root discovery is not bounded by layer-0 and popup-menu owners",
