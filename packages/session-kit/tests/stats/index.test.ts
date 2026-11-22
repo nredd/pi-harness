@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseColor } from "@earendil-works/pi-tui";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { realClock } from "../../src/clock.ts";
 import { defaultConfig } from "../../src/config.ts";
 import { register } from "../../src/stats/index.ts";
 import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
@@ -93,6 +94,33 @@ function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir
 }
 
 describe("/stats command", () => {
+	it("shows router gauges, observed counts and inferred blocks without any session history", async () => {
+		const fixture = JSON.parse(
+			readFileSync(new URL("../../../subscription-router/tests/fixtures/views.json", import.meta.url), "utf8"),
+		) as { views: { name: string; now: number; usage: { views: unknown[] } }[] };
+		const metered = fixture.views.find((view) => view.name === "metered");
+		const window = fixture.views.find((view) => view.name === "inferred-span");
+		if (!metered || !window) throw new Error("Missing router view fixtures");
+		const root = join(dir, "router-state", "v1");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "view.json"), JSON.stringify([...window.usage.views, ...metered.usage.views]));
+		const opts = { agentDir: dir, clock: { ...realClock, now: () => metered.now } };
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		expect(rendered).toHaveLength(1);
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/short-quota +██████████ +100% +reported/);
+		expect(overlay).toMatch(/rpd +37\/250 requests +observed · resets 00:00 PT/);
+		expect(overlay).toMatch(/blocked until 2026-01-16 08:00 UTC +inferred/);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toContain("short-quota: 100% used · reported");
+		expect(printed).toContain("Google spend-10m: $1.24 · observed");
+		expect(printed).toContain("Google/faux-fast rpd: 37/250 requests · observed · resets 00:00 PT");
+		expect(printed).toContain("blocked until 2026-01-16 08:00 UTC · inferred");
+	});
+
 	it("opens a full-screen overlay, shows loading status, clears it, and writes the cache", async () => {
 		seed();
 		const { run, ctx, custom, rendered } = setup("tui");

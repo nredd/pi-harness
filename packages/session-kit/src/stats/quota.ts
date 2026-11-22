@@ -18,11 +18,12 @@ export interface QuotaRow {
 	label: string;
 	/** The window has reset since the reading: no percentage is known. */
 	expired: boolean;
-	usedPercent: number;
+	head: { kind: "gauge"; percent: number } | { kind: "text"; text: string };
+	basis: "reported" | "observed" | "inferred";
 	/** `resets in 3h 12m`, or `reset 5m ago, no newer reading`. */
-	reset: string;
-	/** `observed 12m ago via codex` */
-	observed: string;
+	reset?: string;
+	/** Legacy harness provenance, e.g. `observed 12m ago via codex`. */
+	observed?: string;
 	/** Observed more than `QUOTA_DIM_AFTER_MS` ago. */
 	old: boolean;
 }
@@ -60,7 +61,8 @@ export function quotaRows(allReadings: readonly QuotaObservation[], now: number)
 			return {
 				label: `${base(q)}${tag}`,
 				expired,
-				usedPercent: q.usedPercent,
+				head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: q.usedPercent },
+				basis: "reported",
 				reset: expired
 					? `reset ${duration(now - q.resetAt)} ago, no newer reading`
 					: `resets in ${duration(q.resetAt - now)}`,
@@ -68,6 +70,12 @@ export function quotaRows(allReadings: readonly QuotaObservation[], now: number)
 				old: now - q.observedAt > QUOTA_DIM_AFTER_MS,
 			};
 		});
+}
+
+/** Preserve legacy harness provenance; router rows use the view's explicit evidence basis. */
+export function quotaDetails(row: QuotaRow): string[] {
+	if (row.reset === undefined) return [row.basis];
+	return row.observed === undefined ? [row.basis, row.reset] : [row.reset, row.observed];
 }
 
 /** `47.3%`, or `100%` / `5%` without a pointless decimal. */

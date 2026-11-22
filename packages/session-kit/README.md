@@ -242,7 +242,10 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   shows `reset 5m ago, no newer reading` and no percent (unknown, not the old value). Readings come
   from local Codex rollouts, optional Claude statusLine captures and imported snapshots, are
   account-wide (no harness, model or range filter applies), and are never fetched. Claude without
-  a valid capture says `no local reading`.
+  a valid capture says `no local reading`. If present, `<agentDir>/router-state/v1/view.json` adds
+  router rows to Overview and print output: window gauges, count or spend meters, and active blocks,
+  labelled `reported`, `observed`, or `inferred`. Observed counts are local only, not provider totals.
+  The router view is read locally and never included in portable stats snapshots.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per
   harness when several have data and none is picked), else the top three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays

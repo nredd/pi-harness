@@ -13,6 +13,8 @@ import { freshnessLines } from "./freshness.ts";
 import { EXTERNAL_HARNESSES } from "./harness/index.ts";
 import type { Loaded } from "./load.ts";
 import { createValuer } from "./pricing.ts";
+import type { QuotaRow } from "./quota.ts";
+import { readRouterQuota } from "./router-quota.ts";
 import { type Combined, coverageLabel, loadCombined } from "./snapshot.ts";
 
 const STATUS_KEY = "session-kit:stats";
@@ -37,7 +39,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 	const clock = options.clock ?? realClock;
 	pi.registerCommand("stats", {
 		description:
-			"Usage stats: activity heatmap, tokens per day, per-model breakdown and subscription quota across pi, Claude Code, Codex and OpenCode",
+			"Usage stats: activity heatmap, tokens per day, per-model breakdown and local quota across pi, Claude Code, Codex and OpenCode",
 		async handler(args: string, ctx: ExtensionCommandContext) {
 			if (args.trim()) {
 				ctx.ui.notify("usage: /stats", "warning");
@@ -46,9 +48,12 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 			const tui = ctx.mode === "tui";
 			if (tui) ctx.ui.setStatus(STATUS_KEY, "stats: loading...");
 			let loaded: Combined;
+			let routerQuota: QuotaRow[];
+			let now: number;
 			try {
+				const agentDir = resolveAgentDir(options);
 				loaded = await loadCombined(
-					resolveAgentDir(options),
+					agentDir,
 					tui ? (done, total) => ctx.ui.setStatus(STATUS_KEY, `stats: loading ${done}/${total}...`) : undefined,
 					clock.now(),
 					{
@@ -57,6 +62,8 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 						onHarnessProgress: tui ? (status) => ctx.ui.setStatus(STATUS_KEY, `stats: ${status}...`) : undefined,
 					},
 				);
+				now = clock.now();
+				routerQuota = await readRouterQuota(agentDir, now);
 			} catch (error) {
 				say(pi, ctx, MESSAGE_TYPE, `/stats: ${(error as Error).message}`, "error");
 				return;
@@ -71,7 +78,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 				...loaded.harnessProblems.map((p) => `/stats: ${p}`),
 			];
 			const coverage = coverageLabel(loaded.coverage);
-			const freshness = freshnessLines(loaded.coverage, clock.now());
+			const freshness = freshnessLines(loaded.coverage, now);
 			if (!tui) {
 				say(
 					pi,
@@ -79,10 +86,11 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 					MESSAGE_TYPE,
 					[
 						summary(
-							loaded.calls.filter((c) => c.ms <= clock.now()),
+							loaded.calls.filter((c) => c.ms <= now),
 							loaded.quota,
-							clock.now(),
+							now,
 							valueCall,
+							routerQuota,
 						),
 						coverage,
 						...freshness,
@@ -93,7 +101,7 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 				return;
 			}
 			for (const line of damage) ctx.ui.notify(line, "warning");
-			if (loaded.calls.length === 0 && loaded.quota.length === 0) {
+			if (loaded.calls.length === 0 && loaded.quota.length === 0 && routerQuota.length === 0) {
 				ctx.ui.notify(`/stats: no usage recorded yet\n${coverage}\n${freshness.join("\n")}`, "info");
 				return;
 			}
@@ -108,7 +116,8 @@ export function register(pi: ExtensionAPI, _config: KitConfig, options: AgentDir
 						freshness,
 						valueCall,
 						quota,
-						now: clock.now(),
+						routerQuota,
+						now,
 						theme,
 						rows: () => tuiHost.terminal.rows,
 						requestRender: () => tuiHost.requestRender(),
