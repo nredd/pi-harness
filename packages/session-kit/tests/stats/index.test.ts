@@ -158,6 +158,18 @@ describe("/stats command", () => {
 		expect(String(out.mock.calls[0]?.[0])).toContain(print);
 	});
 
+	it("shows prepaid pool balances as display-only text", async () => {
+		const opts = seedRouterView("metered");
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		expect(rendered[0]?.join("\n")).toMatch(/Google prepaid-credits +12 credits balance/);
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toMatch(/^\/stats: no usage recorded yet/);
+		expect(printed).toContain("Google prepaid-credits: 12 credits balance\n");
+	});
+
 	it("opens a full-screen overlay, shows loading status, clears it, and writes the cache", async () => {
 		seed();
 		const { run, ctx, custom, rendered } = setup("tui");

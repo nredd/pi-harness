@@ -99,6 +99,17 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 				old,
 			});
 		}
+		for (const pool of list(view.pools).map(asRecordOf)) {
+			if (!text(pool.name) || (pool.unit !== "credits" && pool.unit !== "usd")) continue;
+			const balance = meterText({ unit: pool.unit, used: pool.balance });
+			if (pool.unlimited !== true && balance === undefined) continue;
+			rows.push({
+				label: `${provider} ${pool.name}`,
+				head: { kind: "text", text: pool.unlimited === true ? "unlimited balance" : `${balance} balance` },
+				expired: false,
+				old,
+			});
+		}
 		for (const mark of list(view.marks).map(asRecordOf)) {
 			if (!text(mark.window) || !timestamp(mark.until) || mark.until <= now) continue;
 			const until = new Date(mark.until)

@@ -246,7 +246,8 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   router rows to Overview and print output: window gauges, count or spend meters, and active blocks,
   labelled `reported`, `observed`, or `inferred`. Assumed or inferred spans are labelled separately
   from utilization. Stale readings and quota read errors are labelled in both outputs. Observed
-  counts are local only, not provider totals.
+  counts are local only, not provider totals. Credit pool balances are display-only text and never
+  contribute to usage totals or blocks.
   The router view is read locally and never included in portable stats snapshots.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per

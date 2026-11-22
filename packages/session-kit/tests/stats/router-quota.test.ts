@@ -107,6 +107,26 @@ it("ignores expired blocks and counts, and never uses an expired percentage", as
 	]);
 });
 
+it("shows unlimited pools and omits invalid or missing balances", async () => {
+	writeFileSync(
+		view,
+		JSON.stringify([
+			{
+				provider: "provider",
+				pools: [
+					null,
+					{ name: "invalid", unit: "tokens", balance: 12 },
+					{ name: "missing", unit: "usd" },
+					{ name: "valid", unit: "usd", unlimited: true },
+				],
+			},
+		]),
+	);
+	expect(await readRouterQuota(dir, NOW)).toEqual([
+		{ label: "provider valid", head: { kind: "text", text: "unlimited balance" }, expired: false, old: false },
+	]);
+});
+
 it("dims an available snapshot past its expiry or age limit", async () => {
 	const window = { name: "window", usedPercent: 40, resetAt: NOW + 60_000 };
 	writeFileSync(
