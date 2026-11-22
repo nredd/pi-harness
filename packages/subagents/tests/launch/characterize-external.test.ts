@@ -1,6 +1,8 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import { flush } from "../fixtures/boot-extension.ts";
-import { bootLaunchStack, expectHeld, heldTool } from "../fixtures/launch-stack.ts";
+import { bootLaunchStack, expectHeld, heldTool, warmLaunchStack } from "../fixtures/launch-stack.ts";
+
+beforeAll(() => warmLaunchStack());
 
 it("char:3 tracks a launch from the RPC bus", async () => {
 	const stack = await bootLaunchStack();

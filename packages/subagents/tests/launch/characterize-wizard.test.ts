@@ -1,5 +1,7 @@
-import { expect, it } from "vitest";
-import { bootLaunchStack, expectHeld, heldTool } from "../fixtures/launch-stack.ts";
+import { beforeAll, expect, it } from "vitest";
+import { bootLaunchStack, expectHeld, heldTool, warmLaunchStack } from "../fixtures/launch-stack.ts";
+
+beforeAll(() => warmLaunchStack());
 
 it("char:11 #1176: generation uses general-purpose and shows thinking instead of the tool", async () => {
 	const stack = await bootLaunchStack();
