@@ -749,12 +749,20 @@ function createSetup(argv, deps) {
 		return (await findDeveloperIdIdentity()) ?? (await ensureLocalSigningIdentity()) ?? "-";
 	}
 
-	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier) {
+	/**
+	 * @param {string} outputPath Bundle or binary to sign.
+	 * @param {string} [identifier] Code-signing identifier.
+	 * @param {string} [resolvedIdentity] An identity the caller already resolved, so no lookup runs between the
+	 * caller's last destination check and `codesign`.
+	 * @returns {Promise<string>} The identity used, or `unsigned`.
+	 * @throws {Error} When `codesign` fails.
+	 */
+	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier, resolvedIdentity = undefined) {
 		if (env.PI_COMPUTER_USE_NO_SIGN === "1") {
 			return "unsigned";
 		}
 
-		const identity = await resolveCodeSignIdentity();
+		const identity = resolvedIdentity ?? (await resolveCodeSignIdentity());
 		const commandArgs = ["--force", "--deep", "-i", identifier, "--timestamp=none", "--sign", identity, outputPath];
 		await run("codesign", commandArgs);
 		if (identity === "-") {
@@ -877,10 +885,15 @@ function createSetup(argv, deps) {
 	 *
 	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
 	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
+	 * the newline so nothing is trimmed). This guards against accidental overwrites; it is not authentication.
+	 *
+	 * Limit (#1285): only the parent is checked, and a concurrent retarget of a symlinked ancestor between this check
+	 * and the removal is not closed; that needs a private quarantine rename under a trusted parent.
 	 * @returns {Promise<string | undefined>} The reason, or `undefined`.
 	 * @throws {never} Every failure is a reason.
 	 */
 	async function foreignDestinationReason() {
+			[path.dirname(helperAppPath), "its parent directory", true],
 		const infoPlistPath = path.join(helperAppPath, "Contents", "Info.plist");
 		/** @type {[string, string, boolean][]} Entry, label and whether it must be a directory. */
 		const entries = [
@@ -901,10 +914,10 @@ function createSetup(argv, deps) {
 			if (directory ? !stats.isDirectory() : !stats.isFile()) {
 				return `${label} is not a ${directory ? "directory" : "file"}`;
 			}
-		}
+				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
 		let identifier;
 		try {
-			const { stdout } = await execFile(
+			identifier = String(stdout);
 				"plutil",
 				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
 				lifecycleProbeOptions,
@@ -989,7 +1002,7 @@ function createSetup(argv, deps) {
 			// If a real signing identity is available, upgrade older ad-hoc installs
 			// in place so local builds have a consistent identity. macOS may still
 			// require permission review after native code changes.
-			const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
+				await signHelper(helperAppPath, helperBundleId, signingIdentity);
 			if (signingIdentity !== "-" && (await helperHasAdhocSignature())) {
 				// A resident daemon keeps the ad-hoc signature it launched with: stop it so the next command runs the re-signed app.
 				await stopRunningHelper();
@@ -1013,7 +1026,7 @@ function createSetup(argv, deps) {
 		await stopRunningHelper();
 		await assertReplaceableDestination();
 		await fs.mkdir(path.dirname(helperAppExecutablePath), { recursive: true });
-		await fs.mkdir(path.dirname(helperSourceHashPath), { recursive: true });
+		await signHelper(helperAppPath, helperBundleId, signingIdentity);
 		await fs.copyFile(sourcePath, helperAppExecutablePath);
 		await fs.chmod(helperAppExecutablePath, 0o755);
 		await fs.writeFile(infoPlistPath, infoPlist);
