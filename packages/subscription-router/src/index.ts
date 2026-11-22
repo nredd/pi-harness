@@ -388,7 +388,11 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			if (!profile) return undefined;
 			const signal = ctx.signal;
 			const current = captureSelection(ctx, signal);
-			const env = routeEnv(ctx, usage, confirmation);
+			const assertCurrent = (): void => {
+				if (!current()) throw new Error("subscription-router: settle selection changed or was cancelled");
+			};
+			// Every confirmation below (partial mark, recovery) re-checks the selection before it commits.
+			const env = { ...routeEnv(ctx, usage, confirmation), assertCurrent };
 			// Partial output is marked for the next prompt but never omitted or continued.
 			if (await recovery.markPartial(event, profile, env, signal)) return undefined;
 			const outcome = await recovery.handle(event, profile, env, signal, current);

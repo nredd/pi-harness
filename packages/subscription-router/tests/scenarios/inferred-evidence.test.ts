@@ -1,6 +1,7 @@
 /** Evidence-chain failover through real sessions: faux `google` (metered) and `anthropic` (OAuth or API key). */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import {
 	createHarness,
 	createTestUiContext,
@@ -73,8 +74,8 @@ class Scenario {
 	readonly scripts = new Map<string, Step[]>();
 	harness!: Harness;
 	usage: { percent: number } | { status: number };
-	/** Runs inside each usage fetch, before it answers. */
-	onFetch?: () => void;
+	/** Runs inside each usage fetch, before it answers; the fetch waits for it. */
+	onFetch?: () => void | Promise<void>;
 	/** The session's extension event bus, for the pi-subagents RPCs. */
 	events!: ExtensionAPI["events"];
 	private readonly registrations = [
@@ -97,7 +98,7 @@ class Scenario {
 			getAccessToken: async (_ctx, provider) => options.tokens?.[provider],
 			fetch: async (url) => {
 				this.fetches.push(url);
-				this.onFetch?.();
+				await this.onFetch?.();
 				const read = this.usage;
 				if ("status" in read) return new Response(null, { status: read.status });
 				const resets_at = new Date(clock.now() + 3 * 3_600_000).toISOString();
@@ -569,6 +570,45 @@ describe("chain situations", () => {
 				expect(s.tracker.active()).toMatchObject([{ provider: "anthropic", window: "inferred:billing" }]);
 				expect(switched).toHaveLength(1);
 			}
+		},
+	);
+
+	it.each([
+		["terminal settle", fail(BILLING)],
+		["retry", fail(DAILY)],
+		["terminal partial", { kind: "partial", partial: "visible", error: BILLING } as Step],
+		["retry partial", { kind: "partial", partial: "visible", error: DAILY } as Step],
+	])(
+		"C9: a selection change during the evidence wait (%s) writes no inferred mark and no edit",
+		async (_path, step) => {
+			const s = await run({
+				chain: [SONNET, NEON],
+				tokens: { anthropic: "synthetic-oauth" },
+				providers: { anthropic: { fallbackOnReadError: true } },
+			});
+			await s.harness.session.prompt("/router refresh");
+			s.usage = { status: 500 };
+			const entered = deferred();
+			const release = deferred();
+			s.onFetch = async () => {
+				entered.resolve();
+				await release.promise;
+			};
+			s.script(SONNET, step);
+			const prompted = s.prompt();
+			await entered.promise;
+			// Core omits a retryable failure before it asks for the retry route; no new edit may follow.
+			const edits = () => s.harness.session.sessionManager.getBranch().filter((entry) => entry.type === "context_edit");
+			const before = edits();
+			const pinned = s.harness.session.modelRuntime.getModel(NEON.provider, NEON.id);
+			if (!pinned) throw new Error("missing pin target");
+			await s.harness.session.setModel(pinned);
+			release.resolve();
+			await prompted;
+			expect(s.calls).toEqual(["anthropic/claude-sonnet-5-5"]);
+			expect(s.tracker.active()).toEqual([]);
+			expect(edits()).toEqual(before);
+			expect(s.notifications.filter((text) => text.includes("out of quota"))).toEqual([]);
 		},
 	);
 

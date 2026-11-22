@@ -41,6 +41,16 @@ export function isQuotaError(message: Pick<AssistantMessage, "stopReason" | "err
 	return message.stopReason === "error" && QUOTA_ERROR_PATTERN.test(message.errorMessage ?? "");
 }
 
+/** Whether `env`'s requester still owns its selection. Hosts without a guard are always current. */
+function isCurrent(env: RouteEnv): boolean {
+	try {
+		env.assertCurrent?.();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** A failed stream with output cannot be transparently replayed without duplicating visible output. */
 export function hasPartialOutput(message: Pick<AssistantMessage, "content">): boolean {
 	return message.content.some(
@@ -50,7 +60,10 @@ export function hasPartialOutput(message: Pick<AssistantMessage, "content">): bo
 
 /** What the router needs from the host. `ExtensionContext` provides it in production. */
 export interface RouteEnv {
-	/** Reject a stale requester after shared asynchronous confirmation, before any route decision. */
+	/**
+	 * Reject a stale requester after shared asynchronous confirmation, before any route decision
+	 * and before an inferred mark is committed.
+	 */
 	assertCurrent?(): void;
 	/** The physical model for a chain entry, or undefined when unknown or without credentials. */
 	resolve(entry: ChainEntry): Model<Api> | undefined;
@@ -341,6 +354,10 @@ export class Router {
 	): Promise<boolean> {
 		const decision = await env.refresh(model, signal, failedAt, failed);
 		if (!decision?.block || signal?.aborted || decision[COLLECTOR_EVIDENCE]?.aborted) return false;
+		// C9: an inferred mark comes from this requester's failure, so it is committed only while the
+		// requester's selection is still current, checked right before the write. A read-confirmed
+		// mark is shared provider state and stays shared, as it always was.
+		if (decision.evidence !== undefined && !isCurrent(env)) return false;
 		return this.tracker.record(model, decision) !== undefined;
 	}
 
