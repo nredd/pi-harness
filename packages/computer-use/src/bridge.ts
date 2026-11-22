@@ -327,6 +327,8 @@ interface ReadTextDetails {
 	hasMore: boolean;
 	complete?: boolean;
 	text: string;
+	/** Empty text from an unread (`truncated`) node: the text may exist but was not read. */
+	inconclusive?: true;
 }
 
 interface WaitForDetails {
@@ -357,6 +359,9 @@ interface OutlineToolDetails {
 	returned?: number;
 	hasMore?: boolean;
 	matches?: SerializedOutlineSearchMatch[];
+	/** Zero matches in an outline with unread (`truncated`) nodes do not prove absence. */
+	inconclusive?: true;
+	unreadRefs?: string[];
 	target?: SerializedOutlineNode;
 	note?: WindowNote;
 }
@@ -1428,6 +1433,13 @@ async function helperAct(
 		}
 		return candidate;
 	};
+	// A native semantic timeout (Linux AT-SPI2 rejects `act` with code `timeout`) leaves delivery indeterminate.
+	// Report it as an unknown step so the transaction accounts for it instead of failing the completed prefix.
+	const timedOut = (error: unknown): HelperActResult => {
+		const failure = error as (Error & { code?: string }) | undefined;
+		if (failure?.code !== "timeout") throw error;
+		return { outcome: "unknown", error: { code: "timeout", message: failure.message } };
+	};
 	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	// Only foreground delivery posts real cursor/keyboard events; it alone takes the desktop lock shared with
@@ -1437,7 +1449,7 @@ async function helperAct(
 		withPhysicalInput(
 			() => currentPlatformBackend.act(helperActRequest(target, action, "foreground"), { signal, timeoutMs }),
 			signal,
-		);
+		).catch(timedOut);
 	if ((action.usesCurrentFocus || action.needsForeground) && !headless) {
 		const foreground = checked(await actInForeground());
 		const trace = executionTraceFromAct(foreground, "foreground");
@@ -1447,7 +1459,9 @@ async function helperAct(
 	try {
 		const initialPolicy = headless ? "ax_only" : "background";
 		const result = checked(
-			await currentPlatformBackend.act(helperActRequest(target, action, initialPolicy), { signal, timeoutMs }),
+			await currentPlatformBackend
+				.act(helperActRequest(target, action, initialPolicy), { signal, timeoutMs })
+				.catch(timedOut),
 		);
 		if (canRetryInForeground(action, result.outcome, headless)) {
 			const foreground = checked(await actInForeground());
@@ -1869,6 +1883,8 @@ async function performReadText(
 		})
 	).value;
 	const text = raw.text;
+	// A backend can default a timed-out or failed text read to empty; on an unread node that is not evidence.
+	const unread = !text && node.truncated;
 	const details: ReadTextDetails = {
 		tool: "read_text",
 		ref,
@@ -1877,8 +1893,12 @@ async function performReadText(
 		totalChars: raw.totalChars,
 		hasMore: raw.hasMore,
 		text,
+		...(unread ? { inconclusive: true as const } : {}),
 	};
-	return { content: [{ type: "text", text: text || "(empty text slice)" }], details };
+	const empty = unread
+		? `(no text read: ${ref} is unread (truncated), so empty text is not evidence. expand_ui it or observe_ui again, then retry read_text.)`
+		: "(empty text slice)";
+	return { content: [{ type: "text", text: text || empty }], details };
 }
 
 function normalizeWaitTimeoutMs(value: unknown): number {
@@ -2252,6 +2272,12 @@ async function performSearchUi(
 		escalatedOCR = true;
 	}
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
+	// Browser snapshots are not partial reads; expand_ui cannot re-read them.
+	const unreadRefs =
+		ranked.totalMatches === 0 && !isBrowserContextId(state.contextId)
+			? outline.nodes.filter((node) => node.truncated).map((node) => node.ref)
+			: [];
+	const inconclusive = unreadRefs.length > 0;
 	const details: OutlineToolDetails = {
 		tool: "search_ui",
 		stateId: state.currentCapture?.stateId,
@@ -2261,6 +2287,7 @@ async function performSearchUi(
 		returned: matches.length,
 		hasMore: ranked.totalMatches > matches.length,
 		note: state.currentNote,
+		...(inconclusive ? { inconclusive: true as const, unreadRefs } : {}),
 	};
 	const collides = (match: OutlineSearchMatch) =>
 		matches.some((other) => other !== match && other.role === match.role && other.label === match.label);
@@ -2277,11 +2304,16 @@ async function performSearchUi(
 		ranked.totalMatches > matches.length
 			? ` Refine the query to inspect ${ranked.totalMatches - matches.length} additional matches.`
 			: "";
+	const unreadList = `${unreadRefs.slice(0, 5).join(", ")}${unreadRefs.length > 5 ? ", ..." : ""}`;
+	// An incomplete read never leads with a zero count: the count only covers what could be read.
+	const lead = inconclusive
+		? `Inconclusive: no matches in the part of the outline that could be read; ${unreadRefs.length} node${unreadRefs.length === 1 ? "" : "s"} unread (${unreadList}). expand_ui an unread ref before concluding the element is absent.`
+		: `Found ${ranked.totalMatches} outline match${ranked.totalMatches === 1 ? "" : "es"}; returned ${matches.length}.${moreText}`;
 	return {
 		content: [
 			{
 				type: "text",
-				text: `${noteText}Found ${ranked.totalMatches} outline match${ranked.totalMatches === 1 ? "" : "es"}; returned ${matches.length}.${moreText}${escalationText}\n${lines.join("\n")}`,
+				text: `${noteText}${lead}${escalationText}\n${lines.join("\n")}`,
 			},
 		],
 		details,
@@ -2491,20 +2523,33 @@ async function dispatchUiTransaction(
 		try {
 			const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 			steps.push(step);
+			// A later action would run on an unknown state and its outcome would mask the timeout.
+			if (isTimedOutStep(step)) return stoppedTransaction(steps);
 			if (step.outcome === "didnt") break;
 		} catch (error) {
 			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
 			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
 			if (!failure.evidence && steps.length === 0) throw error;
-			const step = executionTraceFromAct(
-				{ outcome: "didnt", error: { code: failure.code, message: failure.message }, evidence: failure.evidence },
-				"foreground",
+			steps.push(
+				executionTraceFromAct(
+					{ outcome: "didnt", error: { code: failure.code, message: failure.message }, evidence: failure.evidence },
+					"foreground",
+				),
 			);
-			steps.push(step);
-			return { ...aggregateExecutions(steps), error: step.error, evidence: step.evidence, stoppedAt: steps.length - 1 };
+			return stoppedTransaction(steps);
 		}
 	}
 	return aggregateExecutions(steps);
+}
+
+/** The serial transaction stopped at its last step: carry that step's error and its index. */
+function stoppedTransaction(steps: ExecutionTrace[]): ExecutionTrace {
+	const step = steps.at(-1)!;
+	return { ...aggregateExecutions(steps), error: step.error, evidence: step.evidence, stoppedAt: steps.length - 1 };
+}
+
+function isTimedOutStep(step: ExecutionTrace): boolean {
+	return step.outcome === "unknown" && step.error?.code === "timeout";
 }
 
 function aggregateExecutions(steps: ExecutionTrace[]): ExecutionTrace {
@@ -2620,6 +2665,7 @@ export async function terminalDesktopActionResult(
 	condition?: ReturnType<typeof validateCondition>,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
 	await normalizeRootDeltaRefs(execution, target);
+	const timedOutIndex = timedOutStepIndex(execution);
 	let exactRootAvailable: boolean | undefined;
 	let liveRoots: PlatformRoot[] = [];
 	try {
@@ -2631,7 +2677,8 @@ export async function terminalDesktopActionResult(
 			if (attempt < 2) await sleep(75);
 		}
 	} catch {
-		// A failed identity probe cannot prove that the root closed.
+		// A failed identity probe cannot prove that the root closed, even after an earlier empty listing.
+		exactRootAvailable = undefined;
 	}
 	const targetClosed = exactRootAvailable === false;
 	if (
@@ -2667,8 +2714,11 @@ export async function terminalDesktopActionResult(
 			gone: condition.gone || undefined,
 			timeoutMs: condition.timeoutMs,
 		};
-		execution.outcome = outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus);
-		if (verificationStatus === "failed") {
+		execution.outcome = settledOutcome(
+			execution,
+			outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus),
+		);
+		if (verificationStatus === "failed" && timedOutIndex < 0) {
 			execution.error = {
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
@@ -2723,14 +2773,23 @@ export async function terminalDesktopActionResult(
 		successors.length > 0
 			? ` It was replaced by ${successors.map((item) => `${item.kind} ${JSON.stringify(item.title ?? "")}${item.isModal ? " (modal)" : ""}`).join(", ")}.`
 			: "";
-	const result = targetClosed
-		? `The action was delivered, and its source root ${target.appName} — ${target.windowTitle} closed before a successor observation could be captured.${successorText}`
-		: `The action was delivered, but its source root ${target.appName} — ${target.windowTitle} could not be observed afterward: ${message}`;
+	const root = `${target.appName} — ${target.windowTitle}`;
+	const rootFate = targetClosed
+		? `closed before a successor observation could be captured.${successorText}`
+		: `could not be observed afterward: ${message}`;
+	const result =
+		timedOutIndex >= 0
+			? `${timeoutSentence(timedOutIndex)} Its source root ${root} ${rootFate}`
+			: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
+	const next =
+		timedOutIndex >= 0
+			? `Do not replay the transaction: call find_roots, then observe_ui to check whether action ${timedOutIndex + 1} took effect.`
+			: "Call find_roots, then observe_ui to continue.";
 	return {
 		content: [
 			{
 				type: "text",
-				text: `${keyboardStopSummary(execution) ?? result}\nNo successor state was created. Call find_roots, then observe_ui to continue.`,
+				text: `${keyboardStopSummary(execution) ?? result}\nNo successor state was created. ${next}`,
 			},
 		],
 		details,
@@ -2744,6 +2803,29 @@ function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
 	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
 	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
+}
+
+/** Index of the step that timed out, or -1: its delivery stays unknown whatever is observed afterward. */
+function timedOutStepIndex(execution: ExecutionTrace): number {
+	return (execution.steps ?? []).findIndex(isTimedOutStep);
+}
+
+/** Later evidence settles an act's outcome, except after a timed-out step: postconditions and values cannot prove delivery. */
+function settledOutcome(execution: ExecutionTrace, settled: ActOutcome): ActOutcome {
+	return timedOutStepIndex(execution) < 0 ? settled : execution.outcome!;
+}
+
+/** The numbered timeout sentence plus the completed prefix, shared by successor and terminal results. */
+function timeoutSentence(index: number): string {
+	const prefix = index === 0 ? "" : index === 1 ? " Action 1 completed." : ` Actions 1-${index} completed.`;
+	return `Action ${index + 1} timed out; whether it was delivered is unknown.${prefix}`;
+}
+
+function timeoutSummary(execution: ExecutionTrace, stateId: string): string | undefined {
+	const index = timedOutStepIndex(execution);
+	return index < 0
+		? undefined
+		: `${timeoutSentence(index)} Do not replay the transaction: check state ${stateId} for whether action ${index + 1} took effect before retrying it.`;
 }
 
 async function performDesktopTransaction(
@@ -2801,7 +2883,10 @@ async function performDesktopTransaction(
 						gone: gone || undefined,
 						timeoutMs,
 					};
-					execution.outcome = outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status);
+					execution.outcome = settledOutcome(
+						execution,
+						outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status),
+					);
 					if (!verification.found) {
 						execution.error = {
 							code: "postcondition_failed",
@@ -2819,20 +2904,27 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
-				execution.outcome = outcomeAfterObservedValues(
-					execution.outcome ?? "unknown",
-					executedActions,
-					(ref) => nodeByRef(capture.outline, ref)?.value,
+				execution.outcome = settledOutcome(
+					execution,
+					outcomeAfterObservedValues(
+						execution.outcome ?? "unknown",
+						executedActions,
+						(ref) => nodeByRef(capture.outline, ref)?.value,
+					),
 				);
-				for (const action of executedActions) {
+				const timedOutIndex = timedOutStepIndex(execution);
+				for (const [index, action] of executedActions.entries()) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {
 						window: noteWindowForTarget(capture.target, capture.look),
 						rootDelta: execution.rootDelta,
+						// The saved note carries the indeterminate delivery to every later call on this state.
+						timedOutAction: index === timedOutIndex ? index + 1 : undefined,
 					});
 				}
 				const built = await buildToolResult(
 					"act_ui",
 					keyboardStopSummary(execution) ??
+						timeoutSummary(execution, capture.capture.stateId) ??
 						`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
 					capture,
 					execution,
@@ -3999,7 +4091,7 @@ expand_ui({ stateId, ref: "@e7", depth: 3 })
 inspect_ui({ stateId, ref: "@e12" })
 ```
 
-`semantic` observation is cheapest, `fused` is the default, and `visual` forces visual text evidence. Search requires at least one of `text`, `role`, or `capability`. It ranks exact, prefix, and substring text before conservative fuzzy matches, returns a fixed top set with the total match count, and asks the caller to refine broad queries. Search can escalate OCR once when the original desktop look omitted it; that refresh is checked against the state's resource epoch.
+`semantic` observation is cheapest, `fused` is the default, and `visual` forces visual text evidence. Search requires at least one of `text`, `role`, or `capability`. It ranks exact, prefix, and substring text before conservative fuzzy matches, returns a fixed top set with the total match count, and asks the caller to refine broad queries. Search can escalate OCR once when the original desktop look omitted it; that refresh is checked against the state's resource epoch. A desktop search with zero matches in an outline that has `truncated` (unread) nodes leads with `Inconclusive: no matches in the part of the outline that could be read; N nodes unread (...)` instead of a zero count; its details keep `totalMatches: 0` and add `inconclusive: true` and `unreadRefs`, the unread refs to `expand_ui`. Both fields are omitted when there is a match or nothing is unread. Likewise an empty `read_text` page from a `truncated` node returns `inconclusive: true` and says the text was not read.
 
 ## Acting and batching
 
@@ -4068,7 +4160,7 @@ Successor diff (1 change, S1 → S2):
 Use stateId S2 for subsequent actions and queries.
 ```
 
-Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
+Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly; a node missing under any surviving ancestor the successor could not read (`truncated`) is not reported as removed. A `search_ui` with zero matches in an outline with `truncated` nodes is `inconclusive` and lists them in `unreadRefs`. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
 
 Coordinate fallback uses image pixels from the observed state:
 
