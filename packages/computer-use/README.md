@@ -418,7 +418,7 @@ Measured, not assumed:
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
 - `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
 - The macOS client checks the daemon build on each managed socket before sending commands. The helper reports its compiled package version and SHA-256 of the production Swift sources. A different or missing build is refused without reinstalling or restarting the helper. Re-run this package’s setup to update it. `/computer-use` shows the last reported build.
-- `PI_CU_SOCKET_PATH` can point to an externally managed socket. The client does not install or launch its helper and skips the local build check for that override; its operator is responsible for build compatibility.
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol; only its operator can install, launch or restart it. Aliases of the default socket are still managed.
 - After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
 
 ### Whole-desktop control
@@ -1436,13 +1436,15 @@ The normal runtime requires this executable inside the resolved helper app:
 
 Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. Set `PI_COMPUTER_USE_HELPER_APP_PATH` only when an explicit location is needed for development or testing.
 
-Install the packaged, downloaded, or locally buildable helper with:
+A stale or unstamped managed helper is refused before desktop commands run. `/computer-use` shows the reported and expected build after a refusal. The client does not replace or restart a stale helper. If the executable is missing but the socket accepts a connection, runtime startup will not run setup even if diagnostics fail.
+
+From the installed package root, explicitly repair a missing or stale helper with:
 
 ```bash
 node scripts/setup-helper.mjs --runtime
 ```
 
-For source development, rebuild first and then run the same installer:
+For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
 ```bash
 npm run build:native

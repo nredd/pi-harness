@@ -80,7 +80,7 @@ test.each([older, undefined])(
 		await client.ensureInstalled();
 		const error = {
 			code: "stale_helper",
-			message: `pi-computer-use helper at ${executable} is stale (helper build ${build ?? "unknown"}, expected ${current}): re-run the package setup to update it.`,
+			message: `pi-computer-use helper at ${executable} is stale (helper build ${build ?? "unknown"}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`,
 		};
 		await assert.rejects(client.ensureProtocol(), error);
 		await assert.rejects(client.command("listApps"), error);
