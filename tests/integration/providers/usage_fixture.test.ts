@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, onTestFinished, test, vi } from "vitest";
+import sharedViews from "../../../packages/subscription-router/tests/fixtures/views.json";
 import usageFixture from "./usage_fixture.ts";
 
 type Handler = (event: unknown, ctx: unknown) => void;
@@ -68,6 +69,48 @@ test("replies with the state file's snapshots and blocks, re-read on every reque
 		],
 		["router:rpc:usage:reply:r2", { success: true, data: { snapshots: [], blocks: [] } }],
 	]);
+});
+
+test.each(["tui", "print", "rpc"])("forwards the metered v2 row in %s mode", (mode) => {
+	const metered = sharedViews.views.find(({ name }) => name === "metered");
+	assert.ok(metered);
+	const fixture = harness(metered.usage);
+	fixture.start(mode);
+	fixture.request({ requestId: "google" });
+	writeFileSync(fixture.statePath, JSON.stringify({ views: [] }));
+	fixture.request({ requestId: "empty" });
+	assert.deepEqual(fixture.emitted, [
+		["router:rpc:usage:reply:google", { success: true, data: metered.usage }],
+		["router:rpc:usage:reply:empty", { success: true, data: { version: 2, snapshots: [], blocks: [], views: [] } }],
+	]);
+	fixture.shutdown();
+});
+
+test.each(["print", "rpc"])("forwards the stack's Google request meter without snapshots in %s mode", (mode) => {
+	const metered = sharedViews.views.find(({ name }) => name === "metered");
+	const google = metered?.usage.views.find(({ provider }) => provider === "google");
+	assert.ok(google);
+	const rpd = google.meters.find(({ name, quantity }) => name === "rpd" && quantity.unit === "requests");
+	assert.ok(rpd);
+	const { resetAt: _resetAt, ...meter } = rpd;
+	const stackView = {
+		provider: "google",
+		display: google.display,
+		access: "metered",
+		meters: [meter],
+		pools: [],
+		marks: [],
+	};
+	const fixture = harness({ snapshots: [], blocks: [], views: [stackView] });
+	fixture.start(mode);
+	fixture.request({ requestId: "stack-google" });
+	assert.deepEqual(fixture.emitted, [
+		[
+			"router:rpc:usage:reply:stack-google",
+			{ success: true, data: { version: 2, snapshots: [], blocks: [], views: [stackView] } },
+		],
+	]);
+	fixture.shutdown();
 });
 
 test("error mode replies with a failure and hang mode never replies", () => {
