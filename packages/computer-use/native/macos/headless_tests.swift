@@ -360,6 +360,7 @@ struct HeadlessTests {
         runKeyboardAssertions()
         runRequestFramingAssertions()
         try runRequestAdmissionAssertions()
+        runRootPairingAssertions()
         testMotionLifecycle()
         runCursorMotionAssertions()
         runCursorLifecycleAssertions()
