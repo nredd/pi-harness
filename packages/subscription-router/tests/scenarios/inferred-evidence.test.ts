@@ -314,6 +314,24 @@ describe("collected providers keep read-only confirmation", () => {
 		expect(mark).not.toHaveProperty("evidence");
 	});
 
+	it.each([
+		[
+			"quota-worded 401",
+			'401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token lacks quota scope"}}',
+		],
+		["quota-worded 503", "503: quota backend failed"],
+		["safety stop mentioning quota", "Provider stopped with: SAFETY (quota)"],
+		["per-minute throttle", PER_MINUTE],
+	])("S10-S12: a %s never marks, even when a fresh read would show the block", async (_name, text) => {
+		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
+		s.usage = { percent: 100 };
+		s.script(SONNET, text, text, text, text);
+		const messages = await s.prompt();
+		expect(s.calls.every((call) => call === "anthropic/claude-sonnet-5-5")).toBe(true);
+		expect(messages.at(-1)).toMatchObject({ stopReason: "error", errorMessage: text });
+		expect(s.tracker.active()).toEqual([]);
+	});
+
 	it("S2: a fresh read with room is authoritative; a daily token never reaches inference", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH, usage: { percent: 40 } });
 		s.script(SONNET, DAILY, DAILY, DAILY, DAILY);

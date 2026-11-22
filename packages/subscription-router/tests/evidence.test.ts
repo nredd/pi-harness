@@ -6,6 +6,7 @@ import type { Profile } from "../src/config.ts";
 import {
 	type ConfirmationEvidence,
 	composeEvidence,
+	confirmEvidence,
 	type Evidence,
 	evidenceChain,
 	type FailureContext,
@@ -299,6 +300,29 @@ describe("composeEvidence", () => {
 		];
 		expect(await composeEvidence(chain)({ ...failure(BARE), signal: controller.signal })).toBeUndefined();
 		expect(calls).toEqual([]);
+	});
+});
+
+describe("confirmEvidence", () => {
+	const block: UsageDecision = { block: true, window: "five_hour", scope: "provider" };
+
+	it.each([
+		["401", "401: quota project unauthenticated"],
+		["503", "503: quota backend failed"],
+		["safety", "Provider stopped with: SAFETY (quota)"],
+		["per-minute", PER_MINUTE],
+	])("applies the never-mark rules before a %s reaches the read", async (_name, text) => {
+		const { usage, reads } = reader({}, block);
+		expect(await confirmEvidence(usage, new FailureHistory(), undefined)(failure(text))).toBeUndefined();
+		expect(reads).toEqual([]);
+	});
+
+	it("lets a quota failure, or a confirmation without a failed message, reach the read", async () => {
+		const { usage, reads } = reader({}, block);
+		const confirm = confirmEvidence(usage, new FailureHistory(), undefined);
+		expect(await confirm(failure(BARE))).toBe(block);
+		expect(await confirm({ model: CARBON, failedAt: T0 })).toBe(block);
+		expect(reads).toHaveLength(2);
 	});
 });
 

@@ -29,7 +29,7 @@ import {
 	ROUTER_PROVIDER,
 	THINKING_LEVELS,
 } from "./config.ts";
-import { composeEvidence, evidenceChain, FailureHistory, type UsageRead } from "./evidence.ts";
+import { confirmEvidence, FailureHistory, type UsageRead } from "./evidence.ts";
 import { ExhaustionTracker } from "./exhaustion.ts";
 import { refKey } from "./model-ref.ts";
 import { compilePolicy } from "./policy.ts";
@@ -191,7 +191,11 @@ function routeEnv(ctx: RegistryContext, usage: RouterUsage, { declarations, hist
 		},
 		refresh: (model, signal, notBefore, failed) => {
 			const declared = Object.hasOwn(declarations, model.provider) ? declarations[model.provider] : undefined;
-			return composeEvidence(evidenceChain(read, history, declared))({
+			return confirmEvidence(
+				read,
+				history,
+				declared,
+			)({
 				model,
 				failedAt: notBefore,
 				signal,

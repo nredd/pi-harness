@@ -71,6 +71,16 @@ export function composeEvidence(
 	};
 }
 
+/**
+ * Never-mark rules: auth (401/403), 5xx, transport, safety and per-minute failures, whatever their
+ * wording. Checked before any adapter, so not even a collected provider's read can mark one.
+ */
+export function neverMarks({ message, failedAt }: FailureContext): boolean {
+	if (message?.stopReason !== "error") return false;
+	const found = classify(message.errorMessage, failedAt);
+	return found.class === "not-quota" || found.class === "per-minute";
+}
+
 /** The read the `read` adapter needs: an exact snapshot plus the per-model decision on it. */
 export interface UsageRead {
 	get(provider: string, options: { fresh: true; notBefore: number; signal?: AbortSignal }): Promise<UsageSnapshot>;
@@ -198,6 +208,16 @@ export function failureEvidence(
 			}
 		},
 	};
+}
+
+/** Confirm one failure for `provider`: the never-mark rules first, then its evidence chain. */
+export function confirmEvidence(
+	usage: UsageRead,
+	history: FailureHistory,
+	provider: ProviderConfig | undefined,
+): (failure: FailureContext) => Promise<EvidenceDecision | undefined> {
+	const confirm = composeEvidence(evidenceChain(usage, history, provider));
+	return async (failure) => (neverMarks(failure) ? undefined : confirm(failure));
 }
 
 /**
