@@ -19,9 +19,39 @@ export function macosHelperBuild(root) {
 	return `${version}+${hash.digest("hex")}`;
 }
 
-/** Compile the identity into the running binary, not a replaceable file beside it. */
+/**
+ * Compile the identity into the running binary, not a replaceable file beside it.
+ * @param {string} root Package root.
+ * @param {string} directory Scratch directory for the generated Swift file.
+ */
 export function writeMacosBuildStamp(root, directory) {
 	const stamp = path.join(directory, "HelperBuildStamp.swift");
 	writeFileSync(stamp, `let helperBuildIdentity = ${JSON.stringify(macosHelperBuild(root))}\n`);
 	return stamp;
+}
+
+/**
+ * Keep the upgrade note outside the signed bundle and scoped to the intended build.
+ * @param {string} appPath Installed application bundle path.
+ */
+export function macosSigningRefusalPath(appPath) {
+	return `${appPath}.signing-refusal`;
+}
+
+export const macosSigningRecovery =
+	"Setup refused to replace the retained helper because no usable Developer ID or managed local signing identity was available. Use a pre-signed helper app or make one of those identities available, then re-run setup. For local development only, explicitly opt in with PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 (macOS may reset permissions).";
+
+/**
+ * Report an earlier signing refusal only for the build setup attempted to install.
+ * @param {string} appPath Installed application bundle path.
+ * @param {string} expectedBuild Build the client requires.
+ */
+export function macosSigningRefusal(appPath, expectedBuild) {
+	try {
+		return readFileSync(macosSigningRefusalPath(appPath), "utf8").trim() === expectedBuild
+			? ` ${macosSigningRecovery}`
+			: "";
+	} catch {
+		return "";
+	}
 }

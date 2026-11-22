@@ -9,8 +9,13 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+	macosHelperBuild,
+	macosSigningRecovery,
+	macosSigningRefusalPath,
+	writeMacosBuildStamp,
+} from "../src/platform/macos/helper-build.mjs";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
-import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 
 const execFile = promisify(execFileCallback);
 const helperBundleId = "com.injaneity.pi-computer-use";
@@ -844,9 +849,14 @@ function createSetup(argv, deps) {
 
 		const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 		if (signingIdentity === "-" && existingSourceHash !== undefined && !allowAdhocUpdate) {
-			throw new Error(
-				"Refusing to replace an installed helper with an ad-hoc signed rebuild because macOS may reset Accessibility/Screen Recording grants. Use a pre-signed helper app, install a Developer ID identity, or set PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 for local development.",
-			);
+			try {
+				await fs.writeFile(macosSigningRefusalPath(helperAppPath), `${macosHelperBuild(rootDir)}\n`, {
+					flag: fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+				});
+			} catch (error) {
+				console.warn(`[pi-computer-use] could not record the signing refusal: ${String(error)}`);
+			}
+			throw new Error(`Refusing to replace an installed helper with an ad-hoc signed rebuild. ${macosSigningRecovery}`);
 		}
 
 		await fs.mkdir(path.dirname(helperAppExecutablePath), { recursive: true });

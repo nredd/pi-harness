@@ -290,7 +290,9 @@ function formatConfigStatus(): string {
 		`cursor_overlay: ${loaded.config.cursor_overlay ? "enabled" : "disabled"}`,
 		`activity_glow: ${loaded.config.activity_glow ? "enabled" : "disabled"}`,
 		...(hostPlatform() === "macos"
-			? [`helper build: ${macosHelper.staleBuildMessage ? `stale -- ${macosHelper.staleBuildMessage}` : (macosHelper.helperBuild ?? "not checked")}`]
+			? [
+					`helper build: ${macosHelper.staleBuildMessage ? `stale -- ${macosHelper.staleBuildMessage}` : (macosHelper.helperBuild ?? "not checked")}`,
+				]
 			: []),
 		...blocklistStatus,
 		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),

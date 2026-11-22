@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { PlatformDiagnostics } from "../types.ts";
-import { macosHelperBuild } from "./helper-build.mjs";
+import { macosHelperBuild, macosSigningRefusal } from "./helper-build.mjs";
 import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
@@ -211,7 +211,7 @@ export class MacosHelperClient {
 		if (usingExternalHelperSocket) return;
 		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
 		if (this.helperBuild !== expectedBuild) {
-			this.staleBuildMessage = `pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`;
+			this.staleBuildMessage = `pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper${macosSigningRefusal(HELPER_APP_PATH, expectedBuild)}`;
 			throw new HelperCommandError(this.staleBuildMessage, "stale_helper");
 		}
 	}

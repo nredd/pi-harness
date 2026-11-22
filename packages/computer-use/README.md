@@ -1451,7 +1451,7 @@ npm run build:native
 node scripts/setup-helper.mjs --runtime
 ```
 
-There is no `--force` installer option. If replacement is refused because only an ad-hoc signing identity is available, prefer a signed helper or managed local signing identity. Set `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1` only when intentionally replacing a development helper.
+There is no `--force` installer option. If an npm upgrade could only replace the helper with an ad-hoc build, setup keeps the old app. The next `stale_helper` error and `/computer-use` status report the signing refusal for that build. Use a pre-signed app or provide a usable Developer ID or managed local signing identity before re-running setup. Set `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1` only when intentionally replacing a development helper; macOS may reset its permissions.
 
 ## Recover from a helper that disconnected mid-command
 

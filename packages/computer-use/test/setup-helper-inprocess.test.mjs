@@ -14,6 +14,7 @@ import realFs from "node:fs/promises";
 import realOs from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, describe, onTestFinished, test, vi } from "vitest";
 import {
@@ -25,6 +26,7 @@ import {
 	runCancellable,
 	withDirectoryLock,
 } from "../scripts/setup-helper.mjs";
+import { shortSocketPath, startFakeHelper } from "./support/fake-helper.mjs";
 
 const LSREGISTER =
 	"/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
@@ -802,6 +804,86 @@ describe("macOS local helper install and signing", () => {
 		rec = await runMain(host, []);
 		assert.deepEqual(rec.exit, []);
 		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "bin v3");
+	});
+
+	test("postinstall retains the old helper and runtime reports the signing recovery", async () => {
+		const host = await makeHost();
+		host.state.which.openssl = false;
+		await prebuiltBinary(host, "arm64", "bin v1");
+		await runMain(host);
+		await prebuiltBinary(host, "arm64", "bin v2");
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, [0]);
+		assert.ok(rec.warn.some((message) => /postinstall helper setup skipped: Refusing to replace/.test(message)));
+		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "bin v1");
+		assert.ok(!rec.exec.some(([cmd]) => cmd === "pkill"));
+
+		const socketPath = shortSocketPath();
+		const fake = await startFakeHelper({ socketPath, diagnostics: { pid: 0, buildIdentity: "old-stamp" } });
+		onTestFinished(() => fake.stop());
+		const platform = Object.getOwnPropertyDescriptor(process, "platform");
+		Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+		vi.resetModules();
+		vi.stubEnv("PI_CU_SOCKET_PATH", undefined);
+		vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", host.dirs.app);
+		vi.doMock("node:os", async (original) => {
+			const actual = await original();
+			return { ...actual, default: { ...actual.default, homedir: () => host.dirs.home } };
+		});
+		vi.doMock("node:net", async (original) => {
+			const actual = await original();
+			return { ...actual, default: { ...actual.default, createConnection: () => actual.createConnection(socketPath) } };
+		});
+		vi.doMock("node:child_process", async (original) => ({
+			...(await original()),
+			spawn: () => {
+				throw new Error("Unexpected runtime spawn");
+			},
+		}));
+		vi.doMock("../src/platform/macos/helper-build.mjs", async (original) => {
+			const actual = await original();
+			return { ...actual, macosHelperBuild: () => actual.macosHelperBuild(host.dirs.root) };
+		});
+		try {
+			const { macosHelper } = await import("../src/platform/macos/helper.ts");
+			const { default: extension } = await import("../src/index.ts");
+			const remedy = /no usable Developer ID or managed local signing identity was available/;
+			await assert.rejects(macosHelper.ensureProtocol(), (error) => {
+				assert.equal(error.code, "stale_helper");
+				assert.match(error.message, remedy);
+				assert.match(error.message, /node scripts\/setup-helper\.mjs --runtime/);
+				return true;
+			});
+			const pi = createRecordingPi();
+			extension(pi.pi);
+			const notify = vi.fn();
+			await pi.commands.get("computer-use").handler("status", { cwd: host.dirs.root, ui: { notify } });
+			assert.match(notify.mock.calls[0][0], remedy);
+			assert.deepEqual(
+				fake.requests.map(({ cmd }) => cmd),
+				["diagnostics"],
+			);
+			const note = `${host.dirs.app}.signing-refusal`;
+			await realFs.writeFile(note, "another-stamp\n");
+			await assert.rejects(macosHelper.ensureProtocol(), (error) => {
+				assert.equal(error.code, "stale_helper");
+				assert.doesNotMatch(error.message, remedy);
+				return true;
+			});
+			await realFs.rm(note);
+			await realFs.mkdir(note);
+			const unwritable = await runMain(host, ["--postinstall"]);
+			assert.ok(unwritable.warn.some((message) => /could not record the signing refusal/.test(message)));
+			assert.deepEqual(unwritable.exit, [0]);
+		} finally {
+			Object.defineProperty(process, "platform", platform);
+			vi.unstubAllEnvs();
+			vi.doUnmock("node:os");
+			vi.doUnmock("node:net");
+			vi.doUnmock("node:child_process");
+			vi.doUnmock("../src/platform/macos/helper-build.mjs");
+			vi.resetModules();
+		}
 	});
 
 	test("an explicit identity signs without warnings and upgrades an ad-hoc install in place", async () => {
