@@ -407,6 +407,18 @@ test("wait_for keeps a claimed absence inconclusive when its root cannot be obse
 			`Inconclusive: the condition is not proven gone: its root could not be observed afterward (capture failed). No successor state was created; state ${stateId} is unchanged. Call find_roots, then observe_ui before treating it as gone.`,
 		);
 	}
+	fake.lookPayload = () => {
+		throw "look refused";
+	};
+	fake.waitFor = async () => ({ found: true, gone: true, complete: true });
+	const bare = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", until: "absent" });
+	assert.deepEqual(
+		[bare.details.observationError, bare.details.nodeCount, bare.details.timedOut],
+		["look refused", undefined, undefined],
+	);
+	fake.lookPayload = () => {
+		throw new Error("capture failed");
+	};
 	// A decisive timeout or a presence wait has no absence to keep: the failed observation is the error.
 	for (const [params, reply] of [
 		[{ until: "absent" }, { found: false, timedOut: true, nodeCount: 2 }],

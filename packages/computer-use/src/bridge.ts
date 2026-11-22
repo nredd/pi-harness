@@ -1246,18 +1246,18 @@ function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: Look
 	};
 }
 
+/** Capture `resolved`, the root the caller already resolved, as the new current state. */
 async function captureCurrentTarget(
 	signal: AbortSignal | undefined,
 	readText: "auto" | "always" | "never",
-	maxDimension = AUTO_IMAGE_MAX_DIMENSION,
-	targetOverride?: ResolvedTarget,
+	maxDimension: number,
+	resolved: ResolvedTarget,
 	includeImage = true,
 ): Promise<CaptureResult> {
 	const state = operationState();
 	const baseOutline = state.currentOutline;
 	const baseTarget = state.currentTarget;
-	let target = targetOverride ?? (await resolveCurrentTarget(signal));
-	target = await ensureTargetWindowId(target, signal);
+	const target = await ensureTargetWindowId(resolved, signal);
 	const look = await performLook(target, { maxDimension, readText, includeImage }, signal);
 	const outline = stabilizeRefs(
 		baseTarget && sameRootIdentity(baseTarget, target) ? baseOutline : undefined,
