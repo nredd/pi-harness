@@ -116,6 +116,17 @@ function refPath(node: OutlineNode): string[] {
 	return refs;
 }
 
+/**
+ * Only a fully read ancestry proves removal: a node missing under any unread (`truncated`) surviving
+ * ancestor may still exist, because a bounded read marks the nearest retained ancestor, not every parent.
+ */
+function removalUnproven(node: OutlineNode, after: Map<string, OutlineNode>): boolean {
+	for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) {
+		if (after.get(ancestor.ref)?.truncated) return true;
+	}
+	return false;
+}
+
 export function changesBetween(base: Outline, next: Outline): OutlineDiff {
 	if (base.root.role !== next.root.role || base.root.subrole !== next.root.subrole) {
 		return {
@@ -144,7 +155,8 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
 		}
 	}
 	for (const node of base.nodes)
-		if (!after.has(node.ref)) changes.push({ type: "removed", ref: node.ref, parent: node.parent?.ref });
+		if (!after.has(node.ref) && !removalUnproven(node, after))
+			changes.push({ type: "removed", ref: node.ref, parent: node.parent?.ref });
 	const identityConfidence =
 		next.nodes.length === 0 ? 1 : next.nodes.filter((node) => before.has(node.ref)).length / next.nodes.length;
 	const changeRatio = changes.length / Math.max(1, Math.max(base.nodes.length, next.nodes.length));

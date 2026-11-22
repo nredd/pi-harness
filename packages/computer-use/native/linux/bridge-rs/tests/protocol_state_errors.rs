@@ -48,6 +48,7 @@ fn node(n: usize) -> NodeSnapshot {
         bounds: None,
         is_secure: false,
         depth: 0,
+        unread: false,
     }
 }
 

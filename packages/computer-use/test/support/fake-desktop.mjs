@@ -171,6 +171,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		lookPayload: undefined,
 		/** Replaceable `waitFor` backend result: receives the request. */
 		waitFor: async () => ({ found: true, nodeCount: 2 }),
+		/** `parseLookResponse` options, e.g. the Linux backend's `{ unmarkedNodesUnread: true }`. */
+		parseOptions: undefined,
 	};
 	const findWire = (nodes, ref) => {
 		for (const node of nodes) {
@@ -200,6 +202,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 				(request?.scopeRef && findWire(fake.tree, request.scopeRef)) ||
 				wireNode("w", "AXWindow", fake.windowTitle, {
 					subrole: "AXStandardWindow",
+					truncated: false,
 					rect: { x: 0, y: 0, w: 300, h: 200 },
 					children: fake.tree,
 				}),
@@ -236,7 +239,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		},
 		observe: async (request) => {
 			fake.looks.push(request);
-			return parseLookResponse((fake.lookPayload ?? defaultLook)(request));
+			return parseLookResponse((fake.lookPayload ?? defaultLook)(request), fake.parseOptions);
 		},
 		act: async (request, options) => {
 			fake.actCalls.push(request);
