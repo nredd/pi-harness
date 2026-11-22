@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createWriteStream, rmSync, writeFileSync } from "node:fs";
+import { createWriteStream, readFileSync, rmSync, writeFileSync } from "node:fs";
 import realFs from "node:fs/promises";
 import realOs from "node:os";
 import path from "node:path";
@@ -1178,6 +1178,54 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		assert.equal(await realFs.readFile(plist, "utf8"), swapped);
 	});
 
+	test.each(["local install", "in-place re-sign"])(
+		"a %s resolves the signing identity once, before the final recheck, so no lookup separates it from codesign",
+		async (kind) => {
+			const host = await makeHost();
+			await prebuiltBinary(host, "arm64", "new");
+			host.state.devIdOutput = `  1) ${DEV_FPR} "Developer ID Application: Someone (TEAM123456)"\n`;
+			if (kind === "in-place re-sign") {
+				await runMain(host, ["--runtime"]);
+				host.state.codesignInfo = { stdout: "", stderr: "Signature=adhoc" };
+			} else {
+				await makeApp(host.dirs.app, "old", infoPlist());
+			}
+			const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+			let lookups = 0;
+			// A second Developer ID lookup would run after the recheck: swap the plist there.
+			host.deps.execFile = (
+				(inner) => async (command, args, options) => {
+					if (command === "security" && args.includes("-v")) {
+						lookups += 1;
+						if (lookups === 2) writeFileSync(plist, infoPlist("com.example.other"));
+					}
+					return inner(command, args, options);
+				}
+			)(host.deps.execFile);
+			const signedPlists = [];
+			const lookupsAtSign = [];
+			host.deps.spawn = (
+				(inner) => (command, args) => {
+					if (command === "codesign" && args[0] === "--force") {
+						signedPlists.push(readFileSync(plist, "utf8"));
+						lookupsAtSign.push(lookups);
+					}
+					return inner(command, args);
+				}
+			)(host.deps.spawn);
+			const rec = await runMain(host, ["--runtime"]);
+			assert.deepEqual(rec.exit, [], rec.error.join("\n"));
+			assert.deepEqual(lookupsAtSign, [1], "the identity resolver ran once before codesign");
+			assert.equal(signedPlists.length, 1);
+			assert.match(
+				signedPlists[0],
+				/<key>CFBundleIdentifier<\/key><string>com\.injaneity\.pi-computer-use<\/string>/,
+				"codesign signs the bundle the recheck saw",
+			);
+			assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", DEV_FPR]);
+		},
+	);
+
 	test("automatic setup refuses an app-path override whose Info.plist cannot be read", async () => {
 		const host = await makeHost();
 		await makeApp(host.dirs.app, "old", infoPlist());
@@ -1411,14 +1459,14 @@ describe("macOS local helper install and signing", () => {
 		host.state.securityImportFail = new Error("import denied");
 		const rec = await runMain(host, []);
 		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-");
-		// The identity is resolved twice (to pick the install path, then to sign), each failing the same way.
+		// The identity is resolved once: the install path and the signing call share it.
 		const warning = "[pi-computer-use] could not create a valid local signing identity: import denied";
 		assert.deepEqual(
 			rec.warn.filter((line) => line.includes("could not create")),
-			[warning, warning],
+			[warning],
 		);
-		// Per resolution: Developer ID lookup, local lookup, once more before the lock and once inside it.
-		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 8);
+		// Developer ID lookup, local lookup, once more before the lock and once inside it.
+		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 4);
 		assert.deepEqual(host.state.lockSeen, ["pi-computer-use-local-signing-user.lock"]);
 	});
 

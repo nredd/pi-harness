@@ -749,12 +749,20 @@ function createSetup(argv, deps) {
 		return (await findDeveloperIdIdentity()) ?? (await ensureLocalSigningIdentity()) ?? "-";
 	}
 
-	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier) {
+	/**
+	 * @param {string} outputPath Bundle or binary to sign.
+	 * @param {string} [identifier] Code-signing identifier.
+	 * @param {string} [resolvedIdentity] An identity the caller already resolved, so no lookup runs between the
+	 * caller's last destination check and `codesign`.
+	 * @returns {Promise<string>} The identity used, or `unsigned`.
+	 * @throws {Error} When `codesign` fails.
+	 */
+	async function signHelper(outputPath, identifier = defaultCodeSignIdentifier, resolvedIdentity = undefined) {
 		if (env.PI_COMPUTER_USE_NO_SIGN === "1") {
 			return "unsigned";
 		}
 
-		const identity = await resolveCodeSignIdentity();
+		const identity = resolvedIdentity ?? (await resolveCodeSignIdentity());
 		const commandArgs = ["--force", "--deep", "-i", identifier, "--timestamp=none", "--sign", identity, outputPath];
 		await run("codesign", commandArgs);
 		if (identity === "-") {
@@ -994,7 +1002,7 @@ function createSetup(argv, deps) {
 				// A resident daemon keeps the ad-hoc signature it launched with: stop it so the next command runs the re-signed app.
 				await stopRunningHelper();
 				await assertReplaceableDestination();
-				await signHelper(helperAppPath, helperBundleId);
+				await signHelper(helperAppPath, helperBundleId, signingIdentity);
 				await registerHelperApp();
 				return true;
 			}
@@ -1018,7 +1026,7 @@ function createSetup(argv, deps) {
 		await fs.chmod(helperAppExecutablePath, 0o755);
 		await fs.writeFile(infoPlistPath, infoPlist);
 		await fs.writeFile(helperSourceHashPath, `${sourceHash}\n`);
-		await signHelper(helperAppPath, helperBundleId);
+		await signHelper(helperAppPath, helperBundleId, signingIdentity);
 		await registerHelperApp();
 		return true;
 	}
