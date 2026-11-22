@@ -2713,8 +2713,8 @@ async function dispatchUiTransaction(
 			steps.push(step);
 			// A later action would run on an unknown state and its outcome would mask the indeterminate delivery.
 			if (isIndeterminateStep(step)) return stoppedTransaction(steps);
-			// The stop index is recorded whether or not the refusal carries an error.
-			if (step.outcome === "didnt") return { ...aggregateExecutions(steps), stoppedAt: steps.length - 1 };
+			// The stop index is recorded whether or not the refusal carries an error; a returned error is kept too.
+			if (step.outcome === "didnt") return stoppedTransaction(steps);
 			// A helper that stopped after posting part of the action reports the count; never run the next action.
 			if (step.error && typeof step.evidence?.deliveredUnits === "number") return stoppedTransaction(steps);
 		} catch (error) {

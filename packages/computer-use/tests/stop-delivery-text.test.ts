@@ -43,6 +43,21 @@ test.for(["input_unsafe", "cancelled"])(
 	},
 );
 
+test("a refusal returned on the stopped step keeps its code on the transaction and in the text", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await failingCapture(onTestFinished);
+	const refusal = { code: "ax_write_failed", message: "AXSelectedTextRange write failed" };
+	fake.actHook = () =>
+		fake.actCalls.length === 1
+			? { outcome: "worked", performed: { delivery: "hid" } }
+			: { outcome: "didnt", performed: { delivery: "ax" }, error: refusal };
+	const result = await act([press, press]);
+	assert.equal(result.details.execution.stoppedAt, 1);
+	assert.deepEqual(result.details.execution.error, refusal);
+	assert.ok(fake.text(result).startsWith("Stopped at action 2 (ax_write_failed);"), fake.text(result));
+});
+
 test("a stop after several delivered steps names the whole prefix", async ({ onTestFinished }) => {
 	const { fake, act } = await failingCapture(onTestFinished);
 	fake.actHook = () =>
