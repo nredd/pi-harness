@@ -23,7 +23,7 @@ import {
 	type SafetyFilter,
 } from "./policy.ts";
 import { formatScore, type QuotaScore } from "./selection.ts";
-import type { UsageDecision, UsageSnapshot } from "./usage.ts";
+import { COLLECTOR_EVIDENCE, type UsageDecision, type UsageSnapshot } from "./usage.ts";
 
 /**
  * Failure text worth a confirming usage read: rate limits and 429s (which
@@ -326,7 +326,7 @@ export class Router {
 	 */
 	async confirm(model: Model<Api>, env: RouteEnv, signal: AbortSignal | undefined, failedAt: number): Promise<boolean> {
 		const decision = await env.refresh(model, signal, failedAt);
-		if (!decision?.block || signal?.aborted) return false;
+		if (!decision?.block || signal?.aborted || decision[COLLECTOR_EVIDENCE]?.aborted) return false;
 		this.tracker.mark(model, decision);
 		return true;
 	}
