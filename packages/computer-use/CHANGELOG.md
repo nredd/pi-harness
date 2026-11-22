@@ -5,7 +5,6 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 ## [Unreleased]
 
 - Move the entry to `src/index.ts`, retire the inherited website/media/workflows, preserve prose, and build native payloads instead of committing them (#870).
-- Enforce zero uncovered lines, functions, branches and statements for the JS/TS runtime suite on Bun, on macOS and Linux, like the Node signal (#645).
 
 ### Fixed
 
@@ -29,7 +28,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 ### Added
 
 - Add tests for Linux X11 root matching and window metadata using synthetic snapshots without a display server (nredd/pi-harness#696).
-- Run the full JS/TS runtime suite on Bun with an independent report-only Istanbul signal (#645).
+- Run the full JS/TS runtime suite on Bun with an independent Istanbul signal, enforced at zero uncovered lines, functions, branches and statements on macOS and Linux like the Node signal (#645).
 - Gate actual AppKit cursor overlay lifecycle behind exact `PI_COMPUTER_USE_LIVE=1`; default invariants retain motion, compiler and fake gate-refusal assertions and report the live check as `NOT RUN`. Source mutation controls never execute the unsafe fixture (nredd/pi-harness#819).
 - Deterministic finite-input tests close the five remaining cursor-motion LLVM regions and ten pure-key/selection policy regions in `bridge.swift`. Numerical safeguards stay intact; no live desktop input, capture or TCC runs (nredd/pi-harness#810, #645).
 - Native Windows x64 compiler/test/LLVM CI producer with raw reports, source-hash metadata and deterministic input-policy/null-capture refusal controls. ARM64 and live desktop acceptance remain separate; absent native branch/statement counters remain unmeasured (nredd/pi-harness#696).

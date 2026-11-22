@@ -484,12 +484,15 @@ instead of dropping out. It stays
 measured uncovered counts for lines, functions, branches and statements (darwin **0 / 0 / 0 / 0**;
 linux **0 / 0 / 0 / 0**). The earlier `1 / 0 / 1 / 1` receipt from run `43173083073` is historical.
 The full runtime suite also runs through `test:bun` with the same Istanbul inventory and separate
-`coverage/bun/` reports. Accounting requires complete reports and compares them to the primary zero
-budgets for reference only. Bun enforcement requires complete-source hosted receipts on both owned
-OSes (#645); the verification-only async suite retains its independent Node signal.
+`coverage/bun/` reports. Since hosted main run `45009970545` (`39b7a5bb`) accounting enforces the Bun
+signal's own zero budgets (darwin and linux **0 / 0 / 0 / 0**, the signal's default `platforms`) over
+the complete inventory; the verification-only async suite retains its independent Node signal.
+This promotes Bun only: the goal stays `excluded` (T7 needs the owner's explicit reversal).
 Subprocess-run scripts count only what the suites import. On Node, files already at 0/0/0/0 on
 every OS are pinned per file by
 `coverage.thresholds` in `packages/computer-use/vitest.config.ts` (the policy schema has no per-file pins).
+The 34 pins omit owned `src/platform/macos/helper-build.mjs` and `scripts/swift-coverage.mjs`, which
+only the aggregate zero budgets hold; Bun skips the per-file pins and relies on its aggregate budget.
 The native and
 live suites (`linux-native`, `macos-helper-live`, `linux-live`) also run under Vitest now; skipped off
 their platform or opt-in, and `linux-native` counts only the `src/platform/linux/helper.ts` client it imports. Its TS entries and
