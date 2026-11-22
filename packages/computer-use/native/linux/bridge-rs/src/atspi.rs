@@ -376,8 +376,11 @@ impl AtspiClient {
             let mut readable = access.readable();
             let mut value = String::new();
             let (mut role, mut name, mut description) = if readable.is_some() {
+                // `wait_for` matches the role name, so a blank or failed one cannot prove absence.
+                let role_name = self.role_name(&accessible).await.unwrap_or_default();
+                unread |= role_name.trim().is_empty();
                 (
-                    field_or_default(self.role_name(&accessible).await, &mut unread),
+                    role_name,
                     field_or_default(self.string_property(&accessible, "Name").await, &mut unread),
                     field_or_default(
                         self.string_property(&accessible, "Description").await,
