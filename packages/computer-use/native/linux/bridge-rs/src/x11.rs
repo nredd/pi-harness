@@ -210,18 +210,53 @@ fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
 
 pub fn focus_window(window: Window, policy: PhysicalPolicy) -> Result<Value, ProtocolError> {
     policy.require_physical(SessionKind::detect())?;
-    let (conn, screen) = connect()?;
-    let root = conn.setup().roots[screen].root;
-    let atom = intern(&conn, "_NET_ACTIVE_WINDOW")?;
+    activate_unless_cancelled(
+        &InputState::shared(),
+        || {
+            let (conn, screen) = connect()?;
+            let root = conn.setup().roots[screen].root;
+            let atom = intern(&conn, "_NET_ACTIVE_WINDOW")?;
+            Ok((conn, root, atom))
+        },
+        |(conn, root, atom)| send_active_window(&conn, root, window, atom),
+    )?;
+    Ok(json!({"focused":true,"delivery":"ewmh","windowId":window}))
+}
+
+/// Run the blocking preparation for an EWMH activation request, e.g. X11 connection
+/// setup and the atom lookup, then send it with `send` unless shutdown began in the
+/// meantime: admission before `prepare` does not cover a request sent after it.
+fn activate_unless_cancelled<P>(
+    state: &InputState,
+    prepare: impl FnOnce() -> Result<P, ProtocolError>,
+    send: impl FnOnce(P) -> Result<(), ProtocolError>,
+) -> Result<(), ProtocolError> {
+    let prepared = prepare()?;
+    if state.is_cancelled() {
+        return Err(err(
+            "Helper is shutting down; the focus request was not sent",
+            ErrorCode::Cancelled,
+        ));
+    }
+    send(prepared)
+}
+
+/// Ask the window manager to activate `target` with `_NET_ACTIVE_WINDOW` (`atom`).
+fn send_active_window(
+    c: &RustConnection,
+    root: Window,
+    target: Window,
+    atom: Atom,
+) -> Result<(), ProtocolError> {
     let event = ClientMessageEvent {
         response_type: CLIENT_MESSAGE_EVENT,
         format: 32,
         sequence: 0,
-        window,
+        window: target,
         type_: atom,
         data: ClientMessageData::from([2, 0, 0, 0, 0]),
     };
-    conn.send_event(
+    c.send_event(
         false,
         root,
         EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
@@ -230,8 +265,7 @@ pub fn focus_window(window: Window, policy: PhysicalPolicy) -> Result<Value, Pro
     .map_err(xerr)?
     .check()
     .map_err(xerr)?;
-    conn.flush().map_err(xerr)?;
-    Ok(json!({"focused":true,"delivery":"ewmh","windowId":window}))
+    c.flush().map_err(xerr)
 }
 
 pub fn capture_window(
@@ -895,7 +929,7 @@ impl Input<XtestSink> {
         let input = Self::with_state(XtestSink { conn, root, target }, state);
         input.settle()?;
         validate_target(&input.sink.conn, root, target)?;
-        prepare_focus(&input.sink.conn, root, target, policy)?;
+        prepare_focus(&input.sink.conn, root, target, policy, &input.state)?;
         Ok(input)
     }
 }
@@ -1267,10 +1301,11 @@ fn prepare_focus(
     root: Window,
     target: Window,
     policy: PhysicalPolicy,
+    state: &InputState,
 ) -> Result<(), ProtocolError> {
     let plan = focus_plan(policy, active_window(c, root)? == Some(target))?;
     if plan == FocusPlan::ActivateAndConfirm {
-        request_active_window(c, root, target)?;
+        request_active_window(c, root, target, state)?;
     }
     for _ in 0..20 {
         if active_window(c, root)? == Some(target) {
@@ -1332,26 +1367,13 @@ fn request_active_window(
     c: &RustConnection,
     root: Window,
     target: Window,
+    state: &InputState,
 ) -> Result<(), ProtocolError> {
-    let atom = intern(c, "_NET_ACTIVE_WINDOW")?;
-    let event = ClientMessageEvent {
-        response_type: CLIENT_MESSAGE_EVENT,
-        format: 32,
-        sequence: 0,
-        window: target,
-        type_: atom,
-        data: ClientMessageData::from([2, 0, 0, 0, 0]),
-    };
-    c.send_event(
-        false,
-        root,
-        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-        event,
+    activate_unless_cancelled(
+        state,
+        || intern(c, "_NET_ACTIVE_WINDOW"),
+        |atom| send_active_window(c, root, target, atom),
     )
-    .map_err(xerr)?
-    .check()
-    .map_err(xerr)?;
-    c.flush().map_err(xerr)
 }
 fn windows_related(c: &RustConnection, hit: Window, target: Window) -> Result<bool, ProtocolError> {
     fn ancestors(c: &RustConnection, mut w: Window) -> Result<Vec<Window>, ProtocolError> {
@@ -1681,6 +1703,49 @@ mod tests {
             .require_physical(SessionKind::Headless)
             .is_err());
     }
+    #[test]
+    fn focus_does_not_send_after_shutdown() {
+        // Shutdown begins while the atom lookup blocks: the request is never sent.
+        let state = InputState::default();
+        let sent = Cell::new(false);
+        let result = activate_unless_cancelled(
+            &state,
+            || {
+                state.cancel();
+                Ok(())
+            },
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::Cancelled);
+        assert!(!sent.get(), "no _NET_ACTIVE_WINDOW after shutdown began");
+
+        // Otherwise it is sent, and a failed preparation sends nothing.
+        let state = InputState::default();
+        activate_unless_cancelled(
+            &state,
+            || Ok(()),
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(sent.replace(false));
+        let failed = activate_unless_cancelled(
+            &state,
+            || Err::<(), _>(err("no atom", ErrorCode::InternalError)),
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(failed.unwrap_err().code, ErrorCode::InternalError);
+        assert!(!sent.get());
+    }
+
     #[test]
     fn focus_policy_is_deterministic() {
         assert_eq!(
