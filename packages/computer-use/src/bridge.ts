@@ -2467,10 +2467,17 @@ async function dispatchUiTransaction(
 			helperActRequest(target, prepareUiAction(action, actionState, look, true), "ax_only"),
 		);
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
-		const result = await currentPlatformBackend.actBatch(requests, {
-			signal,
-			timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
-		});
+		let result: Awaited<ReturnType<NonNullable<typeof currentPlatformBackend.actBatch>>>;
+		try {
+			result = await currentPlatformBackend.actBatch(requests, {
+				signal,
+				timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
+			});
+		} catch (error) {
+			// Any step may have run, so no step index is known: the whole batch is unknown.
+			if (!isReplyLost(error)) throw error;
+			return { ...aggregateExecutions([]), outcome: "unknown", ...replyLostStop(error) };
+		}
 		if (!result.steps || result.steps.length === 0)
 			throw new Error("Native action transaction returned no checked steps.");
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
@@ -2503,15 +2510,8 @@ async function dispatchUiTransaction(
 		} catch (error) {
 			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
 			// The request reached the helper but its reply was lost: the action may have run, in part or in full.
-			if (failure?.code === "reply_lost") {
-				const step = executionTraceFromAct(
-					{
-						outcome: "unknown",
-						error: { code: failure.code, message: failure.message },
-						evidence: { deliveryUncertain: true },
-					},
-					"foreground",
-				);
+			if (isReplyLost(failure)) {
+				const step = executionTraceFromAct({ outcome: "unknown", ...replyLostStop(failure) }, "foreground");
 				steps.push(step);
 				return {
 					...aggregateExecutions(steps),
@@ -2531,6 +2531,15 @@ async function dispatchUiTransaction(
 		}
 	}
 	return aggregateExecutions(steps);
+}
+
+function isReplyLost(error: unknown): error is Error & { code: "reply_lost" } {
+	return (error as { code?: string } | undefined)?.code === "reply_lost";
+}
+
+/** The error and evidence of a stop whose request reached the helper but whose reply was lost. */
+function replyLostStop(error: Error & { code: "reply_lost" }): Pick<ExecutionTrace, "error" | "evidence"> {
+	return { error: { code: error.code, message: error.message }, evidence: { deliveryUncertain: true } };
 }
 
 function aggregateExecutions(steps: ExecutionTrace[]): ExecutionTrace {
@@ -2858,11 +2867,13 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
-				execution.outcome = outcomeAfterObservedValues(
-					execution.outcome ?? "unknown",
-					executedActions,
-					(ref) => nodeByRef(capture.outline, ref)?.value,
-				);
+				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
+				if (!execution.error)
+					execution.outcome = outcomeAfterObservedValues(
+						execution.outcome ?? "unknown",
+						executedActions,
+						(ref) => nodeByRef(capture.outline, ref)?.value,
+					);
 				for (const action of executedActions) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {
 						window: noteWindowForTarget(capture.target, capture.look),
@@ -2886,6 +2897,14 @@ async function performDesktopTransaction(
 			} catch (error) {
 				if (signal?.aborted) {
 					clearDesktopOperationState(state);
+					// The abort ends only the follow-up observation: a stopped transaction keeps its unknown outcome.
+					const code = execution.error?.code;
+					const stop = keyboardStopSummary(execution);
+					if (code && stop)
+						throw Object.assign(new ComputerUseError(code, `${stop} The follow-up observation was aborted.`), {
+							execution,
+							cause: error,
+						});
 					throw error;
 				}
 				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);

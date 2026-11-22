@@ -126,6 +126,72 @@ test.for([{ first: true }, { first: false }])(
 	},
 );
 
+test("a strict-headless batch whose reply was lost is unknown without inventing a step index", async ({
+	onTestFinished,
+}) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const { fake, act } = await observed(onTestFinished);
+	currentPlatformBackend.actBatch = async (requests) => {
+		fake.actBatchCalls.push(requests);
+		throw Object.assign(new Error("Helper command 'actBatch' timed out after 15000ms."), { code: "reply_lost" });
+	};
+	const result = await act([press, press]);
+	const { execution } = result.details;
+	assert.equal(fake.actBatchCalls.length, 1);
+	assert.equal(execution.outcome, "unknown");
+	assert.equal(execution.stoppedAt, undefined);
+	assert.deepEqual(execution.steps, []);
+	assert.equal(execution.error.code, "reply_lost");
+	assert.deepEqual(execution.evidence, { deliveryUncertain: true });
+	assert.ok(
+		fake
+			.text(result)
+			.startsWith("Stopped (reply_lost). More input may have been delivered. Do not replay the transaction."),
+	);
+	// Any other batch failure still escapes as an error.
+	currentPlatformBackend.actBatch = async () => {
+		throw new Error("batch refused");
+	};
+	const { stateId } = await fake.observe();
+	await assert.rejects(() => fake.call(fake.bridge.executeAct, { stateId, actions: [press] }), /batch refused/);
+});
+
+test("an abort after a lost reply keeps the unknown stop instead of a bare abort", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const abort = new AbortController();
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		abort.abort();
+		throw Object.assign(new Error("Operation aborted."), { code: "reply_lost" });
+	};
+	await assert.rejects(
+		() => act([press, press], {}, abort.signal),
+		(error) => {
+			assert.ok(
+				error.message.startsWith(
+					"Stopped at action 1 (reply_lost). More input may have been delivered. Do not replay the transaction.",
+				),
+				error.message,
+			);
+			assert.equal(error.code, "reply_lost");
+			assert.equal(error.execution.outcome, "unknown");
+			assert.deepEqual(error.execution.evidence, { deliveryUncertain: true });
+			return true;
+		},
+	);
+	assert.equal(fake.actCalls.length, 1);
+});
+
+test("a stopped setText is not upgraded to worked by a matching observed value", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const error = { code: "foreground_required", message: "Refusing XTEST delivery" };
+	fake.actResult = { outcome: "unknown", performed: { delivery: "hid" }, error, evidence: { deliveredUnits: 5 } };
+	fake.tree = [wireButton("b1", "Go", { value: "typed" })];
+	const result = await act([{ action: "setText", ref: "@e2", text: "typed" }]);
+	assert.equal(result.details.execution.outcome, "unknown");
+	assert.deepEqual(result.details.execution.error, error);
+});
+
 test("a stop that left input held names the unconfirmed release", async ({ onTestFinished }) => {
 	const { fake, act } = await observed(onTestFinished);
 	fake.actResult = {
