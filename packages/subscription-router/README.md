@@ -314,9 +314,12 @@ Only the returned handle owns that registration: calling it unregisters, and old
 remove a replacement or restore a previous registration. `handle.replace(adapter)` swaps in a new
 adapter for the same ID (another ID throws) and keeps alias grants; it throws once a later
 registration has displaced the handle's own. Retirement drops cached usage and confirmed blocks, aborts
-reads, and ignores late results. Registration reads each adapter field (`provider`, `display`,
-`acceptsCredential`, `kind`, `request`, `parse`, `read`) once into a frozen copy before it looks at
-the current owner, so a getter that registers reentrantly is itself displaced and retired.
+reads, and ignores late results. Registration copies the adapter once into a frozen copy before it
+looks at the current owner, so a getter that registers reentrantly is itself displaced and retired.
+The copy keeps own enumerable fields (receiver state such as an `endpoint` that `request` reads
+through `this`; each own accessor runs once) plus the declared fields (`provider`, `display`,
+`acceptsCredential`, `kind`, `request`, `parse`, `read`) even when inherited or not enumerable.
+Adapter methods run with the frozen copy as `this`.
 `collectorFor(id)` returns that frozen copy.
 
 Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
@@ -350,8 +353,8 @@ its `session_start` after the router warmed the alias keeps it available across 
 Config reloads swap the declarations and clear older revocations before aborting any read, so a
 retirement caused by an abort handler stays revoked.
 
-The router reads each declared own reading field once into plain records and dense arrays (at most
-128 items) without calling adapter methods such as `map`, then validates and uses only that copy. A
+The router reads each declared own reading field once into plain records and dense arrays (an integer
+`length` from 0 to 128) without calling adapter methods such as `map`, then validates and uses only that copy. A
 throwing getter is an adapter error. An external reset later than `MAX_EXTERNAL_RESET_MS` (31 days)
 after the read started is implausible and becomes unknown, so it blocks only while the reading is
 fresh instead of for its stated lifetime. Built-in collector resets are not bounded. Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
