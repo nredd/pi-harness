@@ -138,12 +138,16 @@ export const macosBackend: Pick<
 	},
 
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
-		if (Number.isFinite(query.pid)) assertMacosPidUpperBound(query.pid!, "pid");
+		const { pid } = query;
+		if (pid !== undefined) {
+			if (!Number.isInteger(pid) || pid <= 0) throw new Error("pid must be a positive integer when provided.");
+			assertMacosPidUpperBound(pid, "pid");
+		}
 		return parseRoots(
 			await macosHelper.command<unknown>(
 				"listRoots",
 				{
-					...(Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}),
+					...(pid === undefined ? {} : { pid }),
 					...(query.title?.trim() ? { title: query.title.trim() } : {}),
 				},
 				{ signal },
