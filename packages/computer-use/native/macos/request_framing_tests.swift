@@ -120,7 +120,11 @@ func runRequestFramingAssertions() {
     actual.handleLine("{\"id\":\"locked-router\",\"cmd\":\"act\"}")
     let routedResponses = routed.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     check(routedResponses.count == 2 && routedResponses[0]["id"] as? String == "real-router" && (routedResponses[0]["error"] as? [String: String])?["code"] == "unknown_command" && (routedResponses[1]["error"] as? [String: String])?["code"] == "screen_locked" && sessionReads == 4, "framing invokes actual router for unknown and locked commands")
-    // No live command or shutdown is invoked here.
+    actual.handleLine("{\"id\":\"build-probe\",\"cmd\":\"diagnostics\"}")
+    let diagnosticsReply = routed.last.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    let diagnostics = diagnosticsReply?["result"] as? [String: Any]
+    check(diagnostics?["buildIdentity"] as? String == helperBuildIdentity, "wire diagnostics reports the compiled build identity")
+    // No live input, capture, or shutdown is invoked here.
     for invalid: Any in [NSNull(), true, 7, 1.5, [], [:]] {
         failure("invalid_args", "Missing string argument 'value'") { try actual.stringArg(["value": invalid], "value") }
         check(actual.optionalStringArg(["value": invalid], "value") == nil, "optional string rejects \(invalid)")

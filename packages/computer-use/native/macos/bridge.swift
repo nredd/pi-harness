@@ -1496,6 +1496,7 @@ final class Bridge {
 		let parentPath = processPath(pid: parentPid)
 		var output: [String: Any] = [
 			"protocolVersion": protocolVersion,
+			"buildIdentity": helperBuildIdentity,
 			"architectureVersion": 1,
 			"invariants": ["state-scoped-observations", "bounded-observation-history", "multi-root-forest", "progressive-disclosure", "atomic-physical-input", "concurrent-requests", "transactional-batching"],
 			"pid": Int32(getpid()),
