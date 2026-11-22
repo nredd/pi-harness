@@ -35,6 +35,16 @@ struct LookRecord {
     elements: HashMap<String, ElementRecord>,
 }
 
+impl LookRecord {
+    /// Return the element this look issued as `reference`.
+    fn element(&self, reference: &str) -> Result<ElementRecord, ProtocolError> {
+        self.elements
+            .get(reference)
+            .cloned()
+            .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RootSnapshot {
     roots: HashMap<String, Value>,
@@ -88,22 +98,6 @@ impl HelperState {
                 self.looks.remove(&expired);
             }
         }
-    }
-
-    fn element_for_look(
-        &self,
-        look_id: &str,
-        reference: &str,
-    ) -> Result<ElementRecord, ProtocolError> {
-        self.looks
-            .get(look_id)
-            .ok_or_else(|| {
-                ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
-            })?
-            .elements
-            .get(reference)
-            .cloned()
-            .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))
     }
 }
 
@@ -1532,8 +1526,9 @@ fn read_text_element(
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("uiaReadText requires elementRef"))?;
     let root = AdmittedRoot::parse(args)?;
-    root.owned_look(state, look_id)?;
-    Ok((state.element_for_look(look_id, element_ref)?, root.pid))
+    // Resolve from the validated record so the owner check and lookup cannot diverge.
+    let element = root.owned_look(state, look_id)?.element(element_ref)?;
+    Ok((element, root.pid))
 }
 
 fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
@@ -1641,8 +1636,11 @@ fn handle_wait_for_with<Root>(
                 .lock()
                 .map_err(|_| internal("helper state lock poisoned"))?;
             // A valid scope from another root must never steer this root's UIA poll.
-            root.owned_look(&state, look_id)?;
-            Some(state.element_for_look(look_id, scope_ref)?.runtime_id)
+            Some(
+                root.owned_look(&state, look_id)?
+                    .element(scope_ref)?
+                    .runtime_id,
+            )
         }
         (None, Some(_)) => return Err(invalid("scopeRef requires lookId")),
         _ => None,
@@ -2324,16 +2322,19 @@ mod tests {
         let mut state = HelperState::default();
         state.insert_look("look-a".to_owned(), look_with_element(1.0));
         state.insert_look("look-b".to_owned(), look_with_element(2.0));
+        let owner = AdmittedRoot { hwnd: 1, pid: 1 };
         assert_eq!(
-            state
-                .element_for_look("look-a", "same-ref")
+            owner
+                .owned_look(&state, "look-a")
+                .and_then(|look| look.element("same-ref"))
                 .unwrap()
                 .runtime_id,
             vec![1]
         );
         assert_eq!(
-            state
-                .element_for_look("look-b", "same-ref")
+            owner
+                .owned_look(&state, "look-b")
+                .and_then(|look| look.element("same-ref"))
                 .unwrap()
                 .runtime_id,
             vec![2]
@@ -2343,10 +2344,7 @@ mod tests {
         }
         assert_eq!(state.looks.len(), MAX_LOOK_RECORDS);
         assert_eq!(
-            state
-                .element_for_look("look-a", "same-ref")
-                .unwrap_err()
-                .code,
+            owner.owned_look(&state, "look-a").unwrap_err().code,
             ErrorCode::StaleLook
         );
     }
