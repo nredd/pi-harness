@@ -139,6 +139,11 @@ function savedResume(tombstone: AgentTombstone | undefined, note: EvictedNote | 
 	return { mode: "none", why };
 }
 
+/** A lookup step that can answer; `none` is the miss. */
+type Step = Exclude<AgentRefVia, "none">;
+
+const EVERY_STEP: ReadonlySet<Step> = new Set(["id", "run", "workflow-run", "name", "prefix", "saved"]);
+
 /**
  * Resolve one handle in a fixed order: the successor chain, the exact id (this
  * manager, then survivors), a run id, a workflow run id, a handle or alias
@@ -149,7 +154,17 @@ function savedResume(tombstone: AgentTombstone | undefined, note: EvictedNote | 
 export function resolveAgent(input: string, asker: Asker, sources: AgentSources): AgentRef {
 	const handle = normalizeHandle(input);
 	if (!handle) return { requested: input, latest: input, via: "none", state: "unknown" };
-	const latest = sources.latestId(handle.raw);
+	return lookup(handle, sources.latestId(handle.raw), asker, sources, EVERY_STEP);
+}
+
+/** `resolveAgent`'s order after normalization, running only `steps`: a skipped step cannot shadow a later one. */
+function lookup(
+	handle: AgentHandle,
+	latest: string,
+	asker: Asker,
+	sources: AgentSources,
+	steps: ReadonlySet<Step>,
+): AgentRef {
 	const base = (via: AgentRefVia): RefBase => ({ requested: handle.raw, latest, via });
 	const survivors = sources.survivors();
 
@@ -158,23 +173,25 @@ export function resolveAgent(input: string, asker: Asker, sources: AgentSources)
 	const survivor = survivors.find((record) => record.id === latest);
 	if (survivor) return visible(survivor, "survivor", asker, base("id"));
 
-	const run = locate(sources, survivors, (record) => record.runId === handle.raw);
+	const run = steps.has("run") ? locate(sources, survivors, (record) => record.runId === handle.raw) : undefined;
 	if (run) return visible(run.record, run.home, asker, base("run"));
 
 	// Below here everything is the session's: workflow runs, top-level names and saved history.
 	if (asker.kind === "agent") return { ...base("none"), state: "unknown" };
 
-	const task = WORKFLOW_RUN_ID.test(handle.raw) ? sources.workflowTasks().get(handle.raw) : undefined;
+	const workflowRun = steps.has("workflow-run") && WORKFLOW_RUN_ID.test(handle.raw);
+	const task = workflowRun ? sources.workflowTasks().get(handle.raw) : undefined;
 	if (task) return { ...base("workflow-run"), state: "workflow-owned", owner: { kind: "run", task } };
 
-	const prefixed = stripAgentPrefix(handle.key);
-	const names: [AgentRefVia, string][] = [["name", handle.key]];
+	const prefixed = steps.has("prefix") ? stripAgentPrefix(handle.key) : undefined;
+	const names: [AgentRefVia, string][] = steps.has("name") ? [["name", handle.key]] : [];
 	if (prefixed) names.push(["prefix", prefixed]);
 	for (const [via, key] of names) {
 		const named = locate(sources, survivors, (record) => record.handle === key || record.alias === key);
 		if (named) return visible(named.record, named.home, asker, base(via));
 	}
 
+	if (!steps.has("saved")) return { ...base("none"), state: "unknown" };
 	const tombstone =
 		sources.tombstoneByName(handle.key) ??
 		(prefixed ? sources.tombstoneByName(prefixed) : undefined) ??
@@ -196,30 +213,28 @@ const NO_WORKFLOWS: ReadonlyMap<string, WorkflowTask> = new Map();
 
 /**
  * What the pre-resolver lookups returned for `input`: a record matched by the
- * exact input under the given steps, with no normalization and no successor
+ * exact input under only `steps`, with no normalization and no successor
  * followed (callers follow `latestId` themselves). A workflow child is still
  * returned for the caller's own ownership check; a nested child is not.
  */
-function legacyRecord(ref: AgentRef, input: string, steps: readonly AgentRefVia[]): AgentRecord | undefined {
-	if (ref.requested !== input || ref.latest !== input || !steps.includes(ref.via)) return undefined;
-	return refRecord(ref);
+function legacyRecord(input: string, sources: AgentSources, steps: ReadonlySet<Step>): AgentRecord | undefined {
+	return refRecord(lookup({ raw: input, key: input.toLowerCase() }, input, SESSION, sources, steps));
 }
+
+const ID_ONLY: ReadonlySet<Step> = new Set(["id"]);
+const ID_THEN_NAME: ReadonlySet<Step> = new Set(["id", "name"]);
 
 export function createAgentLookup(manager: AgentManager, getCtx: () => ExtensionContext | undefined) {
 	/** Any live record by exact id, including survivors registered under another session file. */
 	const liveAgentById = (id: string) =>
 		legacyRecord(
-			resolveAgent(
-				id,
-				SESSION,
-				agentSources(
-					manager,
-					() => listAllRunningDetached().map(({ agent }) => agent.record),
-					() => NO_WORKFLOWS,
-				),
-			),
 			id,
-			["id"],
+			agentSources(
+				manager,
+				() => listAllRunningDetached().map(({ agent }) => agent.record),
+				() => NO_WORKFLOWS,
+			),
+			ID_ONLY,
 		);
 
 	/**
@@ -232,17 +247,13 @@ export function createAgentLookup(manager: AgentManager, getCtx: () => Extension
 	 */
 	const resolveAgentRef = (ref: string): AgentRecord | undefined =>
 		legacyRecord(
-			resolveAgent(
-				ref,
-				SESSION,
-				agentSources(
-					manager,
-					() => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record),
-					() => NO_WORKFLOWS,
-				),
-			),
 			ref,
-			["id", "name"],
+			agentSources(
+				manager,
+				() => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record),
+				() => NO_WORKFLOWS,
+			),
+			ID_THEN_NAME,
 		);
 
 	return { liveAgentById, resolveAgentRef };

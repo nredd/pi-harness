@@ -318,6 +318,13 @@ it("keeps the legacy lookups' contract, now matching survivor names case-insensi
 	])
 		expect(resolveAgentRef(input)).toBeUndefined();
 	expect(createAgentLookup(manager, () => undefined).resolveAgentRef("auth-audit")).toBeUndefined();
+	// Only the id and name steps run: an alias spelling another agent's run id still answers.
+	const aliased = spawn(manager, "aliased");
+	aliased.alias = parent.runId;
+	expect(resolveAgentRef(parent.runId!)).toBe(aliased);
+	// Intended (id beats name): a survivor's id now beats this manager's alias spelling it.
+	aliased.alias = survivor.id;
+	expect(resolveAgentRef(survivor.id)).toBe(survivor);
 
 	expect(liveAgentById(elsewhere.id)).toBe(elsewhere);
 	expect(liveAgentById(parent.id)).toBe(parent);
