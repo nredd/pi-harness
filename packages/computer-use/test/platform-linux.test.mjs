@@ -263,6 +263,8 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 
 	for (const [label, writeStale] of [
 		["protocol 4", (c) => fs.writeFile(c.helper, helperScript({ protocol: 4, startFile: `${c.starts}.stale` }))],
+		// A protocol 5 helper reports no executable identity (#1180), so it is replaced too.
+		["protocol 5", (c) => fs.writeFile(c.helper, helperScript({ protocol: 5, startFile: `${c.starts}.stale` }))],
 		[
 			"architecture version 2",
 			(c) => fs.writeFile(c.helper, helperScript({ architecture: 2, startFile: `${c.starts}.stale` })),
