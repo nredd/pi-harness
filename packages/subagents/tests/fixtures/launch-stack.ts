@@ -31,8 +31,16 @@ interface Component {
 	dispose?(): void;
 }
 
-/** Only the host UI and the runner boundary are doubles. Widget factories and overlay components are real. */
-export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
+/**
+ * Only the host UI and the runner boundary are doubles. Widget factories and overlay components are real.
+ *
+ * @param settings Extension settings layered over the characterization defaults.
+ * @param registerCleanup Where the shutdown and leak checks run; a test's own `onTestFinished` by default.
+ */
+export async function bootLaunchStack(
+	settings: Record<string, unknown> = {},
+	registerCleanup: (cleanup: () => Promise<void>) => void = onTestFinished,
+) {
 	const env = hermeticDir({
 		settings: {
 			agentMentions: "direct",
@@ -94,7 +102,7 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 	function closeOverlays() {
 		for (const overlay of overlays.splice(0).reverse()) overlay.close();
 	}
-	onTestFinished(async () => {
+	registerCleanup(async () => {
 		try {
 			closeOverlays();
 			for (const gate of held) gate.resolve();
@@ -290,7 +298,40 @@ export async function bootLaunchStack(settings: Record<string, unknown> = {}) {
 
 export const heldTool = { turn: 3, tool: "inspect_fixture" };
 
-export async function expectHeld(gate: ReturnType<Awaited<ReturnType<typeof bootLaunchStack>>["holdAt"]>) {
+type LaunchStack = Awaited<ReturnType<typeof bootLaunchStack>>;
+
+/** The launch a lane's warm-up drives: a background `Agent` call unless the lane says otherwise. */
+const agentLaunch = (stack: LaunchStack) => stack.agent({ run_in_background: true });
+
+/** A one-child workflow, the launch `characterize-workflow.test.ts` warms. */
+export const workflowLaunch = (stack: LaunchStack) =>
+	stack.execute("SubagentWorkflow", {
+		script: 'export const meta = { name: "warm-up", description: "launch warm-up" };\nawait agent("warm-up child");',
+	});
+
+/**
+ * Drive one launch to the runner and shut its stack down, for a lane's `beforeAll`.
+ *
+ * The first launch in a test process runs the host path cold: the boot, the tool, the widgets and,
+ * for a workflow, the worker thread's boot all pay first-execution cost. Inside a case that cost shares
+ * the case's 5 s timeout and times out on a loaded host (#1245); in the hook every case starts warm.
+ *
+ * @param launch Starts the attempt against a fresh stack; settles once the tool has answered.
+ */
+export async function warmLaunchStack(launch: (stack: LaunchStack) => Promise<{ isError?: boolean }> = agentLaunch) {
+	const cleanups: (() => Promise<void>)[] = [];
+	try {
+		const stack = await bootLaunchStack({}, (cleanup) => cleanups.push(cleanup));
+		const gate = stack.holdAt(heldTool);
+		expect((await launch(stack)).isError).not.toBe(true);
+		await expectHeld(gate);
+		gate.release();
+	} finally {
+		for (const cleanup of cleanups) await cleanup();
+	}
+}
+
+export async function expectHeld(gate: ReturnType<LaunchStack["holdAt"]>) {
 	const attempt = await gate.started.promise;
 	expect(attempt.dispatchToolActivity, "runner must dispatch the held tool start").toHaveBeenCalledWith({
 		type: "start",
