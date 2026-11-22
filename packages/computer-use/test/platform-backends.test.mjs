@@ -21,7 +21,7 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 	runProcess: vi.fn(),
 }));
 vi.mock("../src/platform/linux/helper.ts", () => ({
-	LINUX_HELPER_PROTOCOL_VERSION: 4,
+	LINUX_HELPER_PROTOCOL_VERSION: 5,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
 }));
@@ -37,7 +37,7 @@ const { wslProbe } = await import("../src/platform/linux/wsl.ts");
 
 const signal = new AbortController().signal;
 const diagnostics = (over = {}) => ({
-	protocolVersion: 4,
+	protocolVersion: 5,
 	architectureVersion: 1,
 	invariants: [...REQUIRED_PLATFORM_INVARIANTS],
 	accessibility: true,
@@ -610,8 +610,9 @@ describe("Linux backend", () => {
 		assert.equal(state.keep, 1);
 		assert.ok(state.lastPermissionCheckAt > 0);
 		assert.deepEqual(lastCall(fakes.linux), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
-		fakes.linux.command.mockResolvedValue(diagnostics({ protocolVersion: 9 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 4, got 9/);
+		// A v4 helper neither records owed releases across restarts nor rechecks the drag start, so it must not pass readiness.
+		fakes.linux.command.mockResolvedValue(diagnostics({ protocolVersion: 4 }));
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 5, got 4/);
 		fakes.linux.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
 		fakes.linux.command.mockResolvedValue(diagnostics({ invariants: [] }));

@@ -1217,7 +1217,7 @@ Run Pi as the same user and inside the same graphical session as the target appl
 ~/.pi/agent/helpers/pi-computer-use/linux-bridge
 ```
 
-The npm package ships no Linux binary. It ships the locked Rust crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`), and building it is opt-in. On every Pi load an existing helper at that path is probed (`diagnostics`: protocol version 4 and the shared architecture invariants) and used as-is when it passes, with no setup and no compiler. A missing, non-executable, wrong-architecture or stale helper is replaced by setup (a `prebuilt/linux/<arch>/linux-bridge`, if the install has one, else the source build) and probed again.
+The npm package ships no Linux binary. It ships the locked Rust crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`), and building it is opt-in. On every Pi load an existing helper at that path is probed (`diagnostics`: protocol version 5 and the shared architecture invariants) and used as-is when it passes, with no setup and no compiler. Protocol 5 marks the owed-release record and the point rechecks of the input safety contract: a protocol 4 helper built before them is rejected and replaced, never used. A missing, non-executable, wrong-architecture or stale helper is replaced by setup (a `prebuilt/linux/<arch>/linux-bridge`, if the install has one, else the source build) and probed again.
 
 The source build needs `cargo` (Rust toolchain via [rustup](https://rustup.rs)) and a C linker (e.g. `build-essential`), and runs only when you opt in:
 

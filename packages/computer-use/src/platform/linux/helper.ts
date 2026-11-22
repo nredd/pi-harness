@@ -22,7 +22,7 @@ const SETUP_KILL_GRACE_MS = 2_000;
 export const HELPER_TERMINATE_GRACE_MS = 750;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
-export const LINUX_HELPER_PROTOCOL_VERSION = 4;
+export const LINUX_HELPER_PROTOCOL_VERSION = 5;
 export const LINUX_HELPER_PATH =
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH ||
 	path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
