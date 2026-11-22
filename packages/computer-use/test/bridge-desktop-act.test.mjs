@@ -887,3 +887,53 @@ test("a refusal after a delivered physical step keeps the transaction unknown an
 	assert.equal(typed.details.execution.outcome, "unknown");
 	assert.equal(typed.details.execution.stoppedAt, 1);
 });
+
+test("an errorless first-step didnt is a stop: a matching observed value never upgrades it", async ({
+	onTestFinished,
+}) => {
+	const { fake } = await observed(onTestFinished);
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		return { outcome: "didnt", performed: { delivery: "ax" } };
+	};
+	fake.tree = [wireButton("b1", "Go", { value: "typed" })];
+	const { stateId } = await fake.observe();
+	const typed = await fake.call(fake.bridge.executeAct, {
+		stateId,
+		actions: [{ action: "setText", ref: "@e2", text: "typed" }],
+	});
+	assert.equal(typed.details.execution.stoppedAt, 0);
+	assert.equal(typed.details.execution.outcome, "didnt", "the stop is kept, not promoted to worked");
+});
+
+for (const code of ["input_unsafe", "cancelled"]) {
+	test(`a ${code} thrown after a delivered step keeps the checked prefix and stop index as unknown`, async ({
+		onTestFinished,
+	}) => {
+		const { fake, act } = await observed(onTestFinished);
+		let calls = 0;
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			calls += 1;
+			if (calls === 1) return { outcome: "worked", performed: { delivery: "hid", mechanism: "xtest" } };
+			throw Object.assign(new Error(`Refused: ${code}`), { code });
+		};
+		const result = await act([press, press, press]);
+		const { execution } = result.details;
+		assert.equal(fake.actCalls.length, 2, "nothing after the refusal is dispatched");
+		assert.equal(execution.outcome, "unknown", "never success, never a bare error");
+		assert.equal(execution.stoppedAt, 1);
+		assert.equal(execution.actionCount, 2);
+		assert.equal(execution.steps[0].outcome, "worked");
+		assert.equal(execution.error.code, code);
+	});
+}
+
+test("an input_unsafe thrown before any step ran still throws: nothing was delivered", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	currentPlatformBackend.act = async () => {
+		throw Object.assign(new Error("Refusing physical input"), { code: "input_unsafe" });
+	};
+	await assert.rejects(act([press, press]), /Refusing physical input/);
+	assert.equal(fake.actCalls.length, 0);
+});

@@ -2521,7 +2521,9 @@ async function dispatchUiTransaction(
 					stoppedAt: steps.length - 1,
 				};
 			}
-			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
+			// A refusal thrown after an earlier step ran, e.g. sticky `input_unsafe` or a helper shutting down,
+			// keeps that checked prefix and its stop index: the transaction is `unknown`, never a bare error.
+			if (!isStopRefusal(failure)) throw error;
 			if (!failure.evidence && steps.length === 0) throw error;
 			const step = executionTraceFromAct(
 				{ outcome: "didnt", error: { code: failure.code, message: failure.message }, evidence: failure.evidence },
@@ -2532,6 +2534,13 @@ async function dispatchUiTransaction(
 		}
 	}
 	return aggregateExecutions(steps);
+}
+
+/** Refusals a per-action dispatch records as a `didnt` stop instead of throwing, once a step ran or with evidence. */
+const STOP_REFUSAL_CODES = new Set(["app_blocked", "input_deadline_expired", "input_unsafe", "cancelled"]);
+
+function isStopRefusal(error: unknown): error is Error & { code: string; evidence?: Record<string, unknown> } {
+	return STOP_REFUSAL_CODES.has((error as { code?: string } | undefined)?.code ?? "");
 }
 
 function isReplyLost(error: unknown): error is Error & { code: "reply_lost" } {
@@ -2817,8 +2826,8 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
-			// A stop after an earlier step, or with an error, may have delivered more than any check shows.
-			const partial = execution.error !== undefined || (execution.stoppedAt ?? 0) > 0;
+			// Any stop, even an errorless first-step `didnt`, or an error: neither `expect` nor observed values upgrade it.
+			const partial = execution.error !== undefined || execution.stoppedAt !== undefined;
 			try {
 				if (condition && !partial) {
 					const {
