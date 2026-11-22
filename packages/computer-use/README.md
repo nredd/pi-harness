@@ -2719,6 +2719,7 @@ The current overlay is main-display-only because its frame is created from `NSSc
 - ScreenCaptureKit readiness, capture, and the command-line screenshot fallback are separate checks, so one successful check does not guarantee every later window capture.
 - The visual agent cursor only covers the main display.
 - Strict headless mode rejects actions that need synthesized pointer or keyboard input, including every `typeText` and `keypress`.
+- On Linux X11, owed key and button releases are tracked in the helper process only. An exit with status 3 makes the client refuse physical input for the rest of the session, but SIGKILL, OOM or a crash leave no record, and a new Pi session does not know what an earlier one left held. Persisting it is #1256.
 
 <details className="reference-provenance">
   <summary>source provenance</summary>
