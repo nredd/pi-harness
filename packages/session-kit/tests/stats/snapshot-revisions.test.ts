@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -272,6 +272,56 @@ it("prunes post-recovery active generations while retaining only the frozen reco
 	expect(state.recoveryFiles).toEqual([original.file]);
 	expect(state.lostHarnesses).toEqual([]);
 });
+
+it.each(["deleted state", "moved outbox"])(
+	"keeps frozen recovery files when the outbox's own bookkeeping is lost (%s)",
+	async (loss) => {
+		const path = join(agent, "sessions", "active.jsonl");
+		const seed = (input: number) => {
+			const row = JSON.parse(assistantLine({ ms: Date.now(), provider: "physical", model: "fixture", input }));
+			row.id = "active";
+			sessionFile(path, { startMs: Date.now(), lines: [JSON.stringify(row)] });
+		};
+		seed(7);
+		const first = await exportStats(agent, out);
+		const original = manifest(first.snapshotDir).shards[0];
+		if (!original) throw new Error("Missing shard");
+		writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
+		await exportStats(agent, out);
+		// A readable manifest again: the archived shard is now only in this outbox's frozen recovery set.
+		seed(8);
+		await exportStats(agent, out);
+		expect(manifest(first.snapshotDir).shards.map((ref) => ref.file)).not.toContain(original.file);
+		let target = out;
+		if (loss === "deleted state") rmSync(outboxStatePath(agent, first.snapshotDir));
+		else {
+			target = join(root, "moved");
+			renameSync(out, target);
+		}
+		const snapshotDir = join(target, "machines", basename(first.snapshotDir));
+		for (let i = 0; i < 2; i++) {
+			seed(9 + i);
+			const result = await exportStats(agent, target);
+			expect(readdirSync(snapshotDir)).toContain(original.file);
+			expect(result.warnings).toEqual([
+				"recovery files retained: explicit replacement required",
+				...(i === 0
+					? [
+							"no bookkeeping for this outbox: froze 1 unaccounted shard files as recovery files; pass --replace-harnesses to drop them",
+						]
+					: []),
+			]);
+		}
+		expect(JSON.parse(readFileSync(outboxStatePath(agent, snapshotDir), "utf8")).recoveryFiles).toEqual([
+			original.file,
+		]);
+		// Accepting the loss is explicit.
+		await exportStats(agent, target, undefined, { replaceHarnesses: true });
+		expect(readdirSync(snapshotDir).sort()).toEqual(
+			["manifest.json", ...manifest(snapshotDir).shards.map((ref) => ref.file)].sort(),
+		);
+	},
+);
 
 it("prunes post-recovery generations without losing frozen files to another outbox's stale state", async () => {
 	const path = join(agent, "sessions", "active.jsonl");

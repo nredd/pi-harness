@@ -306,15 +306,18 @@ async function exportState(dir: string): Promise<ExportState> {
 		validateState,
 	);
 }
-/** This outbox's own bookkeeping, else the legacy installation-wide fields it inherits. Corrupt fails. */
-async function outboxState(path: string, legacy: ExportState): Promise<OutboxState> {
+/**
+ * This outbox's own bookkeeping (`own`), else the legacy installation-wide fields it inherits. Corrupt
+ * fails.
+ */
+async function outboxState(path: string, legacy: ExportState): Promise<{ state: OutboxState; own: boolean }> {
 	try {
-		return validateOutbox(await jsonFile(path));
+		return { state: validateOutbox(await jsonFile(path)), own: true };
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	const { salt: _, ...inherited } = legacy;
-	return inherited;
+	return { state: inherited, own: false };
 }
 
 /**
@@ -1097,7 +1100,8 @@ async function publishStats(
 	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
 	// stale recovery state over this one's.
 	const statePath = await outboxStateFile(dir, snapshotDir);
-	const state: ExportState = { ...(await outboxState(statePath, installation)), salt: installation.salt };
+	const bookkeeping = await outboxState(statePath, installation);
+	const state: ExportState = { ...bookkeeping.state, salt: installation.salt };
 	const previous = intactPrevious(await loadPrevious(snapshotDir), options.replaceHarnesses === true);
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
@@ -1206,9 +1210,22 @@ async function publishStats(
 					reportedLost.some((lost) => lost === h) ||
 					(state.lostHarnesses.includes(h) && (h === "pi" || !(report[h]?.found && !report[h]?.failed))),
 			);
+	// Without this outbox's own bookkeeping (deleted, or the checkout moved and so rekeyed), a shard
+	// neither the active manifest nor the inherited fields account for may be a frozen recovery file:
+	// its ownership is unknown, so freeze it instead of pruning it. Only replacement accepts the loss.
+	const unaccounted: string[] = [];
+	if (!bookkeeping.own && !options.replaceHarnesses) {
+		const accounted = new Set([
+			...(previous !== null && previous !== "unreadable" ? previous.manifest.shards.map((ref) => ref.file) : []),
+			...(state.recoveryFiles ?? []),
+		]);
+		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
+			if (entry.isFile() && SHARD_FILE.test(entry.name) && !accounted.has(entry.name)) unaccounted.push(entry.name);
+	}
 	const recoveryPending =
-		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
-	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));
+		!options.replaceHarnesses &&
+		(state.recoveryPending || previous === "unreadable" || reportedLost.length > 0 || unaccounted.length > 0);
+	const protectedFiles = new Set(options.replaceHarnesses ? [] : [...(state.recoveryFiles ?? []), ...unaccounted]);
 	const captureRecovery = recoveryPending && (previous === "unreadable" || state.recoveryFiles === null);
 	if (captureRecovery) {
 		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
@@ -1217,7 +1234,7 @@ async function publishStats(
 	const recoveryFiles = [...protectedFiles].sort();
 	// Freeze recovery scope BEFORE replacing unreadable history. Ordinary exports never add newly
 	// superseded files to this set, so subsequent active generations still prune automatically.
-	if (recoveryPending && (captureRecovery || !state.recoveryPending))
+	if (recoveryPending && (captureRecovery || !state.recoveryPending || unaccounted.length > 0))
 		await atomicJson(statePath, {
 			version: 1,
 			harnesses: state.harnesses,
@@ -1303,6 +1320,11 @@ async function publishStats(
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
 	const warnings = recoveryPending ? ["recovery files retained: explicit replacement required"] : [];
+	if (unaccounted.length > 0)
+		warnings.push(
+			`no bookkeeping for this outbox: froze ${unaccounted.length} unaccounted shard files as recovery files; ` +
+				"pass --replace-harnesses to drop them",
+		);
 	const keep = new Set([...snapshot.manifest.shards.map((ref) => ref.file), ...recoveryFiles]);
 	warnings.push(...(await pruneOutbox(snapshotDir, keep)));
 	// Recorded only once published: a failed export leaves the previous set, so the next run is still checked.

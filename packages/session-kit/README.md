@@ -638,8 +638,14 @@ Installation state, never synced:
   Old boolean-only recovery state captures its protected files once on upgrade; unknown old data
   coverage does not invent lost harnesses. Explicit `--replace-harnesses` publication clears recovery
   metadata. Failure to persist the protected set aborts before replacing the manifest. A corrupt
-  file fails the export. Moving the sync checkout changes the key, so the moved outbox starts from
-  the legacy fields again: back up frozen recovery files before moving a checkout with recovery pending.
+  file fails the export. Moving the sync checkout changes the key, and deleting the file loses it:
+  the outbox then starts from the legacy fields and cannot tell its frozen recovery files from
+  superseded generations. So that export prunes nothing it cannot account for: every shard file that
+  neither the active manifest nor the inherited fields name is frozen as a recovery file, recovery
+  stays pending, and the result warns `no bookkeeping for this outbox: froze N unaccounted shard
+  files as recovery files; pass --replace-harnesses to drop them`. To rebind instead, move
+  `outboxes/<old key>.json` to the new key before the next export; to accept the loss, pass
+  `--replace-harnesses`.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
