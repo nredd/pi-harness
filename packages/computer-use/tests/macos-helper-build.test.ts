@@ -616,7 +616,7 @@ test("macOS status shows unchecked, then stale with the expected build, then the
 });
 
 test.each([
-	["/Users/someone/bridge", "unrecognized"],
+	["/Users/<user>/bridge", "unrecognized"],
 	[`0.7.0+${"A".repeat(64)}\nhelper build: ${current}`, "unrecognized"],
 	[42, "unrecognized"],
 	[undefined, "none"],
