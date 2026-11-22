@@ -1,13 +1,13 @@
 /** Real multi-extension sessions, with one host identity shared by every fork. */
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionFactory, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createHarness, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 
 const ROOT = new URL("../../", import.meta.url);
 /** Imported fork -> `packages/<dir>` workspace and its declared `pi.extensions` entry. */
@@ -124,15 +124,17 @@ export function holdWake(platform: NodeJS.Platform = process.platform): WakeHelp
 export async function isolateStackHome(
 	spawnWake: () => WakeHelper | undefined = holdWake,
 ): Promise<{ root: string; cleanup(): Promise<void> }> {
-	const root = mkdtempSync(join(tmpdir(), "pi-stack-"));
-	const wake = spawnWake();
-	if (wake) {
-		try {
-			await once(wake, "spawn");
-		} catch (error) {
-			rmSync(root, { recursive: true, force: true });
-			throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
-		}
+	let removeScratch!: () => void;
+	const root = makeTestTempDir("pi-stack-", (cleanup) => {
+		removeScratch = cleanup;
+	});
+	let wake: WakeHelper | undefined;
+	try {
+		wake = spawnWake();
+		if (wake) await once(wake, "spawn");
+	} catch (error) {
+		removeScratch();
+		throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
 	}
 	const previous = new Map<string, string | undefined>();
 	// Subagent task dirs live under XDG_STATE_HOME (os.tmpdir() as fallback); keep both inside this root so cleanup removes them (#678, #900).
@@ -154,7 +156,7 @@ export async function isolateStackHome(
 					if (value === undefined) delete process.env[key];
 					else process.env[key] = value;
 				}
-				rmSync(root, { recursive: true, force: true });
+				removeScratch();
 			} finally {
 				if (wake) await stopWake(wake);
 			}

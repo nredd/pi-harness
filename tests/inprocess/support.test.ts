@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type ExtensionFactory, ExtensionStartupError } from "@earendil-works/pi-coding-agent";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
 	assertHostIdentity,
@@ -170,8 +171,8 @@ it("holds an injected wake helper until fixture cleanup stops it", async () => {
 	expect(existsSync(fixture.root)).toBe(false);
 });
 
-it("removes the fixture home when the wake helper cannot spawn", async () => {
-	const temp = realpathSync(mkdtempSync(join(tmpdir(), "pi-wake-spawn-")));
+it("removes the fixture home when the wake helper cannot spawn", async ({ onTestFinished }) => {
+	const temp = realpathSync(makeTestTempDir("pi-wake-spawn-", onTestFinished));
 	const previous = { TMPDIR: process.env.TMPDIR, agent: process.env.PI_CODING_AGENT_DIR };
 	const failure = new Error("spawn /usr/bin/caffeinate ENOENT");
 	try {
@@ -188,7 +189,24 @@ it("removes the fixture home when the wake helper cannot spawn", async () => {
 	} finally {
 		if (previous.TMPDIR === undefined) delete process.env.TMPDIR;
 		else process.env.TMPDIR = previous.TMPDIR;
-		rmSync(temp, { recursive: true, force: true });
+	}
+});
+
+it("removes the fixture home when the wake helper throws before returning a child", async ({ onTestFinished }) => {
+	const temp = makeTestTempDir("pi-wake-throw-", onTestFinished);
+	const previous = process.env.TMPDIR;
+	const failure = new Error("wake setup failed");
+	try {
+		process.env.TMPDIR = temp;
+		await expect(
+			isolateStackHome(() => {
+				throw failure;
+			}),
+		).rejects.toHaveProperty("cause", failure);
+		expect(readdirSync(temp)).toEqual([]);
+	} finally {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
 	}
 });
 
@@ -196,21 +214,23 @@ it("holds no wake helper off macOS", () => {
 	for (const platform of ["linux", "win32", "freebsd"] as const) expect(holdWake(platform)).toBeUndefined();
 });
 
-it.skipIf(existsSync("/usr/bin/caffeinate"))("refuses a macOS fixture whose caffeinate is missing", async () => {
-	const temp = realpathSync(mkdtempSync(join(tmpdir(), "pi-wake-missing-")));
-	const previous = process.env.TMPDIR;
-	try {
-		process.env.TMPDIR = temp;
-		const attempt = isolateStackHome(() => holdWake("darwin"));
-		await expect(attempt).rejects.toThrow("Cannot hold macOS wake assertions for stack tests");
-		await expect(attempt).rejects.toHaveProperty("cause.code", "ENOENT");
-		expect(readdirSync(temp)).toEqual([]);
-	} finally {
-		if (previous === undefined) delete process.env.TMPDIR;
-		else process.env.TMPDIR = previous;
-		rmSync(temp, { recursive: true, force: true });
-	}
-});
+it.skipIf(existsSync("/usr/bin/caffeinate"))(
+	"refuses a macOS fixture whose caffeinate is missing",
+	async ({ onTestFinished }) => {
+		const temp = realpathSync(makeTestTempDir("pi-wake-missing-", onTestFinished));
+		const previous = process.env.TMPDIR;
+		try {
+			process.env.TMPDIR = temp;
+			const attempt = isolateStackHome(() => holdWake("darwin"));
+			await expect(attempt).rejects.toThrow("Cannot hold macOS wake assertions for stack tests");
+			await expect(attempt).rejects.toHaveProperty("cause.code", "ENOENT");
+			expect(readdirSync(temp)).toEqual([]);
+		} finally {
+			if (previous === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = previous;
+		}
+	},
+);
 
 it("isolates without a wake helper and unsets on cleanup what was unset before", async () => {
 	const previous = { agent: process.env.PI_CODING_AGENT_DIR, xdg: process.env.XDG_CONFIG_HOME };
@@ -236,8 +256,10 @@ it("isolates without a wake helper and unsets on cleanup what was unset before",
 });
 
 for (const path of ["/usr/bin:/bin", undefined]) {
-	it(`puts the failing qmd first on ${path === undefined ? "an unset" : "the inherited"} PATH and restores it`, () => {
-		const root = mkdtempSync(join(tmpdir(), "pi-research-path-"));
+	it(`puts the failing qmd first on ${path === undefined ? "an unset" : "the inherited"} PATH and restores it`, ({
+		onTestFinished,
+	}) => {
+		const root = makeTestTempDir("pi-research-path-", onTestFinished);
 		const previous = process.env.PATH;
 		try {
 			if (path === undefined) delete process.env.PATH;
@@ -250,39 +272,34 @@ for (const path of ["/usr/bin:/bin", undefined]) {
 		} finally {
 			if (previous === undefined) delete process.env.PATH;
 			else process.env.PATH = previous;
-			rmSync(root, { recursive: true, force: true });
 		}
 	});
 }
 
-it("refuses a fork that resolves its own host copy", () => {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-host-copy-")));
+it("refuses a fork that resolves its own host copy", ({ onTestFinished }) => {
+	const root = realpathSync(makeTestTempDir("pi-host-copy-", onTestFinished));
+	const fork = join(root, "packages/todo");
+	const copy = join(fork, "node_modules/@earendil-works/pi-coding-agent");
+	mkdirSync(copy, { recursive: true });
+	writeFileSync(join(fork, "package.json"), JSON.stringify({ name: "copy", type: "module" }));
+	writeFileSync(
+		join(copy, "package.json"),
+		JSON.stringify({ name: "@earendil-works/pi-coding-agent", type: "module", exports: { ".": "./index.js" } }),
+	);
+	writeFileSync(join(copy, "index.js"), "export {};\n");
+	let error: unknown;
 	try {
-		const fork = join(root, "packages/todo");
-		const copy = join(fork, "node_modules/@earendil-works/pi-coding-agent");
-		mkdirSync(copy, { recursive: true });
-		writeFileSync(join(fork, "package.json"), JSON.stringify({ name: "copy", type: "module" }));
-		writeFileSync(
-			join(copy, "package.json"),
-			JSON.stringify({ name: "@earendil-works/pi-coding-agent", type: "module", exports: { ".": "./index.js" } }),
-		);
-		writeFileSync(join(copy, "index.js"), "export {};\n");
-		let error: unknown;
-		try {
-			assertHostIdentity("rpiv-todo", pathToFileURL(`${root}/`));
-		} catch (caught) {
-			error = caught;
-		}
-		expect(error).toBeInstanceOf(Error);
-		const { message, cause } = error as Error;
-		expect(message).toContain("Host identity check failed for rpiv-todo: ");
-		expect(message).toContain(`Delete '${join(fork, "node_modules")}/' and use root npm ci.`);
-		expect(String(cause)).toBe(
-			`Error: @earendil-works/pi-coding-agent: fork resolved '${join(copy, "index.js")}', stack resolved '${resolveHost("@earendil-works/pi-coding-agent", new URL(import.meta.url))}'`,
-		);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
+		assertHostIdentity("rpiv-todo", pathToFileURL(`${root}/`));
+	} catch (caught) {
+		error = caught;
 	}
+	expect(error).toBeInstanceOf(Error);
+	const { message, cause } = error as Error;
+	expect(message).toContain("Host identity check failed for rpiv-todo: ");
+	expect(message).toContain(`Delete '${join(fork, "node_modules")}/' and use root npm ci.`);
+	expect(String(cause)).toBe(
+		`Error: @earendil-works/pi-coding-agent: fork resolved '${join(copy, "index.js")}', stack resolved '${resolveHost("@earendil-works/pi-coding-agent", new URL(import.meta.url))}'`,
+	);
 });
 
 it("resolves a dual-format host identically through both engines' resolvers", () => {
