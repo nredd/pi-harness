@@ -819,6 +819,9 @@ struct NativeInputSink {
 	let sleep: (useconds_t) -> Void
 	let keyboardInputSource: () -> KeyboardInputSource
 	var checkCancellation: (() throws -> Void)?
+	/// Post-time stamp for pointer events, in `CGEventTimestamp` units (nanoseconds since startup, paused in sleep).
+	/// No default: every sink, including test fakes, names its clock.
+	let eventTimestamp: () -> CGEventTimestamp
 
 	func checkDragCancellation() throws {
 		try Task.checkCancellation()
@@ -858,7 +861,8 @@ struct NativeInputSink {
 		},
 		postHID: { event, _ in event.post(tap: .cghidEventTap) },
 		sleep: { _ = usleep($0) },
-		keyboardInputSource: currentKeyboardInputSource
+		keyboardInputSource: currentKeyboardInputSource,
+		eventTimestamp: { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
 	)
 }
 
@@ -4798,8 +4802,11 @@ final class Bridge {
 		optionalStringArg(request, "delivery") == "pid" ? "pid" : "hid"
 	}
 
+	/// Stamps at post time from a monotonic clock: a drag's release is allocated before its mouse-down, so its
+	/// creation time would precede the down and the drag steps.
 	private func postPointerEvent(_ event: CGEvent, pid: Int32, delivery: String) {
 		if delivery == "hid" { _ = inputSink.prepareHID(pid) }
+		event.timestamp = inputSink.eventTimestamp()
 		postEvent(event, pid: pid, delivery: delivery)
 	}
 
