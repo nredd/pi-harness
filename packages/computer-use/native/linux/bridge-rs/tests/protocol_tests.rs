@@ -71,3 +71,38 @@ fn diagnostics_response_is_flushed_after_stdin_eof() {
     assert_eq!(response["ok"], true);
     assert_eq!(response["result"]["protocolVersion"], PROTOCOL_VERSION);
 }
+
+#[test]
+fn termination_signals_drain_and_exit_cleanly() {
+    use std::io::{BufRead, BufReader};
+    for signal in ["TERM", "INT"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_linux-bridge"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn linux helper");
+        // One reply proves the handlers are installed: they register before the first read.
+        let request = json!({"protocolVersion": PROTOCOL_VERSION, "id": "sig", "cmd": "diagnostics", "args": {}});
+        writeln!(child.stdin.as_mut().unwrap(), "{request}").unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.as_mut().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert!(line.contains("\"sig\""), "{line}");
+        let killed = Command::new("kill")
+            .args([format!("-{signal}"), child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        // `wait` would close a stdin the child still owns; holding it keeps EOF away, so
+        // only the signal can end the helper here.
+        let stdin = child.stdin.take();
+        let status = child.wait().unwrap();
+        drop(stdin);
+        assert!(
+            status.success(),
+            "SIG{signal} must drain and exit 0, not kill the helper: {status:?}"
+        );
+    }
+}

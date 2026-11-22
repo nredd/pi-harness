@@ -2501,6 +2501,24 @@ async function dispatchUiTransaction(
 				};
 		} catch (error) {
 			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
+			// The request reached the helper but its reply was lost: the action may have run, in part or in full.
+			if (failure?.code === "reply_lost") {
+				const step = executionTraceFromAct(
+					{
+						outcome: "unknown",
+						error: { code: failure.code, message: failure.message },
+						evidence: { deliveryUncertain: true },
+					},
+					"foreground",
+				);
+				steps.push(step);
+				return {
+					...aggregateExecutions(steps),
+					error: step.error,
+					evidence: step.evidence,
+					stoppedAt: steps.length - 1,
+				};
+			}
 			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
 			if (!failure.evidence && steps.length === 0) throw error;
 			const step = executionTraceFromAct(
@@ -2672,8 +2690,10 @@ export async function terminalDesktopActionResult(
 			gone: condition.gone || undefined,
 			timeoutMs: condition.timeoutMs,
 		};
-		execution.outcome = outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus);
-		if (verificationStatus === "failed") {
+		// A transaction that already stopped keeps its outcome and original error; the check is recorded beside it.
+		const stopped = execution.error !== undefined;
+		if (!stopped) execution.outcome = outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus);
+		if (!stopped && verificationStatus === "failed") {
 			execution.error = {
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
@@ -2744,17 +2764,21 @@ export async function terminalDesktopActionResult(
 function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	const code = execution.error?.code;
 	const delivered = execution.evidence?.deliveredUnits;
-	const partial = code !== undefined && typeof delivered === "number";
+	const uncertain = execution.evidence?.deliveryUncertain === true;
+	const partial = code !== undefined && (typeof delivered === "number" || uncertain);
 	if (code !== "app_blocked" && code !== "input_deadline_expired" && !partial) return undefined;
 	const units = execution.evidence?.postedUnits;
 	const posted =
 		typeof units === "number"
 			? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.`
-			: partial
+			: typeof delivered === "number"
 				? ` ${delivered} input ${delivered === 1 ? "event" : "events"} posted.`
 				: "";
+	const unknown = uncertain ? " More input may have been delivered." : "";
+	const held = execution.evidence?.unconfirmedReleases;
+	const stuck = Array.isArray(held) && held.length > 0 ? ` Release of ${held.join(", ")} is unconfirmed.` : "";
 	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
-	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
+	return `Stopped${atAction} (${code}).${posted}${unknown}${stuck} Do not replay the transaction.`;
 }
 
 async function performDesktopTransaction(

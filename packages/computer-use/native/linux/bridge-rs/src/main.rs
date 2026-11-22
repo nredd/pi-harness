@@ -9,7 +9,7 @@ use linux_bridge::atspi::{
 use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::state::{fresh_state_id, HelperState};
 use linux_bridge::wayland::{PortalCapabilities, PortalClient, PortalError};
-use linux_bridge::x11::{self, Input, InputSink, PhysicalPolicy, SessionKind};
+use linux_bridge::x11::{self, Input, InputSink, InputState, PhysicalPolicy, SessionKind};
 use linux_bridge::{ErrorCode, ProtocolError, Request, Response};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -38,7 +38,17 @@ async fn main() {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(REQUEST_WORKERS));
     let mut requests = tokio::task::JoinSet::new();
-    while let Ok(Some(line)) = lines.next_line().await {
+    // Registered before the first read, so a SIGTERM or SIGINT from then on drains
+    // instead of killing the helper between a press and its release.
+    let mut shutdown = shutdown_signals();
+    loop {
+        let line = tokio::select! {
+            () = shutdown.recv() => break,
+            line = lines.next_line() => line,
+        };
+        let Ok(Some(line)) = line else {
+            break;
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -67,9 +77,44 @@ async fn main() {
             let _ = output.send(response);
         });
     }
+    // Stdin EOF, a read error or a signal: stop physical input before its next unit.
+    // An in-flight action runs its owed releases and replies; then the helper exits.
+    InputState::shared().cancel();
     while requests.join_next().await.is_some() {}
     drop(output);
     let _ = writer.await;
+    // Tokio's stdin reads on a blocking thread that runtime shutdown would wait on
+    // until EOF; every reply is written, so leave now.
+    std::process::exit(0);
+}
+
+/// SIGTERM and SIGINT, merged. A signal that cannot be registered keeps its default.
+struct ShutdownSignals {
+    terminate: Option<tokio::signal::unix::Signal>,
+    interrupt: Option<tokio::signal::unix::Signal>,
+}
+impl ShutdownSignals {
+    async fn recv(&mut self) {
+        async fn next(signal: &mut Option<tokio::signal::unix::Signal>) {
+            match signal {
+                Some(signal) => {
+                    signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        }
+        tokio::select! {
+            () = next(&mut self.terminate) => {}
+            () = next(&mut self.interrupt) => {}
+        }
+    }
+}
+fn shutdown_signals() -> ShutdownSignals {
+    use tokio::signal::unix::{signal, SignalKind};
+    ShutdownSignals {
+        terminate: signal(SignalKind::terminate()).ok(),
+        interrupt: signal(SignalKind::interrupt()).ok(),
+    }
 }
 
 fn action_lock() -> &'static tokio::sync::Mutex<()> {
@@ -648,9 +693,12 @@ fn physical_act(
     deliver_physical(&input, action, params, owning_window, point, &geometry)
 }
 
-/// Drive one physical action through `input`. A stop after any posted event is
-/// `unknown` with `evidence.deliveredUnits` and the refusal code: some input already
-/// reached the desktop, so it must never become an error a batch records as `didnt`.
+/// Drive one physical action through `input`. A stop after any posted event, or after
+/// a post whose delivery is unknown, is `unknown` with `evidence.deliveredUnits`
+/// (confirmed posts), `evidence.deliveryUncertain` when a post went unconfirmed,
+/// `evidence.unconfirmedReleases` when cleanup could not confirm a release, and the
+/// refusal code: input may have reached the desktop, so it must never become an error
+/// a batch records as `didnt`.
 fn deliver_physical<S: InputSink>(
     input: &Input<S>,
     action: &str,
@@ -667,9 +715,16 @@ fn deliver_physical<S: InputSink>(
     });
     match result {
         Ok(()) => Ok(response),
-        Err(error) if input.delivered_units() == 0 => Err(error),
+        Err(error) if input.delivered_units() == 0 && !input.delivery_uncertain() => Err(error),
         Err(error) => {
             response["evidence"]["deliveredUnits"] = json!(input.delivered_units());
+            if input.delivery_uncertain() {
+                response["evidence"]["deliveryUncertain"] = json!(true);
+            }
+            let unconfirmed = input.state().unconfirmed_releases();
+            if !unconfirmed.is_empty() {
+                response["evidence"]["unconfirmedReleases"] = json!(unconfirmed);
+            }
             response["error"] = json!({"code":error.code.to_string(),"message":error.message});
             Ok(response)
         }
@@ -816,18 +871,17 @@ where
     Ok(response)
 }
 
-/// A stop is `didnt` only when its last step checked that nothing happened; a step
-/// that stopped after posting input keeps the batch `unknown`.
+/// A stopped batch is `didnt` only when its first step checked that nothing happened.
+/// Any step before the stop ran and may have delivered input, and a step that stopped
+/// after posting is `unknown`, so those batches stay `unknown`; the refusal keeps its
+/// own step.
 fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
-    let last_didnt = steps
-        .last()
-        .is_some_and(|step| step.get("outcome").and_then(Value::as_str) == Some("didnt"));
-    if stopped && last_didnt {
+    fn outcome(step: &Value) -> Option<&str> {
+        step.get("outcome").and_then(Value::as_str)
+    }
+    if stopped && steps.len() == 1 && outcome(&steps[0]) == Some("didnt") {
         "didnt"
-    } else if steps
-        .iter()
-        .any(|step| step.get("outcome").and_then(Value::as_str) == Some("unknown"))
-    {
+    } else if stopped || steps.iter().any(|step| outcome(step) == Some("unknown")) {
         "unknown"
     } else {
         "worked"
@@ -1031,6 +1085,7 @@ mod test_peer;
 mod tests {
     use super::test_peer::{with_peer, StalledReply};
     use super::*;
+    use linux_bridge::testing::RecordingSink;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use zbus::{zvariant::OwnedObjectPath, Connection};
@@ -1266,7 +1321,8 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(seen, [0, 1]);
-            assert_eq!(result["outcome"], "didnt");
+            // Step 0 ran and may have delivered input: the refusal stays on step 1.
+            assert_eq!(result["outcome"], "unknown");
             assert_eq!(result["stoppedAt"], 1);
             assert_eq!(result["performed"]["actionCount"], 2);
             assert_eq!(result["steps"][0]["outcome"], "unknown");
@@ -1786,11 +1842,7 @@ mod tests {
         );
     }
 
-    fn deliver(
-        sink: x11::RecordingSink,
-        action: &str,
-        params: Value,
-    ) -> Result<Value, ProtocolError> {
+    fn deliver(sink: RecordingSink, action: &str, params: Value) -> Result<Value, ProtocolError> {
         let geometry = ActionGeometry {
             frame: Rect {
                 x: 0,
@@ -1815,7 +1867,7 @@ mod tests {
     fn physical_stop_after_posting_is_unknown_with_delivered_units() {
         // `abc`: the first two characters (four events) post, then the target loses focus.
         let result = deliver(
-            x11::RecordingSink::default().refuse_admission_after(4),
+            RecordingSink::default().refuse_admission_after(4),
             "typeText",
             json!({"text":"abc"}),
         )
@@ -1827,7 +1879,7 @@ mod tests {
         // setText: the click posts, then `a` of the select-all chord is refused and the
         // held control releases: motion, button down/up, control down/up.
         let result = deliver(
-            x11::RecordingSink::default().refuse_admission_after(5),
+            RecordingSink::default().refuse_admission_after(5),
             "setText",
             json!({"text":"x"}),
         )
@@ -1836,12 +1888,61 @@ mod tests {
         assert_eq!(result["evidence"]["deliveredUnits"], 5);
         // A drag point outside the look fails before anything posts.
         let error = deliver(
-            x11::RecordingSink::default(),
+            RecordingSink::default(),
             "drag",
             json!({"path":[{"x":1,"y":1},{"x":500,"y":1}]}),
         )
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn an_unconfirmed_post_is_unknown_even_with_nothing_confirmed() {
+        // The first press is applied but unacknowledged and its cleanup is rejected.
+        let state = Arc::new(x11::InputState::default());
+        let input = Input::with_state(
+            RecordingSink::default().lose_ack(0, true).fail_post(1),
+            Arc::clone(&state),
+        );
+        let geometry = ActionGeometry {
+            frame: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            image_width: 100,
+            image_height: 100,
+        };
+        let result = deliver_physical(
+            &input,
+            "keypress",
+            &json!({"keys":["control"]}),
+            7,
+            (5, 5),
+            &geometry,
+        )
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["evidence"]["deliveredUnits"], 0);
+        assert_eq!(result["evidence"]["deliveryUncertain"], true);
+        assert_eq!(
+            result["evidence"]["unconfirmedReleases"],
+            json!(["keycode 8"])
+        );
+        assert_eq!(result["error"]["code"], "internal_error");
+        // The held key blocks the next action before it posts anything.
+        let next = Input::with_state(RecordingSink::default(), state);
+        let error = deliver_physical(
+            &next,
+            "typeText",
+            &json!({"text":"a"}),
+            7,
+            (5, 5),
+            &geometry,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
     }
 
     #[test]
@@ -1855,10 +1956,10 @@ mod tests {
             ("setText", json!({"text":"a"})),
             ("keypress", json!({"keys":["enter"]})),
         ] {
-            let refused = x11::RecordingSink::default().refuse_admission_after(0);
+            let refused = RecordingSink::default().refuse_admission_after(0);
             let error = deliver(refused, action, params.clone()).unwrap_err();
             assert_eq!(error.code, ErrorCode::ForegroundRequired, "{action}");
-            let result = deliver(x11::RecordingSink::default(), action, params).unwrap();
+            let result = deliver(RecordingSink::default(), action, params).unwrap();
             assert_eq!(result["outcome"], "unknown", "{action}");
             assert!(result.get("error").is_none(), "{action}");
             assert!(
@@ -1872,10 +1973,10 @@ mod tests {
             ("drag", json!({"path":[{"y":1}]})),
             ("drag", json!({"path":[{"x":1}]})),
         ] {
-            let error = deliver(x11::RecordingSink::default(), action, params).unwrap_err();
+            let error = deliver(RecordingSink::default(), action, params).unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidRequest, "{action}");
         }
-        let error = deliver(x11::RecordingSink::default(), "wiggle", json!({})).unwrap_err();
+        let error = deliver(RecordingSink::default(), "wiggle", json!({})).unwrap_err();
         assert_eq!(error.code, ErrorCode::UnsupportedCommand);
     }
 
@@ -1917,12 +2018,16 @@ mod tests {
             batch_outcome(&[json!({"outcome":"unknown"})], true),
             "unknown"
         );
-        assert_eq!(
-            batch_outcome(
-                &[json!({"outcome":"unknown"}), json!({"outcome":"didnt"})],
-                true
-            ),
-            "didnt"
-        );
+        for prefix in ["worked", "unknown"] {
+            assert_eq!(
+                batch_outcome(
+                    &[json!({"outcome":prefix}), json!({"outcome":"didnt"})],
+                    true
+                ),
+                "unknown",
+                "{prefix} prefix"
+            );
+        }
+        assert_eq!(batch_outcome(&[json!({"outcome":"didnt"})], true), "didnt");
     }
 }

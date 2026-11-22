@@ -98,6 +98,76 @@ test.for([
 	},
 );
 
+test.for([{ first: true }, { first: false }])(
+	"a reply lost after submission is unknown and ends the transaction (first step: $first)",
+	async ({ first }, { onTestFinished }) => {
+		const { fake, act } = await observed(onTestFinished);
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			if (!first && fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "hid" } };
+			throw Object.assign(new Error("Helper command 'act' timed out after 15000ms."), { code: "reply_lost" });
+		};
+		const result = await act([press, press, press]);
+		const { execution } = result.details;
+		const at = first ? 0 : 1;
+		assert.equal(fake.actCalls.length, at + 1, "nothing after the lost reply is dispatched");
+		assert.equal(execution.outcome, "unknown");
+		assert.equal(execution.stoppedAt, at);
+		assert.equal(execution.steps[at].outcome, "unknown");
+		assert.deepEqual(execution.evidence, { deliveryUncertain: true });
+		assert.equal(execution.error.code, "reply_lost");
+		assert.ok(
+			fake
+				.text(result)
+				.startsWith(
+					`Stopped at action ${at + 1} (reply_lost). More input may have been delivered. Do not replay the transaction.`,
+				),
+		);
+	},
+);
+
+test("a stop that left input held names the unconfirmed release", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	fake.actResult = {
+		outcome: "unknown",
+		performed: { delivery: "hid" },
+		error: { code: "foreground_required", message: "focus moved" },
+		evidence: { deliveredUnits: 0, deliveryUncertain: true, unconfirmedReleases: ["keycode 37"] },
+	};
+	const result = await act([press, press]);
+	assert.equal(fake.actCalls.length, 1);
+	assert.ok(
+		fake
+			.text(result)
+			.startsWith(
+				"Stopped at action 1 (foreground_required). 0 input events posted. More input may have been delivered. Release of keycode 37 is unconfirmed. Do not replay the transaction.",
+			),
+	);
+});
+
+test("partial stop survives root closure", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const error = { code: "foreground_required", message: "Refusing XTEST delivery" };
+	fake.actResult = { outcome: "unknown", performed: { delivery: "hid" }, error, evidence: { deliveredUnits: 2 } };
+	let closed = false;
+	failCapture(fake, () => {
+		closed = true;
+	});
+	fake.listRootsHook = (query) =>
+		closed ? [] : query?.pid ? fake.roots.filter((root) => root.pid === query.pid) : fake.roots;
+	const result = await act([press, press], { expect: { text: "Done", timeoutMs: 250 } });
+	const { execution } = result.details;
+	assert.equal(result.details.status, "target_closed");
+	assert.equal(execution.outcome, "unknown", "the partial stop is not rewritten as didnt");
+	assert.deepEqual(execution.error, error, "the original refusal is kept");
+	assert.equal(execution.verification.status, "failed", "the check is still recorded");
+	assert.ok(
+		fake
+			.text(result)
+			.startsWith("Stopped at action 1 (foreground_required). 2 input events posted. Do not replay the transaction."),
+	);
+});
+
 test("an unknown step makes the transaction unknown, and all-worked steps make it worked", async ({
 	onTestFinished,
 }) => {

@@ -14,6 +14,12 @@ const HELPER_SETUP_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const HELPER_PROBE_TIMEOUT_MS = 5_000;
 const SETUP_KILL_GRACE_MS = 2_000;
+/**
+ * SIGTERM-to-SIGKILL grace for a discarded helper. On SIGTERM (or stdin EOF) the helper stops admitting
+ * physical input before its next unit, posts the releases it owes and exits; SIGKILL only backstops a
+ * helper that is hung, and skips that cleanup.
+ */
+export const HELPER_TERMINATE_GRACE_MS = 750;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
 export const LINUX_HELPER_PROTOCOL_VERSION = 4;
@@ -95,6 +101,15 @@ async function runProcess(
 const RESTART_HINT = "Restart Pi to use the installed helper.";
 const SESSION_CLOSED_MESSAGE = "Linux helper closed because the Pi session ended.";
 
+/**
+ * A request already written whose reply will never be read: timed out, aborted or orphaned by a helper exit.
+ * The helper may have executed it, or part of it, so callers must treat its effect as unknown, never replay it.
+ */
+function replyLost(error: unknown): Error & { code: string } {
+	const message = error instanceof Error ? error.message : String(error);
+	return Object.assign(new Error(message, { cause: error }), { code: "reply_lost" });
+}
+
 function reason(error: unknown): string {
 	return (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
 }
@@ -163,16 +178,21 @@ export class LinuxHelperClient {
 		child.stdout.destroy();
 		child.stderr.destroy();
 		child.kill("SIGTERM");
+		const backstop = setTimeout(() => {
+			if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
+		}, HELPER_TERMINATE_GRACE_MS);
+		backstop.unref();
+		child.once("exit", () => clearTimeout(backstop));
 		child.unref();
 	}
 
-	/** Reject in-flight commands: all of them, or only those sent to `child` when it is given. */
+	/** Reject in-flight commands as lost replies: all of them, or only those sent to `child` when it is given. */
 	private rejectPending(error: Error, child?: ChildProcessWithoutNullStreams): void {
 		for (const [id, pending] of this.pending) {
 			if (child && pending.child !== child) continue;
 			this.pending.delete(id);
 			clearTimeout(pending.timer);
-			pending.reject(error);
+			pending.reject(replyLost(error));
 		}
 	}
 
@@ -391,15 +411,16 @@ export class LinuxHelperClient {
 	): Promise<T> {
 		const id = randomUUID();
 		return await new Promise<T>((resolve, reject) => {
+			// The helper protocol has no cancel message: an abort or timeout only stops waiting for the reply.
 			const onAbort = () => {
 				this.pending.delete(id);
 				clearTimeout(timer);
-				reject(new Error("Operation aborted."));
+				reject(replyLost(new Error("Operation aborted.")));
 			};
 			const timer = setTimeout(() => {
 				signal?.removeEventListener("abort", onAbort);
 				this.pending.delete(id);
-				reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`));
+				reject(replyLost(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)));
 			}, timeoutMs);
 			this.pending.set(id, {
 				child,

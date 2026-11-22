@@ -550,12 +550,19 @@ setInterval(() => {}, 1000);
 		await assert.rejects(cancelled, /Operation aborted/);
 		const pending = client.send(child, "hold", {}, 5000);
 		// Attach every assertion immediately, including while the acknowledgement is pending.
+		// The helper read `hold` before its stdin closed, so that reply is lost, not refused. A write that
+		// fails outright is EPIPE; one still pending when the stream error lands is lost the same way.
+		const epipe = (lost) => (error) => {
+			assert.equal(error.code === "reply_lost" ? error.cause.code : error.code, "EPIPE");
+			if (lost) assert.equal(error.code, "reply_lost");
+			return true;
+		};
 		await Promise.all([
-			assert.rejects(pending, { code: "EPIPE" }),
+			assert.rejects(pending, epipe(true)),
 			// Bun can acknowledge a small write into its own buffer after the peer closes stdin.
 			// Exceed that buffer so the OS write actually fails; a write callback is not delivery proof.
 			ready.then(() =>
-				assert.rejects(client.send(child, "test", { payload: "x".repeat(64 * 1024) }, 5000), { code: "EPIPE" }),
+				assert.rejects(client.send(child, "test", { payload: "x".repeat(64 * 1024) }, 5000), epipe(false)),
 			),
 			exit,
 		]);

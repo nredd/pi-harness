@@ -1,0 +1,213 @@
+//! Headless test support: a scripted [`InputSink`] that records every post.
+//!
+//! Built only for this crate's tests (`cfg(test)` or the `testing` feature its
+//! dev-dependency enables), so the shipped helper does not expose it.
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use x11rb::protocol::xproto::{Keycode, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT};
+
+use crate::x11::{InputSink, InputState, PostFailure};
+use crate::{ErrorCode, ProtocolError};
+
+/// One event a [`RecordingSink`] applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostedEvent {
+    pub event: u8,
+    pub detail: u8,
+    pub x: i32,
+    pub y: i32,
+    /// Whether an admission check immediately preceded this post.
+    pub admitted: bool,
+}
+
+/// Headless sink that records applied posts, tracks which keys and buttons are
+/// down, and refuses, fails, loses acknowledgments or panics on a script.
+///
+/// Post attempts are numbered from zero in call order. Keycodes are assigned in
+/// first-use order from 8, the lowest X11 keycode.
+#[derive(Debug, Default)]
+pub struct RecordingSink {
+    events: RefCell<Vec<PostedEvent>>,
+    keymap: RefCell<Vec<u32>>,
+    /// `(is_button, detail)` currently down, for anyone.
+    down: RefCell<BTreeSet<(bool, u8)>>,
+    pending_admission: Cell<bool>,
+    admissions: Cell<usize>,
+    point_admissions: Cell<usize>,
+    attempts: Cell<usize>,
+    refuse_admission_after: Option<usize>,
+    refuse_points: bool,
+    cover_points_after: Option<usize>,
+    unmapped: Option<u32>,
+    fail_posts: Vec<usize>,
+    lost_acks: Vec<(usize, bool)>,
+    panic_posts: Vec<usize>,
+    cancel_after: Option<(usize, Arc<InputState>)>,
+    query_fails: bool,
+}
+impl RecordingSink {
+    /// Admit the first `admissions` checks, then refuse with `foreground_required`.
+    pub fn refuse_admission_after(mut self, admissions: usize) -> Self {
+        self.refuse_admission_after = Some(admissions);
+        self
+    }
+    /// Reject the post at zero-based `attempt` definitively: nothing is applied.
+    pub fn fail_post(mut self, attempt: usize) -> Self {
+        self.fail_posts.push(attempt);
+        self
+    }
+    /// Lose the acknowledgment of the post at `attempt`: it is uncertain to the
+    /// caller, and applied to the desktop only when `applied`.
+    pub fn lose_ack(mut self, attempt: usize, applied: bool) -> Self {
+        self.lost_acks.push((attempt, applied));
+        self
+    }
+    /// Panic inside the post at `attempt`, before anything is applied.
+    pub fn panic_post(mut self, attempt: usize) -> Self {
+        self.panic_posts.push(attempt);
+        self
+    }
+    /// Refuse every point admission with `coordinate_blocked`.
+    pub fn refuse_points(mut self) -> Self {
+        self.refuse_points = true;
+        self
+    }
+    /// Admit the first `admissions` point checks, then report the point covered.
+    pub fn cover_points_after(mut self, admissions: usize) -> Self {
+        self.cover_points_after = Some(admissions);
+        self
+    }
+    /// Report `sym` as missing from the keymap.
+    pub fn unmapped(mut self, sym: u32) -> Self {
+        self.unmapped = Some(sym);
+        self
+    }
+    /// Start with the key (or button) `detail` already held by another client.
+    pub fn held(self, button: bool, detail: u8) -> Self {
+        self.down.borrow_mut().insert((button, detail));
+        self
+    }
+    /// Cancel `state` after `posts` posts were applied, as a shutdown signal would.
+    pub fn cancel_after(mut self, posts: usize, state: Arc<InputState>) -> Self {
+        self.cancel_after = Some((posts, state));
+        self
+    }
+    /// Fail every key and button state query.
+    pub fn query_fails(mut self) -> Self {
+        self.query_fails = true;
+        self
+    }
+    /// Events applied so far, in post order.
+    pub fn events(&self) -> Vec<PostedEvent> {
+        self.events.borrow().clone()
+    }
+    fn apply(&self, event: u8, detail: u8, x: i32, y: i32, admitted: bool) {
+        let button = matches!(event, BUTTON_PRESS_EVENT | BUTTON_RELEASE_EVENT);
+        if matches!(event, KEY_PRESS_EVENT | BUTTON_PRESS_EVENT) {
+            self.down.borrow_mut().insert((button, detail));
+        } else {
+            self.down.borrow_mut().remove(&(button, detail));
+        }
+        self.events.borrow_mut().push(PostedEvent {
+            event,
+            detail,
+            x,
+            y,
+            admitted,
+        });
+        if let Some((posts, state)) = &self.cancel_after {
+            if self.events.borrow().len() >= *posts {
+                state.cancel();
+            }
+        }
+    }
+}
+impl InputSink for RecordingSink {
+    fn admit(&self) -> Result<(), ProtocolError> {
+        let admissions = self.admissions.get();
+        if self
+            .refuse_admission_after
+            .is_some_and(|limit| admissions >= limit)
+        {
+            return Err(ProtocolError::new(
+                "Recorded target is no longer active",
+                ErrorCode::ForegroundRequired,
+            ));
+        }
+        self.admissions.set(admissions + 1);
+        self.pending_admission.set(true);
+        Ok(())
+    }
+    fn admit_point(&self, _x: i32, _y: i32) -> Result<(), ProtocolError> {
+        // A refused point voids the admission before it.
+        let admitted = self.pending_admission.replace(false);
+        if self.refuse_points {
+            return Err(ProtocolError::new(
+                "Recorded point is outside the target",
+                ErrorCode::CoordinateBlocked,
+            ));
+        }
+        let admissions = self.point_admissions.get();
+        if self
+            .cover_points_after
+            .is_some_and(|limit| admissions >= limit)
+        {
+            return Err(ProtocolError::new(
+                "Recorded point is covered by another window",
+                ErrorCode::OccludedTarget,
+            ));
+        }
+        self.point_admissions.set(admissions + 1);
+        self.pending_admission.set(admitted);
+        Ok(())
+    }
+    fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError> {
+        if self.unmapped == Some(sym) {
+            return Ok(None);
+        }
+        let mut keymap = self.keymap.borrow_mut();
+        let index = keymap
+            .iter()
+            .position(|&known| known == sym)
+            .unwrap_or_else(|| {
+                keymap.push(sym);
+                keymap.len() - 1
+            });
+        Ok(Some(8 + index as u8))
+    }
+    fn is_down(&self, button: bool, detail: u8) -> Result<bool, ProtocolError> {
+        if self.query_fails {
+            return Err(ProtocolError::new(
+                "Recorded state query failed",
+                ErrorCode::InternalError,
+            ));
+        }
+        Ok(self.down.borrow().contains(&(button, detail)))
+    }
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
+        let admitted = self.pending_admission.replace(false);
+        let attempt = self.attempts.replace(self.attempts.get() + 1);
+        if self.panic_posts.contains(&attempt) {
+            panic!("recorded post {attempt} panicked");
+        }
+        if self.fail_posts.contains(&attempt) {
+            return Err(PostFailure::Rejected(ProtocolError::new(
+                "Recorded post was rejected",
+                ErrorCode::InternalError,
+            )));
+        }
+        if let Some(&(_, applied)) = self.lost_acks.iter().find(|(at, _)| *at == attempt) {
+            if applied {
+                self.apply(event, detail, x, y, admitted);
+            }
+            return Err(PostFailure::Uncertain(ProtocolError::new(
+                "Recorded post acknowledgment was lost",
+                ErrorCode::InternalError,
+            )));
+        }
+        self.apply(event, detail, x, y, admitted);
+        Ok(())
+    }
+}

@@ -501,6 +501,54 @@ describe("Linux helper client", () => {
 		module.linuxHelper.dispose();
 	});
 
+	test("a reply lost after the request was written is reply_lost: timeout, abort and helper exit", async () => {
+		install();
+		const engine = linuxEngine({ hang: silent() });
+		const { client, children } = await linux({ helper: { engine } });
+		const lost = (pattern) => (error) => {
+			assert.match(error.message, pattern);
+			assert.equal(error.code, "reply_lost");
+			return true;
+		};
+		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), lost(/timed out after 30ms\./));
+		const controller = new AbortController();
+		const aborted = client.command("hang", {}, { signal: controller.signal });
+		await vi.waitFor(() => assert.equal(engine.requests.filter((request) => request.cmd === "hang").length, 2));
+		controller.abort();
+		await assert.rejects(aborted, lost(/^Operation aborted\.$/));
+		const orphaned = client.command("hang");
+		await vi.waitFor(() => assert.equal(engine.requests.filter((request) => request.cmd === "hang").length, 3));
+		children[0].exit(1);
+		await assert.rejects(orphaned, lost(/Linux helper exited with code 1\./));
+	});
+
+	test("a discarded helper gets SIGTERM, then SIGKILL only if it outlives the grace", async () => {
+		install();
+		const { client, children, module } = await linux({ helper: { engine: linuxEngine({ look: ok(1) }) } });
+		assert.equal(await client.command("look"), 1);
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		client.dispose();
+		assert.deepEqual(children[0].signals, ["SIGTERM"]);
+		await vi.advanceTimersByTimeAsync(module.HELPER_TERMINATE_GRACE_MS - 1);
+		assert.deepEqual(children[0].signals, ["SIGTERM"], "the helper may drain and release held input first");
+		await vi.advanceTimersByTimeAsync(1);
+		assert.deepEqual(children[0].signals, ["SIGTERM", "SIGKILL"]);
+
+		const second = await linux({ helper: { engine: linuxEngine({ look: ok(1) }) } });
+		assert.equal(await second.client.command("look"), 1);
+		second.client.dispose();
+		second.children[0].emit("exit", 0, null);
+		await vi.advanceTimersByTimeAsync(second.module.HELPER_TERMINATE_GRACE_MS);
+		assert.deepEqual(second.children[0].signals, ["SIGTERM"], "a helper that exited is not SIGKILLed");
+
+		const third = await linux({ helper: { engine: linuxEngine({ look: ok(1) }) } });
+		assert.equal(await third.client.command("look"), 1);
+		third.children[0].signalCode = "SIGTERM";
+		third.client.dispose();
+		await vi.advanceTimersByTimeAsync(third.module.HELPER_TERMINATE_GRACE_MS);
+		assert.deepEqual(third.children[0].signals, ["SIGTERM"], "a helper the signal ended is not SIGKILLed");
+	});
+
 	test("an installed, compatible helper is probed once and serves commands with no setup", async () => {
 		install();
 		const engine = linuxEngine({ look: ok({ roots: [] }) });
@@ -912,6 +960,9 @@ describe("Linux helper client", () => {
 		await vi.waitFor(() => assert.equal(engine.requests.length, 1));
 		children[0].stdin.emit("error", "pipe closed");
 		await assert.rejects(pending, /was rejected: pipe closed\./);
+		// The pending probe's lost reply wraps that value; a spawn failure reaches `reason` unwrapped.
+		const spawnFailed = await linux({ setup: { exitCode: 1 }, helper: { spawnError: "spawn refused" } });
+		await assert.rejects(spawnFailed.client.ensureInstalled(), /was rejected: spawn refused\./);
 	});
 
 	test("dispose while the executable check is in flight stops ensureInstalled (checked helper present)", async () => {

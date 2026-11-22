@@ -188,6 +188,9 @@ fn every_error_has_the_stable_wire_code_and_display() {
         (ErrorCode::CoordinateBlocked, "coordinate_blocked"),
         (ErrorCode::ForegroundRequired, "foreground_required"),
         (ErrorCode::SecureTextUnreadable, "secure_text_unreadable"),
+        (ErrorCode::OccludedTarget, "occluded_target"),
+        (ErrorCode::InputUnsafe, "input_unsafe"),
+        (ErrorCode::Cancelled, "cancelled"),
     ] {
         assert_eq!(serde_json::to_value(code).unwrap(), wire);
         assert_eq!(code.to_string(), wire);
