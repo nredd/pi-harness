@@ -1976,3 +1976,29 @@ test("a confirmed model block is visible beside healthy legacy quota, from v1 bl
 		"Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | opus blocked->12:00 read | OAI 7d 35% @Jan 18 12:00",
 	);
 });
+
+test("a fallback row searches every block for one that fits whole and counts the blocks it drops", () => {
+	const opus = mark(CLOCK + hour, "inferred", ["claude-opus-extended-family"]);
+	const wide = mark(CLOCK + hour, "inferred");
+	const fit = (marks: unknown[], width: number) =>
+		footer.fitQuotaRows(projected([view("A", { marks })]), width, plain, fixed);
+	// The provider-wide block outranks a model block, whichever comes first.
+	for (const marks of [
+		[opus, wide],
+		[wide, opus],
+	]) {
+		assert.deepEqual(fit(marks, 19), ["Left: A blocked inf"]);
+		assert.deepEqual(fit(marks, 23), ["Left: A blocked inf +1!"]);
+		// The pointer outranks the scope word: a terse head that counts the drop beats a silent one.
+		assert.deepEqual(fit(marks, 31), ["Left: A blocked inf +1!"]);
+		assert.deepEqual(fit(marks, 32), ["Left: A provider blocked inf +1!"]);
+	}
+	// Among model blocks, the first one that fits whole is shown, not the label alone.
+	const short = mark(CLOCK + hour, "inferred", ["m"]);
+	assert.deepEqual(fit([opus, short], 22), ["Left: A m blocked inf"]);
+	assert.deepEqual(fit([opus, short], 25), ["Left: A m blocked inf +1!"]);
+	// A dropped block is worth a shorter label.
+	assert.deepEqual(footer.fitQuotaRows(projected([view("Alpha", { marks: [wide, opus] })]), 23, plain, fixed), [
+		"Left: A blocked inf +1!",
+	]);
+});

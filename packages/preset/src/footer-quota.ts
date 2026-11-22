@@ -658,7 +658,8 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 				? `(${cell.evidence})`
 				: { inferred: "inf", observed: "obs", read: "read", unknown: "unk" }[cell.evidence];
 			// Terse keeps the scope kind honest: a model-scoped block never reads as the whole provider.
-			const subject = layout.terse ? (families.length ? "model " : "") : `${scope} `;
+			const model = scope.length < "model".length ? scope : "model";
+			const subject = layout.terse ? (families.length ? `${model} ` : "") : `${scope} `;
 			return colorize(
 				"warning",
 				`${subject}blocked${when ? (full ? ` until ${when}` : `->${when.split(" ").at(-1)}`) : ""} ${evidence}`,
@@ -696,7 +697,10 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 	const rendered = segments.flatMap(({ quota, cells }) => {
 		const shown = layout.essential ? cells.filter(isEssential) : cells;
 		if (!shown.length) return [];
-		const marks = shown.filter((cell) => cell.kind === "mark");
+		// Provider-wide blocks lead model blocks: they stop every model of the provider.
+		const marks = shown
+			.filter((cell) => cell.kind === "mark")
+			.sort((a, b) => Number(a.families.length > 0) - Number(b.families.length > 0));
 		const data = shown.filter((cell) => cell.kind !== "mark");
 		// Staleness qualifies cached readings only. Marks carry their own expiry, so never read as stale.
 		// Generic rows also age at the render clock; legacy rows keep their parsed flag byte for byte.
@@ -768,9 +772,9 @@ type Piece = { cell: QuotaCell; sep: string; layout: Layout };
 
 /**
  * One prioritized row within `width`: the label yields first, so the highest-priority cell
- * (a mark, then the lowest quota) always survives whole, with its scope and evidence together.
- * A mark that cannot fit even tersely is omitted rather than clipped mid-assertion; whole lower
- * cells are dropped behind a ` ...` marker.
+ * (the first mark that fits whole, else the lowest quota) survives with its scope and evidence
+ * together. A mark that cannot fit even tersely is omitted rather than clipped mid-assertion;
+ * whole lower cells are dropped behind ` +K!` (K blocks dropped) or else a ` ...` marker.
  */
 function budgetRow(
 	lead: string,
@@ -783,29 +787,49 @@ function budgetRow(
 	opts: ResolvedOptions,
 ): string {
 	const dim = (text: string) => colorize("dim", text);
-	const draw = (label: string, chosen: Piece[], more: boolean) =>
+	const draw = (label: string, chosen: Piece[], marker: string) =>
 		dim(`${lead}${label}${suffix}`) +
 		chosen.map((piece) => dim(piece.sep) + cellText(piece.cell, piece.layout, colorize, opts)).join("") +
-		(more ? dim(MORE) : "");
+		(marker ? dim(marker) : "");
 	const all: Piece[] = pieces.map((piece) => ({ ...piece, layout }));
 	const size = (piece: Piece) => piece.sep.length + cellText(piece.cell, piece.layout, PLAIN, opts).length;
-	const [first, ...rest] = all as [Piece, ...Piece[]];
-	const heads = first.cell.kind === "mark" ? [first, { ...first, layout: { ...layout, terse: true } }] : [first];
+	const marks = all.filter((piece) => piece.cell.kind === "mark");
+	// Search every mark, whole then terse, for one that fits before falling back to the label alone.
+	const heads = marks.length
+		? marks.flatMap((piece) => [piece, { ...piece, layout: { ...layout, terse: true } }])
+		: all.slice(0, 1);
+	// A row that drops a block without saying so is kept only when no other head can count it.
+	let silent: string | undefined;
 	for (const head of heads) {
 		const room = width - lead.length - suffix.length - size(head);
 		if (room < 1) continue;
-		const label = shorten(name, room);
+		let label = shorten(name, room);
 		const chosen = [head];
 		let used = lead.length + label.length + suffix.length + size(head);
-		for (const piece of rest) {
+		for (const piece of all) {
+			if (piece.cell === head.cell) continue;
 			if (used + size(piece) > width) break;
 			chosen.push(piece);
 			used += size(piece);
 		}
-		const dropped = chosen.length < all.length;
-		while (dropped && chosen.length > 1 && used + MORE.length > width) used -= size(chosen.pop() as Piece);
-		return draw(label, chosen, dropped && used + MORE.length <= width);
+		const marker = () => {
+			if (chosen.length === all.length) return "";
+			const hidden = marks.filter((piece) => !chosen.some((kept) => kept.cell === piece.cell)).length;
+			return hidden ? ` +${hidden}!` : MORE;
+		};
+		while (chosen.length > 1 && used + marker().length > width) used -= size(chosen.pop() as Piece);
+		// A dropped block is worth a shorter label, down to one character.
+		const over = used + marker().length - width;
+		if (over > 0 && marker() !== MORE && label.length - over >= 1) {
+			label = shorten(name, label.length - over);
+			used -= over;
+		}
+		const shown = used + marker().length <= width ? marker() : "";
+		const row = draw(label, chosen, shown);
+		if (shown || marker() === "" || marker() === MORE) return row;
+		silent ??= row;
 	}
+	if (silent !== undefined) return silent;
 	// Nothing fits beside even a one-character label: show what fits of the provider, assert nothing.
 	const label = shorten(name, Math.max(0, width - lead.length));
 	return dim(`${lead}${label}`.slice(0, Math.max(0, width)));
