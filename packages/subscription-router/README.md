@@ -323,7 +323,9 @@ adapter defines `read({ token, signal, now })` and should stop on abort. Return 
 (and optional `meters`, `pools` or `credits`), or `undefined` for unsupported data. Only matching
 percentage windows can block models. Set `providers.<provider>.collector.id` to use a different
 registered adapter; credentials still come from `<provider>`. Unknown explicit IDs return `unavailable`
-without falling back to the provider ID.
+without falling back to the provider ID. The router validates and copies reading fields; malformed
+readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
+reported basis; extensions cannot set snapshot metadata.
 
 No Google subscription collector or OAuth client is bundled. A user-supplied Google subscription
 collector must be read-only, use local first-party client state or a documented first-party client

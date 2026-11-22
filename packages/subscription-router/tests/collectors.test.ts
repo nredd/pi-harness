@@ -244,6 +244,83 @@ it("applies the usage deadline and backoff to a custom reader even if it ignores
 	expect(fetch).not.toHaveBeenCalled();
 });
 
+it.each([NaN, Infinity, -1, 101, "100"])(
+	"rejects invalid used percentages (%s) without blocking",
+	async (usedPercent) => {
+		const { usage } = harness();
+		const malformed = { windows: [{ name: "bad", scope: "provider", usedPercent }] } as CollectorReading;
+		install({ ...fake, read: async () => malformed });
+		expect(await usage.get(ctx, provider)).toMatchObject({
+			status: "error",
+			message: "Usage response had an unsupported shape.",
+		});
+		const router = new Router(usage, new ExhaustionTracker(() => T0), () => T0);
+		expect(router.blockedBy({ provider, id: "faux-one" })).toBeUndefined();
+	},
+);
+
+it("copies bounded reading fields without accepting adapter metadata or out-of-range resets", async () => {
+	const { usage } = harness();
+	const window = {
+		name: "fake",
+		scope: "model" as const,
+		families: ["faux-one"],
+		usedPercent: 100,
+		basis: "inferred" as const,
+		resetAt: Number.MAX_SAFE_INTEGER,
+		durationMs: 10_000,
+		kind: "calendar" as const,
+		resetRule: { at: "09:00", timeZone: "UTC", every: "day" as const },
+		quantity: { unit: "requests" as const, used: 100, limit: 100, remaining: 0 },
+	};
+	const payload = {
+		provider: "spoofed",
+		status: "stale",
+		retrievedAt: 1,
+		expiresAt: 2,
+		access: "metered",
+		basis: "inferred",
+		windows: [window],
+		meters: reading.meters,
+		pools: [
+			{ ...reading.pools?.[0], name: "pool", unit: "usd" as const, role: "prepaid" as const, appliesAfter: ["fake"] },
+		],
+		credits: { available: true, unlimited: false, balance: "12", raw: "not evidence" },
+	};
+	install({ ...fake, read: async () => payload });
+	const snapshot = await usage.get(ctx, provider);
+	window.families[0] = "faux-two";
+	window.quantity.used = 0;
+	window.resetRule.at = "10:00";
+	payload.pools[0]?.appliesAfter.pop();
+	expect(snapshot).toMatchObject({
+		provider,
+		status: "available",
+		retrievedAt: T0,
+		expiresAt: T0 + 300_000,
+		windows: [{ families: ["faux-one"], resetRule: { at: "09:00" }, quantity: { used: 100 } }],
+		pools: [{ appliesAfter: ["fake"] }],
+	});
+	expect(snapshot).not.toHaveProperty("access");
+	expect(snapshot).not.toHaveProperty("basis");
+	expect(snapshot.credits).not.toHaveProperty("raw");
+	expect(snapshot.windows[0]).not.toHaveProperty("basis");
+	expect(snapshot.windows[0]?.resetAt).toBeUndefined();
+	const router = new Router(usage, new ExhaustionTracker(() => T0), () => T0);
+	expect(router.blockedBy({ provider, id: "faux-one" })).toMatchObject({ reason: "fake exhausted" });
+});
+
+it("sanitizes thrown adapter callbacks independently of reading validation", async () => {
+	const { usage } = harness();
+	install({
+		...fake,
+		read: () => {
+			throw new Error("private fake payload");
+		},
+	});
+	expect(await usage.get(ctx, provider)).toMatchObject({ status: "error", message: "Usage request failed." });
+});
+
 it("selects configured collector IDs without changing the credential provider", async () => {
 	const { usage, getAccessToken } = harness();
 	const { pi } = createRecordingPi();

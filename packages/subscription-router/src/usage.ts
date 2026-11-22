@@ -13,6 +13,7 @@
 
 import { addAbortListener } from "node:events";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { normalizeReading } from "./collector-reading.ts";
 import { type CollectorReading, type CollectorRegistration, registrationFor } from "./collectors.ts";
 
 import type { ProviderConfig } from "./config.ts";
@@ -555,14 +556,13 @@ export class UsageService {
 				parsed = collector.parse(payload);
 			} else {
 				// Custom reads get the same deadline even if the adapter ignores abort.
-				const deadline = new Promise<never>((_, reject) => {
-					signal.addEventListener("abort", () => reject(new DOMException("Timed out", "AbortError")), { once: true });
-				});
-				parsed = await Promise.race([collector.read({ token, signal, now: () => this.transport.now() }), deadline]);
+				const read = collector.read({ token, signal, now: () => this.transport.now() });
+				parsed = await untilAborted(read, signal);
 			}
-			if (!parsed) return failure("Usage response had an unsupported shape.");
+			const reading = normalizeReading(parsed);
+			if (!reading) return failure("Usage response had an unsupported shape.");
 			return {
-				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...parsed },
+				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...reading },
 				failed: false,
 			};
 		} catch (error) {
@@ -572,6 +572,19 @@ export class UsageService {
 		} finally {
 			clearTimeout(timeout);
 		}
+	}
+}
+
+/** Bound awaited work even when an adapter ignores the signal. */
+async function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+	let listener: Disposable | undefined;
+	const cancelled = new Promise<never>((_, reject) => {
+		listener = addAbortListener(signal, () => reject(signal.reason));
+	});
+	try {
+		return await Promise.race([cancelled, work]);
+	} finally {
+		listener?.[Symbol.dispose]();
 	}
 }
 
