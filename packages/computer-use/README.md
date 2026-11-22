@@ -57,6 +57,8 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   deltas refuse during parsing before any mutation. Every actual rounded drag vertex (start, waypoints, end) is
   checked before the first mutation for live containment and hit-tested ownership. Coordinate paths
   use observed image pixels, reject stale window geometry and never clamp out-of-range vertices.
+  The macOS helper rejects non-finite drag vertices or coordinates outside `[-1000000, 1000000]`
+  (image pixels and grounded global points) before acquiring the HID lock or preparing input.
   Ref drag paths use `params.path` fractions in `[0,1]` of the current live control, starting at its
   current center, and remain entirely within that control and its owning window. Paths contain at
   most 1024 requested vertices. Scroll/click/move paths use the same read-only ownership boundary.

@@ -351,7 +351,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		);
 		assert.ok(!coordinates.slice(refuseAt, postAt).includes("case "), `the pointer check must sit in the ${post} case`);
 	}
-	assert.match(coordinates, /try refuseBlockedBeforePost\(points\)/, "act drag must check every vertex");
+	assert.match(coordinates, /try refuseBlockedBeforePost\(dragPoints\)/, "act drag must check every vertex");
 	assert.match(
 		swift,
 		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry world\.refuseBlockedPoints\(/,

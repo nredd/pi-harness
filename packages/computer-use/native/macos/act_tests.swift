@@ -22,6 +22,8 @@ private final class ActFixture {
         }
     }
     let point = CGPoint(x: 110, y: 220)
+    var windowFrame = CGRect(x: 100, y: 200, width: 300, height: 200)
+    var postDrag: (([CGPoint], Int32, String) throws -> Void)?
     var hasImage = true
     var web = false
     var supported = true
@@ -47,7 +49,7 @@ private final class ActFixture {
         return ActWorld(
             lookRecord: { id in
                 guard id == "look" else { return nil }
-                return LookRecord(lookId: id, windowId: 8, windowFrame: CGRect(x: 100, y: 200, width: 300, height: 200), imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
+                return LookRecord(lookId: id, windowId: 8, windowFrame: self.windowFrame, imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
             },
             cachedElement: { $0 == "ref" ? self.element : nil },
             refindElement: { ref, pid, window, _ in
@@ -135,6 +137,7 @@ private final class ActFixture {
             postMouseMove: { _, pid, delivery in self.trace.append("move:\(pid):\(delivery)") },
             postScrollWheel: { _, x, y, pid, delivery in self.trace.append("wheel:\(pid):\(x):\(y):\(delivery)") },
             postMouseDrag: { points, pid, delivery in
+                if let post = self.postDrag { return try post(points, pid, delivery) }
                 expect(points == [self.point, CGPoint(x: 130, y: 240), CGPoint(x: 150, y: 260)], "ground every drag vertex")
                 self.trace.append("drag:\(pid):\(delivery)")
             },
@@ -406,10 +409,17 @@ private func runBatchAssertions() throws {
     let success = try fixture.bridge.actBatch(["actions": [press, fixture.request("setText", policy: "ax_only", params: ["text": "ok"])]], world: fixture.world, supportsAgentCursor: false)
     expect(success["outcome"] as? String == "worked" && fixture.trace == ["begin:1234", "ax:AXPress:cached", "set:AXValue", "finish"], "all-AX batch has one root delta and no physical lock")
     fixture.trace = []
-    let result = try fixture.bridge.actBatch(["actions": [fixture.request("moveMouse", policy: "background", coords: true), fixture.request("drag", coords: true), press]], world: fixture.world, supportsAgentCursor: false)
+    let move = fixture.request("moveMouse", policy: "background", coords: true)
+    try actionFailure("invalid_args") {
+        try fixture.bridge.actBatch(["actions": [move, fixture.request("drag", coords: true), press]], world: fixture.world, supportsAgentCursor: false)
+    }
+    expect(fixture.trace.isEmpty, "malformed batch drag must not acquire outer lock or execute an earlier action")
+    fixture.blocked = true
+    let drag = fixture.request("drag", coords: true, params: ["path": [["x": 10, "y": 20], ["x": 30, "y": 40]]])
+    let result = try fixture.bridge.actBatch(["actions": [move, drag, press]], world: fixture.world, supportsAgentCursor: false)
     let steps = result["steps"] as? [[String: Any]]
     expect(result["outcome"] as? String == "didnt" && result["stoppedAt"] as? Int == 1 && steps?.count == 2, "batch stops at the failed step")
-    expect(fixture.trace == ["begin:1234", "lock", "move:1234:pid", "lock", "activate", "raise", "sleep:20000", "unlock", "finish", "unlock"], "batch keeps the outer lock through finish and does not execute the trailing press")
+    expect(fixture.trace == ["begin:1234", "lock", "move:1234:pid", "lock", "activate", "raise", "sleep:20000", "pointer", "unlock", "finish", "unlock"], "batch keeps the outer lock through finish and does not execute the trailing press")
     fixture.trace = []
     let aliasedPid = 1234 + (1 << 32)
     for pid in [aliasedPid, Int(Int32.min) - 1, Int(Int32.max) + 1, Int.max] {
@@ -472,6 +482,12 @@ private func runWindowIDAssertions() throws {
     expect(omitted == nil && null == nil && smallest == 1 && largest == UInt32.max, "missing and null IDs are absent; both positive UInt32 boundaries are accepted")
 }
 
+private final class RecordingInputLock: NSLocking {
+    var acquisitions = 0
+    func lock() { acquisitions += 1 }
+    func unlock() {}
+}
+
 private func runEventAssertions() throws {
     struct Event: Equatable {
         let type: CGEventType
@@ -485,6 +501,8 @@ private func runEventAssertions() throws {
     }
     var events: [Event] = []
     var delays: [useconds_t] = []
+    var mouseAllocations: [CGEventType] = []
+    let inputLock = RecordingInputLock()
     var rejectDragAt: CGPoint?
     var cancelAfterFirstDrag = false
     var rejectNextMouseType: CGEventType?
@@ -518,6 +536,7 @@ private func runEventAssertions() throws {
     }
     let sink = NativeInputSink(
         mouseEvent: { type, point, button in
+            mouseAllocations.append(type)
             if type == rejectNextMouseType {
                 rejectNextMouseType = nil
                 return nil
@@ -544,7 +563,7 @@ private func runEventAssertions() throws {
             if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
         }
     )
-    let world = Bridge(activityGlow: nil, inputSink: sink).actionWorld()
+    let world = Bridge(activityGlow: nil, inputSink: sink, physicalInputLock: inputLock).actionWorld()
     let start = CGPoint(x: 100, y: 200)
     let midpoint = CGPoint(x: 112, y: 200)
     let end = CGPoint(x: 124, y: 200)
@@ -557,19 +576,40 @@ private func runEventAssertions() throws {
     try world.postMouseDrag([start, end], 1234, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
     events = []; delays = []
-    let huge = CGPoint(x: 1.7e308, y: 0)
-    for path in [
-        [start, CGPoint(x: 1.7e308, y: 1.7e308)],
-        [huge, CGPoint(x: -1.7e308, y: 0)],
-        [start, huge, start],
-        [start, CGPoint(x: CGFloat.nan, y: 0)],
-    ] {
-        try actionFailure("invalid_args", message: "Drag path geometry must be finite") {
-            try world.postMouseDrag(path, 1234, "hid")
+    let dragFixture = ActFixture()
+    dragFixture.postDrag = world.postMouseDrag
+    let invalidDrag = "Drag coordinates must be finite and within +/-1000000"
+    mouseAllocations = []
+    for x: Double in [1e100, 1e39, 1.7e308, -1_000_000.0001, .nan] {
+        try actionFailure("invalid_args", message: invalidDrag) {
+            try world.postMouseDrag([.zero, CGPoint(x: x, y: 0)], 1234, "hid")
             return [:]
         }
-        expect(events.isEmpty && delays.isEmpty, "invalid drag geometry never moves or holds the mouse")
+        expect(inputLock.acquisitions == 0, "invalid native drag must not acquire HID lock")
+        expect(mouseAllocations.isEmpty, "invalid native drag must not reserve mouse-up or allocate any event")
+        expect(events.isEmpty && delays.isEmpty, "invalid native drag must not post or wait")
+
+        dragFixture.trace = []
+        try actionFailure("invalid_args", message: invalidDrag) {
+            try dragFixture.act("drag", coords: true, params: ["path": [["x": 0.0, "y": 0.0], ["x": x, "y": 0.0]]])
+        }
+        expect(dragFixture.trace == ["begin:1234"], "invalid act drag must not lock, activate, raise or preflight: \(dragFixture.trace)")
+        expect(mouseAllocations.isEmpty, "invalid act drag must not allocate input events")
     }
+    dragFixture.trace = []
+    dragFixture.windowFrame.origin.x = 999_900
+    try actionFailure("invalid_args", message: invalidDrag) {
+        try dragFixture.act("drag", coords: true, params: ["path": [["x": 0, "y": 0], ["x": 300, "y": 0]]])
+    }
+    expect(dragFixture.trace == ["begin:1234"] && mouseAllocations.isEmpty, "out-of-range grounded drag must not lock, activate, raise, preflight or allocate")
+
+    let secondary = CGPoint(x: -240, y: -120)
+    let boundary = CGPoint(x: -1_000_000, y: 1_000_000)
+    try world.postMouseDrag([secondary, boundary], 1234, "hid")
+    expect(inputLock.acquisitions > 0 && mouseAllocations.first == .leftMouseUp, "valid drag acquires HID lock and reserves release first")
+    expect(events.first?.point == secondary && events.last?.point == boundary, "signed secondary-display coordinates and inclusive boundary are accepted")
+    expect(events.allSatisfy { abs($0.point.x) <= 1_000_000 && abs($0.point.y) <= 1_000_000 }, "all derived drag steps stay in range")
+    events = []; delays = []
     rejectDragAt = end
     try actionFailure("input_failed", message: "Failed to create mouse drag event") {
         try world.postMouseDrag([start, end], 1234, "pid")
