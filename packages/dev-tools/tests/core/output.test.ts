@@ -2,6 +2,9 @@ import { readFile } from "node:fs/promises";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { bound, capList, tailLines } from "../../src/core/output.ts";
+import { sandboxSpillRoot } from "../fixtures/spill.ts";
+
+const spillRoot = sandboxSpillRoot();
 
 const manyLines = (n: number) => Array.from({ length: n }, (_, i) => `line ${i}`).join("\n");
 
@@ -19,6 +22,7 @@ describe("bound", () => {
 		expect(b.text).not.toMatch(/^line 0\n/);
 		expect(b.text).toContain("truncated at the start");
 		expect(b.fullOutputPath).toMatch(/pi-dev-tools-[^/]+\/t-\d+\.txt$/);
+		expect(b.fullOutputPath?.startsWith(spillRoot())).toBe(true);
 		expect(await readFile(b.fullOutputPath as string, "utf8")).toBe(text);
 	});
 

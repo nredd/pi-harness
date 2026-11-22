@@ -6,6 +6,7 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
 import { branchSlug, formatWorktrees, parseWorktrees } from "../../src/git/worktree.ts";
+import { sandboxSpillRoot } from "../fixtures/spill.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
 const GIT_ENV = {
@@ -28,6 +29,7 @@ function sh(cwd: string, ...args: string[]): string {
 	});
 }
 
+sandboxSpillRoot();
 const mock = createToolHost();
 registerGitTools(mock.pi);
 

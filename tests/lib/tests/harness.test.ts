@@ -358,6 +358,21 @@ test("a supplied resource loader replaces the factory loader", async () => {
 	expect(h.session.getAllTools().map((tool) => tool.name)).toContain("echo");
 });
 
+test("extension loading removes its scratch agent dir, even on a failing factory", async ({ onTestFinished }) => {
+	const scratch = makeTestTempDir("pi-test-lib-", onTestFinished);
+	for (const name of ["TMPDIR", "TMP", "TEMP"]) vi.stubEnv(name, scratch);
+	onTestFinished(() => {
+		vi.unstubAllEnvs();
+	});
+	await createTestExtensionsResult([echo]);
+	expect(readdirSync(scratch)).toEqual([]);
+	const boom: ExtensionFactory = () => {
+		throw new Error("boom");
+	};
+	await expect(createTestExtensionsResult([boom])).rejects.toThrow("boom");
+	expect(readdirSync(scratch)).toEqual([]);
+});
+
 test("extension inputs are named like the loader names them, and a path input reports its source", async () => {
 	const quiet: ExtensionFactory = () => {};
 	const result = await createTestExtensionsResult(

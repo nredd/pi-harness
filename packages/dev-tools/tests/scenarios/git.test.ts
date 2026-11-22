@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git, makeGitFixture } from "@nredd/pi-test-lib/git";
 import type { Harness } from "@nredd/pi-test-lib/harness";
@@ -13,8 +13,7 @@ describe("git tools through a real session", () => {
 
 	/** A fresh git fixture and a session running the extension in its clone. */
 	async function session(): Promise<{ harness: Harness; repo: string; remote: string }> {
-		const fixture = makeGitFixture();
-		cleanups.push(() => rmSync(dirname(fixture.repo), { recursive: true, force: true }));
+		const fixture = makeGitFixture((cleanup) => cleanups.push(cleanup));
 		const harness = await startSession(extension, fixture.repo);
 		cleanups.push(() => harness.cleanup());
 		return { harness, ...fixture };
