@@ -25,8 +25,13 @@ export const HELPER_TERMINATE_GRACE_MS = 750;
  * memory only, so a respawned helper would not know about it: the client refuses physical input instead.
  */
 export const HELPER_EXIT_RELEASE_DEBT = 3;
-/** Stderr kept per helper, newest characters last: enough for the exit report, bounded against a chatty helper. */
-export const HELPER_STDERR_LIMIT_CHARS = 8_192;
+/** Stderr bytes kept per helper, newest last: enough for the exit report, bounded against a chatty helper. */
+export const HELPER_STDERR_LIMIT_BYTES = 8_192;
+/**
+ * How long a physical command or `dispose()` waits for a discarded helper's exit status: past the SIGKILL
+ * backstop, so only a helper that cannot be reaped runs it out.
+ */
+export const DISCARDED_EXIT_WAIT_MS = HELPER_TERMINATE_GRACE_MS + 1_000;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
 export const LINUX_HELPER_PROTOCOL_VERSION = 5;
@@ -126,11 +131,17 @@ function isPhysicalCommand(cmd: string, args: Record<string, unknown>): boolean 
 	return false;
 }
 
-/** The sticky refusal after a helper exited owing releases, naming them from its stderr report when it survived. */
-function owedInputMessage(stderr: string): string {
-	const owed = /exiting with the release of (.+?) unconfirmed/.exec(stderr)?.[1] ?? "unknown keys or buttons";
+/** The owed inputs a helper's exit report names, if its stderr tail still holds the report. */
+function owedInputs(stderr: string): string | undefined {
+	return /exiting with the release of (.+?) unconfirmed/.exec(stderr)?.[1];
+}
+
+/** The sticky refusal after a helper exited owing releases. */
+function owedInputMessage(owed = "unknown keys or buttons"): string {
 	return `Refusing physical input: the Linux helper exited with the release of ${owed} unconfirmed; it may still be held. Release it by hand, then restart Pi.`;
 }
+
+const UNSETTLED_EXIT_MESSAGE = `Refusing physical input: a discarded Linux helper did not exit within ${DISCARDED_EXIT_WAIT_MS}ms, so whether it released its keys and buttons is unknown. Release any held input by hand, then restart Pi.`;
 
 function reason(error: unknown): string {
 	return (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
@@ -176,6 +187,8 @@ export class LinuxHelperClient {
 	private pending = new Map<string, Pending<unknown>>();
 	/** Set for good once a helper exits owing releases: every later physical command is refused. */
 	private inputUnsafe?: string;
+	/** Discarded helpers whose exit status is still unknown: any of them may yet exit owing releases. */
+	private unsettledExits = new Set<Promise<void>>();
 	private readonly helperPath: string;
 	private readonly setupHelperScript: string;
 
@@ -184,12 +197,50 @@ export class LinuxHelperClient {
 		this.setupHelperScript = options.setupHelperScript ?? SETUP_HELPER_SCRIPT;
 	}
 
-	/** Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. */
-	dispose(): void {
+	/**
+	 * Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. Resolves,
+	 * within `DISCARDED_EXIT_WAIT_MS`, to the physical-input refusal once the helper's exit status is known:
+	 * a helper that exits owing releases leaves keys or buttons possibly held, and the caller must say so.
+	 */
+	async dispose(): Promise<string | undefined> {
 		this.disposed = true;
 		this.installPromise = undefined;
 		this.setupAbort?.abort();
 		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
+		await this.awaitDiscardedExits();
+		return this.inputUnsafe;
+	}
+
+	/** Refuse physical input from now on with `message`, e.g. carried over from a disposed predecessor. */
+	refusePhysicalInput(message: string): void {
+		this.inputUnsafe ??= message;
+	}
+
+	private refuseUnsafe(physical: boolean): void {
+		if (physical && this.inputUnsafe !== undefined)
+			throw Object.assign(new Error(this.inputUnsafe), { code: "input_unsafe" });
+	}
+
+	/** Latch the refusal for a helper that exited owing releases, keeping a named report over an unnamed one. */
+	private latchOwedInput(stderr: string): void {
+		const owed = owedInputs(stderr);
+		if (owed !== undefined || this.inputUnsafe === undefined) this.inputUnsafe = owedInputMessage(owed);
+	}
+
+	/** Wait, bounded, until every discarded helper's exit status is known; one that never exits is refused. */
+	private async awaitDiscardedExits(signal?: AbortSignal): Promise<void> {
+		if (this.unsettledExits.size === 0) return;
+		let timer: NodeJS.Timeout | undefined;
+		const timedOut = new Promise<boolean>((resolve) => {
+			timer = setTimeout(() => resolve(true), DISCARDED_EXIT_WAIT_MS);
+		});
+		try {
+			const settled = Promise.all(this.unsettledExits).then(() => false);
+			if (await waitForShared(Promise.race([settled, timedOut]), signal))
+				this.refusePhysicalInput(UNSETTLED_EXIT_MESSAGE);
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	/** Reject in-flight commands and kill the current child, if any, so a replaced helper cannot leak. */
@@ -207,7 +258,15 @@ export class LinuxHelperClient {
 			if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
 		}, HELPER_TERMINATE_GRACE_MS);
 		backstop.unref();
-		child.once("exit", () => clearTimeout(backstop));
+		// Its exit status may still say it owes releases: physical commands wait for it (`awaitDiscardedExits`).
+		const exited = new Promise<void>((resolve) =>
+			child.once("exit", () => {
+				clearTimeout(backstop);
+				this.unsettledExits.delete(exited);
+				resolve();
+			}),
+		);
+		this.unsettledExits.add(exited);
 		child.unref();
 	}
 
@@ -344,11 +403,12 @@ export class LinuxHelperClient {
 		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
 		const child = spawn(this.helperPath, [], { stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.setEncoding("utf8");
-		child.stderr.setEncoding("utf8");
-		// Drained so a chatty helper never blocks on a full pipe; only the tail is kept.
-		let stderr = "";
-		child.stderr.on("data", (chunk: string) => {
-			stderr = (stderr + chunk).slice(-HELPER_STDERR_LIMIT_CHARS);
+		// Drained so a chatty helper never blocks on a full pipe; only the last bytes are kept, copied so a large
+		// chunk is not retained through a view.
+		let stderr = Buffer.alloc(0);
+		child.stderr.on("data", (chunk: Buffer) => {
+			const joined = Buffer.concat([stderr, chunk]);
+			stderr = Buffer.from(joined.subarray(Math.max(0, joined.length - HELPER_STDERR_LIMIT_BYTES)));
 		});
 		child.stdin.setDefaultEncoding("utf8");
 		// A failed write invokes its callback and also emits an error on the stream.
@@ -361,12 +421,15 @@ export class LinuxHelperClient {
 			buffer = this.onStdout(buffer, chunk);
 		});
 		// `exit` can fire while stdout still holds a complete reply: only forget the child here so the next
-		// command respawns, and fail what is still pending once `close` says stdout is drained.
-		child.on("exit", () => {
+		// command respawns, and fail what is still pending once `close` says stdout is drained. Owed releases
+		// are latched on `exit` already, so no physical command can reach a respawned helper in between.
+		child.on("exit", (code) => {
+			if (code === HELPER_EXIT_RELEASE_DEBT) this.latchOwedInput(stderr.toString("utf8"));
 			if (this.child === child) this.child = undefined;
 		});
 		child.on("close", (code, signalName) => {
-			if (code === HELPER_EXIT_RELEASE_DEBT) this.inputUnsafe = owedInputMessage(stderr);
+			// Stderr is complete now: name the owed inputs if the report arrived after `exit`.
+			if (code === HELPER_EXIT_RELEASE_DEBT) this.latchOwedInput(stderr.toString("utf8"));
 			this.rejectPending(
 				new Error(`Linux helper exited${signalName ? ` on ${signalName}` : ` with code ${code ?? "unknown"}`}.`),
 				child,
@@ -428,12 +491,21 @@ export class LinuxHelperClient {
 		// A signal that is already aborted never fires again: refuse before installing, spawning or sending.
 		throwIfAborted(signal);
 		// A respawned helper has no record of what an earlier one left held: only non-physical commands go on.
-		if (this.inputUnsafe !== undefined && isPhysicalCommand(cmd, args))
-			throw Object.assign(new Error(this.inputUnsafe), { code: "input_unsafe" });
-		const child = await this.process(signal);
-		// ...and so does one aborted while the install check or helper start was in flight.
-		throwIfAborted(signal);
-		return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
+		const physical = isPhysicalCommand(cmd, args);
+		for (;;) {
+			this.refuseUnsafe(physical);
+			const child = await this.process(signal);
+			// ...and so does one aborted while the install check or helper start was in flight.
+			throwIfAborted(signal);
+			// A discarded helper may still exit owing releases: learn its status before sending physical input.
+			if (physical && this.unsettledExits.size > 0) {
+				await this.awaitDiscardedExits(signal);
+				continue;
+			}
+			// Rechecked right before writing: a helper may have exited owing releases during the awaits above.
+			this.refuseUnsafe(physical);
+			return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
+		}
 	}
 
 	private async send<T>(
@@ -485,9 +557,17 @@ export class LinuxHelperClient {
 
 export let linuxHelper = new LinuxHelperClient();
 
-/** Session shutdown: dispose the shared client (terminal) and install a fresh one for the next session. */
-export function resetLinuxHelper(): void {
+/**
+ * Session shutdown: install a fresh client for the next session, then dispose the old one (terminal) and
+ * wait, bounded, for its helper's exit status. Resolves to the refusal when it may have left input held:
+ * the caller must surface it, and the fresh client keeps refusing physical input, since the input is still
+ * held in this process's desktop.
+ */
+export async function resetLinuxHelper(): Promise<string | undefined> {
 	const old = linuxHelper;
-	linuxHelper = new LinuxHelperClient();
-	old.dispose();
+	const next = new LinuxHelperClient();
+	linuxHelper = next;
+	const warning = await old.dispose();
+	if (warning !== undefined) next.refusePhysicalInput(warning);
+	return warning;
 }

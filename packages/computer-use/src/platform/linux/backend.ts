@@ -143,8 +143,8 @@ async function ensureReady(
 
 export const linuxBackend: ComputerUsePlatformBackend = {
 	name: "linux",
-	shutdown(): void {
-		resetLinuxHelper();
+	async shutdown(): Promise<string | undefined> {
+		return await resetLinuxHelper();
 	},
 	ensureReady,
 	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {

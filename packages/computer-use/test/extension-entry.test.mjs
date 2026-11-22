@@ -302,6 +302,19 @@ describe("activity glow lifecycle", () => {
 		assert.deepEqual(glowCalls(), [true, false], "shutdown reset the active flag");
 	});
 
+	test("session_shutdown surfaces a shutdown warning as a UI warning", async () => {
+		const pi = createRecordingPi();
+		extension(pi.pi);
+		const notes = [];
+		await pi.handlers.get("session_shutdown")[0](
+			{},
+			{ ui: { notify: (message, level) => notes.push({ message, level }) } },
+		);
+		const [warn] = bridge.shutdownComputerUseSession.mock.calls[0];
+		warn("keycode 50 may still be held");
+		assert.deepEqual(notes, [{ message: "keycode 50 may still be held", level: "warning" }]);
+	});
+
 	test("session_shutdown still releases the session when the glow call fails", async () => {
 		bridge.setComputerUseActivity.mockRejectedValueOnce(new Error("helper gone"));
 		const pi = createRecordingPi();

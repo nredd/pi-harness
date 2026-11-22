@@ -412,11 +412,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 		} catch {}
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		activityGlowActive = false;
 		try {
 			await setComputerUseActivity(false);
 		} catch {}
-		await shutdownComputerUseSession();
+		// e.g. a Linux helper that exited with a key possibly held: the only place the user learns of it.
+		await shutdownComputerUseSession((message) => ctx.ui.notify(message, "warning"));
 	});
 }

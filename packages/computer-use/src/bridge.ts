@@ -483,8 +483,8 @@ export async function setComputerUseActivity(active: boolean): Promise<void> {
 	await currentPlatformBackend.setActivity?.(active);
 }
 
-/** Release handles and state owned by the current Pi session. */
-export async function shutdownComputerUseSession(): Promise<void> {
+/** Release handles and state owned by the current Pi session; `warn` receives a platform shutdown warning. */
+export async function shutdownComputerUseSession(warn?: (message: string) => void): Promise<void> {
 	await resourceScheduler.close();
 	resourceScheduler = new ResourceScheduler();
 	disconnectCdp();
@@ -508,7 +508,8 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	runtimeState.permissionStatus = undefined;
 	runtimeState.helperDiagnostics = undefined;
 	runtimeState.lastPermissionCheckAt = 0;
-	await currentPlatformBackend.shutdown?.();
+	const warning = await currentPlatformBackend.shutdown?.();
+	if (warning) warn?.(warning);
 	if (browserStopError) throw browserStopError;
 }
 
