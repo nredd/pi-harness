@@ -645,16 +645,49 @@ impl Owed {
     }
 }
 
+/// Inputs that may be held, under one lock: an exit snapshot and a cleanup handing a
+/// failed release from `held` to `debt` exclude each other, so a snapshot never sees
+/// the input in neither list.
+#[derive(Debug, Default)]
+struct Owing {
+    /// Unconfirmed releases in press order; the newest is released first.
+    debt: Vec<Owed>,
+    /// Inputs a running action registered before submitting their press and has not
+    /// confirmed released yet. An exit that cannot wait for that action names them.
+    held: Vec<Owed>,
+}
+impl Owing {
+    fn unhold(&mut self, owed: Owed) {
+        if let Some(index) = self
+            .held
+            .iter()
+            .rposition(|entry| entry.event == owed.event && entry.detail == owed.detail)
+        {
+            self.held.remove(index);
+        }
+    }
+    /// Owed releases for an exit report: delivery-unknown ones say so.
+    fn report(&self) -> Vec<String> {
+        self.debt
+            .iter()
+            .map(|owed| {
+                let name = owed.describe();
+                if owed.ambiguous {
+                    format!("{name} (delivery unknown, never resent)")
+                } else {
+                    name
+                }
+            })
+            .collect()
+    }
+}
+
 /// Helper-wide physical input state shared by every action: releases a cleanup
 /// could not confirm, inputs a running action pressed, and the shutdown flag. It lives
 /// in this process only.
 #[derive(Debug, Default)]
 pub struct InputState {
-    /// Unconfirmed releases in press order; the newest is released first.
-    debt: Mutex<Vec<Owed>>,
-    /// Inputs a running action registered before submitting their press and has not
-    /// confirmed released yet. An exit that cannot wait for that action names them.
-    held: Mutex<Vec<Owed>>,
+    owing: Mutex<Owing>,
     cancelled: AtomicBool,
 }
 impl InputState {
@@ -672,7 +705,11 @@ impl InputState {
     }
     /// Keys and buttons whose release is unconfirmed, e.g. `keycode 37`.
     pub fn unconfirmed_releases(&self) -> Vec<String> {
-        self.debt().iter().map(|owed| owed.describe()).collect()
+        self.owing()
+            .debt
+            .iter()
+            .map(|owed| owed.describe())
+            .collect()
     }
     /// Refuse while a release is unconfirmed.
     fn refusal(&self) -> Option<ProtocolError> {
@@ -702,11 +739,19 @@ impl InputState {
         }
     }
     /// What an exit that cannot wait for running actions must name: owed releases, as
-    /// in the exit report, then inputs a running action may hold.
+    /// in the exit report, then inputs a running action may hold. One snapshot.
     pub fn possibly_held(&self) -> Vec<String> {
-        let mut names = self.exit_report();
+        self.possibly_held_with(|| {})
+    }
+    /// [`Self::possibly_held`] with `between` run after the owed releases are read and
+    /// before the held inputs are, inside the same lock.
+    fn possibly_held_with(&self, between: impl FnOnce()) -> Vec<String> {
+        let owing = self.owing();
+        let mut names = owing.report();
+        between();
         names.extend(
-            self.held()
+            owing
+                .held
                 .iter()
                 .map(|owed| format!("{} (held by a running action)", owed.describe())),
         );
@@ -714,39 +759,30 @@ impl InputState {
     }
     /// Register `owed` as possibly held, before its press is submitted.
     fn hold(&self, owed: Owed) {
-        self.held().push(owed);
+        self.owing().held.push(owed);
     }
-    /// Its release is confirmed, handed to the debt, or its press was rejected.
+    /// Its release is confirmed, or its press was rejected.
     fn unhold(&self, owed: Owed) {
-        let mut held = self.held();
-        if let Some(index) = held
-            .iter()
-            .rposition(|entry| entry.event == owed.event && entry.detail == owed.detail)
-        {
-            held.remove(index);
-        }
+        self.owing().unhold(owed);
     }
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Owed>> {
-        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    /// A cleanup's result, in one step: `unconfirmed` joins the debt and `released`
+    /// leaves the held list, so an exit sees each input in one of them.
+    fn hand_over(&self, unconfirmed: Vec<Owed>, released: Vec<Owed>) {
+        let mut owing = self.owing();
+        owing.debt.extend(unconfirmed);
+        for owed in released {
+            owing.unhold(owed);
+        }
     }
     /// Owed releases for an exit report: delivery-unknown ones say so.
     fn exit_report(&self) -> Vec<String> {
-        self.debt()
-            .iter()
-            .map(|owed| {
-                let name = owed.describe();
-                if owed.ambiguous {
-                    format!("{name} (delivery unknown, never resent)")
-                } else {
-                    name
-                }
-            })
-            .collect()
+        self.owing().report()
     }
     /// The one transition for an owed release in the debt: replace the entry for the
     /// same input with `left`, or remove it when `left` is `None`.
     fn resolve(&self, owed: Owed, left: Option<Owed>) {
-        let mut debt = self.debt();
+        let mut owing = self.owing();
+        let debt = &mut owing.debt;
         let same = |entry: &Owed| entry.event == owed.event && entry.detail == owed.detail;
         if let Some(index) = debt.iter().rposition(same) {
             match left {
@@ -757,9 +793,9 @@ impl InputState {
             }
         }
     }
-    fn debt(&self) -> std::sync::MutexGuard<'_, Vec<Owed>> {
-        // Debt is plain data: a panic elsewhere cannot leave it inconsistent.
-        self.debt.lock().unwrap_or_else(PoisonError::into_inner)
+    fn owing(&self) -> std::sync::MutexGuard<'_, Owing> {
+        // Plain data: a panic elsewhere cannot leave it inconsistent.
+        self.owing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -794,7 +830,7 @@ where
     S: InputSink + 'static,
     F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
 {
-    if state.debt().is_empty() {
+    if state.owing().debt.is_empty() {
         return Vec::new();
     }
     let (done, finished) = std::sync::mpsc::channel();
@@ -897,7 +933,7 @@ impl<S: InputSink> Input<S> {
     /// may hold that input now. These posts belong to the earlier action and are not
     /// counted.
     pub fn settle(&self) -> Result<(), ProtocolError> {
-        let pending = self.state.debt().clone();
+        let pending = self.state.owing().debt.clone();
         for owed in pending.into_iter().rev() {
             let left = catch_unwind(AssertUnwindSafe(|| self.settle_one(owed)))
                 // A panic mid-post leaves its delivery unknown.
@@ -1202,11 +1238,7 @@ impl<S: InputSink> Drop for Held<'_, S> {
             released.push(owed);
         }
         unconfirmed.reverse();
-        // Into the debt before leaving the held list, so an exit never sees neither.
-        self.input.state.debt().extend(unconfirmed);
-        for owed in released {
-            self.input.state.unhold(owed);
-        }
+        self.input.state.hand_over(unconfirmed, released);
     }
 }
 
@@ -1919,7 +1951,7 @@ mod tests {
         settled.type_text("b").unwrap();
 
         // An input already up settles without posting.
-        state.debt().push(Owed {
+        state.owing().debt.push(Owed {
             event: BUTTON_RELEASE_EVENT,
             detail: 1,
             ambiguous: false,
@@ -2052,9 +2084,36 @@ mod tests {
         assert_eq!(input.state().possibly_held(), ["keycode 8"]);
     }
 
+    #[test]
+    fn exit_snapshot_during_debt_transfer() {
+        // A cleanup hands a failed release from the held list to the debt while an
+        // exit snapshot is between its reads: the snapshot still names the input. The
+        // window gives a racing transfer time to run; one lock keeps it out.
+        let state = Arc::new(InputState::default());
+        let owed = Owed {
+            event: KEY_RELEASE_EVENT,
+            detail: 8,
+            ambiguous: false,
+        };
+        state.hold(owed);
+        let (done, transferred) = std::sync::mpsc::channel();
+        let cleanup = Arc::clone(&state);
+        let mut worker = None;
+        let snapshot = state.possibly_held_with(|| {
+            worker = Some(std::thread::spawn(move || {
+                cleanup.hand_over(vec![owed], vec![owed]);
+                let _ = done.send(());
+            }));
+            let _ = transferred.recv_timeout(Duration::from_millis(300));
+        });
+        assert_eq!(snapshot, ["keycode 8 (held by a running action)"]);
+        worker.expect("spawned").join().expect("transfer");
+        assert_eq!(state.possibly_held(), ["keycode 8"]);
+    }
+
     fn owing(detail: u8) -> Arc<InputState> {
         let state = Arc::new(InputState::default());
-        state.debt().push(Owed {
+        state.owing().debt.push(Owed {
             event: KEY_RELEASE_EVENT,
             detail,
             ambiguous: false,
@@ -2081,7 +2140,10 @@ mod tests {
             },
         );
         assert_eq!(left, ["keycode 8 (delivery unknown, never resent)"]);
-        assert!(state.debt()[0].ambiguous, "never resendable in-process");
+        assert!(
+            state.owing().debt[0].ambiguous,
+            "never resendable in-process"
+        );
         let later = Input::with_state(RecordingSink::default().held(false, 8), state);
         assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
         assert!(later.sink().events().is_empty(), "never resent");
@@ -2104,7 +2166,7 @@ mod tests {
             Duration::from_secs(5),
         );
         assert_eq!(left, ["keycode 9"]);
-        assert!(!state.debt()[0].ambiguous);
+        assert!(!state.owing().debt[0].ambiguous);
 
         // Nothing owed: no attempt.
         let left = settle_for_exit(
@@ -2223,7 +2285,7 @@ mod tests {
 
         // An owed release that was never submitted settles only by a confirmed post.
         let state = Arc::new(InputState::default());
-        state.debt().push(Owed {
+        state.owing().debt.push(Owed {
             event: BUTTON_RELEASE_EVENT,
             detail: 6,
             ambiguous: false,
@@ -2271,7 +2333,7 @@ mod tests {
         );
         // And a delivery-unknown release of it is never settled by a query.
         let state = Arc::new(InputState::default());
-        state.debt().push(Owed {
+        state.owing().debt.push(Owed {
             event: BUTTON_RELEASE_EVENT,
             detail: 5,
             ambiguous: true,
