@@ -874,10 +874,9 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 			if (!prior || prior.endMs < session.endMs) sessions.set(session.id, session);
 		}
 	const byKey = new Map<string, SnapshotQuota[]>();
-	const baseRows = new Set(base.quota.map((q) => JSON.stringify(q)));
-	for (const { quota } of deltas)
+	const baseRows = new Set(base.quota);
+	for (const { quota } of [base, ...deltas])
 		for (const q of quota) {
-			if (baseRows.has(JSON.stringify(q))) continue;
 			const key = quotaKey(q);
 			const rows = byKey.get(key) ?? [];
 			rows.push(q);
@@ -900,6 +899,8 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 		for (const q of rows) {
 			if (q.resetAt <= latestReset) continue;
 			latestReset = q.resetAt;
+			// The base can dominate deltas without occupying a delta slot itself.
+			if (baseRows.has(q)) continue;
 			const shard = compacted[slot] ?? { ...base, events: [], sessions: [], quota: [] };
 			shard.quota.push(q);
 			compacted[slot++] = shard;

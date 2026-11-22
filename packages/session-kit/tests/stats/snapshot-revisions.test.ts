@@ -603,6 +603,29 @@ it("does not publish if preserving quota winners would exceed the cap", async ()
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 });
 
+it("publishes unrelated usage when the sealed base dominates all quota deltas", async () => {
+	const { before, snapshotDir } = await sealedFixture([
+		{ quota: [quotaRow(99, at("2026-12-02"))] },
+		...Array.from({ length: 32 }, (_, i) => ({ quota: [quotaRow(i, at("2026-12-01") - i)] })),
+	]);
+	const base = before.shards[0];
+	if (!base) throw new Error("Missing base");
+	const path = join(snapshotDir, base.file);
+	const bytes = readFileSync(path);
+	sessionFile(join(agent, "sessions", "new.jsonl"), {
+		startMs: at("2026-11-01"),
+		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	await exportStats(agent, out);
+	const after = manifest(snapshotDir);
+	expect(after.shards.filter((ref) => ref.month === base.month)).toEqual([base]);
+	expect(readFileSync(path)).toEqual(bytes);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const combined = await loadCombined(viewer);
+	expect(combined.quota).toEqual([quotaRow(99, at("2026-12-02"))]);
+	expect(combined.calls.map((row) => row.input)).toEqual([7]);
+});
+
 it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", async (reset) => {
 	// Run compaction both before and after the newer observation expires.
 	const earlyReset = at(reset);

@@ -697,7 +697,8 @@ that limit, or an older manifest already exceeds it, the exporter keeps the firs
 and compacts later shards and any new delta. It keeps archived calls and the maximum session end
 even after transcripts leave the scan. The viewer orders equal-time imported calls within a session
 by event ID regardless of shard boundaries. Compaction keeps quota readings that can win as windows
-reset, using separate shards for readings of the same key. If the quota history cannot fit the cap
+reset, using separate shards for readings of the same key. Base readings participate without
+occupying any delta slots. If the quota history cannot fit the cap
 or the candidate exceeds the reader's cumulative expansion budget, export fails without publishing
 or pruning. No format change is required; readers still accept older, larger manifests.
 
