@@ -135,6 +135,11 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   Counts such as `37/250 req obs` describe locally observed usage, not account-wide quota;
   unknown limits have no denominator. Model buckets appear for the routed or directly selected
   model and for models with active blocks. No Google collector or credentials are needed by the footer.
+  Every active block is shown, legacy rows included: v1 `blocks` attach to their provider (a block
+  for a provider without a row gets its own), and a confirmed Opus block appears beside healthy
+  provider-wide quota, e.g. `| opus blocked->Jan 18 12:00 read`. The pre-view footer ignored
+  blocks; legacy rows without an active block keep their bytes. A tracker mark without `evidence`
+  is a confirmed read and says `read`. Compact blocks keep the date unless they lift today.
   Provenance is never promoted: an inferred span reads `10m~` (full: `span inferred`) and an
   assumed or unrecognized one `name?` (full: `window unknown`), on percentages and counts alike;
   only the legacy Codex row keeps `quota?`. A selector never lends its duration to an assumed or
@@ -144,16 +149,21 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   rules apply only to v1 replies and views that keep the built-in Anthropic or Codex selection.
   Freshness is the snapshot status and expiry against the clock (a legacy row with no counts or
   pools also needs a percentage window). Staleness covers percentages, counts and pools: an
-  expired or failed snapshot says `(stale)`, never on an active block. A failed view whose render
-  shows no cached value (only `--` placeholders, unknown pools or another model's buckets) shows
+  expired or failed snapshot says `(stale)`, never on an active block. A failed view whose layout
+  shows no cached value (decided after each layout drops cells) (only `--` placeholders, unknown pools or another model's buckets) shows
   `quota error`, `quota unavailable` or `quota stale` beside any active block.
   Provider, bucket, pool and family labels are cut to 48 characters (`...`), and a block names at
-  most four families, then `+N`; matching always uses the full ids.
+  most four families, then `+N`; matching always uses the full ids. Providers whose labels collide
+  (long ids cut alike, or identical display names) get a stable `#xx` tag from a hash of their id,
+  lengthened until the tags differ and kept whole when the label shortens; a lone legacy row keeps
+  its pinned label.
   The layout tries one full or compact row, then compact provider rows, then removes reset times
   and drops counts and pools if needed. The fallback shows at most four provider rows: blocked
   providers first, each group by lowest remaining quota. Each fallback row fits the width: the
-  label shortens first, then whole lower cells drop behind ` ...`; a block shortens to `blocked inf`
-  (or `model blocked inf`) and is omitted rather than clipped away from its evidence. A legacy row
+  label shortens first, then whole lower cells drop behind ` ...`, or ` +K!` when K blocks are
+  dropped. Provider-wide blocks lead model blocks, and every block is tried whole, then terse
+  (`blocked inf`, or `model blocked inf`), before the row falls back to its label; a block is omitted
+  rather than clipped away from its evidence. A legacy row
   keeps its pinned bytes unless it carries a block; then it is budgeted the same way, its
   percentages in legacy order. The last row points to the rest and always fits, keeping the hidden
   blocked count longest: `+2 more (1 blocked): /router status`, `+2 more (1 blocked)`, `+1!`
