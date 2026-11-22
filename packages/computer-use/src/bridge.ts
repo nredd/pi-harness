@@ -2824,12 +2824,33 @@ async function foregroundModalNote(target: ResolvedTarget): Promise<string | und
 	}
 }
 
+/** A helper's `gone` verdict awaiting corroboration, kept with the delivery outcome it falls back to. */
+interface ProvisionalAbsence {
+	/** The transaction's outcome before the check: an unproven absence settles back to it. */
+	fallback: ActOutcome;
+}
+
+/**
+ * Settle an `absent` check the evidence could not prove: `inconclusive`, keeping the delivery outcome from before
+ * the check. The message claims delivery only when that outcome says it worked.
+ */
+function settleUnprovenAbsence(execution: ExecutionTrace, fallback: ActOutcome, reason: string): void {
+	execution.verification!.status = "inconclusive";
+	execution.outcome = settledOutcome(execution, fallback);
+	const lead = execution.outcome === "worked" ? "The action was delivered, but its" : "The";
+	execution.error = {
+		code: "postcondition_inconclusive",
+		message: `${lead} absent postcondition is not proven: ${reason}.`,
+	};
+}
+
 export async function terminalDesktopActionResult(
 	target: ResolvedTarget,
 	baseStateId: string,
 	execution: ExecutionTrace,
 	error: unknown,
 	condition?: ReturnType<typeof validateCondition>,
+	provisional?: ProvisionalAbsence,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
 	await normalizeRootDeltaRefs(execution, target);
 	const timedOutIndex = timedOutStepIndex(execution);
@@ -2900,6 +2921,9 @@ export async function terminalDesktopActionResult(
 			execution.error = undefined;
 		}
 	}
+	// Without a successor observation or a proven closure, the helper's absence stays uncorroborated.
+	if (provisional && !targetClosed)
+		settleUnprovenAbsence(execution, provisional.fallback, "no successor observation could be captured");
 	const successors = targetClosed
 		? execution
 				.rootDelta!.filter(
@@ -3035,16 +3059,8 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
-			// The outcome before an `absent` check: an uncorroborated absence falls back to it.
-			let outcomeBeforeAbsence: ActOutcome | undefined;
-			const absenceUnconfirmed = (reason: string): void => {
-				execution.verification!.status = "inconclusive";
-				execution.outcome = settledOutcome(execution, outcomeBeforeAbsence!);
-				execution.error = {
-					code: "postcondition_inconclusive",
-					message: `The action was delivered, but its absent postcondition is not proven: ${reason}.`,
-				};
-			};
+			// The helper's `gone`, pending corroboration by the successor observation or a proven closure.
+			let provisional: ProvisionalAbsence | undefined;
 			// Any stop, even an errorless first-step `didnt`, or an error: neither `expect` nor observed values upgrade it.
 			const partial = execution.error !== undefined || execution.stoppedAt !== undefined;
 			try {
@@ -3073,26 +3089,30 @@ async function performDesktopTransaction(
 						},
 						{ signal, timeoutMs: timeoutMs + 2_000 },
 					);
+					const before = execution.outcome ?? "unknown";
+					const status = verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed";
 					execution.verification = {
-						status: verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed",
+						status,
 						text: expectedText,
 						role: expectedRole,
 						value: expectedValue,
 						gone: gone || undefined,
 						timeoutMs,
 					};
-					if (gone) outcomeBeforeAbsence = execution.outcome ?? "unknown";
-					execution.outcome = settledOutcome(
-						execution,
-						outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status),
-					);
 					if (gone && !verification.found && verification.incomplete) {
-						absenceUnconfirmed(`the accessibility tree could not be read completely within ${timeoutMs}ms`);
-					} else if (!verification.found) {
-						execution.error = {
-							code: "postcondition_failed",
-							message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
-						};
+						settleUnprovenAbsence(
+							execution,
+							before,
+							`the accessibility tree could not be read completely within ${timeoutMs}ms`,
+						);
+					} else {
+						execution.outcome = settledOutcome(execution, outcomeAfterCheck(before, status));
+						if (gone && verification.found) provisional = { fallback: before };
+						if (!verification.found)
+							execution.error = {
+								code: "postcondition_failed",
+								message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
+							};
 					}
 				} else {
 					await sleep(settleMsForExecution(execution), signal);
@@ -3105,10 +3125,10 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
-				if (outcomeBeforeAbsence !== undefined && execution.verification!.status !== "inconclusive") {
-					const unproven =
-						execution.verification!.status === "failed" ? undefined : absenceUnproven(capture.outline, condition!);
-					if (unproven) absenceUnconfirmed(absenceUnprovenMessage(unproven));
+				if (provisional) {
+					const unproven = absenceUnproven(capture.outline, condition!);
+					if (unproven) settleUnprovenAbsence(execution, provisional.fallback, absenceUnprovenMessage(unproven));
+					provisional = undefined;
 				}
 				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
 				// A timed-out step is always a stop; `settledOutcome` keeps it unknown should one ever arrive unstopped.
@@ -3160,16 +3180,7 @@ async function performDesktopTransaction(
 						});
 					throw error;
 				}
-				const terminal = await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);
-				// Without a successor observation or a proven closure, the helper's absence stays uncorroborated.
-				const status = execution.verification?.status;
-				if (
-					outcomeBeforeAbsence !== undefined &&
-					terminal.details.status !== "target_closed" &&
-					(status === "verified" || status === "preexisting")
-				)
-					absenceUnconfirmed("no successor observation could be captured");
-				return terminal;
+				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition, provisional);
 			}
 		}, signal),
 	);

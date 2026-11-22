@@ -459,3 +459,40 @@ test("a scope that moved under fresh wire refs is not read as gone", async ({ on
 		/^Inconclusive: the condition is not proven gone: its scope could not be matched in the successor observation, which shows the condition elsewhere\./,
 	);
 });
+
+test.for([
+	{ name: "a successor that still shows it", capture: true },
+	{ name: "no successor observation", capture: false },
+])(
+	"an unproven absence after an unknown delivery stays delivery-neutral with $name",
+	async ({ capture }, { onTestFinished }) => {
+		vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+		const fake = await installFakeDesktop(onTestFinished);
+		fake.tree = [wireButton("go", "Go")];
+		const { stateId } = await fake.observe();
+		fake.actBatchResult = {
+			outcome: "unknown",
+			performed: { delivery: "ax", transaction: true, actionCount: 1 },
+			steps: [{ outcome: "unknown", performed: { delivery: "ax" } }],
+		};
+		fake.waitFor = async () => {
+			if (!capture)
+				fake.lookPayload = () => {
+					throw new Error("capture failed");
+				};
+			return { found: true, gone: true, complete: true, nodeCount: 1 };
+		};
+		const result = await fake.call(fake.bridge.executeAct, {
+			stateId,
+			actions: [{ action: "press", ref: "@e2" }],
+			expect: { text: "Go", until: "absent", timeoutMs: 250 },
+		});
+		const { execution } = result.details;
+		assert.equal(execution.verification.status, "inconclusive");
+		assert.equal(execution.outcome, "unknown");
+		assert.deepEqual(execution.error, {
+			code: "postcondition_inconclusive",
+			message: `The absent postcondition is not proven: ${capture ? "the successor observation still shows the condition" : "no successor observation could be captured"}.`,
+		});
+	},
+);
