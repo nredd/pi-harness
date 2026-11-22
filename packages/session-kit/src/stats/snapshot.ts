@@ -1103,12 +1103,15 @@ async function publishStats(
 	// the active month, be replaced by the scan and pruned. Refuse before the salt, the scan cache or any
 	// bookkeeping can be written.
 	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
-	if (exportedAt < publishedAt && !options.replaceHarnesses)
+	if (exportedAt < publishedAt && !options.replaceHarnesses) {
+		const published = new Date(publishedAt).toISOString();
 		throw new Error(
-			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ` +
-				`${new Date(publishedAt).toISOString()}); refusing to reopen sealed months. Fix the clock, ` +
-				"or pass --replace-harnesses to publish anyway",
+			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ${published}); ` +
+				"refusing to reopen sealed months. Fix the clock, or pass --replace-harnesses to publish anyway: " +
+				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot " +
+				`reject the replacement as older until the clock passes ${published}`,
 		);
+	}
 	const installation = await exportState(dir);
 	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
 	// stale recovery state over this one's.

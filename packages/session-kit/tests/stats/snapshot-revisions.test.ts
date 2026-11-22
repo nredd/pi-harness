@@ -1184,7 +1184,13 @@ it("refuses a same-month clock rollback before the scan, salt or bookkeeping can
 	const before = files();
 	expect(before.cache && before.bookkeeping && before.manifest && !before.salt).toBeTruthy();
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
-	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
+	const behind = new Date(at("2026-11-02") - 1).toISOString();
+	const published = new Date(at("2026-11-02")).toISOString();
+	await expect(exportStats(agent, out)).rejects.toThrow(
+		`Clock is behind the last published export (${behind} < ${published}); refusing to reopen sealed months. ` +
+			"Fix the clock, or pass --replace-harnesses to publish anyway: that drops sealed history absent from " +
+			`this scan, and viewers that imported the newer snapshot reject the replacement as older until the clock passes ${published}`,
+	);
 	expect(files()).toEqual(before);
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
 	await exportStats(agent, out);
