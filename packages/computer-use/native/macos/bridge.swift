@@ -182,6 +182,44 @@ struct AXTraversalWorld<Element: AnyObject> {
 		}
 		return AXTraversal(nodes: output, complete: complete)
 	}
+
+	/// One `waitFor` pass over `root`, bounded by `waitForMaxDepth` and `waitForMaxNodes`.
+	/// - Parameters:
+	///   - scopeExact: Test only `root`, so nothing below it can hide a match.
+	///   - matches: The tri-state predicate; `nil` when a failed read leaves the element undecided.
+	func waitPass(startingAt root: Element, scopeExact: Bool, matches: (Element) -> Bool?) -> AXWaitPass<Element> {
+		let traversal = walk(startingAt: root, maxDepth: scopeExact ? 0 : waitForMaxDepth, maxNodes: waitForMaxNodes, checkFrontier: !scopeExact)
+		// Absence needs the whole scope walked and every predicate read: an unread subtree or field may hold the match.
+		var undecided = !traversal.complete
+		for candidate in traversal.nodes {
+			guard let matched = matches(candidate.element) else {
+				undecided = true
+				continue
+			}
+			if matched { return AXWaitPass(nodes: traversal.nodes, verdict: .found(candidate)) }
+		}
+		return AXWaitPass(nodes: traversal.nodes, verdict: undecided ? .undecided : .absent)
+	}
+}
+
+/// The deepest level below its scope a `waitFor` pass walks.
+let waitForMaxDepth = 12
+/// The most nodes one `waitFor` pass walks.
+let waitForMaxNodes = 2000
+
+/// What one `waitFor` pass proved.
+enum AXWaitVerdict<Element> {
+	case found(AXDescendant<Element>)
+	/// The whole scope was walked and read, and nothing matched.
+	case absent
+	/// Nothing matched, but an unread subtree or field may hold a match.
+	case undecided
+}
+
+/// One `waitFor` pass: the nodes it walked and its verdict.
+struct AXWaitPass<Element> {
+	let nodes: [AXDescendant<Element>]
+	let verdict: AXWaitVerdict<Element>
 }
 
 /// The most AX windows one root inventory lists.
@@ -3780,24 +3818,19 @@ final class Bridge {
 		var lastUndecided = false
 		repeat {
 			let changeGeneration = rootChangeGeneration(pid: pid)
-			// An exact scope tests only the scope element, so nothing below it can hide a match.
-			let traversal = walkDescendants(startingAt: rootElement, maxDepth: scopeExact ? 0 : 12, maxNodes: 2000, checkFrontier: !scopeExact)
-			let descendants = traversal.nodes
-			lastCount = descendants.count
-			// Absence needs the whole scope walked and every predicate read: an unread subtree or field may hold the match.
-			var undecided = !traversal.complete
-			var found: AXDescendant<AXUIElement>?
-			for candidate in descendants {
-				guard let matched = axWaitConditionMatch(role: role, text: text, value: expectedValue, read: { field(candidate.element, $0) }) else {
-					undecided = true
-					continue
-				}
-				if matched {
-					found = candidate
-					break
-				}
+			let pass = descendantWorld().waitPass(startingAt: rootElement, scopeExact: scopeExact) { element in
+				axWaitConditionMatch(role: role, text: text, value: expectedValue) { field(element, $0) }
 			}
-			lastUndecided = found == nil && undecided
+			let descendants = pass.nodes
+			lastCount = descendants.count
+			var found: AXDescendant<AXUIElement>?
+			lastUndecided = false
+			switch pass.verdict {
+			case .found(let match): found = match
+			// Only a whole, fully read scope proves the condition gone.
+			case .absent: if waitForGone { return ["found": true, "gone": true, "nodeCount": lastCount] }
+			case .undecided: lastUndecided = true
+			}
 			if let match = found {
 				if waitForGone {
 					waitForRootChange(pid: pid, since: changeGeneration, until: deadline)
@@ -3815,9 +3848,6 @@ final class Bridge {
 					),
 					"nodeCount": lastCount,
 				]
-			}
-			if waitForGone && !undecided {
-				return ["found": true, "gone": true, "nodeCount": lastCount]
 			}
 			waitForRootChange(pid: pid, since: changeGeneration, until: deadline)
 		} while Date() < deadline
@@ -4063,10 +4093,6 @@ final class Bridge {
 			childLists: descendantChildLists,
 			sameElement: sameElement, hash: axEquivalenceHash
 		)
-	}
-
-	private func walkDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int, checkFrontier: Bool) -> AXTraversal<AXUIElement> {
-		descendantWorld().walk(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes, checkFrontier: checkFrontier)
 	}
 
 	/// `nil` when the children could not be read; visibility reads only refine, so their failures are ignored.

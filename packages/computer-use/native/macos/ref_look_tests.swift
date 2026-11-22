@@ -317,18 +317,19 @@ private func runAbsenceEvidenceAssertions() {
     [AXError.cannotComplete, .apiDisabled, .failure, .notImplemented].allSatisfy { axReadEvidence($0) == .failed },
     "a timeout or any other failure proves nothing")
 
-  // A chain 0...13: the depth-13 node lies one level past the waitFor depth limit of 12.
-  let chain = (0...13).map { Node("n\($0)") }
+  // A chain one level past the waitFor depth limit: its last node lies below the cut.
+  let limit = waitForMaxDepth
+  let chain = (0...(limit + 1)).map { Node("n\($0)") }
   var chainChildren: [String: [Node]] = [:]
-  for depth in 0..<13 { chainChildren[chain[depth].name] = [chain[depth + 1]] }
-  let deep = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 12, maxNodes: 2000, checkFrontier: true)
-  check(deep.nodes.count == 13 && !deep.complete, "a node below the depth limit leaves the walk incomplete")
-  let unchecked = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 12, maxNodes: 2000, checkFrontier: false)
-  check(unchecked.nodes.count == 13, "an unchecked frontier walks the same nodes")
-  let whole = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 13, maxNodes: 2000, checkFrontier: true)
-  check(whole.nodes.count == 14 && whole.complete, "a leaf at the depth limit completes the walk")
-  let frontierUnread = world(children: chainChildren, unreadable: ["n12"])
-    .walk(startingAt: chain[0], maxDepth: 12, maxNodes: 2000, checkFrontier: true)
+  for depth in 0...limit { chainChildren[chain[depth].name] = [chain[depth + 1]] }
+  let deep = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: limit, maxNodes: waitForMaxNodes, checkFrontier: true)
+  check(deep.nodes.count == limit + 1 && !deep.complete, "a node below the depth limit leaves the walk incomplete")
+  let unchecked = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: limit, maxNodes: waitForMaxNodes, checkFrontier: false)
+  check(unchecked.nodes.count == limit + 1, "an unchecked frontier walks the same nodes")
+  let whole = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: limit + 1, maxNodes: waitForMaxNodes, checkFrontier: true)
+  check(whole.nodes.count == limit + 2 && whole.complete, "a leaf at the depth limit completes the walk")
+  let frontierUnread = world(children: chainChildren, unreadable: [chain[limit].name])
+    .walk(startingAt: chain[0], maxDepth: limit, maxNodes: waitForMaxNodes, checkFrontier: true)
   check(!frontierUnread.complete, "an unreadable node at the depth limit may have children")
   let budget = world(children: chainChildren).walk(startingAt: chain[0], maxDepth: 20, maxNodes: 5, checkFrontier: true)
   check(budget.nodes.count == 5 && !budget.complete, "the node budget leaves the walk incomplete")
@@ -336,8 +337,53 @@ private func runAbsenceEvidenceAssertions() {
     .walk(startingAt: Node("root"), maxDepth: 20, maxNodes: 3, checkFrontier: true)
   check(!wide.complete, "children cut by the queue budget leave the walk incomplete")
   let unreadable = world(children: chainChildren, unreadable: ["n5"])
-    .walk(startingAt: chain[0], maxDepth: 20, maxNodes: 2000, checkFrontier: true)
+    .walk(startingAt: chain[0], maxDepth: 20, maxNodes: waitForMaxNodes, checkFrontier: true)
   check(unreadable.nodes.count == 6 && !unreadable.complete, "a failed child read leaves the walk incomplete")
+
+  // The production `waitFor` pass (#1243): a match beyond its depth or node budget leaves absence undecided.
+  func verdict(_ pass: AXWaitPass<Node>) -> String {
+    switch pass.verdict {
+    case .found: return "found"
+    case .absent: return "absent"
+    case .undecided: return "undecided"
+    }
+  }
+  let chainWorld = world(children: chainChildren)
+  func named(_ name: String) -> (Node) -> Bool? { { $0.name == name } }
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: false, matches: named(chain[limit + 1].name))) == "undecided",
+    "a match one level below the depth cut is undecided, never gone")
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: false, matches: named(chain[limit].name))) == "found",
+    "a match at the depth limit is found")
+  var shallowChildren = chainChildren
+  shallowChildren[chain[limit].name] = nil
+  let shallow = world(children: shallowChildren)
+  check(
+    verdict(shallow.waitPass(startingAt: chain[0], scopeExact: false) { _ in false }) == "absent",
+    "a whole, fully read scope without a match proves absence")
+  check(
+    verdict(shallow.waitPass(startingAt: chain[0], scopeExact: false) { $0.name == "n3" ? nil : false }) == "undecided",
+    "an unread predicate field leaves absence undecided")
+  check(
+    verdict(shallow.waitPass(startingAt: chain[0], scopeExact: false) { $0.name == "n2" ? nil : $0.name == "n3" }) == "found",
+    "a later match wins over an undecided node")
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: true, matches: named("n1"))) == "absent",
+    "an exact scope tests only its own element")
+  check(
+    verdict(chainWorld.waitPass(startingAt: chain[0], scopeExact: true, matches: named("n0"))) == "found",
+    "an exact scope matches itself")
+  // The root and `waitForMaxNodes` children: the queue budget cuts the last child.
+  let crowd = (0..<waitForMaxNodes).map { Node("k\($0)") }
+  let crowdWorld = world(children: ["crowd": crowd])
+  let lastChild = "k\(waitForMaxNodes - 1)"
+  check(
+    verdict(crowdWorld.waitPass(startingAt: Node("crowd"), scopeExact: false, matches: named(lastChild))) == "undecided",
+    "a match past the node budget is undecided, never gone")
+  check(
+    verdict(crowdWorld.waitPass(startingAt: Node("crowd"), scopeExact: false, matches: named("k\(waitForMaxNodes - 2)"))) == "found",
+    "a match inside the node budget is found")
 
   func fields(_ values: [AXWaitField: AXStringRead]) -> (AXWaitField) -> AXStringRead {
     { values[$0] ?? .absent }
