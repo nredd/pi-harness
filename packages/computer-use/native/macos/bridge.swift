@@ -1184,6 +1184,17 @@ struct NativeInputSink {
 	static let live = production(activate: activateIfInactive, sleep: { _ = usleep($0) }, post: { $0.post(tap: .cghidEventTap) })
 }
 
+/// The clock and blocking calls behind `Bridge.waitForRootChange`, injectable so tests observe the bound
+/// without sleeping.
+struct RootChangeWaiter {
+	let now: () -> Date
+	let sleep: (TimeInterval) -> Void
+	/// Wait on a locked condition until a deadline.
+	let wait: (NSCondition, Date) -> Void
+
+	static let live = RootChangeWaiter(now: { Date() }, sleep: { Thread.sleep(forTimeInterval: $0) }, wait: { _ = $0.wait(until: $1) })
+}
+
 struct RootAXEvent {
 	let sequence: UInt64
 	let timestamp: TimeInterval
@@ -2994,17 +3005,19 @@ final class Bridge {
 		return state.changeGeneration
 	}
 
-	func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date) {
+	/// Block until `pid`'s change generation moves past `generation`, for at most 200 ms and never past
+	/// `deadline`. An unobserved pid sleeps the same bound instead.
+	func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date, waiter: RootChangeWaiter = .live) {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
 		guard let state else {
-			Thread.sleep(forTimeInterval: min(0.2, max(0, deadline.timeIntervalSinceNow)))
+			waiter.sleep(min(0.2, max(0, deadline.timeIntervalSince(waiter.now()))))
 			return
 		}
 		state.change.lock()
 		if state.changeGeneration == generation {
-			_ = state.change.wait(until: min(deadline, Date().addingTimeInterval(0.2)))
+			waiter.wait(state.change, min(deadline, waiter.now().addingTimeInterval(0.2)))
 		}
 		state.change.unlock()
 	}
