@@ -18,6 +18,8 @@ pub enum ErrorCode {
     UnsupportedPlatform,
     #[serde(rename = "capture_failed")]
     CaptureFailed,
+    #[serde(rename = "root_stale")]
+    RootStale,
     #[serde(rename = "stale_look")]
     StaleLook,
     #[serde(rename = "stale_ref")]
@@ -44,6 +46,7 @@ impl fmt::Display for ErrorCode {
             ErrorCode::InternalError => "internal_error",
             ErrorCode::UnsupportedPlatform => "unsupported_platform",
             ErrorCode::CaptureFailed => "capture_failed",
+            ErrorCode::RootStale => "root_stale",
             ErrorCode::StaleLook => "stale_look",
             ErrorCode::StaleRef => "stale_ref",
             ErrorCode::CoordinateUnavailableForRoot => "coordinate_unavailable_for_root",

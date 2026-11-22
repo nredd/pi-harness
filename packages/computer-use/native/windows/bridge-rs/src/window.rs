@@ -498,6 +498,22 @@ fn window_list_response(windows_info: Vec<Value>) -> Value {
     })
 }
 
+/// Return the current owner of this exact HWND, or `None` if it no longer exists.
+pub fn owner_pid(hwnd: isize) -> Option<u64> {
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        None
+    }
+    #[cfg(windows)]
+    {
+        let mut pid = 0u32;
+        // SAFETY: Windows validates the borrowed HWND and only writes to this local PID.
+        let thread = unsafe { GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid)) };
+        (thread != 0 && pid != 0).then_some(u64::from(pid))
+    }
+}
+
 pub fn foreground_pid() -> Option<u64> {
     #[cfg(not(windows))]
     {

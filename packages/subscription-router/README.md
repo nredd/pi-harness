@@ -267,7 +267,7 @@ destination once. It never hides partial text, thinking or tool calls. Confirmat
 precede the context edit and continuation; manual changes or aborts while it waits suppress both
 the edit and notice. Hosts older than core `v1.3.0-nredd.12` lack the cancellation signal this depends on.
 
-Usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
+Built-in usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
 auth has no subscription window and is never blocked. Codex window names follow the reported
 `limit_window_seconds`, not their primary/secondary position: some plans expose only a weekly
 primary window. Missing durations retain the legacy positional fallback; other durations stay
@@ -286,7 +286,7 @@ Surfaces:
 - `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all LOCAL confirmed blocks. `reset` does not reset provider quota, redeem a grant, or modify usage counters. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
 - `pi.events` RPC with the pi-subagents envelope (`{ requestId, ... }`, reply on `<channel>:reply:<requestId>` as `{ success, data | error }`):
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
-  - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads both collected providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
+  - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads registered providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
 
 Usage and block state is process-global, so in-process subagent sessions share it. A newer
 confirmation read supersedes older in-flight reads for cache and backoff writes, even when the older
@@ -299,8 +299,71 @@ resolve credentials. Out-of-range reset timestamps normalize to an unknown reset
 
 Core owns OAuth acquisition, refresh and persistence. The router bounds its wait for credential
 lookup to 10 seconds, then reports a sanitized error and backs off; it cannot cancel core's lookup.
-The subsequent usage HTTP request has its own 10-second timeout. No token or response body appears
+The subsequent usage read has its own 10-second timeout. No token or response body appears
 in usage errors. These bounds do not prove live OAuth refresh or revocation behavior.
+
+### Collector extensions
+
+Trusted extensions can call `registerCollector` from `src/collectors.ts` in the installed package.
+Register before or after the router extension loads. The built-in IDs `anthropic` and
+`openai-codex` are reserved; registering either throws. A collector ID must be a primitive string
+Pi provider ID: non-blank, at most 256 characters, no whitespace or slashes. Other values throw and
+are never coerced, because Pi resolves a non-string credential argument as a model and reads its
+`provider`. For external IDs the last registration wins.
+Only the returned handle owns that registration: calling it unregisters, and old cleanup cannot
+remove a replacement or restore a previous registration. `handle.replace(adapter)` swaps in a new
+adapter for the same ID (another ID throws) and keeps alias grants; it throws once a later
+registration has displaced the handle's own. Retirement drops cached usage and confirmed blocks, aborts
+reads, and ignores late results. Registration copies the adapter once into a frozen copy before it
+looks at the current owner, so a getter that registers reentrantly is itself displaced and retired.
+The copy keeps own enumerable fields (receiver state such as an `endpoint` that `request` reads
+through `this`; each own accessor runs once) plus the declared fields (`provider`, `display`,
+`acceptsCredential`, `kind`, `request`, `parse`, `read`) even when inherited or not enumerable.
+Adapter methods run with the frozen copy as `this`.
+`collectorFor(id)` returns that frozen copy.
+
+Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
+of `src/collectors.ts` has initialized it, even before the router extension loads. The frozen
+protocol object has `version: 1` and `register(adapter) -> handle`, not a mutable map. Check
+the version before using it; router copies reject incompatible versions, and version 1 objects that
+lack `register`, `registrationFor`, `collectorFor` or `collectedProviders`, without changing the
+object. The first copy installs the registry in a non-writable, non-configurable global slot, so a
+later copy or a same-realm reload reuses it instead of replacing it. This only rejects buggy
+registries; it does not authenticate trusted in-process code that installed the slot first.
+The live `COLLECTED_PROVIDERS` export is retained; use `collectedProviders()` for an array snapshot.
+
+A collector receives the provider credential from Pi, so register only code you trust with that
+credential. A `kind: "http"` adapter defines `request(token)` and `parse(payload)`; a `kind: "custom"`
+adapter defines `read({ token, signal, now })` and should stop on abort. HTTP response bodies are
+streamed and capped at `MAX_USAGE_RESPONSE_BYTES` (256 KiB after decoding HTTP content encoding). A
+non-success response's unread body is cancelled without waiting for the source.
+Extensions run as trusted code in the same process; this API is not a sandbox or a credential
+isolation boundary. Deadlines bound asynchronous waits, not time spent in synchronous callbacks
+(`acceptsCredential`, `request`, `parse`, or `read` before it yields). Return normalized `windows`
+(and optional `meters`, `pools` or `credits`), or `undefined` for unsupported data. Only matching
+percentage windows can block models. Set `providers.<provider>.collector.id` to use a different
+registered adapter; credentials still come from `<provider>`. Unknown explicit IDs return `unavailable`
+without falling back to the provider ID. An alias is a credential grant to the registration that owns
+the ID when the alias first resolves, not to the name: once that registration is replaced or
+unregistered, the alias returns `unavailable` without a credential lookup until config loads again
+(session start or `/reload`), which re-authorizes the current owner. The one exception is the owner's
+own `handle.replace(adapter)`: the grant moves to the new adapter, so an owner that re-registers in
+its `session_start` after the router warmed the alias keeps it available across `/reload`. A plain
+`registerCollector` with the same ID, from the owner or anyone else, still revokes the alias.
+Config reloads swap the declarations and clear older revocations before aborting any read, so a
+retirement caused by an abort handler stays revoked.
+
+The router reads each declared own reading field once into plain records and dense arrays (an integer
+`length` from 0 to 128) without calling adapter methods such as `map`, then validates and uses only that copy. A
+throwing getter is an adapter error. An external reset later than `MAX_EXTERNAL_RESET_MS` (31 days)
+after the read started is implausible and becomes unknown, so it blocks only while the reading is
+fresh instead of for its stated lifetime. Built-in collector resets are not bounded. Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
+reported basis; extensions cannot set snapshot metadata.
+
+No Google subscription collector or OAuth client is bundled. A user-supplied Google subscription
+collector must be read-only, use local first-party client state or a documented first-party client
+surface, never send Gemini CLI or Antigravity OAuth credentials from third-party code, and label its
+window spans `assumed` until a first-party contract exists.
 
 ## Reset schedules and free Codex resets
 
