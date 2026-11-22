@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 
+import { execFile as execFileCallback, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { spawn, execFile as execFileCallback, execFileSync } from "node:child_process";
-import { constants as fsConstants, createWriteStream, realpathSync } from "node:fs";
-import { pipeline } from "node:stream/promises";
-import { promisify } from "node:util";
+import { createWriteStream, constants as fsConstants, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
+import { writeMacosBuildStamp } from "./build-native.mjs";
 
 const execFile = promisify(execFileCallback);
 const helperBundleId = "com.injaneity.pi-computer-use";
@@ -878,9 +879,8 @@ function createSetup(argv, deps) {
 			"-O",
 		];
 		for (const framework of frameworks) swiftArgs.push("-framework", framework);
-		swiftArgs.push(...helperSourcePaths, "-o", outputPath);
-
 		try {
+			swiftArgs.push(...helperSourcePaths, writeMacosBuildStamp(rootDir, moduleCachePath), "-o", outputPath);
 			await run("xcrun", swiftArgs);
 		} finally {
 			await fs.rm(moduleCachePath, { recursive: true, force: true });

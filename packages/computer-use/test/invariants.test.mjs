@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, describe, test } from "vitest";
+import { writeMacosBuildStamp } from "../scripts/build-native.mjs";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import {
 	countOutlineNodes,
@@ -693,6 +694,7 @@ describeMacosOnly("swiftc", () => {
 				"native/macos/agent_cursor_motion.swift",
 				"native/macos/bridge.swift",
 				"native/macos/helper_entry.swift",
+				writeMacosBuildStamp(root, scratch),
 			],
 			{ cwd: root, label: "INV-8 Swift source typecheck", timeoutMs: 65_000 },
 		);

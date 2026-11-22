@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { PlatformDiagnostics } from "../types.ts";
+import { macosHelperBuild } from "./helper-build.mjs";
 import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
@@ -22,6 +23,11 @@ const usingExternalHelperSocket = HELPER_SOCKET_PATH !== DEFAULT_HELPER_SOCKET_P
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
+let expectedBuild: string | undefined;
+
+function rethrowStaleHelper(error: unknown): void {
+	if (error instanceof HelperCommandError && error.code === "stale_helper") throw error;
+}
 
 export class HelperTransportError extends Error {
 	readonly code?: string;
@@ -175,6 +181,19 @@ export class MacosHelperClient {
 	private daemonAvailable = false;
 	private requestSequence = 0;
 	private diagnosticsCache?: PlatformDiagnostics;
+	helperBuild?: string;
+
+	verifyBuild(result: { buildIdentity?: unknown; executablePath?: unknown } | undefined): void {
+		this.helperBuild = toOptionalString(result?.buildIdentity) ?? "unknown";
+		if (usingExternalHelperSocket) return;
+		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
+		if (this.helperBuild !== expectedBuild) {
+			throw new HelperCommandError(
+				`pi-computer-use helper at ${toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): re-run the package setup to update it.`,
+				"stale_helper",
+			);
+		}
+	}
 
 	get diagnostics(): PlatformDiagnostics | undefined {
 		return this.diagnosticsCache;
@@ -188,6 +207,9 @@ export class MacosHelperClient {
 		if (await isExecutable(HELPER_APP_EXECUTABLE_PATH)) {
 			return;
 		}
+
+		// Check any resident daemon before setup, even if its executable was removed.
+		await this.daemonCommand("diagnostics", {}, 1_000, signal).catch(rethrowStaleHelper);
 
 		// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
 		await runProcess(process.execPath, [SETUP_HELPER_SCRIPT, "--runtime"], HELPER_SETUP_TIMEOUT_MS, signal, {
@@ -225,8 +247,10 @@ export class MacosHelperClient {
 		throwIfAborted(signal);
 		return await new Promise<T>((resolve, reject) => {
 			const id = `req_${++this.requestSequence}`;
+			const probeId = `build_${id}`;
 			const socket = net.createConnection(HELPER_SOCKET_PATH);
 			let buffer = "";
+			let checkingBuild = !usingExternalHelperSocket && cmd !== "diagnostics";
 			let settled = false;
 			// First outcome wins: the `close` that follows a reply, timeout, abort or error must not settle again.
 			// Socket listeners die with the socket; the timer and the abort listener are released here.
@@ -253,17 +277,41 @@ export class MacosHelperClient {
 			// Give the helper a chance to report its posted prefix before the socket timer wins.
 			const keyboardDeadlineMs =
 				cmd === "desktopInput" || cmd === "act" || cmd === "actBatch" ? Date.now() + timeoutMs - 250 : undefined;
-			const onConnect = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
+			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
+			const onConnect = () => {
+				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
+				else sendCommand();
+			};
 			const onData = (chunk: string) => {
 				buffer += chunk;
 				const newline = buffer.indexOf("\n");
 				if (newline < 0) return;
+				if (checkingBuild) {
+					try {
+						const probe = JSON.parse(buffer.slice(0, newline));
+						if (probe.id !== probeId || probe.ok !== true) {
+							throw new HelperTransportError("Invalid helper build probe reply.");
+						}
+						this.verifyBuild(probe.result);
+						checkingBuild = false;
+						buffer = "";
+						sendCommand();
+					} catch (error) {
+						settle(() => {
+							socket.destroy();
+							reject(error);
+						});
+					}
+					return;
+				}
 				settle(() => {
 					socket.end();
 					try {
 						const parsed = JSON.parse(buffer.slice(0, newline));
-						if (parsed.ok === true) resolve(parsed.result as T);
-						else
+						if (parsed.ok === true) {
+							if (cmd === "diagnostics") this.verifyBuild(parsed.result);
+							resolve(parsed.result as T);
+						} else
 							reject(
 								new HelperCommandError(
 									parsed?.error?.message ?? `Daemon command '${cmd}' failed.`,
@@ -299,14 +347,17 @@ export class MacosHelperClient {
 			await this.daemonCommand("diagnostics", {}, 1_000, signal);
 			this.daemonAvailable = true;
 			return true;
-		} catch {}
+		} catch (error) {
+			rethrowStaleHelper(error);
+		}
 		await this.launchDaemon(signal).catch(() => undefined);
 		for (let index = 0; index < 30; index += 1) {
 			try {
 				await this.daemonCommand("diagnostics", {}, 1_000, signal);
 				this.daemonAvailable = true;
 				return true;
-			} catch {
+			} catch (error) {
+				rethrowStaleHelper(error);
 				await sleep(100, signal);
 			}
 		}
@@ -331,7 +382,7 @@ export class MacosHelperClient {
 	}
 
 	async restart(signal?: AbortSignal): Promise<void> {
-		await this.command("shutdown", {}, { signal, timeoutMs: 2_000 }).catch(() => undefined);
+		await this.command("shutdown", {}, { signal, timeoutMs: 2_000 }).catch(rethrowStaleHelper);
 		this.daemonAvailable = false;
 		await sleep(400, signal);
 		if (!(await this.ensureDaemon(signal))) {
@@ -400,7 +451,7 @@ class MacosActivityGlowConnection {
 	async setActive(active: boolean): Promise<void> {
 		const operation = this.tail.then(async () => {
 			const socket = await this.ensureConnection();
-			await this.send(socket, active);
+			await this.send(socket, "setActivityGlow", { active });
 		});
 		this.tail = operation.catch(() => undefined);
 		await operation;
@@ -438,8 +489,15 @@ class MacosActivityGlowConnection {
 					socket.on("close", () => {
 						if (this.socket === socket) this.socket = undefined;
 					});
-					this.socket = socket;
-					resolve(socket);
+					const verify = async () => {
+						if (!usingExternalHelperSocket) macosHelper.verifyBuild(await this.send(socket, "diagnostics"));
+						this.socket = socket;
+						resolve(socket);
+					};
+					void verify().catch((error) => {
+						socket.destroy();
+						reject(error);
+					});
 				});
 			});
 		})();
@@ -451,8 +509,8 @@ class MacosActivityGlowConnection {
 		}
 	}
 
-	private async send(socket: net.Socket, active: boolean): Promise<void> {
-		await new Promise<void>((resolve, reject) => {
+	private async send(socket: net.Socket, cmd: string, args = {}): Promise<{ buildIdentity?: unknown }> {
+		return await new Promise((resolve, reject) => {
 			const id = `activity_${++this.requestSequence}`;
 			let buffer = "";
 			const timer = setTimeout(() => {
@@ -476,7 +534,7 @@ class MacosActivityGlowConnection {
 				cleanup();
 				try {
 					const response = JSON.parse(buffer.slice(0, newline));
-					if (response.id === id && response.ok === true) resolve();
+					if (response.id === id && response.ok === true) resolve(response.result);
 					else
 						reject(
 							new HelperCommandError(
@@ -490,7 +548,7 @@ class MacosActivityGlowConnection {
 			};
 			socket.on("data", onData);
 			socket.once("close", onClose);
-			socket.write(`${JSON.stringify({ id, cmd: "setActivityGlow", active })}\n`);
+			socket.write(`${JSON.stringify({ id, cmd, ...args })}\n`);
 		});
 	}
 }

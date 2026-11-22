@@ -417,7 +417,9 @@ Measured, not assumed:
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
 - `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
-- `ensureProtocol()` restarts a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
+- The macOS client checks the daemon build on each managed socket before sending commands. The helper reports its compiled package version and SHA-256 of the production Swift sources. A different or missing build is refused without reinstalling or restarting the helper. Re-run this package’s setup to update it. `/computer-use` shows the last reported build.
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. The client does not install or launch its helper and skips the local build check for that override; its operator is responsible for build compatibility.
+- After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
 
 ### Whole-desktop control
 

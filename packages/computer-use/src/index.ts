@@ -19,6 +19,7 @@ import {
 } from "./bridge.ts";
 import { getComputerUseConfig, getLoadedComputerUseConfig, hostPlatform, loadComputerUseConfig } from "./config.ts";
 import { executeDesktopInput, executeDesktopScreenshot } from "./desktop.ts";
+import { macosHelper } from "./platform/macos/helper.ts";
 
 const stateId = Type.String({ description: "Required state id owning every @e ref used by this operation" });
 const point = { x: Type.Number(), y: Type.Number() };
@@ -288,6 +289,7 @@ function formatConfigStatus(): string {
 		`headless: ${loaded.config.headless ? "enabled" : "disabled"}`,
 		`cursor_overlay: ${loaded.config.cursor_overlay ? "enabled" : "disabled"}`,
 		`activity_glow: ${loaded.config.activity_glow ? "enabled" : "disabled"}`,
+		...(hostPlatform() === "macos" ? [`helper build: ${macosHelper.helperBuild ?? "not checked"}`] : []),
 		...blocklistStatus,
 		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),
 		"",

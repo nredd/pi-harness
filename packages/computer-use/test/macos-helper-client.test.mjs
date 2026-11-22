@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
 import {
 	createFakeChild,
@@ -26,6 +28,7 @@ import {
 // Cases that wait out the client's own fixed timers (30 x 100 ms probe loop, 400 ms restart pause, 2 s glow
 // timeout). Longest alone: ~5.9 s; budget is ~7x that (#312).
 const SLOW_MS = 45_000;
+const matchingBuild = macosHelperBuild(fileURLToPath(new URL("../", import.meta.url)));
 
 const cleanups = [];
 let tmp;
@@ -43,6 +46,7 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	vi.doUnmock("node:child_process");
 	vi.doUnmock("node:net");
+	vi.doUnmock("node:os");
 	vi.resetModules();
 	while (cleanups.length) await cleanups.pop()();
 });
@@ -67,6 +71,11 @@ async function load({ external, fake, spawn }) {
 		vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	}
 	if (!external) {
+		vi.doMock("node:os", async (original) => {
+			const actual = await original();
+			const patched = { ...actual, homedir: () => tmp };
+			return { ...patched, default: patched };
+		});
 		vi.doMock("node:net", async (original) => {
 			const actual = await original();
 			const patched = {
@@ -81,7 +90,12 @@ async function load({ external, fake, spawn }) {
 
 async function fakeOn({ protocol = 7, ...options } = {}) {
 	const socketPath = shortSocketPath();
-	const fake = await startFakeHelper({ socketPath, protocolVersion: protocol, ...options });
+	const fake = await startFakeHelper({
+		socketPath,
+		protocolVersion: protocol,
+		...options,
+		diagnostics: { buildIdentity: matchingBuild, ...options.diagnostics },
+	});
 	cleanups.push(async () => {
 		await fake.stop();
 	});

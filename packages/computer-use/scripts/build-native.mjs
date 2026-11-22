@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realpathSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // `scripts/package_contracts.py` parses this declaration from the packed script: keep it a plain literal list plus `.map`.
@@ -87,6 +88,13 @@ function defaultOutputPath(ctx, arch) {
 	return path.join(ctx.rootDir, "prebuilt", "macos", arch, "bridge");
 }
 
+/** Compile the identity into the running binary, not a replaceable file beside it. */
+export function writeMacosBuildStamp(root, directory) {
+	const stamp = path.join(directory, "HelperBuildStamp.swift");
+	writeFileSync(stamp, `let helperBuildIdentity = ${JSON.stringify(macosHelperBuild(root))}\n`);
+	return stamp;
+}
+
 function swiftArgsForArch(ctx, arch, outputPath, moduleCachePath) {
 	const args = [
 		"swiftc",
@@ -97,7 +105,12 @@ function swiftArgsForArch(ctx, arch, outputPath, moduleCachePath) {
 		"-O",
 	];
 	for (const framework of frameworks) args.push("-framework", framework);
-	args.push(...macosSourcePaths.map((file) => path.join(ctx.rootDir, file)), "-o", outputPath);
+	args.push(
+		...macosSourcePaths.map((file) => path.join(ctx.rootDir, file)),
+		writeMacosBuildStamp(ctx.rootDir, moduleCachePath),
+		"-o",
+		outputPath,
+	);
 	return args;
 }
 
