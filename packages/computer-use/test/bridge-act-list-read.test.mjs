@@ -201,11 +201,11 @@ describe("delivery policy and foreground retries", () => {
 		assert.deepEqual(policies(), ["foreground", "foreground"]);
 	});
 
-	test("a background typeText that changed nothing is retried once in the foreground", async () => {
+	test("a background typeText that posted nothing is retried once in the foreground", async () => {
 		let attempts = 0;
 		fake.actHook = () =>
 			++attempts === 1
-				? { outcome: "didnt", performed: { delivery: "pid" } }
+				? { outcome: "didnt", performed: { delivery: "pid" }, evidence: { postedUnits: 0 } }
 				: { outcome: "worked", performed: { delivery: "cgevent" } };
 		const result = await act([{ action: "typeText", ref: "@e3", text: "hi" }]);
 		assert.deepEqual(policies(), ["background", "foreground"]);
@@ -214,13 +214,13 @@ describe("delivery policy and foreground retries", () => {
 		assert.equal(step.escalationReason, "side_effect_free_didnt");
 		assert.deepEqual(step.backgroundAttempt, {
 			outcome: "didnt",
-			reason: "Background input produced no observable value change; a foreground retry was safe.",
+			reason: "Background input posted nothing; a foreground retry was safe.",
 		});
 		assert.equal(step.backgroundFirst, true);
 	});
 
-	test("a failed keypress is retried, but a failed paste is never repeated", async () => {
-		fake.actHook = () => ({ outcome: "didnt", performed: { delivery: "pid" } });
+	test("a keypress that posted nothing is retried, but a failed paste is never repeated", async () => {
+		fake.actHook = () => ({ outcome: "didnt", performed: { delivery: "pid" }, evidence: { postedUnits: 0 } });
 		await act([{ action: "keypress", ref: "@e3", keys: ["a"] }]);
 		assert.deepEqual(policies(), ["background", "foreground"]);
 		fake.actCalls.length = 0;

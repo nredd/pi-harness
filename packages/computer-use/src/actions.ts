@@ -1,6 +1,7 @@
 import type { MouseButtonName, UiAction } from "./contract.ts";
 import { INCIDENTAL_ACTIONS, type OutlineNode } from "./outline.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
+import type { HelperActResult } from "./platform/types.ts";
 
 export type ActionTarget = { ref: string } | { x: number; y: number } | { focus: { x: number; y: number } };
 
@@ -337,13 +338,23 @@ export function unsupportedActionRejection(action: UiAction, platform: string): 
 	return `${action.action} is not supported on ${platform}; it is currently implemented by the macOS helper only`;
 }
 
-/** Foreground retry is never offered for `paste`: a slow target may still paste, so a retry could insert twice. */
+/**
+ * Whether a background `typeText` or `keypress` may be resent in the foreground. Requires explicit pre-delivery
+ * refusal evidence: a `didnt` reporting `evidence.postedUnits === 0`. A `didnt` without it, e.g. a stale readback
+ * after posted text, may already have typed, so it is never resent (#1241). Never offered for `paste`: a slow target
+ * may still paste, so a retry could insert twice.
+ */
 export function canRetryInForeground(
 	action: PreparedAction,
-	outcome: "worked" | "didnt" | "unknown",
+	attempt: Pick<HelperActResult, "outcome" | "evidence">,
 	headless: boolean,
 ): boolean {
-	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress");
+	return (
+		!headless &&
+		attempt.outcome === "didnt" &&
+		attempt.evidence?.postedUnits === 0 &&
+		(action.action === "typeText" || action.action === "keypress")
+	);
 }
 
 export function outcomeAfterCheck(
