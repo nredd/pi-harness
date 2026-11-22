@@ -1278,7 +1278,7 @@ test("generic width ladder fits, drops meters, caps providers and clips by prior
 		"B provider blocked obs 1h 3% 2h 95%",
 		"C provider blocked obs 1h 3% 2h 95%",
 		"D provider blocked obs 1h 3% 2h 95%",
-		"+1 more: /router status",
+		"+1 more (1 blocked): /router status",
 	]);
 });
 
@@ -1375,6 +1375,23 @@ test("inferred and assumed spans are qualified on windows and meters, whatever t
 		footer.formatQuotaRow(state({ show: [{ durationMs: ten }] }), "compact", plain, fixed),
 		/^Left: F 10m~ 0% @13:00 /,
 	);
+});
+
+test("the provider cap never hides a blocked provider without saying so", () => {
+	const healthy = (id: string, left: number) =>
+		view(id, { snapshot: snap(id, [{ ...win("q", 100 - left), durationMs: hour }], { expiresAt: CLOCK + hour }) });
+	const blocked = view("E", { marks: [mark(CLOCK + hour, "inferred")] });
+	const fit = (views: unknown[], width = 20) => footer.fitQuotaRows(projected(views), width, plain, fixed);
+	// Blocked first, then lowest remaining; the healthiest provider is the one hidden.
+	assert.deepEqual(fit([healthy("A", 50), healthy("B", 10), healthy("C", 90), healthy("D", 30), blocked]), [
+		"Left: E provider blocked inf",
+		"B 1h 10%",
+		"D 1h 30%",
+		"A 1h 50%",
+		"+1 more: /router status",
+	]);
+	const marked = (id: string) => view(id, { marks: [mark(CLOCK + hour, "observed")] });
+	assert.deepEqual(fit(["A", "B", "C", "D", "E", "F"].map(marked), 40).at(-1), "+2 more (2 blocked): /router status");
 });
 
 test("freshness covers meters and pools, never marks, and error-only views keep a row", () => {

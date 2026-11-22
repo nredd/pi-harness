@@ -618,7 +618,7 @@ interface Segment {
 function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, opts: ResolvedOptions): string[] {
 	const full = layout.tier === "full";
 	const dim = (text: string) => colorize("dim", text);
-	const rows = segments.flatMap(({ quota, cells }) => {
+	const rendered = segments.flatMap(({ quota, cells }) => {
 		const shown = layout.essential ? cells.filter(isEssential) : cells;
 		if (!shown.length) return [];
 		const marks = shown.filter((cell) => cell.kind === "mark");
@@ -635,22 +635,37 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 		if (layout.prioritize) {
 			const ranked = data.sort((a, b) => priority(a) - priority(b));
 			// Marks lead; stale data follows them behind its own label.
-			if (stale && marks.length) return [dim(`${name} `) + groupText(marks) + dim(" | (stale) ") + groupText(ranked)];
-			return [dim(`${name}${stale ? " (stale)" : ""} `) + groupText([...marks, ...ranked])];
+			const text =
+				stale && marks.length
+					? dim(`${name} `) + groupText(marks) + dim(" | (stale) ") + groupText(ranked)
+					: dim(`${name}${stale ? " (stale)" : ""} `) + groupText([...marks, ...ranked]);
+			return [{ text, shown }];
 		}
 		const ordered = [data, marks]
 			.filter((group) => group.length)
 			.map(groupText)
 			.join(dim(full ? "; " : " | "));
-		return [dim(`${name}${stale ? " (stale)" : ""} `) + ordered];
+		return [{ text: dim(`${name}${stale ? " (stale)" : ""} `) + ordered, shown }];
 	});
-	if (!rows.length) return [];
+	if (!rendered.length) return [];
 	const lead = dim(full ? "Quota left: " : "Left: ");
-	if (!layout.split) return [lead + rows.join(dim(" | "))];
+	if (!layout.split) return [lead + rendered.map(({ text }) => text).join(dim(" | "))];
+	const blocked = ({ shown }: (typeof rendered)[number]) => shown.some((cell) => cell.kind === "mark");
+	const cap = layout.cap ?? Number.POSITIVE_INFINITY;
+	const capped = rendered.length > cap;
+	// Before capping, rank blocked providers first, then the lowest remaining quota, so a cap never hides them silently.
+	const ranked = capped
+		? rendered
+				.map((row) => ({ row, blocked: blocked(row), lowest: Math.min(101, ...row.shown.map(priority)) }))
+				.sort((a, b) => Number(b.blocked) - Number(a.blocked) || a.lowest - b.lowest)
+				.map(({ row }) => row)
+		: rendered;
+	const rows = ranked.map(({ text }) => text);
 	rows[0] = lead + rows[0];
-	if (layout.cap && rows.length > layout.cap)
-		return [...rows.slice(0, layout.cap), dim(`+${rows.length - layout.cap} more: /router status`)];
-	return rows;
+	if (!capped) return rows;
+	const hidden = ranked.slice(cap).filter(blocked).length;
+	const more = `+${rows.length - cap} more${hidden ? ` (${hidden} blocked)` : ""}: /router status`;
+	return [...rows.slice(0, cap), dim(more)];
 }
 
 function segmentsOf(state: QuotaState, opts: ResolvedOptions): Segment[] {
