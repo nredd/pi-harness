@@ -90,3 +90,81 @@ describe("Linux helper client disconnects (#725)", () => {
 		await assert.rejects(first, /Linux helper exited/);
 	});
 });
+
+describe("Linux helper exit owing releases (#1183)", () => {
+	const report =
+		"linux-bridge: exiting with the release of keycode 50, button 1 (delivery unknown, never resent) unconfirmed; it may still be held. Release it by hand, then restart Pi.\n";
+
+	/** Exit the newest child with `code` after writing `stderr`, once the data has been read. */
+	async function exitWith(children, code, stderr) {
+		const child = children.at(-1);
+		child.stderr.write(stderr);
+		await new Promise((resolve) => setImmediate(resolve));
+		child.exit(code);
+	}
+
+	test("exit status 3 refuses every later physical command, naming the held input; others respawn", async () => {
+		const { client, children, spawn } = await clientFor(() => ({
+			listRoots: ok([]),
+			act: ok({ outcome: "worked" }),
+			actBatch: ok({ outcome: "worked" }),
+		}));
+		await client.command("listRoots");
+		await exitWith(children, 3, report);
+		for (const [cmd, args] of [
+			["act", { policy: "default" }],
+			["act", {}],
+			["actBatch", { actions: [{ policy: "ax_only" }, { policy: "foreground" }] }],
+			["actBatch", {}],
+			["focusWindow", {}],
+		]) {
+			await assert.rejects(client.command(cmd, args), (error) => {
+				assert.equal(error.code, "input_unsafe");
+				assert.match(error.message, /keycode 50, button 1 \(delivery unknown, never resent\)/);
+				assert.match(error.message, /Release it by hand, then restart Pi\./);
+				return true;
+			});
+		}
+		assert.equal(spawn.calls.length, 1, "a refused physical command spawns nothing");
+		// Semantic and observation commands still run on a respawned helper, and the refusal stays.
+		assert.deepEqual(await client.command("listRoots"), []);
+		assert.deepEqual(await client.command("act", { policy: "ax_only" }), { outcome: "worked" });
+		assert.deepEqual(await client.command("actBatch", { actions: [{ policy: "ax_only" }] }), { outcome: "worked" });
+		assert.equal(spawn.calls.length, 2);
+		await assert.rejects(client.command("act", {}), /Refusing physical input/);
+	});
+
+	test("a helper discarded with SIGTERM still reports owed releases on its way out", async () => {
+		const { client, children } = await clientFor(() => ({ listRoots: ok([]) }));
+		await client.command("listRoots");
+		const child = children.at(-1);
+		client.discardChild(new Error("replaced"));
+		assert.deepEqual(child.signals, ["SIGTERM"]);
+		await exitWith(children, 3, report);
+		await assert.rejects(client.command("focusWindow", {}), /keycode 50/);
+	});
+
+	test("other exits leave physical input alone", async () => {
+		const { client, children } = await clientFor(() => ({ listRoots: ok([]), act: ok({ outcome: "worked" }) }));
+		await client.command("listRoots");
+		await exitWith(children, 1, report);
+		assert.deepEqual(await client.command("act", {}), { outcome: "worked" });
+	});
+
+	test("stderr is drained but bounded: a report pushed out by later output names no input", async () => {
+		const { client, children } = await clientFor(() => ({ listRoots: ok([]) }));
+		await client.command("listRoots");
+		// The report survives any amount of earlier output.
+		await exitWith(children, 3, `${"x".repeat(1_000_000)}\n${report}`);
+		await assert.rejects(client.command("act", {}), /keycode 50/);
+
+		const second = await clientFor(() => ({ listRoots: ok([]) }));
+		await second.client.command("listRoots");
+		await exitWith(second.children, 3, `${report}${"x".repeat(9_000)}`);
+		await assert.rejects(second.client.command("act", {}), (error) => {
+			assert.equal(error.code, "input_unsafe");
+			assert.match(error.message, /release of unknown keys or buttons unconfirmed/);
+			return true;
+		});
+	});
+});
