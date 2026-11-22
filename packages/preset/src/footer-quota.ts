@@ -693,14 +693,55 @@ function lowestRemaining(cells: readonly QuotaCell[]): number {
 }
 
 interface Segment {
+	id: string;
 	quota: ProviderQuota;
 	cells: QuotaCell[];
+}
+
+/** FNV-1a of a provider id in base 36: the same id always gets the same tag. */
+function idHash(id: string): string {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 0x01000193) >>> 0;
+	return hash.toString(36).padStart(7, "0");
+}
+
+const TAG_MIN = 2;
+
+/**
+ * Row labels for one tier. Providers sharing a label (bounded labels of long ids, or identical display
+ * names) get a `#xx` tag from a hash of their id, lengthened until the tags differ; a full hash
+ * collision falls back to the position. A lone legacy member keeps its pinned label untagged.
+ */
+function rowNames(segments: readonly Segment[], full: boolean): Map<Segment, { base: string; tag: string }> {
+	const groups = new Map<string, Segment[]>();
+	for (const segment of segments) {
+		const base = full ? segment.quota.display.full : segment.quota.display.compact;
+		const group = groups.get(base);
+		if (group) group.push(segment);
+		else groups.set(base, [segment]);
+	}
+	const names = new Map<Segment, { base: string; tag: string }>();
+	for (const [base, group] of groups) {
+		const legacy = group.filter(({ quota }) => quota.legacy);
+		const tagged = group.length > 1 ? group.filter((segment) => legacy.length !== 1 || segment !== legacy[0]) : [];
+		const hashes = tagged.map(({ id }) => idHash(id));
+		let length = TAG_MIN;
+		while (length < 7 && new Set(hashes.map((hash) => hash.slice(-length))).size < hashes.length) length++;
+		const unique = new Set(hashes.map((hash) => hash.slice(-length))).size === hashes.length;
+		for (const segment of group) names.set(segment, { base, tag: "" });
+		tagged.forEach((segment, i) => {
+			names.set(segment, { base, tag: `#${(hashes[i] as string).slice(-length)}${unique ? "" : `.${i + 1}`}` });
+		});
+	}
+	return names;
 }
 
 function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, opts: ResolvedOptions): string[] {
 	const full = layout.tier === "full";
 	const dim = (text: string) => colorize("dim", text);
-	const rendered = segments.flatMap(({ quota, cells }) => {
+	const names = rowNames(segments, full);
+	const rendered = segments.flatMap((segment) => {
+		const { quota, cells } = segment;
 		const shown = withFailure(quota, layout.essential ? cells.filter(isEssential) : cells);
 		if (!shown.length) return [];
 		// Provider-wide blocks lead model blocks: they stop every model of the provider.
@@ -716,7 +757,8 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 			group
 				.map((cell) => cellText(cell, layout, colorize, opts))
 				.join(full && group.every((cell) => cell.kind !== "percent") ? dim("; ") : " ");
-		const name = full ? quota.display.full : quota.display.compact;
+		const { base, tag } = names.get(segment) as { base: string; tag: string };
+		const name = `${base}${tag}`;
 		const budget = layout.budget;
 		// Budget every generic row, and a legacy row only when it carries a mark: its percentages keep
 		// their legacy order and bytes, but the mark is never left for the caller's clip to cut.
@@ -728,7 +770,12 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 				sep: stale && marks.length && i === marks.length ? " | (stale) " : " ",
 			}));
 			const suffix = stale && !marks.length ? " (stale)" : "";
-			return [{ shown, make: (lead: string) => budgetRow(lead, name, suffix, pieces, budget, layout, colorize, opts) }];
+			return [
+				{
+					shown,
+					make: (lead: string) => budgetRow(lead, { base, tag }, suffix, pieces, budget, layout, colorize, opts),
+				},
+			];
 		}
 		const ordered = [data, marks]
 			.filter((group) => group.length)
@@ -768,9 +815,14 @@ export function overflowPointer(more: number, blocked: number, width: number): s
 const PLAIN: Colorize = (_color, text) => text;
 const MORE = " ...";
 
-/** Shorten a provider label to `room` characters, marking the cut when there is space for it. */
-function shorten(name: string, room: number): string {
+/**
+ * Shorten a provider label to `room` characters, marking the cut when there is space for it.
+ * A collision tag is kept whole while one character of the label still fits beside it.
+ */
+function shorten({ base, tag }: { base: string; tag: string }, room: number): string {
+	const name = `${base}${tag}`;
 	if (name.length <= room) return name;
+	if (tag && room > tag.length) return `${shorten({ base, tag: "" }, room - tag.length)}${tag}`;
 	return room > 3 ? `${name.slice(0, room - 3)}...` : name.slice(0, room);
 }
 
@@ -784,7 +836,7 @@ type Piece = { cell: QuotaCell; sep: string; layout: Layout };
  */
 function budgetRow(
 	lead: string,
-	name: string,
+	name: { base: string; tag: string },
 	suffix: string,
 	pieces: { cell: QuotaCell; sep: string }[],
 	width: number,
@@ -844,7 +896,7 @@ function budgetRow(
 function segmentsOf(state: QuotaState, opts: ResolvedOptions): Segment[] {
 	return Object.entries(state).flatMap(([id, quota]) => {
 		const cells = activeCells(id, quota, opts);
-		return cells.length || quota.failed ? [{ quota, cells }] : [];
+		return cells.length || quota.failed ? [{ id, quota, cells }] : [];
 	});
 }
 

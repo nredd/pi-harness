@@ -2019,3 +2019,39 @@ test("a layout that drops a failed view's cached value reports the failure inste
 		assert.match(rows, /A (quota error|\(stale\) wallet \$4\.00)/, `width ${width}: ${rows}`);
 	}
 });
+
+test("providers whose labels collide get a stable distinguishing tag, kept when the label shortens", () => {
+	const stem = `provider-${"x".repeat(40)}`;
+	const healthy = (id: string, extra: Record<string, unknown> = {}) =>
+		view(id, { snapshot: snap(id, [{ ...win("w", 50), durationMs: hour }], { expiresAt: CLOCK + hour }), ...extra });
+	const labelsOf = (row: string) => row.split(" | ").map((part) => part.replace(/^Left: /, "").split(" ")[0]);
+	const pair = [healthy(`${stem}-alpha`), healthy(`${stem}-beta`)];
+	const [alpha, beta] = labelsOf(footer.formatQuotaRow(projected(pair), "compact", plain, fixed));
+	assert.notEqual(alpha, beta);
+	assert.match(present(alpha), /^provider-x+\.\.\.#[0-9a-z]{2}$/);
+	// Stable: a provider's tag is its own, whatever else is shown or in which order.
+	assert.deepEqual(labelsOf(footer.formatQuotaRow(projected([...pair].reverse()), "compact", plain, fixed)), [
+		beta,
+		alpha,
+	]);
+	// Shortened for width, every row keeps its tag.
+	const narrow = footer.fitQuotaRows(projected(pair), 20, plain, fixed);
+	assert.deepEqual(narrow, [
+		`Left: p...${present(alpha).slice(-3)} 1h 50%`,
+		`provide...${present(beta).slice(-3)} 1h 50%`,
+	]);
+	// Identical explicit labels collide too; a legacy row keeps its pinned label and the other is tagged.
+	const named = { display: { full: "Anthropic", compact: "Anth" } };
+	const legacy = healthy("anthropic", { display: LEGACY_ANTHROPIC });
+	const [anth, other] = labelsOf(
+		footer.formatQuotaRow(projected([legacy, healthy("lookalike", named)]), "compact", plain, fixed),
+	);
+	assert.equal(anth, "Anth");
+	assert.match(present(other), /^Anth#[0-9a-z]{2}$/);
+	// Ids whose hashes collide in full still get distinct tags.
+	const twins = projected([healthy("p2039599", named), healthy("p2222382", named)]);
+	const tags = labelsOf(footer.formatQuotaRow(twins, "compact", plain, fixed));
+	assert.equal(new Set(tags).size, 2, tags.join());
+	// Without a collision nothing is tagged.
+	assert.equal(footer.formatQuotaRow(projected([healthy("solo")]), "compact", plain, fixed), "Left: solo 1h 50%");
+});
