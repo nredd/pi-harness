@@ -927,7 +927,9 @@ def test_child_path_contains_only_absolute_entries(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize("tool", ["git", "gh", "lsof"])
-def test_child_does_not_inherit_injection_variables(monkeypatch: pytest.MonkeyPatch, tool: str) -> None:
+def test_child_does_not_inherit_injection_variables(
+    monkeypatch: pytest.MonkeyPatch, tool: str, tmp_path: Path
+) -> None:
     vars_to_drop = {
         "GIT_TRACE2_EVENT": "/unused/trace.json",
         "GIT_EXTERNAL_DIFF": "/unused/diff",
@@ -941,7 +943,13 @@ def test_child_does_not_inherit_injection_variables(monkeypatch: pytest.MonkeyPa
         "DYLD_INSERT_LIBRARIES": "/unused/library.dylib",
         "PYTHONPATH": "/unused/python",
     }
-    common = {"PATH": "/usr/bin", "HOME": "/home/test", "LANG": "C", "LC_ALL": "C", "TMPDIR": "/tmp"}
+    common = {
+        "PATH": "/usr/bin",
+        "HOME": str(tmp_path / "fixture-home"),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "TMPDIR": "/tmp",
+    }
     gh_auth = {
         "GH_TOKEN": "synthetic-token",
         "GITHUB_TOKEN": "synthetic-fallback",

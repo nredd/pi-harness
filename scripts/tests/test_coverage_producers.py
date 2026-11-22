@@ -41,6 +41,15 @@ BUN_COVERAGE_ARGS = [
 
 
 def test_script_lcov_replays_from_a_different_checkout(tmp_path: Path) -> None:
+    """Resolve both split LCOV reports against a different checkout.
+
+    Parameters:
+        tmp_path (Path): Isolated producer and replay checkout roots.
+    Returns:
+        None.
+    Raises:
+        AssertionError: A report does not resolve to its replay source.
+    """
     producer = tmp_path / "producer"
     replay = tmp_path / "fan-in"
     signals = (
@@ -83,7 +92,16 @@ def test_script_lcov_replays_from_a_different_checkout(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("mode", ["test fails", "threshold fails", "no coverage"])
 def test_script_gate_requires_fresh_reports(tmp_path: Path, mode: str) -> None:
-    """Run miniature scripts gates under shell errexit with stale artifacts present."""
+    """Run miniature scripts gates under shell errexit with stale artifacts present.
+
+    Parameters:
+        tmp_path (Path): Isolated scripts project and report directories.
+        mode (str): Failure mode to exercise in the coverage recipe.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The gate masks a failure or does not handle stale reports correctly.
+    """
     assertion = mode != "test fails"
     shutil.copyfile(ROOT / "Makefile", tmp_path / "Makefile")
     scripts = tmp_path / "scripts"
