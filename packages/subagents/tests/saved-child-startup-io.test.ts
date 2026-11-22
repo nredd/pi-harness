@@ -3,8 +3,9 @@ import * as fs from "node:fs";
 import { dirname, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
-import { afterEach, expect, it, vi } from "vitest";
-import { RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { checkSavedChild, RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -128,4 +129,39 @@ it("resolves a journaled transcript once per record across its journal writes", 
 	const transcript = resolved().filter((path) => path === sessionFile || path === dirname(sessionFile));
 	expect(transcript.length).toBeLessThanOrEqual(2);
 	h.cleanup();
+});
+
+it("reads only a bounded header of a file a tampered journaled directory admits", () => {
+	const root = makeTestTempDir("saved-child-io-", onTestFinished);
+	const configured = join(root, "sessions");
+	const tampered = join(root, "elsewhere");
+	const parentFile = join(root, "parent.jsonl");
+	fs.mkdirSync(configured);
+	fs.mkdirSync(tampered);
+	fs.writeFileSync(parentFile, "");
+	const header = (fields: Record<string, unknown>) => `${JSON.stringify({ type: "session", ...fields })}\n`;
+	const check = (file: string) =>
+		checkSavedChild({
+			file,
+			// A tampered row can name any directory as its creation directory.
+			directories: [tampered, configured],
+			parentFile,
+			status: "completed",
+			now: Number.MAX_SAFE_INTEGER,
+			savedCwd: "/work",
+		});
+	const huge = join(tampered, "huge.jsonl");
+	fs.writeFileSync(huge, "x".repeat(1024 * 1024));
+	vi.mocked(fs.readSync).mockClear();
+	expect(check(huge)).toEqual({ refusal: `child session has no readable header: ${huge}` });
+	expect(readLengths().reduce((sum, length) => sum + length, 0)).toBe(64 * 1024);
+	const foreign = join(tampered, "foreign.jsonl");
+	fs.writeFileSync(foreign, `${header({ parentSession: join(root, "other.jsonl"), cwd: "/work" })}${"y".repeat(9000)}`);
+	fs.writeFileSync(join(root, "other.jsonl"), "");
+	vi.mocked(fs.readSync).mockClear();
+	expect(check(foreign)).toEqual({ refusal: `child session does not belong to this parent: ${foreign}` });
+	expect(readLengths()).toEqual([4 * 1024]);
+	const moved = join(tampered, "moved.jsonl");
+	fs.writeFileSync(moved, header({ parentSession: parentFile, cwd: "/elsewhere" }));
+	expect(check(moved)).toEqual({ refusal: `child session does not match its saved working directory: ${moved}` });
 });
