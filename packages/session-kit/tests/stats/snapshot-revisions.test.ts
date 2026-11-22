@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -25,6 +25,8 @@ vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
 	return {
 		...actual,
+		lstat: vi.fn(actual.lstat),
+		mkdir: vi.fn(actual.mkdir),
 		unlink: vi.fn(actual.unlink),
 		rename: vi.fn(actual.rename),
 		readdir: vi.fn(actual.readdir),
@@ -46,6 +48,8 @@ beforeEach(({ onTestFinished }) => {
 });
 afterEach(() => {
 	vi.restoreAllMocks();
+	vi.mocked(lstat).mockRestore();
+	vi.mocked(mkdir).mockRestore();
 	vi.mocked(unlink).mockRestore();
 	vi.mocked(rename).mockRestore();
 	vi.mocked(readdir).mockRestore();
@@ -840,6 +844,34 @@ it.each(["previous manifest read", "manifest rename", "pruning", "state recordin
 		expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
 	},
 );
+
+it("fails closed when a racing writer releases its lock before the age check", async () => {
+	const { snapshotDir } = await exportStats(agent, out);
+	const lock = join(snapshotDir, ".export.lock");
+	mkdirSync(lock);
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(lstat).mockImplementation(async (path, options) => {
+		if (path === lock) await actual.rmdir(lock);
+		return actual.lstat(path, options);
+	});
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		code: "EEXIST",
+		message: expect.stringContaining(`Export lock is held at ${JSON.stringify(lock)} (age unknown); retry`),
+	});
+	await expect(exportStats(agent, out)).resolves.toMatchObject({ snapshotDir });
+});
+
+it("preserves non-contention errors when acquiring the lock", async () => {
+	const { snapshotDir } = await exportStats(agent, out);
+	const lock = join(snapshotDir, ".export.lock");
+	const denied = Object.assign(new Error("lock denied"), { code: "EACCES" });
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(mkdir).mockImplementation(async (path, options) => {
+		if (path === lock) throw denied;
+		return actual.mkdir(path, options);
+	});
+	await expect(exportStats(agent, out)).rejects.toBe(denied);
+});
 
 it.each(["published", "failed"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
 	const ms = at("2026-11-01");

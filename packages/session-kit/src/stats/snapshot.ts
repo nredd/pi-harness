@@ -987,7 +987,18 @@ export async function exportStats(
 	await mkdir(snapshotDir, { recursive: true });
 	// The portable kit cannot import the dev-tools lock. Fail closed on contention or a
 	// crashed writer; never infer that another writer is dead from the age of the lock.
-	await mkdir(lock);
+	await mkdir(lock).catch(async (error: NodeJS.ErrnoException) => {
+		if (error.code !== "EEXIST") throw error;
+		// A winner can release the lock before stat. Still reject this attempt; retry from scratch.
+		const info = await lstat(lock).catch(() => undefined);
+		const age = info && Math.max(0, Math.floor((Date.now() - info.mtimeMs) / 1000));
+		const details = `${JSON.stringify(lock)} (age ${age === undefined ? "unknown" : `${age}s`})`;
+		const message =
+			age !== undefined && age >= 3600
+				? `Suspected stale export lock ${details}; verify no export is running before removing the lock directory, then retry`
+				: `Export lock is held at ${details}; retry after the other export finishes. If this persists, verify no export is running before removing the lock directory`;
+		throw Object.assign(new Error(message, { cause: error }), { code: error.code, path: lock });
+	});
 	let result: ExportResult | undefined;
 	try {
 		result = await publishStats(dir, snapshotDir, root, options, identity);
