@@ -1158,6 +1158,9 @@ const meter = (name: string, used: number, extra = {}) => ({
 	...extra,
 });
 const mark = (until: number, evidence?: string, families?: string[]) => ({ until, evidence, families });
+/** A fresh, empty snapshot: meters, pools and marks are current until it expires. */
+const fresh = (provider: string, extra: Record<string, unknown> = {}) =>
+	snap(provider, [], { expiresAt: CLOCK + hour, ...extra });
 
 test("preset reads the shared metered and inferred-span v2 fixture", () => {
 	const metered = present(fixture.views.find(({ name }) => name === "metered"));
@@ -1319,6 +1322,17 @@ test("custom selectors, scope, provenance and display-only quantities stay disti
 	assert.deepEqual(footer.fitQuotaRows(narrow, 5, plain, fixed), [
 		"Left: custom (stale) provider blocked read ok 40% unknown --",
 	]);
+});
+
+test("an oversized family never throws while matching the selected model", () => {
+	// A regex built from this family is too large for V8; rendering must stay total.
+	const family = "(".repeat(100_000);
+	const state = projected([
+		view("huge", { meters: [meter("calls", 3, { scope: "model", families: [family] })], snapshot: fresh("huge") }),
+	]);
+	const opts = { ...fixed, model: { provider: "huge", id: `x-${family}` } };
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, opts), "Left: huge calls 3 req obs");
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "huge", id: "x" } }), "");
 });
 
 test("mark expiry repaints independently of the snapshot", () => {

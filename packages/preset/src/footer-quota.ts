@@ -436,9 +436,18 @@ function labels(cell: WindowLabel): [string, string] {
 	return [label, label];
 }
 
+const BOUNDARY = "-./:";
+
+/** Case-insensitive token match: `family` sits between id edges or `-./:`. No regex, so any input is total. */
 function matchesModel(id: string, family: string): boolean {
-	const escaped = family.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	return new RegExp(`(?:^|[-./:])${escaped}(?:$|[-./:])`, "i").test(id);
+	const haystack = id.toLowerCase();
+	const needle = family.toLowerCase();
+	for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+		const before = at === 0 || BOUNDARY.includes(haystack.charAt(at - 1));
+		const end = at + needle.length;
+		if (before && (end === haystack.length || BOUNDARY.includes(haystack.charAt(end)))) return true;
+	}
+	return false;
 }
 
 function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): Cell[] {
