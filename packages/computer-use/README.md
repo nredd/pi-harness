@@ -1835,6 +1835,10 @@ failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
+Known gap: `truncated` does not say whether a node's own fields or only its
+descendants are unread, so an exact `ref` scope whose own `AXChildren` read keeps
+failing on macOS stays `inconclusive`, though nothing below it can hold the
+condition (#1310).
 
 Batch steps only when the second step does not need to inspect the result of the first:
 
@@ -2798,7 +2802,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are i
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
 
 When an image is requested, the helper:
 
