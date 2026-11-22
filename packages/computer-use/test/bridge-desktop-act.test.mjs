@@ -67,6 +67,173 @@ test.for([
 	},
 );
 
+test.for([
+	{ units: 1, posted: "1 input event posted." },
+	{ units: 3, posted: "3 input events posted." },
+])(
+	"a step stopped after posting part of its input ends the transaction as unknown ($units)",
+	async ({ units, posted }, { onTestFinished }) => {
+		const { fake, act } = await observed(onTestFinished);
+		const error = { code: "foreground_required", message: "Refusing XTEST delivery" };
+		const results = [
+			{ outcome: "worked", performed: { delivery: "hid" } },
+			{ outcome: "unknown", performed: { delivery: "hid" }, error, evidence: { deliveredUnits: units } },
+		];
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			return results.shift() ?? { outcome: "worked", performed: { delivery: "hid" } };
+		};
+		const result = await act([press, { action: "typeText", ref: "@e2", text: "abc" }, press]);
+		const { execution } = result.details;
+		assert.equal(fake.actCalls.length, 2, "the next action is not dispatched after a partial delivery");
+		assert.equal(execution.outcome, "unknown");
+		assert.equal(execution.stoppedAt, 1);
+		assert.deepEqual(execution.error, error);
+		assert.deepEqual(execution.evidence, { deliveredUnits: units });
+		assert.ok(
+			fake
+				.text(result)
+				.startsWith(`Stopped at action 2 (foreground_required). ${posted} Do not replay the transaction.`),
+		);
+	},
+);
+
+test.for([{ first: true }, { first: false }])(
+	"a reply lost after submission is unknown and ends the transaction (first step: $first)",
+	async ({ first }, { onTestFinished }) => {
+		const { fake, act } = await observed(onTestFinished);
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			if (!first && fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "hid" } };
+			throw Object.assign(new Error("Helper command 'act' timed out after 15000ms."), { code: "reply_lost" });
+		};
+		const result = await act([press, press, press]);
+		const { execution } = result.details;
+		const at = first ? 0 : 1;
+		assert.equal(fake.actCalls.length, at + 1, "nothing after the lost reply is dispatched");
+		assert.equal(execution.outcome, "unknown");
+		assert.equal(execution.stoppedAt, at);
+		assert.equal(execution.steps[at].outcome, "unknown");
+		assert.deepEqual(execution.evidence, { deliveryUncertain: true });
+		assert.equal(execution.error.code, "reply_lost");
+		assert.ok(
+			fake
+				.text(result)
+				.startsWith(
+					`Stopped at action ${at + 1} (reply_lost). More input may have been delivered. Do not replay the transaction.`,
+				),
+		);
+	},
+);
+
+test("a strict-headless batch whose reply was lost is unknown without inventing a step index", async ({
+	onTestFinished,
+}) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const { fake, act } = await observed(onTestFinished);
+	currentPlatformBackend.actBatch = async (requests) => {
+		fake.actBatchCalls.push(requests);
+		throw Object.assign(new Error("Helper command 'actBatch' timed out after 15000ms."), { code: "reply_lost" });
+	};
+	const result = await act([press, press]);
+	const { execution } = result.details;
+	assert.equal(fake.actBatchCalls.length, 1);
+	assert.equal(execution.outcome, "unknown");
+	assert.equal(execution.stoppedAt, undefined);
+	assert.deepEqual(execution.steps, []);
+	assert.equal(execution.error.code, "reply_lost");
+	assert.deepEqual(execution.evidence, { deliveryUncertain: true });
+	assert.ok(
+		fake
+			.text(result)
+			.startsWith("Stopped (reply_lost). More input may have been delivered. Do not replay the transaction."),
+	);
+	// Any other batch failure still escapes as an error.
+	currentPlatformBackend.actBatch = async () => {
+		throw new Error("batch refused");
+	};
+	const { stateId } = await fake.observe();
+	await assert.rejects(() => fake.call(fake.bridge.executeAct, { stateId, actions: [press] }), /batch refused/);
+});
+
+test("an abort after a lost reply keeps the unknown stop instead of a bare abort", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const abort = new AbortController();
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		abort.abort();
+		throw Object.assign(new Error("Operation aborted."), { code: "reply_lost" });
+	};
+	await assert.rejects(
+		() => act([press, press], {}, abort.signal),
+		(error) => {
+			assert.ok(
+				error.message.startsWith(
+					"Stopped at action 1 (reply_lost). More input may have been delivered. Do not replay the transaction.",
+				),
+				error.message,
+			);
+			assert.equal(error.code, "reply_lost");
+			assert.equal(error.execution.outcome, "unknown");
+			assert.deepEqual(error.execution.evidence, { deliveryUncertain: true });
+			return true;
+		},
+	);
+	assert.equal(fake.actCalls.length, 1);
+});
+
+test("a stopped setText is not upgraded to worked by a matching observed value", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const error = { code: "foreground_required", message: "Refusing XTEST delivery" };
+	fake.actResult = { outcome: "unknown", performed: { delivery: "hid" }, error, evidence: { deliveredUnits: 5 } };
+	fake.tree = [wireButton("b1", "Go", { value: "typed" })];
+	const result = await act([{ action: "setText", ref: "@e2", text: "typed" }]);
+	assert.equal(result.details.execution.outcome, "unknown");
+	assert.deepEqual(result.details.execution.error, error);
+});
+
+test("a stop that left input held names the unconfirmed release", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	fake.actResult = {
+		outcome: "unknown",
+		performed: { delivery: "hid" },
+		error: { code: "foreground_required", message: "focus moved" },
+		evidence: { deliveredUnits: 0, deliveryUncertain: true, unconfirmedReleases: ["keycode 37"] },
+	};
+	const result = await act([press, press]);
+	assert.equal(fake.actCalls.length, 1);
+	assert.ok(
+		fake
+			.text(result)
+			.startsWith(
+				"Stopped at action 1 (foreground_required). 0 input events posted. More input may have been delivered. Release of keycode 37 is unconfirmed. Do not replay the transaction.",
+			),
+	);
+});
+
+test("partial stop survives root closure", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	const error = { code: "foreground_required", message: "Refusing XTEST delivery" };
+	fake.actResult = { outcome: "unknown", performed: { delivery: "hid" }, error, evidence: { deliveredUnits: 2 } };
+	let closed = false;
+	failCapture(fake, () => {
+		closed = true;
+	});
+	fake.listRootsHook = (query) =>
+		closed ? [] : query?.pid ? fake.roots.filter((root) => root.pid === query.pid) : fake.roots;
+	const result = await act([press, press], { expect: { text: "Done", timeoutMs: 250 } });
+	const { execution } = result.details;
+	assert.equal(result.details.status, "target_closed");
+	assert.equal(execution.outcome, "unknown", "the partial stop is not rewritten as didnt");
+	assert.deepEqual(execution.error, error, "the original refusal is kept");
+	assert.equal(execution.verification.status, "failed", "the check is still recorded");
+	assert.ok(
+		fake
+			.text(result)
+			.startsWith("Stopped at action 1 (foreground_required). 2 input events posted. Do not replay the transaction."),
+	);
+});
+
 test("an unknown step makes the transaction unknown, and all-worked steps make it worked", async ({
 	onTestFinished,
 }) => {
@@ -186,6 +353,28 @@ test("a batch result without an outcome is treated as unknown, with or without a
 	});
 	assert.equal(terminal.details.execution.verification.status, "verified");
 	assert.equal(terminal.details.execution.outcome, "worked");
+});
+
+test("a native batch that reports a timed-out step without stopping stays unknown after a verified postcondition", async ({
+	onTestFinished,
+}) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const { fake, act } = await observed(onTestFinished);
+	fake.actBatchResult = {
+		outcome: "unknown",
+		performed: { delivery: "ax", transaction: true, actionCount: 2 },
+		steps: [
+			{ outcome: "unknown", performed: { delivery: "ax" }, error: { code: "timeout", message: "step timed out" } },
+			{ outcome: "worked", performed: { delivery: "ax" } },
+		],
+	};
+	const result = await act([press, press], { expect: { text: "Done", timeoutMs: 250 } });
+	const { execution } = result.details;
+	assert.equal(execution.stoppedAt, undefined, "the helper reported no stop");
+	assert.equal(execution.error, undefined, "the helper reported no batch error");
+	assert.equal(execution.verification.status, "verified");
+	assert.equal(execution.outcome, "unknown", "neither the check nor observed values prove the timed-out delivery");
+	assert.ok(fake.text(result).startsWith("Action 1 timed out; whether it was delivered is unknown."));
 });
 
 test("a failing wait on a batch without an outcome still reaches the terminal result for a closed root", async ({
@@ -682,4 +871,91 @@ test("an output ref skips the state lookup entirely", async ({ onTestFinished })
 		() => fake.call(fake.bridge.executeReadText, { ref: "@o99", stateId: "ignored" }),
 		/Output ref '@o99' is unavailable or was evicted\./,
 	);
+});
+
+test("a refusal after a delivered physical step keeps the transaction unknown and skips upgrades", async ({
+	onTestFinished,
+}) => {
+	const { fake, act } = await observed(onTestFinished);
+	const results = () => [
+		{ outcome: "worked", performed: { delivery: "hid", mechanism: "xtest" } },
+		{ outcome: "didnt", performed: { delivery: "ax" } },
+	];
+	let queue = results();
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		return queue.shift() ?? { outcome: "worked", performed: { delivery: "hid" } };
+	};
+	const result = await act([press, press, press], { expect: { text: "Done", timeoutMs: 250 } });
+	const { execution } = result.details;
+	assert.equal(fake.actCalls.length, 2, "nothing after the refusal is dispatched");
+	assert.equal(execution.outcome, "unknown", "the delivered prefix is not relabeled didnt");
+	assert.equal(execution.stoppedAt, 1);
+	assert.equal(execution.actionCount, 2);
+	assert.equal(fake.waits.length, 0, "no postcondition can upgrade a partial transaction");
+	assert.equal(execution.verification, undefined);
+
+	// Matching observed values cannot upgrade it either.
+	queue = results();
+	fake.tree = [wireButton("b1", "Go", { value: "typed" })];
+	const { stateId } = await fake.observe();
+	const typed = await fake.call(fake.bridge.executeAct, {
+		stateId,
+		actions: [
+			{ action: "setText", ref: "@e2", text: "typed" },
+			{ action: "setText", ref: "@e2", text: "typed" },
+		],
+	});
+	assert.equal(typed.details.execution.outcome, "unknown");
+	assert.equal(typed.details.execution.stoppedAt, 1);
+});
+
+test("an errorless first-step didnt is a stop: a matching observed value never upgrades it", async ({
+	onTestFinished,
+}) => {
+	const { fake } = await observed(onTestFinished);
+	currentPlatformBackend.act = async (request) => {
+		fake.actCalls.push(request);
+		return { outcome: "didnt", performed: { delivery: "ax" } };
+	};
+	fake.tree = [wireButton("b1", "Go", { value: "typed" })];
+	const { stateId } = await fake.observe();
+	const typed = await fake.call(fake.bridge.executeAct, {
+		stateId,
+		actions: [{ action: "setText", ref: "@e2", text: "typed" }],
+	});
+	assert.equal(typed.details.execution.stoppedAt, 0);
+	assert.equal(typed.details.execution.outcome, "didnt", "the stop is kept, not promoted to worked");
+});
+
+for (const code of ["input_unsafe", "cancelled"]) {
+	test(`a ${code} thrown after a delivered step keeps the checked prefix and stop index as unknown`, async ({
+		onTestFinished,
+	}) => {
+		const { fake, act } = await observed(onTestFinished);
+		let calls = 0;
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			calls += 1;
+			if (calls === 1) return { outcome: "worked", performed: { delivery: "hid", mechanism: "xtest" } };
+			throw Object.assign(new Error(`Refused: ${code}`), { code });
+		};
+		const result = await act([press, press, press]);
+		const { execution } = result.details;
+		assert.equal(fake.actCalls.length, 2, "nothing after the refusal is dispatched");
+		assert.equal(execution.outcome, "unknown", "never success, never a bare error");
+		assert.equal(execution.stoppedAt, 1);
+		assert.equal(execution.actionCount, 2);
+		assert.equal(execution.steps[0].outcome, "worked");
+		assert.equal(execution.error.code, code);
+	});
+}
+
+test("an input_unsafe thrown before any step ran still throws: nothing was delivered", async ({ onTestFinished }) => {
+	const { fake, act } = await observed(onTestFinished);
+	currentPlatformBackend.act = async () => {
+		throw Object.assign(new Error("Refusing physical input"), { code: "input_unsafe" });
+	};
+	await assert.rejects(act([press, press]), /Refusing physical input/);
+	assert.equal(fake.actCalls.length, 0);
 });
