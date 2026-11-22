@@ -2,10 +2,11 @@
 // physical input only when that helper itself received a physical write, and concurrent resets overlap their bounded
 // exit waits instead of stacking them. Fake children only; no helper binary or X server runs.
 import { afterEach, expect, test, vi } from "vitest";
-import { createFakeChild, createFakeSpawn, createHelperEngine, ok } from "../test/support/fake-helper.mjs";
+import { effect, ok, silent } from "../test/support/fake-helper.mjs";
+import { linuxHelperClient } from "../test/support/linux-helper.mjs";
 
-type FakeChild = ReturnType<typeof createFakeChild> & { exitCode: number | null; signals: string[] };
-type HelperModule = typeof import("../src/platform/linux/helper.ts");
+type Fixture = Awaited<ReturnType<typeof linuxHelperClient>>;
+type FakeChild = Fixture["children"][number];
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -14,30 +15,22 @@ afterEach(() => {
 	vi.resetModules();
 });
 
-/** A fresh helper module whose every spawn yields a fake child answering `listRoots` and `act`. */
-async function helperModule(): Promise<{ helper: HelperModule; children: FakeChild[] }> {
-	const children: FakeChild[] = [];
-	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 5, platform: "Linux" });
-	Object.assign(engine.handlers, { listRoots: ok([]), act: ok({ outcome: "worked" }) });
-	const spawn = createFakeSpawn({
-		"*": () => {
-			const child = createFakeChild({ engine }) as FakeChild;
-			children.push(child);
-			return child;
-		},
-	});
-	vi.resetModules();
-	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn }));
-	const helper = await import("../src/platform/linux/helper.ts");
-	return { helper, children };
+/** A client whose every helper answers `listRoots` and `act`, and never answers `actBatch`; `received` logs commands. */
+async function fixture(): Promise<Fixture & { received: string[] }> {
+	const received: string[] = [];
+	const log = (cmd: string, reply: ReturnType<typeof ok>) => effect(() => received.push(cmd), reply);
+	const loaded = await linuxHelperClient(() => ({
+		listRoots: log("listRoots", ok([])),
+		act: log("act", ok({ outcome: "worked" })),
+		actBatch: log("actBatch", silent()),
+	}));
+	return { ...loaded, received };
 }
 
-/** A client of `helper` whose install check always passes. */
-function clientOf(helper: HelperModule): InstanceType<HelperModule["LinuxHelperClient"]> {
-	const client = new helper.LinuxHelperClient({ helperPath: "/nonexistent/linux-bridge" });
-	vi.spyOn(client, "ensureInstalled").mockResolvedValue(undefined);
-	return client;
-}
+const refused = expect.objectContaining({
+	code: "input_unsafe",
+	message: expect.stringMatching(/killed after physical input; held keys\/buttons unknown/),
+});
 
 /** Emit `exit` the way Node reports a normal exit with `code`. */
 function exitWithCode(child: FakeChild, code: number): void {
@@ -51,8 +44,7 @@ function killedBy(child: FakeChild, signal: string): void {
 }
 
 test("an observe-only helper killed by a signal after an earlier helper took physical input leaves input allowed", async () => {
-	const { helper, children } = await helperModule();
-	const client = clientOf(helper);
+	const { client, children } = await fixture();
 	// Helper A takes physical input and exits through its own cleanup: its status is trusted.
 	expect(await client.command("act", {})).toEqual({ outcome: "worked" });
 	exitWithCode(children[0], 0);
@@ -65,18 +57,13 @@ test("an observe-only helper killed by a signal after an earlier helper took phy
 });
 
 test("a helper killed by a signal after its own physical write stays refused, past later helpers", async () => {
-	const { helper, children } = await helperModule();
-	const client = clientOf(helper);
+	const { client, children } = await fixture();
 	// An observe-only helper first, so the refusal is pinned to the helper that took the write.
 	expect(await client.command("listRoots")).toEqual([]);
 	exitWithCode(children[0], 0);
 	expect(await client.command("act", {})).toEqual({ outcome: "worked" });
 	expect(await client.command("listRoots")).toEqual([]);
 	killedBy(children[1], "SIGTERM");
-	const refused = expect.objectContaining({
-		code: "input_unsafe",
-		message: expect.stringMatching(/killed after physical input; held keys\/buttons unknown/),
-	});
 	await expect(client.command("act", {})).rejects.toEqual(refused);
 	// Observation respawns; a clean exit of that later helper does not lift the refusal.
 	expect(await client.command("listRoots")).toEqual([]);
@@ -86,10 +73,10 @@ test("a helper killed by a signal after its own physical write stays refused, pa
 });
 
 test("a discarded helper that took physical input refuses when it dies by a signal after its successor started", async () => {
-	const { helper, children } = await helperModule();
-	const client = clientOf(helper);
+	const { client, children } = await fixture();
 	expect(await client.command("act", {})).toEqual({ outcome: "worked" });
-	(client as unknown as { discardChild(error: Error): void }).discardChild(new Error("replaced"));
+	// A failed stdin write discards the live helper, which is then killed and replaced on the next command.
+	children[0].stdin.emit("error", new Error("EPIPE"));
 	// The observe-only successor is the live helper when the discarded one dies: the death is judged on its own writes.
 	expect(await client.command("listRoots")).toEqual([]);
 	expect(children).toHaveLength(2);
@@ -98,7 +85,7 @@ test("a discarded helper that took physical input refuses when it dies by a sign
 });
 
 test("concurrent resets overlap their bounded exit waits instead of stacking them", async () => {
-	const { helper, children } = await helperModule();
+	const { helper, children } = await fixture();
 	vi.spyOn(helper.linuxHelper, "ensureInstalled").mockResolvedValue(undefined);
 	await helper.linuxHelper.command("listRoots");
 	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -121,4 +108,28 @@ test("concurrent resets overlap their bounded exit waits instead of stacking the
 		["SIGTERM", "SIGKILL"],
 		["SIGTERM", "SIGKILL"],
 	]);
+});
+
+test("a physical batch still awaiting its reply when its helper dies by a signal refuses, and its reply is lost", async () => {
+	const { client, children, received } = await fixture();
+	const batch = client.command("actBatch", { actions: [{ policy: "ax_only" }, { kind: "click" }] });
+	// The write is out and the helper never answers: delivery is unknown from the moment the write was attempted.
+	await vi.waitFor(() => expect(received).toEqual(["actBatch"]));
+	killedBy(children[0], "SIGKILL");
+	await expect(client.command("act", {})).rejects.toEqual(refused);
+	children[0].emit("close", null, "SIGKILL");
+	await expect(batch).rejects.toMatchObject({ code: "reply_lost", message: "Linux helper exited on SIGKILL." });
+	expect(children).toHaveLength(1);
+});
+
+test("a physical request that cannot be serialized is never written, so its helper's signal death leaves input allowed", async () => {
+	const { client, children, received } = await fixture();
+	expect(await client.command("listRoots")).toEqual([]);
+	const circular: Record<string, unknown> = {};
+	circular.self = circular;
+	await expect(client.command("act", circular)).rejects.toThrow(TypeError);
+	killedBy(children[0], "SIGKILL");
+	expect(await client.command("act", {})).toEqual({ outcome: "worked" });
+	expect(received).toEqual(["listRoots", "act"]);
+	expect(children).toHaveLength(2);
 });

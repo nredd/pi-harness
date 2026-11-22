@@ -218,17 +218,19 @@ export class LinuxHelperClient {
 	}
 
 	/**
-	 * Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. Resolves,
-	 * within `DISCARDED_EXIT_WAIT_MS`, to the physical-input refusal once the helper's exit status is known:
-	 * a helper that exits owing releases leaves keys or buttons possibly held, and the caller must say so.
+	 * Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. Resolves to
+	 * the physical-input refusal once this client's helper exit status is known, or its `DISCARDED_EXIT_WAIT_MS`
+	 * wait runs out, and its predecessor's disposal, if any, has settled too: a helper that exits owing releases
+	 * leaves keys or buttons possibly held, and the caller must say so.
 	 */
 	async dispose(): Promise<string | undefined> {
 		this.disposed = true;
 		this.installPromise = undefined;
 		this.setupAbort?.abort();
 		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
-		// The bounded wait starts now, not after the predecessor's: concurrent resets overlap their waits
-		// instead of stacking them.
+		// This client's bounded exit wait starts now, not once the predecessor settles, so concurrent resets overlap
+		// their deadlines instead of stacking them. The deadline bounds only this wait: disposal resolves once both it
+		// and the predecessor's disposal have settled.
 		const exits = this.awaitDiscardedExits();
 		// A chain of resets: what any predecessor left held is carried down to the newest client.
 		await this.predecessor;
@@ -534,8 +536,7 @@ export class LinuxHelperClient {
 			}
 			// Rechecked right before writing: a helper may have exited owing releases during the awaits above.
 			this.refuseUnsafe(physical);
-			if (physical) this.physicalChildren.add(child);
-			return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
+			return await this.send<T>(child, cmd, args, options?.timeoutMs, signal, physical);
 		}
 	}
 
@@ -545,8 +546,11 @@ export class LinuxHelperClient {
 		args: Record<string, unknown>,
 		timeoutMs = COMMAND_TIMEOUT_MS,
 		signal?: AbortSignal,
+		physical = false,
 	): Promise<T> {
 		const id = randomUUID();
+		// Serialized before anything is registered or written: a request that cannot be encoded never reaches the helper.
+		const line = `${JSON.stringify({ protocolVersion: LINUX_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`;
 		return await new Promise<T>((resolve, reject) => {
 			// The helper protocol has no cancel message: an abort or timeout only stops waiting for the reply.
 			const onAbort = () => {
@@ -572,16 +576,16 @@ export class LinuxHelperClient {
 				timer,
 			});
 			signal?.addEventListener("abort", onAbort, { once: true });
-			child.stdin.write(
-				`${JSON.stringify({ protocolVersion: LINUX_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`,
-				(error) => {
-					if (!error) return;
-					signal?.removeEventListener("abort", onAbort);
-					this.pending.delete(id);
-					clearTimeout(timer);
-					reject(error);
-				},
-			);
+			// Marked when the write is attempted, not when it is acknowledged: from here its delivery is uncertain, so a
+			// signal death of this helper may have left input held even before any reply.
+			if (physical) this.physicalChildren.add(child);
+			child.stdin.write(line, (error) => {
+				if (!error) return;
+				signal?.removeEventListener("abort", onAbort);
+				this.pending.delete(id);
+				clearTimeout(timer);
+				reject(error);
+			});
 		});
 	}
 }
@@ -593,8 +597,9 @@ export let linuxHelper = new LinuxHelperClient();
  * holds every physical write until that disposal settles, then wait, bounded, for the old helper's exit
  * status. Resolves to the refusal when it may have left input held: the caller must surface it, and the
  * fresh client inherits it before its first physical write, since the input is still held in this process's
- * desktop. Concurrent resets chain: each client's disposal waits for its own predecessor's, alongside its own bounded
- * exit wait, which starts when that disposal begins.
+ * desktop. Concurrent resets chain: each client's bounded exit wait starts when its disposal begins, so the waits
+ * overlap; the deadline bounds only that client's own wait, and its disposal resolves once both that wait and its
+ * predecessor's disposal have settled.
  */
 export async function resetLinuxHelper(): Promise<string | undefined> {
 	const disposal = linuxHelper.dispose();
