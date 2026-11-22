@@ -602,7 +602,7 @@ private func runEventAssertions() throws {
     dragFixture.postDrag = world.postMouseDrag
     let invalidDrag = "Drag coordinates must be finite and within +/-1000000"
     mouseAllocations = []
-    for x: Double in [1e100, 1e39, 1.7e308, -1_000_000.0001, .nan] {
+    for x: Double in [1e100, 1e39, 1.7e308, -1_000_000.0001, .nan, .infinity, -.infinity] {
         try actionFailure("invalid_args", message: invalidDrag) {
             try world.postMouseDrag([.zero, CGPoint(x: x, y: 0)], 1234, "hid")
             return [:]
@@ -617,6 +617,14 @@ private func runEventAssertions() throws {
         }
         expect(dragFixture.trace == ["begin:1234"], "invalid act drag must not lock, activate, raise or preflight: \(dragFixture.trace)")
         expect(mouseAllocations.isEmpty, "invalid act drag must not allocate input events")
+
+        // A ref target has an element, so preflight would hit-test; coordinate targets return before that.
+        dragFixture.trace = []
+        try actionFailure("invalid_args", message: invalidDrag) {
+            try dragFixture.act("drag", params: ["path": [["x": 0.0, "y": 0.0], ["x": x, "y": 0.0]]])
+        }
+        expect(dragFixture.trace == ["begin:1234"] && !dragFixture.trace.contains("hit"), "invalid ref drag must not lock, activate, raise or hit-test: \(dragFixture.trace)")
+        expect(mouseAllocations.isEmpty, "invalid ref drag must not allocate input events")
     }
     dragFixture.trace = []
     dragFixture.windowFrame.origin.x = 999_900
@@ -624,6 +632,17 @@ private func runEventAssertions() throws {
         try dragFixture.act("drag", coords: true, params: ["path": [["x": 0, "y": 0], ["x": 300, "y": 0]]])
     }
     expect(dragFixture.trace == ["begin:1234"] && mouseAllocations.isEmpty, "out-of-range grounded drag must not lock, activate, raise, preflight or allocate")
+    dragFixture.trace = []
+    try actionFailure("invalid_args", message: invalidDrag) {
+        try dragFixture.act("drag", params: ["path": [["x": 0, "y": 0], ["x": 300, "y": 0]]])
+    }
+    expect(dragFixture.trace == ["begin:1234"] && mouseAllocations.isEmpty, "out-of-range grounded ref drag must not lock, activate, raise, hit-test or allocate: \(dragFixture.trace)")
+
+    let signedZero = CGPoint(x: -0.0, y: 0)
+    let subnormal = CGPoint(x: Double.leastNonzeroMagnitude, y: -Double.leastNonzeroMagnitude)
+    try world.postMouseDrag([signedZero, subnormal], 1234, "pid")
+    expect(events.first?.point == signedZero && events.last?.point == subnormal && events.last?.type == .leftMouseUp, "signed zero and subnormal vertices are in range")
+    events = []; delays = []; mouseAllocations = []
 
     let secondary = CGPoint(x: -240, y: -120)
     let boundary = CGPoint(x: -1_000_000, y: 1_000_000)
