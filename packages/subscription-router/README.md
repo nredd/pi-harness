@@ -247,7 +247,8 @@ Affirmative window exhaustion prose is a verdict, not weak: Anthropic streams st
 `You have reached your weekly usage limit` or `5-hour limit reached`, so a usage, weekly, 5-hour
 or session limit followed by reached/hit/exceeded (or reached your ... limit, unnegated) reaches
 the read, and without a usage source counts as a bare quota status.
-A status counts only in leading (`429: ...`) or core's `<provider> API error (<status>): ` position;
+A status counts only in leading (`429: ...`) or core's wrapper position, `<provider> API error (<status>): `,
+`OpenAI Decisions error (<status>): ` or `llama.cpp error (<status>): `;
 any other parenthesized number, e.g. `Request ID (402)`, is prose. Error types such as `SAFETY` or
 `UNAVAILABLE` veto only as a structured field or at the start of the message; inside a quota
 message they, like free-text words such as "blocked", are not negative evidence.

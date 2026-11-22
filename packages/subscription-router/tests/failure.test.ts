@@ -360,8 +360,9 @@ it.each([
 	expect(classify("RESOURCE_EXHAUSTED: Daily", now)).toStrictEqual({ ...daily, resetAt: expected });
 });
 
-// Core's `formatProviderError` prefixes are `<provider> API error (<status>): `. Any other
-// parenthesized number is prose and never outranks the body's structured status.
+// Core's `formatProviderError` prefixes are `<provider> API error (<status>): ` plus the
+// `OpenAI Decisions error` and `llama.cpp error` labels. Any other parenthesized number is prose
+// and never outranks the body's structured status.
 it.each<[string, string, FailureClassification]>([
 	["free-prefix 402 is not a status", "Request ID (402): malformed input", weak],
 	[
@@ -372,6 +373,12 @@ it.each<[string, string, FailureClassification]>([
 	["free-prefix 401 is not a status", "Tenant (401): quota exceeded", unknown],
 	["core provider prefix 429", "google-vertex API error (429): Daily quota exceeded", daily],
 	["core provider prefix 503", "Azure OpenAI API error (503): quota exceeded", other],
+	["OpenAI Decisions 429", "OpenAI Decisions error (429): Daily limit reached", daily],
+	["OpenAI Decisions 503", "OpenAI Decisions error (503): Daily quota exceeded", other],
+	["llama.cpp 429", "llama.cpp error (429): Daily limit reached", daily],
+	["llama.cpp 503", "llama.cpp error (503): Daily quota exceeded", other],
+	["System One API 503", "System One API error (503): Daily quota exceeded", other],
+	["unknown label error prefix 503", "Gateway error (503): Daily quota exceeded", daily],
 ])("reads statuses only from core wrappers: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
 });

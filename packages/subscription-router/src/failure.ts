@@ -34,10 +34,11 @@ export function nextPacificMidnight(now: number): number {
 }
 
 const LEADING_STATUS = /^(?:HTTP(?:\/\d(?:\.\d)?)?\s+)?([45]\d{2})(?=$|\s|:)(?!\s+(?:tokens?|bytes?|requests?)\b)/i;
-// Core's `formatProviderError` with a chat provider prefix, `<provider> API error (<status>): <body>`
-// (`OpenAI API error`, `Azure OpenAI API error`, `<provider> API error`). Any other parenthesized
-// number is prose, so it can neither invent a status nor outrank the body's structured one.
-const PREFIXED_STATUS = /^[^{}()\r\n]* API error \(([45]\d{2})\): /;
+// Core's `formatProviderError` wrappers, `<prefix> (<status>): <body>`: chat providers use
+// `<provider> API error` (`OpenAI`, `Azure OpenAI`, `Mistral`, `System One API`); the classifier
+// transports use the fixed labels `OpenAI Decisions error` and `llama.cpp error`. Any other
+// parenthesized number is prose, so it can neither invent a status nor outrank the body's structured one.
+const PREFIXED_STATUS = /^(?:[^{}()\r\n]* API|OpenAI Decisions|llama\.cpp) error \(([45]\d{2})\): /;
 const JSON_TOKEN =
 	/\s*(?:"(?:[^"\\\r\n]|\\.)*"|[{}[\],:]|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.+-]))/y;
 const CUT_MESSAGE = /^\s*,?\s*"message"\s*:\s*"(?:[^"\\\r\n]|\\.)*$/;

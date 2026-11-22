@@ -185,6 +185,7 @@ describe("failure-inferred evidence", () => {
 		["safety", "Provider stopped with: SAFETY quota"],
 		["weak prose", "processed 429 tokens"],
 		["parenthesized 503 mentioning billing", 'OpenAI API error (503): {"error":{"message":"billing service failed"}}'],
+		["OpenAI Decisions 503 with a daily token", "OpenAI Decisions error (503): Daily quota exceeded"],
 		["400 mentioning billing", "400: Invalid billing address"],
 	])("never marks %s", async (_name, text) => {
 		const history = new FailureHistory();
