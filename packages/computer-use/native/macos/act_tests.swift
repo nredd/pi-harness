@@ -651,6 +651,15 @@ private func runEventAssertions() throws {
     expect(events.first?.point == secondary && events.last?.point == boundary, "signed secondary-display coordinates and inclusive boundary are accepted")
     expect(events.allSatisfy { abs($0.point.x) <= 1_000_000 && abs($0.point.y) <= 1_000_000 }, "all derived drag steps stay in range")
     events = []; delays = []
+
+    // desktopInput drag through the real router and sink fixture. Far off-screen, so no window can match the refusal.
+    let desktop = Bridge(activityGlow: nil, readSession: { nil }, inputSink: sink, physicalInputLock: inputLock)
+    let far = [CGPoint(x: -999_000, y: -999_000), CGPoint(x: -998_976, y: -999_000)]
+    let desktopDrag = try desktop.handleRequest(["cmd": "desktopInput", "action": "drag", "path": far.map { ["x": $0.x, "y": $0.y] }], clientID: nil) as? [String: Any]
+    let readback = desktopDrag?["mouse"] as? [String: Any]
+    expect(desktopDrag.map { Set($0.keys) } == ["performed", "mouse"] && desktopDrag?["performed"] as? String == "drag" && readback?["x"] is NSNumber && readback?["y"] is NSNumber, "desktop drag keeps the common success shape with mouse readback: \(String(describing: desktopDrag))")
+    expect(events.first?.point == far[0] && events.last?.type == .leftMouseUp && events.last?.point == far[1] && events.allSatisfy { $0.delivery == "hid" }, "desktop drag posts through the HID sink")
+    events = []; delays = []
     rejectDragAt = end
     try actionFailure("input_failed", message: "Failed to create mouse drag event") {
         try world.postMouseDrag([start, end], 1234, "pid")
