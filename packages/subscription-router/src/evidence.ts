@@ -10,7 +10,8 @@
  * Failure-inferred thresholds: a daily or spend-window token, a 402/billing failure, or a
  * retry hint of at least `minHintSeconds` (default 60) marks on the first failure. A bare quota
  * status marks on the second distinct failure of that model within 10 minutes, with no success
- * between. Per-minute throttles, auth (401/403), transport and safety failures never mark.
+ * between. Per-minute throttles, weak gate matches, auth (401/403), 5xx, transport and safety
+ * failures never mark, read included. A raised `minHintSeconds` narrows inference only.
  * Inferred marks end at 24 hours for daily windows and 60 minutes otherwise; `maxBlockMinutes`
  * lowers every end, the billing and unknown-shape backoff included.
  */
