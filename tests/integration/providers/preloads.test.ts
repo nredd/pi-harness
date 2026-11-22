@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExtensionStartupError } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, test, vi } from "vitest";
+import { makeTestTempDir } from "../../lib/src/temp-dir.ts";
 import guardAuthTransport from "./auth_guard.mjs";
 import { verifyTransport } from "./auth_transport.mjs";
 import { runtimeBun } from "./bun_runtime.mjs";
@@ -62,6 +62,7 @@ const bunRecorders = { spawn: fakeBun.spawn, spawnSync: fakeBun.spawnSync };
 let server: Server;
 let mock = "";
 let root = "";
+let removeScratch: () => void;
 let blockedLog = "";
 let redirectDescriptor: PropertyDescriptor | undefined;
 
@@ -76,7 +77,9 @@ async function importFresh(path: string): Promise<unknown> {
 }
 
 beforeAll(async () => {
-	root = mkdtempSync(join(tmpdir(), "provider-preloads-"));
+	root = makeTestTempDir("provider-preloads-", (cleanup) => {
+		removeScratch = cleanup;
+	});
 	blockedLog = join(root, "blocked.log");
 	server = createServer((request, response) => {
 		const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -105,9 +108,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-	setBun(false);
-	await new Promise((resolve) => server.close(resolve));
-	rmSync(root, { recursive: true, force: true });
+	try {
+		setBun(false);
+		await new Promise((resolve) => server.close(resolve));
+	} finally {
+		removeScratch?.();
+	}
 });
 
 test("the real engine preload blocks later named builtin imports before they can launch a process", () => {

@@ -1,13 +1,13 @@
 /** Real multi-extension sessions, with one host identity shared by every fork. */
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionFactory, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createHarness, type Harness, type HarnessOptions } from "@nredd/pi-test-lib/harness";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 
 const ROOT = new URL("../../", import.meta.url);
 /** Imported fork -> `packages/<dir>` workspace and its declared `pi.extensions` entry. */
@@ -124,42 +124,51 @@ export function holdWake(platform: NodeJS.Platform = process.platform): WakeHelp
 export async function isolateStackHome(
 	spawnWake: () => WakeHelper | undefined = holdWake,
 ): Promise<{ root: string; cleanup(): Promise<void> }> {
-	const root = mkdtempSync(join(tmpdir(), "pi-stack-"));
-	const wake = spawnWake();
-	if (wake) {
+	let removeScratch!: () => void;
+	const root = makeTestTempDir("pi-stack-", (cleanup) => {
+		removeScratch = cleanup;
+	});
+	let wake: WakeHelper | undefined;
+	const previous = new Map<string, string | undefined>();
+	async function cleanup() {
 		try {
-			await once(wake, "spawn");
-		} catch (error) {
-			rmSync(root, { recursive: true, force: true });
-			throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
+			for (const [key, value] of previous) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			removeScratch();
+		} finally {
+			if (wake) await stopWake(wake);
 		}
 	}
-	const previous = new Map<string, string | undefined>();
-	// Subagent task dirs live under XDG_STATE_HOME (os.tmpdir() as fallback); keep both inside this root so cleanup removes them (#678, #900).
-	mkdirSync(join(root, "tmp"));
-	for (const [key, value] of Object.entries({
-		PI_CODING_AGENT_DIR: join(root, "agent"),
-		XDG_CONFIG_HOME: join(root, ".config"),
-		TMPDIR: join(root, "tmp"),
-		XDG_STATE_HOME: join(root, "state"),
-	})) {
-		previous.set(key, process.env[key]);
-		process.env[key] = value;
+	try {
+		try {
+			const child = spawnWake();
+			if (child) await once(child, "spawn");
+			wake = child;
+		} catch (error) {
+			throw new Error("Cannot hold macOS wake assertions for stack tests", { cause: error });
+		}
+		// Subagent task dirs live under XDG_STATE_HOME (os.tmpdir() as fallback); keep both inside this root so cleanup removes them (#678, #900).
+		mkdirSync(join(root, "tmp"));
+		for (const [key, value] of Object.entries({
+			PI_CODING_AGENT_DIR: join(root, "agent"),
+			XDG_CONFIG_HOME: join(root, ".config"),
+			TMPDIR: join(root, "tmp"),
+			XDG_STATE_HOME: join(root, "state"),
+		})) {
+			previous.set(key, process.env[key]);
+			process.env[key] = value;
+		}
+		return { root, cleanup };
+	} catch (error) {
+		try {
+			await cleanup();
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], "Could not set up or roll back the stack fixture");
+		}
+		throw error;
 	}
-	return {
-		root,
-		async cleanup() {
-			try {
-				for (const [key, value] of previous) {
-					if (value === undefined) delete process.env[key];
-					else process.env[key] = value;
-				}
-				rmSync(root, { recursive: true, force: true });
-			} finally {
-				if (wake) await stopWake(wake);
-			}
-		},
-	};
 }
 
 /**

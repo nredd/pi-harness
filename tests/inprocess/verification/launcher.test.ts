@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, test } from "vitest";
 
 const CHILD_FAILURE_STATUS = 7;
@@ -12,129 +12,120 @@ const launcher = fileURLToPath(new URL("../../../scripts/run-vitest.ts", import.
 // The package root export, not a dist path: the fake engine runs outside Vitest's resolver.
 const piUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
 
-test("launcher isolates home and temp before the child starts and cleans both on failure", () => {
-	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-test-"));
-	try {
-		const bin = join(fixture, "bin");
-		mkdirSync(bin);
-		const shared = join(fixture, "shared-tmp");
-		mkdirSync(shared);
-		const receipt = join(fixture, "receipt.json");
-		writeFileSync(
-			join(bin, "bun"),
-			`#!/usr/bin/env node\nimport { mkdtempSync, writeFileSync } from "node:fs";
+test("launcher isolates home and temp before the child starts and cleans both on failure", ({ onTestFinished }) => {
+	const fixture = makeTestTempDir("pi-launcher-test-", onTestFinished);
+	const bin = join(fixture, "bin");
+	mkdirSync(bin);
+	const shared = join(fixture, "shared-tmp");
+	mkdirSync(shared);
+	const receipt = join(fixture, "receipt.json");
+	writeFileSync(
+		join(bin, "bun"),
+		`#!/usr/bin/env node\nimport { mkdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-const dir = mkdtempSync(join(tmpdir(), "bare-fixture-"));
+// Exempt from makeTestTempDir: this is a child of the launcher-owned TMPDIR,
+// left behind so the test can verify the launcher removes that parent on failure.
+const dir = join(tmpdir(), "bare-fixture");
+mkdirSync(dir);
 writeFileSync(join(tmpdir(), "uv-fixture.lock"), "lock");
 writeFileSync(process.env.RECEIPT, JSON.stringify({ home: process.env.HOME, resolved: homedir(), xdg: process.env.XDG_CONFIG_HOME, temp: tmpdir(), dir, argv: process.argv.slice(2) }));
 process.exitCode = ${CHILD_FAILURE_STATUS};\n`,
-			{ mode: EXECUTABLE_MODE },
-		);
-		const result = spawnSync("node", [launcher, "bun", "--maxWorkers=1"], {
-			env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt, TMPDIR: shared },
+		{ mode: EXECUTABLE_MODE },
+	);
+	const result = spawnSync("node", [launcher, "bun", "--maxWorkers=1"], {
+		env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt, TMPDIR: shared },
+		encoding: "utf8",
+	});
+	expect(result.error).toBeUndefined();
+	expect(result.status).toBe(CHILD_FAILURE_STATUS);
+	const actual = JSON.parse(readFileSync(receipt, "utf8"));
+	expect(actual.home).not.toBe(process.env.HOME);
+	expect(actual.resolved).toBe(actual.home);
+	expect(actual.xdg).toBe(join(actual.home, ".config"));
+	expect(actual.argv[0]).toBe("--bun");
+	// Bare `--coverage` goes first (Vitest's parser drops `--coverage.*` fields parsed before it), then the package
+	// arguments; scripts/tests/test_coverage_producers.py pins the provider, reporters and directory that follow.
+	expect(actual.argv.slice(2, 5)).toEqual(["run", "--coverage", "--maxWorkers=1"]);
+	expect(existsSync(actual.home)).toBe(false);
+	expect(dirname(actual.dir)).toBe(actual.temp);
+	expect(existsSync(actual.temp)).toBe(false);
+	expect(readdirSync(shared)).toEqual([]);
+	expect(result.stdout).toContain(`exit ${CHILD_FAILURE_STATUS}`);
+});
+
+test("launcher keeps the account's Rust toolchain reachable under the isolated HOME", ({ onTestFinished }) => {
+	const fixture = makeTestTempDir("pi-launcher-rust-", onTestFinished);
+	const bin = join(fixture, "bin");
+	mkdirSync(bin);
+	writeFileSync(
+		join(bin, "bun"),
+		`#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";
+writeFileSync(process.env.RECEIPT, JSON.stringify({ home: process.env.HOME, cargo: process.env.CARGO_HOME ?? null, rustup: process.env.RUSTUP_HOME ?? null }));\n`,
+		{ mode: EXECUTABLE_MODE },
+	);
+	const run = (toolchain: Record<string, string>) => {
+		const receipt = join(fixture, `receipt-${Object.keys(toolchain).length}.json`);
+		const { CARGO_HOME: _cargo, RUSTUP_HOME: _rustup, ...inherited } = process.env;
+		const result = spawnSync("node", [launcher, "bun"], {
+			env: { ...inherited, ...toolchain, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt },
 			encoding: "utf8",
 		});
 		expect(result.error).toBeUndefined();
-		expect(result.status).toBe(CHILD_FAILURE_STATUS);
-		const actual = JSON.parse(readFileSync(receipt, "utf8"));
-		expect(actual.home).not.toBe(process.env.HOME);
-		expect(actual.resolved).toBe(actual.home);
-		expect(actual.xdg).toBe(join(actual.home, ".config"));
-		expect(actual.argv[0]).toBe("--bun");
-		// Bare `--coverage` goes first (Vitest's parser drops `--coverage.*` fields parsed before it), then the package
-		// arguments; scripts/tests/test_coverage_producers.py pins the provider, reporters and directory that follow.
-		expect(actual.argv.slice(2, 5)).toEqual(["run", "--coverage", "--maxWorkers=1"]);
-		expect(existsSync(actual.home)).toBe(false);
-		expect(dirname(actual.dir)).toBe(actual.temp);
-		expect(existsSync(actual.temp)).toBe(false);
-		expect(readdirSync(shared)).toEqual([]);
-		expect(result.stdout).toContain(`exit ${CHILD_FAILURE_STATUS}`);
-	} finally {
-		rmSync(fixture, { recursive: true, force: true });
-	}
+		expect(result.status).toBe(0);
+		return JSON.parse(readFileSync(receipt, "utf8"));
+	};
+	// rustup's proxies resolve both homes from HOME when unset, so the isolated HOME would hide them.
+	// The launcher runs on Node, whose `userInfo()` reads passwd; Bun's follows this suite's isolated HOME.
+	const account = spawnSync("node", ["-p", "require('node:os').userInfo().homedir"], {
+		encoding: "utf8",
+	}).stdout.trim();
+	const defaults = run({});
+	expect(defaults.home).not.toBe(account);
+	expect(defaults.cargo).toBe(join(account, ".cargo"));
+	expect(defaults.rustup).toBe(join(account, ".rustup"));
+	const explicit = run({ CARGO_HOME: join(fixture, "cargo"), RUSTUP_HOME: join(fixture, "rustup") });
+	expect(explicit.cargo).toBe(join(fixture, "cargo"));
+	expect(explicit.rustup).toBe(join(fixture, "rustup"));
 });
 
-test("launcher keeps the account's Rust toolchain reachable under the isolated HOME", () => {
-	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-rust-"));
-	try {
-		const bin = join(fixture, "bin");
-		mkdirSync(bin);
-		writeFileSync(
-			join(bin, "bun"),
-			`#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";
-writeFileSync(process.env.RECEIPT, JSON.stringify({ home: process.env.HOME, cargo: process.env.CARGO_HOME ?? null, rustup: process.env.RUSTUP_HOME ?? null }));\n`,
-			{ mode: EXECUTABLE_MODE },
-		);
-		const run = (toolchain: Record<string, string>) => {
-			const receipt = join(fixture, `receipt-${Object.keys(toolchain).length}.json`);
-			const { CARGO_HOME: _cargo, RUSTUP_HOME: _rustup, ...inherited } = process.env;
-			const result = spawnSync("node", [launcher, "bun"], {
-				env: { ...inherited, ...toolchain, PATH: `${bin}:${process.env.PATH}`, RECEIPT: receipt },
-				encoding: "utf8",
-			});
-			expect(result.error).toBeUndefined();
-			expect(result.status).toBe(0);
-			return JSON.parse(readFileSync(receipt, "utf8"));
-		};
-		// rustup's proxies resolve both homes from HOME when unset, so the isolated HOME would hide them.
-		// The launcher runs on Node, whose `userInfo()` reads passwd; Bun's follows this suite's isolated HOME.
-		const account = spawnSync("node", ["-p", "require('node:os').userInfo().homedir"], {
-			encoding: "utf8",
-		}).stdout.trim();
-		const defaults = run({});
-		expect(defaults.home).not.toBe(account);
-		expect(defaults.cargo).toBe(join(account, ".cargo"));
-		expect(defaults.rustup).toBe(join(account, ".rustup"));
-		const explicit = run({ CARGO_HOME: join(fixture, "cargo"), RUSTUP_HOME: join(fixture, "rustup") });
-		expect(explicit.cargo).toBe(join(fixture, "cargo"));
-		expect(explicit.rustup).toBe(join(fixture, "rustup"));
-	} finally {
-		rmSync(fixture, { recursive: true, force: true });
-	}
-});
-
-test("launcher keeps a real extension load out of the shared jiti cache", () => {
-	const fixture = mkdtempSync(join(tmpdir(), "pi-launcher-jiti-"));
-	try {
-		// `shared` stands in for the ambient TMPDIR every run inherits; no other process writes here.
-		const shared = join(fixture, "shared-tmp");
-		const bin = join(fixture, "bin");
-		mkdirSync(shared);
-		mkdirSync(bin);
-		const marker = join(fixture, "loaded.txt");
-		const extension = join(fixture, "extension", "probe.ts");
-		mkdirSync(dirname(extension));
-		writeFileSync(
-			extension,
-			`import { appendFileSync } from "node:fs";\nconst label: string = "loaded";\nexport default function () { appendFileSync(${JSON.stringify(marker)}, label + "\\n"); }\n`,
-		);
-		// The fake engine runs Pi's real extension loader, which is what writes `$TMPDIR/jiti` entries.
-		const engine = join(bin, "bun");
-		writeFileSync(
-			engine,
-			`#!/usr/bin/env node\nconst { discoverAndLoadExtensions } = await import(${JSON.stringify(piUrl)});
+test("launcher keeps a real extension load out of the shared jiti cache", ({ onTestFinished }) => {
+	const fixture = makeTestTempDir("pi-launcher-jiti-", onTestFinished);
+	// `shared` stands in for the ambient TMPDIR every run inherits; no other process writes here.
+	const shared = join(fixture, "shared-tmp");
+	const bin = join(fixture, "bin");
+	mkdirSync(shared);
+	mkdirSync(bin);
+	const marker = join(fixture, "loaded.txt");
+	const extension = join(fixture, "extension", "probe.ts");
+	mkdirSync(dirname(extension));
+	writeFileSync(
+		extension,
+		`import { appendFileSync } from "node:fs";\nconst label: string = "loaded";\nexport default function () { appendFileSync(${JSON.stringify(marker)}, label + "\\n"); }\n`,
+	);
+	// The fake engine runs Pi's real extension loader, which is what writes `$TMPDIR/jiti` entries.
+	const engine = join(bin, "bun");
+	writeFileSync(
+		engine,
+		`#!/usr/bin/env node\nconst { discoverAndLoadExtensions } = await import(${JSON.stringify(piUrl)});
 const { errors } = await discoverAndLoadExtensions([${JSON.stringify(extension)}], ${JSON.stringify(fixture)}, ${JSON.stringify(join(fixture, "agent"))});
 if (errors.length > 0) throw new Error(JSON.stringify(errors));\n`,
-			{ mode: EXECUTABLE_MODE },
-		);
-		const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: shared };
-		// The outer run may already carry the opt-out; the launcher must set it on its own.
-		delete env.JITI_FS_CACHE;
+		{ mode: EXECUTABLE_MODE },
+	);
+	const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: shared };
+	// The outer run may already carry the opt-out; the launcher must set it on its own.
+	delete env.JITI_FS_CACHE;
 
-		// Negative control: the same load outside the launcher does write the shared cache.
-		const direct = spawnSync(engine, [], { env, encoding: "utf8" });
-		expect(direct.status, direct.stderr).toBe(0);
-		expect(readdirSync(join(shared, "jiti")).some((name) => name.startsWith("extension-probe."))).toBe(true);
-		rmSync(join(shared, "jiti"), { recursive: true });
+	// Negative control: the same load outside the launcher does write the shared cache.
+	const direct = spawnSync(engine, [], { env, encoding: "utf8" });
+	expect(direct.status, direct.stderr).toBe(0);
+	expect(readdirSync(join(shared, "jiti")).some((name) => name.startsWith("extension-probe."))).toBe(true);
+	rmSync(join(shared, "jiti"), { recursive: true });
 
-		const launched = spawnSync("node", [launcher, "bun"], { env, encoding: "utf8" });
-		expect(launched.status, launched.stderr).toBe(0);
-		expect(readFileSync(marker, "utf8")).toBe("loaded\nloaded\n");
-		expect(existsSync(join(shared, "jiti"))).toBe(false);
-	} finally {
-		rmSync(fixture, { recursive: true, force: true });
-	}
+	const launched = spawnSync("node", [launcher, "bun"], { env, encoding: "utf8" });
+	expect(launched.status, launched.stderr).toBe(0);
+	expect(readFileSync(marker, "utf8")).toBe("loaded\nloaded\n");
+	expect(existsSync(join(shared, "jiti"))).toBe(false);
 });
 
 /** `vitest` or `bun test` as a command head, bare or through a package runner, after any env assignments. */
