@@ -344,7 +344,7 @@ it("prunes post-recovery generations without losing frozen files to another outb
 	const original = manifest(first.snapshotDir).shards[0];
 	if (!original) throw new Error("Missing shard");
 	writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
-	// Barrier: B has read its export state and waits at its manifest while A freezes recovery.
+	// Barrier: B has read its export state and waits to record it while A freezes recovery.
 	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 	let reached = (): void => {};
 	let release = (): void => {};
@@ -355,17 +355,26 @@ it("prunes post-recovery generations without losing frozen files to another outb
 		release = resolve;
 	});
 	let waits = 0;
-	vi.mocked(lstat).mockImplementation(async (target, options) => {
-		if (String(target) === join(second.snapshotDir, "manifest.json") && waits++ === 0) {
+	vi.mocked(rename).mockImplementation(async (from, to) => {
+		if (String(to) === outboxStatePath(agent, second.snapshotDir) && waits++ === 0) {
 			reached();
 			await gate;
 		}
-		return actual.lstat(target, options);
+		return actual.rename(from, to);
 	});
 	const stale = exportStats(agent, outB);
-	await paused;
-	await exportStats(agent, out);
-	release();
+	try {
+		// B failing (or finishing) before its checkpoint surfaces here instead of hanging the test.
+		await Promise.race([
+			paused,
+			stale.then(() => {
+				throw new Error("B finished before its checkpoint");
+			}),
+		]);
+		await exportStats(agent, out);
+	} finally {
+		release();
+	}
 	await stale;
 	seed(8);
 	await exportStats(agent, out);
