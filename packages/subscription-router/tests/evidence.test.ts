@@ -622,6 +622,23 @@ describe("inferred marks", () => {
 		).toMatchObject({ window: "inferred:daily", until: midnight });
 	});
 
+	it("takes one clock sample per write, so crossing the deadline mid-write never backs off", () => {
+		const resetAt = T0 + 95_000;
+		const samples = [resetAt - 1, resetAt + 1];
+		const tracker = new ExhaustionTracker(() => samples.shift() ?? resetAt + 1);
+		const mark = tracker.record(CARBON, {
+			block: true,
+			scope: "model",
+			families: [CARBON.id],
+			window: "inferred:hint",
+			evidence: "inferred",
+			expiry: "hinted",
+			resetAt,
+			evidenceAt: T0,
+		});
+		expect(mark).toMatchObject({ until: resetAt, resetKnown: true, expiry: "hinted", markedAt: resetAt - 1 });
+	});
+
 	it("re-counts after the mark lapses, and never dedupes read marks", () => {
 		const { clock, tracker } = tracked();
 		const decision = { block: true, window: "inferred:backoff", evidence: "inferred", evidenceAt: T0 } as const;

@@ -60,16 +60,22 @@ export class ExhaustionTracker {
 	 * deadline backs off, so an elapsed hint is never replaced by a fresh backoff.
 	 */
 	record(model: ModelRef, decision: EvidenceDecision): ExhaustionMark | undefined {
+		// One clock sample for the check and the write: crossing the deadline between two samples
+		// would otherwise turn a valid deadline into a fresh backoff.
+		const now = this.now();
 		const deadline = decision.expiry === "hinted" || decision.expiry === "window-reset";
-		if (deadline && (decision.resetAt ?? -Infinity) <= this.now()) return undefined;
-		return this.mark(model, decision);
+		if (deadline && (decision.resetAt ?? -Infinity) <= now) return undefined;
+		return this.write(model, decision, now);
 	}
 
 	/** Record a confirmed block for the scope of `decision` and return the mark. Routing uses `record`. */
 	mark(model: ModelRef, decision: EvidenceDecision): ExhaustionMark {
+		return this.write(model, decision, this.now());
+	}
+
+	private write(model: ModelRef, decision: EvidenceDecision, now: number): ExhaustionMark {
 		const families = decision.scope === "model" ? decision.families : undefined;
 		const key = scopeKey(model.provider, families);
-		const now = this.now();
 		const previous = this.marks.get(key);
 		// One failure, keyed by model and message timestamp, counts once while its mark is live.
 		// Distinct failures count separately even when both precede the first confirmation.
