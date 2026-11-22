@@ -1010,11 +1010,13 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 /**
  * A Windows root is bound to its original owner and window instance, not a matching title or HWND: the
  * helper issues a new native ref for a same-HWND replacement, so the saved ref must still be listed.
+ * A Linux text read binds the same way to the exact AT-SPI root that owns the look (#1180).
  */
-async function resolveWindowsRoot(
+async function resolveExactRoot(
 	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
 	signal?: AbortSignal,
 ): Promise<ResolvedTarget> {
+	const platform = currentPlatformBackend.name === "windows" ? "Windows" : "Linux";
 	const windows = await listWindows(saved.pid, signal);
 	const match = windows.find(
 		(window) =>
@@ -1026,7 +1028,7 @@ async function resolveWindowsRoot(
 	if (!match)
 		throw new ComputerUseError(
 			"root_stale",
-			"Saved Windows root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
+			`Saved ${platform} root is no longer available for its original owner and window instance. Rediscover it with find_roots.`,
 		);
 	if (match.instanceUnavailable)
 		throw new ComputerUseError(
@@ -1037,7 +1039,7 @@ async function resolveWindowsRoot(
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
 		throw new ComputerUseError(
 			"app_blocked",
-			"Windows root owner identity changed. Rediscover it with find_roots and observe it again.",
+			`${platform} root owner identity changed. Rediscover it with find_roots and observe it again.`,
 		);
 	}
 	const target = toResolvedTarget(saved, match);
@@ -1057,7 +1059,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
 	assertAppNotBlocked(fromRef);
-	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
+	if (currentPlatformBackend.name === "windows") return await resolveExactRoot(fromRef, signal);
 	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
 	const match =
@@ -1078,13 +1080,13 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean } = {},
+	options: { preferModal?: boolean; exact?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
 	assertAppNotBlocked(current);
-	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
+	if (currentPlatformBackend.name === "windows" || options.exact) return await resolveExactRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
 	if (!windows.length) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
@@ -1901,7 +1903,8 @@ async function performReadText(
 	const state = operationState();
 	const raw = (
 		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
-			const target = currentPlatformBackend.name === "windows" ? await resolveCurrentTarget(signal) : undefined;
+			// Revalidate the exact root owning the look and its live identity before any live read.
+			const target = requiresLiveIdentity() ? await resolveCurrentTarget(signal, { exact: true }) : undefined;
 			return await currentPlatformBackend.readText(
 				{
 					...(target ? { pid: target.pid, windowId: target.windowId } : {}),
@@ -3932,8 +3935,7 @@ function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, 
 	if (!currentTarget) return;
 	const refusalForState = () => {
 		const savedRef = currentTarget.windowRef;
-		const latest =
-			currentPlatformBackend.name === "windows" && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
+		const latest = requiresLiveIdentity() && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
 		return appPolicyRefusal(currentTarget) ?? (latest && appPolicyRefusal(latest));
 	};
 	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {

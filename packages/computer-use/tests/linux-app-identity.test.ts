@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, test, vi } from "vitest";
-import { executeFind, executeObserve } from "../src/bridge.ts";
+import { executeFind, executeObserve, executeReadText, executeSearchUi } from "../src/bridge.ts";
 import { currentPlatformBackend, platformBackendForRuntime } from "../src/platform/index.ts";
 import { linuxBackend } from "../src/platform/linux/backend.ts";
 import { linuxHelper } from "../src/platform/linux/helper.ts";
@@ -50,9 +50,17 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 				return {
 					lookId: `look-${String(args?.rootRef)}`,
 					window: { rootRef: args?.rootRef, framePoints: { x: 0, y: 0, w: 100, h: 100 }, scaleFactor: 1 },
-					outline: { ref: "native-window", role: "frame", title: "Window", truncated: false, children: [] },
+					outline: {
+						ref: "native-window",
+						role: "frame",
+						title: "Window",
+						truncated: false,
+						children: [{ ref: "native-body", role: "text", title: "Body", truncated: false, children: [] }],
+					},
 					readText: { requested: false, executed: false },
 				};
+			case "atspiReadText":
+				return { text: "private body", offset: 0, limit: 4000, totalChars: 12, hasMore: false };
 			default:
 				throw new Error(`Unexpected helper command ${name}`);
 		}
@@ -65,8 +73,13 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	const find = async () => (await executeFind("t", {}, undefined, undefined, ctx)).details.windows;
 	const observe = async (root: string) =>
 		await executeObserve("t", { root, mode: "semantic" }, undefined, undefined, ctx);
-	const looks = () => command.mock.calls.filter(([name]) => name === "look").length;
-	return { state, userFile, find, observe, looks };
+	const calls = (wanted: string) => command.mock.calls.filter(([name]) => name === wanted).length;
+	const looks = () => calls("look");
+	const search = async (stateId: string) =>
+		(await executeSearchUi("t", { stateId, text: "Body" }, undefined, undefined, ctx)).details.matches![0].ref;
+	const readText = async (stateId: string, ref: string) =>
+		await executeReadText("t", { stateId, ref }, undefined, undefined, ctx);
+	return { state, userFile, find, observe, looks, calls, search, readText };
 }
 
 test("Linux blocks roots by executable basename, never by the accessible app name", async ({ onTestFinished }) => {
@@ -206,6 +219,70 @@ test("Linux WM_CLASS and an ambiguous exe link name can only add a block", async
 	expect(await byPid()).toMatchObject({ 204: { blocked: false }, 205: { blocked: true } });
 	// The user list replaced the defaults: a WM_CLASS alias then has nothing to match.
 	expect(await byPid()).toMatchObject({ 201: { blocked: false }, 202: { blocked: false }, 203: { blocked: false } });
+});
+
+test("Linux read_text revalidates the exact root that owns the look before every live read", async ({
+	onTestFinished,
+}) => {
+	const editor = linuxRoot(101, "Editor", "fixture-editor");
+	const { state, find, observe, calls, search, readText } = useLinuxRoots(onTestFinished, [editor]);
+	const [{ windowRef }] = await find();
+	const { stateId } = (await observe(windowRef)).details.capture;
+	const ref = await search(stateId);
+	expect((await readText(stateId, ref)).details.text).toBe("private body");
+	expect(calls("atspiReadText")).toBe(1);
+
+	for (const [roots, refusal] of [
+		// Non-dumpable or otherwise unattributable now, same AT-SPI connection.
+		[
+			[linuxRoot(101, "Editor")],
+			{ code: "app_blocked", message: expect.stringMatching(/identity could not be determined/) },
+		],
+		[[linuxRoot(101, "Editor", "kitty")], { code: "app_blocked", message: expect.stringMatching(/\(kitty\)/) }],
+		[
+			[linuxRoot(101, "Editor", "other-editor")],
+			{ code: "app_blocked", message: expect.stringMatching(/Linux root owner identity changed/) },
+		],
+		[
+			[linuxRoot(101, "Editor", "fixture-editor", { metadata: { wmClass: { instance: "x", class: "keepassxc" } } })],
+			{ code: "app_blocked", message: expect.stringMatching(/\(keepassxc\)/) },
+		],
+		// A replacement window of the same PID and title is never the look's root.
+		[
+			[{ ...editor, rootRef: "@w999" }],
+			{ code: "root_stale", message: expect.stringMatching(/Saved Linux root is no longer available/) },
+		],
+		[[], { code: "root_stale" }],
+	] as const) {
+		state.roots = [...roots];
+		await expect(readText(stateId, ref), JSON.stringify(roots)).rejects.toMatchObject(refusal);
+	}
+	expect(calls("atspiReadText")).toBe(1);
+
+	state.roots = [editor];
+	expect((await readText(stateId, ref)).details.text).toBe("private body");
+	expect(calls("atspiReadText")).toBe(2);
+});
+
+test("Linux read_text preflight refuses a root whose latest discovery lost its identity", async ({
+	onTestFinished,
+}) => {
+	const { state, find, observe, calls, search, readText } = useLinuxRoots(onTestFinished, [
+		linuxRoot(101, "Editor", "fixture-editor"),
+	]);
+	const [{ windowRef }] = await find();
+	const { stateId } = (await observe(windowRef)).details.capture;
+	const ref = await search(stateId);
+	state.roots = [linuxRoot(101, "Editor")];
+	await find();
+	const listed = calls("listRoots");
+	await expect(readText(stateId, ref)).rejects.toMatchObject({
+		code: "app_blocked",
+		message: expect.stringMatching(/identity could not be determined/),
+	});
+	// Refused before the live lookup or any helper read.
+	expect(calls("listRoots")).toBe(listed);
+	expect(calls("atspiReadText")).toBe(0);
 });
 
 test("The Linux backend collects block-only aliases from the helper and X11 WM_CLASS", async ({ onTestFinished }) => {
