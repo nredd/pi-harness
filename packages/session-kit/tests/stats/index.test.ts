@@ -141,6 +141,23 @@ describe("/stats command", () => {
 		expect(printed).toContain("blocked until 2026-01-16 08:00 UTC · inferred");
 	});
 
+	it.each([
+		[
+			"legacy-stale-short-only",
+			/Anthropic seven_day \(stale\) +██░░░░░░░░ +20%/,
+			"Anthropic seven_day (stale): 20% used",
+		],
+		["legacy-error-unavailable", /Anthropic +quota read error/, "Anthropic: quota read error"],
+	])("shows %s status as text in the overlay and print", async (fixture, tui, print) => {
+		const opts = seedRouterView(fixture);
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		expect(rendered[0]?.join("\n")).toMatch(tui);
+		expect(String(out.mock.calls[0]?.[0])).toContain(print);
+	});
+
 	it("opens a full-screen overlay, shows loading status, clears it, and writes the cache", async () => {
 		seed();
 		const { run, ctx, custom, rendered } = setup("tui");

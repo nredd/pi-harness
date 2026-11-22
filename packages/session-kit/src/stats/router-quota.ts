@@ -61,6 +61,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			snapshot.status === "stale" ||
 			(timestamp(snapshot.expiresAt) && snapshot.expiresAt <= now) ||
 			(timestamp(snapshot.retrievedAt) && now - snapshot.retrievedAt > QUOTA_DIM_AFTER_MS);
+		const start = rows.length;
 		if (snapshot.status === "available" || snapshot.status === "stale") {
 			for (const window of list(snapshot.windows).map(asRecordOf)) {
 				if (!text(window.name) || !number(window.usedPercent)) continue;
@@ -68,7 +69,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 				const source = window.spanSource;
 				const name = source === "assumed" || source === "inferred" ? `${window.name} (${source} span)` : window.name;
 				rows.push({
-					label: label(provider, window.families, name),
+					label: label(provider, window.families, old ? `${name} (stale)` : name),
 					head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: window.usedPercent },
 					basis: basis(window.basis),
 					reset: resetDetail(window, now),
@@ -76,6 +77,14 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 					old,
 				});
 			}
+		}
+		if (snapshot.status === "error" || (snapshot.status === "stale" && rows.length === start)) {
+			rows.push({
+				label: provider,
+				head: { kind: "text", text: `quota read ${snapshot.status}` },
+				expired: false,
+				old: true,
+			});
 		}
 		for (const meter of list(view.meters).map(asRecordOf)) {
 			if (!text(meter.name) || (timestamp(meter.resetAt) && meter.resetAt <= now)) continue;

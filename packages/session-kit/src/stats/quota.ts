@@ -19,7 +19,7 @@ export interface QuotaRow {
 	/** The window has reset since the reading: no percentage is known. */
 	expired: boolean;
 	head: { kind: "gauge"; percent: number } | { kind: "text"; text: string };
-	basis: "reported" | "observed" | "inferred";
+	basis?: "reported" | "observed" | "inferred";
 	/** `resets in 3h 12m`, or `reset 5m ago, no newer reading`. */
 	reset?: string;
 	/** Legacy harness provenance, e.g. `observed 12m ago via codex`. */
@@ -74,8 +74,8 @@ export function quotaRows(allReadings: readonly QuotaObservation[], now: number)
 
 /** Preserve legacy harness provenance; router rows use the view's explicit evidence basis. */
 export function quotaDetails(row: QuotaRow): string[] {
-	if (row.reset === undefined) return [row.basis];
-	return row.observed === undefined ? [row.basis, row.reset] : [row.reset, row.observed];
+	if (row.observed !== undefined && row.reset !== undefined) return [row.reset, row.observed];
+	return [row.basis, row.reset].filter((detail) => detail !== undefined);
 }
 
 /** `47.3%`, or `100%` / `5%` without a pointless decimal. */

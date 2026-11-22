@@ -68,11 +68,12 @@ it("ignores expired blocks and counts, and never uses an expired percentage", as
 				provider: "error-provider",
 				snapshot: { status: "error", windows: [{ name: "ignored", usedPercent: 99 }] },
 			},
+			{ provider: "stale-provider", snapshot: { status: "stale", windows: [] } },
 		]),
 	);
 	expect(await readRouterQuota(dir, NOW)).toEqual([
 		{
-			label: "future-provider expired",
+			label: "future-provider expired (stale)",
 			head: { kind: "text", text: "" },
 			basis: "reported",
 			reset: "reset 0s ago, no newer reading",
@@ -80,7 +81,7 @@ it("ignores expired blocks and counts, and never uses an expired percentage", as
 			old: true,
 		},
 		{
-			label: "future-provider live",
+			label: "future-provider live (stale)",
 			head: { kind: "gauge", percent: 30 },
 			basis: "observed",
 			reset: "resets in 1m",
@@ -101,6 +102,8 @@ it("ignores expired blocks and counts, and never uses an expired percentage", as
 			expired: false,
 			old: false,
 		},
+		{ label: "error-provider", head: { kind: "text", text: "quota read error" }, expired: false, old: true },
+		{ label: "stale-provider", head: { kind: "text", text: "quota read stale" }, expired: false, old: true },
 	]);
 });
 
@@ -114,7 +117,7 @@ it("dims an available snapshot past its expiry or age limit", async () => {
 		]),
 	);
 	expect((await readRouterQuota(dir, NOW)).map((row) => [row.label, row.old])).toEqual([
-		["expired window", true],
-		["aged window", true],
+		["expired window (stale)", true],
+		["aged window (stale)", true],
 	]);
 });
