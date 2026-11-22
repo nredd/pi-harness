@@ -1272,7 +1272,10 @@ test("generic width ladder fits, drops meters, caps providers and clips by prior
 	assert.deepEqual(fit(present(terse[0]).length), terse);
 	const essential = ["Left: A 2h 95% 1h 3% | provider blocked obs", "B 2h 95% 1h 3% | provider blocked obs"];
 	assert.deepEqual(fit(present(essential[0]).length), essential);
-	assert.deepEqual(fit(20), ["Left: A provider blocked obs 1h 3% 2h 95%", "B provider blocked obs 1h 3% 2h 95%"]);
+	assert.deepEqual(fit(41), ["Left: A provider blocked obs 1h 3% 2h 95%", "B provider blocked obs 1h 3% 2h 95%"]);
+	// Narrower, whole low-priority cells give way behind ` ...`, then the mark scope, never the evidence.
+	assert.deepEqual(fit(38), ["Left: A provider blocked obs 1h 3% ...", "B provider blocked obs 1h 3% 2h 95%"]);
+	assert.deepEqual(fit(20), ["Left: A blocked obs", "B blocked obs ..."]);
 	assert.deepEqual(fit(70, projected(["A", "B", "C", "D", "E"].map(provider))), [
 		"Left: A provider blocked obs 1h 3% 2h 95%",
 		"B provider blocked obs 1h 3% 2h 95%",
@@ -1315,13 +1318,14 @@ test("custom selectors, scope, provenance and display-only quantities stay disti
 	const stale = projected([{ ...custom, snapshot: undefined }], CLOCK, state);
 	assert.match(footer.formatQuotaRow(stale, "full", plain, fixed), /Custom\?Display \(stale\) 2h 20% 1h 10% quota --/);
 	const metered = view("meter", { meters: [meter("very-long-meter", 10), meter("second", 3)] });
-	assert.deepEqual(footer.fitQuotaRows(projected([metered]), 5, plain, fixed), [
+	assert.deepEqual(footer.fitQuotaRows(projected([metered]), 50, plain, fixed), [
 		// No snapshot vouches for these meters, so they are stale.
-		"Left: meter (stale) very-long-meter 10 req obs second 3 req obs",
+		"Left: meter (stale) very-long-meter 10 req obs ...",
 	]);
 	assert.deepEqual(
 		footer.fitQuotaRows(projected([metered, view("read", { marks: [mark(CLOCK + hour)] })]), 30, plain, fixed),
-		["Left: read provider blocked read"],
+		// The label yields so the mark keeps its evidence.
+		["Left: re provider blocked read"],
 	);
 	const narrow = projected([
 		view("custom", {
@@ -1329,8 +1333,8 @@ test("custom selectors, scope, provenance and display-only quantities stay disti
 			marks: [mark(CLOCK + hour, "read")],
 		}),
 	]);
-	assert.deepEqual(footer.fitQuotaRows(narrow, 5, plain, fixed), [
-		"Left: custom provider blocked read | (stale) ok 40% unknown --",
+	assert.deepEqual(footer.fitQuotaRows(narrow, 55, plain, fixed), [
+		"Left: custom provider blocked read | (stale) ok 40% ...",
 	]);
 });
 
@@ -1381,7 +1385,7 @@ test("the provider cap never hides a blocked provider without saying so", () => 
 	const healthy = (id: string, left: number) =>
 		view(id, { snapshot: snap(id, [{ ...win("q", 100 - left), durationMs: hour }], { expiresAt: CLOCK + hour }) });
 	const blocked = view("E", { marks: [mark(CLOCK + hour, "inferred")] });
-	const fit = (views: unknown[], width = 20) => footer.fitQuotaRows(projected(views), width, plain, fixed);
+	const fit = (views: unknown[], width = 28) => footer.fitQuotaRows(projected(views), width, plain, fixed);
 	// Blocked first, then lowest remaining; the healthiest provider is the one hidden.
 	assert.deepEqual(fit([healthy("A", 50), healthy("B", 10), healthy("C", 90), healthy("D", 30), blocked]), [
 		"Left: E provider blocked inf",
@@ -1436,7 +1440,7 @@ test("freshness covers meters and pools, never marks, and error-only views keep 
 		footer.formatQuotaRow(marked, "compact", plain, at),
 		"Left: m (stale) calls 3 req obs wallet 4 credits | provider blocked->14:00 obs",
 	);
-	assert.deepEqual(footer.fitQuotaRows(marked, 8, plain, at), ["Left: m provider blocked obs"]);
+	assert.deepEqual(footer.fitQuotaRows(marked, 30, plain, at), ["Left: m provider blocked obs"]);
 	const onlyMark = projected([view("m", { marks: [mark(CLOCK + hour, "observed")] })]);
 	assert.equal(footer.formatQuotaRow(onlyMark, "compact", plain, fixed), "Left: m provider blocked->13:00 obs");
 	// Error, unavailable and stale views with nothing to show still render a row.
@@ -1446,7 +1450,7 @@ test("freshness covers meters and pools, never marks, and error-only views keep 
 		footer.formatQuotaRow(projected([status("unavailable")]), "full", plain, fixed),
 		"Quota left: e quota unavailable",
 	);
-	assert.deepEqual(footer.fitQuotaRows(projected([status("stale")]), 5, plain, fixed), ["Left: e quota stale"]);
+	assert.deepEqual(footer.fitQuotaRows(projected([status("stale")]), 19, plain, fixed), ["Left: e quota stale"]);
 	assert.equal(
 		row([{ ...status("error"), marks: [mark(CLOCK + hour, "inferred")] }]),
 		"Left: e quota error | provider blocked->13:00 inf",
@@ -1482,7 +1486,7 @@ test("meters keep their resets and only an observed zero is dropped", () => {
 		"Quota left: m day 37 requests observed (resets 13:00; span inferred); past 1 requests observed; granted 0 requests reported; guess 0 requests inferred",
 	);
 	// Layouts without reset times drop the meter reset too.
-	assert.deepEqual(footer.fitQuotaRows(state, 70, plain, fixed), [
+	assert.deepEqual(footer.fitQuotaRows(state, 71, plain, fixed), [
 		"Left: m 1d~ 37 req obs past 1 req obs granted 0 req rep guess 0 req inf",
 	]);
 	// The Google rule: no calls and no mark, no row.

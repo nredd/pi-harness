@@ -136,6 +136,48 @@ it("default clock polls on cadence and disposal cancels native timers", async ()
 	}
 });
 
+it("a narrow final viewport keeps a quota mark's scope and evidence together", async () => {
+	const f = await mount();
+	try {
+		f.component.render(240);
+		f.clock.advance(1);
+		const until = f.clock.now() + 3_600_000;
+		const marked = (provider: string, families?: string[]) => ({
+			provider,
+			display: { full: provider, compact: provider },
+			marks: [{ until, evidence: "inferred", families }],
+		});
+		f.reply()?.({ success: true, data: { version: 2, snapshots: [], blocks: [], views: [marked("X")] } });
+		for (const width of [27, 24, 19]) {
+			const lines = f.component.render(width);
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(lines[2]).toBe("Left: X blocked inf");
+		}
+		// Below that, the row asserts nothing rather than a clipped half-claim.
+		expect(f.component.render(18)[2]).toBe("Left: X");
+		// A long label yields first; a model-scoped mark never shortens to a provider-wide claim.
+		const label = "a-very-long-provider-label-that-fills-the-row";
+		f.clock.advance(60_000);
+		f.reply()?.({
+			success: true,
+			data: {
+				version: 2,
+				snapshots: [],
+				blocks: [],
+				views: [{ ...marked(label), display: { full: label, compact: label } }, marked("Y", ["gemini-4-carbon"])],
+			},
+		});
+		expect(f.component.render(40).slice(2, 4)).toEqual([
+			"Left: a-very-lon... provider blocked inf",
+			"Y carbon blocked inf",
+		]);
+		expect(f.component.render(24).slice(2, 4)).toEqual(["Left: a-v... blocked inf", "Y carbon blocked inf"]);
+		expect(f.component.render(19).slice(2, 4)).toEqual(["Left: a blocked inf", "Y model blocked inf"]);
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
 it("totals include every live usage entry type, not custom messages", async () => {
 	const f = await mount();
 	try {

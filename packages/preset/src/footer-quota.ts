@@ -457,6 +457,10 @@ interface Layout {
 	essential?: boolean;
 	cap?: number;
 	prioritize?: boolean;
+	/** Fallback only: the terminal width each row is budgeted against. */
+	width?: number;
+	/** Name a mark's scope generically, so its evidence survives a narrow row. */
+	terse?: boolean;
 }
 
 function windowText(
@@ -593,9 +597,11 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 			const evidence = full
 				? `(${cell.evidence})`
 				: { inferred: "inf", observed: "obs", read: "read", unknown: "unk" }[cell.evidence];
+			// Terse keeps the scope kind honest: a model-scoped block never reads as the whole provider.
+			const subject = layout.terse ? (families.length ? "model " : "") : `${scope} `;
 			return colorize(
 				"warning",
-				`${scope} blocked${when ? (full ? ` until ${when}` : `->${when.split(" ").at(-1)}`) : ""} ${evidence}`,
+				`${subject}blocked${when ? (full ? ` until ${when}` : `->${when.split(" ").at(-1)}`) : ""} ${evidence}`,
 			);
 		}
 	}
@@ -635,21 +641,23 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 		if (layout.prioritize) {
 			const ranked = data.sort((a, b) => priority(a) - priority(b));
 			// Marks lead; stale data follows them behind its own label.
-			const text =
-				stale && marks.length
-					? dim(`${name} `) + groupText(marks) + dim(" | (stale) ") + groupText(ranked)
-					: dim(`${name}${stale ? " (stale)" : ""} `) + groupText([...marks, ...ranked]);
-			return [{ text, shown }];
+			const pieces = [...marks, ...ranked].map((cell, i) => ({
+				cell,
+				sep: stale && marks.length && i === marks.length ? " | (stale) " : " ",
+			}));
+			const suffix = stale && !marks.length ? " (stale)" : "";
+			return [{ shown, make: (lead: string) => budgetRow(lead, name, suffix, pieces, layout, colorize, opts) }];
 		}
 		const ordered = [data, marks]
 			.filter((group) => group.length)
 			.map(groupText)
 			.join(dim(full ? "; " : " | "));
-		return [{ text: dim(`${name}${stale ? " (stale)" : ""} `) + ordered, shown }];
+		const text = dim(`${name}${stale ? " (stale)" : ""} `) + ordered;
+		return [{ shown, make: (lead: string) => dim(lead) + text }];
 	});
 	if (!rendered.length) return [];
-	const lead = dim(full ? "Quota left: " : "Left: ");
-	if (!layout.split) return [lead + rendered.map(({ text }) => text).join(dim(" | "))];
+	const lead = full ? "Quota left: " : "Left: ";
+	if (!layout.split) return [dim(lead) + rendered.map(({ make }) => make("")).join(dim(" | "))];
 	const blocked = ({ shown }: (typeof rendered)[number]) => shown.some((cell) => cell.kind === "mark");
 	const cap = layout.cap ?? Number.POSITIVE_INFINITY;
 	const capped = rendered.length > cap;
@@ -660,12 +668,68 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 				.sort((a, b) => Number(b.blocked) - Number(a.blocked) || a.lowest - b.lowest)
 				.map(({ row }) => row)
 		: rendered;
-	const rows = ranked.map(({ text }) => text);
-	rows[0] = lead + rows[0];
+	const rows = ranked.map(({ make }, i) => make(i === 0 ? lead : ""));
 	if (!capped) return rows;
 	const hidden = ranked.slice(cap).filter(blocked).length;
-	const more = `+${rows.length - cap} more${hidden ? ` (${hidden} blocked)` : ""}: /router status`;
-	return [...rows.slice(0, cap), dim(more)];
+	const more = `+${rows.length - cap} more${hidden ? ` (${hidden} blocked)` : ""}`;
+	const pointer = `${more}: /router status`;
+	return [...rows.slice(0, cap), dim(pointer.length <= (layout.width ?? pointer.length) ? pointer : more)];
+}
+
+const PLAIN: Colorize = (_color, text) => text;
+const MORE = " ...";
+
+/** Shorten a provider label to `room` characters, marking the cut when there is space for it. */
+function shorten(name: string, room: number): string {
+	if (name.length <= room) return name;
+	return room > 3 ? `${name.slice(0, room - 3)}...` : name.slice(0, room);
+}
+
+type Piece = { cell: QuotaCell; sep: string; layout: Layout };
+
+/**
+ * One prioritized row within `layout.width`: the label yields first, so the highest-priority cell
+ * (a mark, then the lowest quota) always survives whole, with its scope and evidence together.
+ * A mark that cannot fit even tersely is omitted rather than clipped mid-assertion; whole lower
+ * cells are dropped behind a ` ...` marker.
+ */
+function budgetRow(
+	lead: string,
+	name: string,
+	suffix: string,
+	pieces: { cell: QuotaCell; sep: string }[],
+	layout: Layout,
+	colorize: Colorize,
+	opts: ResolvedOptions,
+): string {
+	const dim = (text: string) => colorize("dim", text);
+	const draw = (label: string, chosen: Piece[], more: boolean) =>
+		dim(`${lead}${label}${chosen.length ? suffix : ""}`) +
+		chosen.map((piece) => dim(piece.sep) + cellText(piece.cell, piece.layout, colorize, opts)).join("") +
+		(more ? dim(MORE) : "");
+	const all: Piece[] = pieces.map((piece) => ({ ...piece, layout }));
+	const width = layout.width;
+	if (width === undefined) return draw(name, all, false);
+	const size = (piece: Piece) => piece.sep.length + cellText(piece.cell, piece.layout, PLAIN, opts).length;
+	const [first, ...rest] = all as [Piece, ...Piece[]];
+	const heads = first.cell.kind === "mark" ? [first, { ...first, layout: { ...layout, terse: true } }] : [first];
+	for (const head of heads) {
+		const room = width - lead.length - suffix.length - size(head);
+		if (room < 1) continue;
+		const label = shorten(name, room);
+		const chosen = [head];
+		let used = lead.length + label.length + suffix.length + size(head);
+		for (const piece of rest) {
+			if (used + size(piece) > width) break;
+			chosen.push(piece);
+			used += size(piece);
+		}
+		const dropped = chosen.length < all.length;
+		while (dropped && chosen.length > 1 && used + MORE.length > width) used -= size(chosen.pop() as Piece);
+		return draw(label, chosen, dropped && used + MORE.length <= width);
+	}
+	// Nothing fits beside even a one-character label: show the provider, assert nothing.
+	return draw(shorten(name, Math.max(1, width - lead.length)), [], false);
 }
 
 function segmentsOf(state: QuotaState, opts: ResolvedOptions): Segment[] {
@@ -708,7 +772,9 @@ export function fitQuotaRows(state: QuotaState, width: number, colorize: Coloriz
 	const allLegacy = Object.values(state).every((quota) => quota.legacy);
 	// Never erase the footer altogether when only meters or pools are available.
 	const fallback = hasEssential ? ESSENTIAL : NO_RESETS;
-	return providerRows(segments, { ...fallback, cap: 4, prioritize: !allLegacy }, colorize, resolved);
+	// Legacy rows keep their pinned bytes; generic rows are budgeted so the caller's clip never cuts a cell.
+	const budget = allLegacy ? {} : { prioritize: true, width };
+	return providerRows(segments, { ...fallback, cap: 4, ...budget }, colorize, resolved);
 }
 
 /** Minimal event bus (matches `pi.events`). */
