@@ -243,15 +243,20 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   from local Codex rollouts, optional Claude statusLine captures and imported snapshots, are
   account-wide (no harness, model or range filter applies), and are never fetched. Claude without
   a valid capture says `no local reading`. If present, `<agentDir>/router-state/v1/view.json` adds
-  router rows to Overview and print output: window gauges, count or spend meters, and active blocks,
-  labelled `reported`, `observed`, or `inferred`. Assumed or inferred window and meter spans are labelled separately
-  from the utilization or quantity basis. Stale readings and quota read errors are labelled in both outputs. Observed
-  counts are local only, not provider totals. Credit pool balances are display-only text and never
-  contribute to usage totals or blocks. Rows with unrecognized evidence or utilization bases are
-  omitted. Narrow overlays wrap quota labels separately when they would hide the reading. Quota
-  labels stop at 160 columns with `…` in both outputs; router provider, family and bucket names stop
-  at 40 each, so span and `(stale)` qualifiers always show.
-  The router view is read locally and never included in portable stats snapshots.
+  router rows to Overview and print output: window gauges, count or spend meters, credit pool
+  balances and active blocks, labelled `reported`, `observed`, or `inferred`. Assumed or inferred
+  window and meter spans are labelled separately from the utilization or quantity basis. Every row
+  of a snapshot past its `expiresAt`, older than 15 minutes, or marked `stale` says `(stale)` in both
+  outputs; a stale snapshot with no window rows adds `quota read stale`. Observed counts are local
+  only, not provider totals. Credit pool balances are display-only text and never contribute to
+  usage totals or blocks. Rows with unrecognized evidence or utilization bases are omitted. Narrow
+  overlays wrap quota labels separately when they would hide the reading. Quota labels stop at 160
+  columns with `…` in both outputs; router provider, family and bucket names stop at 40 each, so
+  span and `(stale)` qualifiers always show.
+  A quota read error the router reports is a row, `quota read error`. The view file itself fails
+  open: a missing, non-regular, symlinked, unreadable or malformed file, or one over 1 MiB, adds no
+  router rows and no warning, and the rest of `/stats` renders as usual. The router view is read
+  locally and never included in portable stats snapshots.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per
   harness when several have data and none is picked), else the top three models. Where lines overlap they merge into junctions (`┴┬├┤┼`) so every line stays
