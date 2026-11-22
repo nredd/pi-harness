@@ -2,27 +2,54 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-/// Drive `Bridge.handleRequest` through the request admission paths that settle before any live
-/// capture, input, clipboard write, app activation or window change. The absent pid is above the
-/// macOS pid range, so AX reads against it fail closed instead of touching a running app.
+/// Fail the run, and exit before the caller can act, when a request reaches a live boundary.
+private func forbidden<T>(_ boundary: String) -> T {
+    expect(false, "request admission must never reach \(boundary)")
+    fatalError("unreachable: \(boundary)")
+}
+
+/// An input sink whose every event, delivery, delay and layout read fails the test.
+private let forbiddenInputSink = NativeInputSink(
+    mouseEvent: { _, _, _ in forbidden("mouse event creation") },
+    wheelEvent: { _, _ in forbidden("wheel event creation") },
+    keyEvent: { _, _ in forbidden("key event creation") },
+    postToPid: { _, _ in forbidden("pid event delivery") },
+    prepareHID: { _ in forbidden("HID activation") },
+    postHID: { _, _ in forbidden("HID event delivery") },
+    sleep: { _ in forbidden("input pacing") },
+    keyboardInputSource: { forbidden("keyboard layout reads") }
+)
+
+/// Drive `Bridge.handleRequest` through request admission paths that settle before capture, input,
+/// clipboard writes, app activation or window changes. Capture and input go through stubs that fail
+/// the test if invoked. Clipboard writes, permission panes and Launch Services activation have no
+/// seam, so the only cases that reach those functions fail on arguments or on names no app can hold.
+/// AX and `NSRunningApplication` calls, including the `AXEnhancedUserInterface` and
+/// `AXManualAccessibility` setters, target a pid above the macOS pid range, so no process receives
+/// them. Discovery and menu looks also read the live CG window list, which is read-only.
 func runRequestAdmissionAssertions() throws {
     let refStore = AXRefStore()
-    let bridge = Bridge(activityGlow: nil, readSession: { nil }, refStore: refStore)
+    let bridge = Bridge(activityGlow: nil, readSession: { nil }, inputSink: forbiddenInputSink, refStore: refStore)
     let absentPid = Int32.max
     var owners: [UInt32] = []
-    func call(_ request: [String: Any]) throws -> [String: Any] {
+    func send(_ request: [String: Any]) throws -> Any {
         try bridge.handleRequest(request, clientID: nil, lookWindowOwner: { id in
             owners.append(id)
             return absentPid
-        }, lookCapture: { id in
-            expect(false, "request admission must never capture window \(id)")
-            throw BridgeFailure(message: "unreachable", code: "unreachable")
-        }) as! [String: Any]
+        }, lookCapture: { id in forbidden("capture of window \(id)") })
+    }
+    func call(_ request: [String: Any]) throws -> [String: Any] {
+        let reply = try send(request)
+        guard let object = reply as? [String: Any] else {
+            expect(false, "\(request["cmd"] ?? ""): expected an object reply, got \(reply)")
+            return [:]
+        }
+        return object
     }
     func refused(_ code: String, _ message: String, _ request: [String: Any]) {
         do {
-            _ = try call(request)
-            expect(false, "\(request["cmd"] ?? "") expected \(code)")
+            let reply = try send(request)
+            expect(false, "\(request["cmd"] ?? ""): expected \(code), got reply \(reply)")
         } catch let error as BridgeFailure {
             expect(error.code == code && error.message == message, "\(request["cmd"] ?? ""): expected \(code) '\(message)', got \(error.code) '\(error.message)'")
         } catch {
@@ -30,13 +57,12 @@ func runRequestAdmissionAssertions() throws {
         }
     }
 
-    // Permission panes: only the two known panes open; nothing opens for a bad kind.
+    // Permission panes need a kind before anything opens.
     refused("invalid_args", "Missing string argument 'kind'", ["cmd": "openPermissionPane"])
-    refused("invalid_args", "Unknown permission pane 'camera'", ["cmd": "openPermissionPane", "kind": "camera"])
 
     // Discovery for an absent owner or an unmatched title finds nothing, without a discovery seam.
-    let windows = try bridge.handleRequest(["cmd": "listWindows", "pid": absentPid], clientID: nil) as? [[String: Any]]
-    expect(windows?.isEmpty == true, "listWindows for an absent pid is empty")
+    let windows = try send(["cmd": "listWindows", "pid": absentPid])
+    expect((windows as? [[String: Any]])?.isEmpty == true, "listWindows for an absent pid is empty, got \(windows)")
     let pidRoots = try call(["cmd": "listRoots", "pid": absentPid])
     expect((pidRoots["roots"] as? [Any])?.isEmpty == true, "listRoots for an absent pid is empty")
     let titleRoots = try call(["cmd": "listRoots", "title": "  pi-cu-absent-title-\(UUID().uuidString) "])
@@ -70,19 +96,23 @@ func runRequestAdmissionAssertions() throws {
     refused("root_not_capturable", "Root has no capturable window (unpaired with any on-screen window); use semantic observation (mode: semantic)", ["cmd": "look", "includeImage": true])
     expect(owners.isEmpty, "rejected looks never resolve a window owner")
 
-    // A CG-only menu root is described without AX or capture and owns a fresh look id.
+    // A CG-only menu root is described without AX or capture and owns a fresh look id. Its frame comes
+    // from the live CG window list, so only host-independent fields are asserted.
     let menuWindowId = UInt32.max - 1
     var lookIds: [String] = []
     for index in 1...9 {
+        if index == 9 {
+            // Eight retained looks still hold the first: the lookup succeeds and only the point is missing.
+            refused("invalid_args", "Missing numeric argument 'x'", ["cmd": "hitTest", "lookId": "look_1"])
+        }
         let menu = try call(["cmd": "look", "windowId": Int(menuWindowId), "windowRef": "cgmenu:\(index)", "includeImage": true, "readText": "always"])
         let window = menu["window"] as? [String: Any]
-        let framePoints = window?["framePoints"] as? [String: Any]
         let outline = menu["outline"] as? [String: Any]
         let timings = menu["timings"] as? [String: Any]
         let pairing = (window?["metadata"] as? [String: Any])?["pairing"] as? [String: Any]
         expect(menu["image"] == nil && menu["readText"] == nil, "menu looks never capture or OCR")
         expect(window?["windowId"] as? Int == Int(menuWindowId) && window?["rootRef"] as? String == "cgmenu:\(index)" && window?["kind"] as? String == "menu" && window?["role"] as? String == "AXMenu" && window?["isModal"] as? Bool == false, "menu look reports the requested CG menu root")
-        expect((framePoints?["w"] as? NSNumber)?.doubleValue == 1 && (framePoints?["h"] as? NSNumber)?.doubleValue == 1 && pairing?["confidence"] as? String == "low", "an unlisted menu window gets a unit frame and low pairing confidence")
+        expect(window?["framePoints"] is [String: Any] && pairing?["confidence"] as? String == "low", "menu look reports a frame and low pairing confidence")
         expect(outline?["ref"] as? String == "cgmenu:\(index)" && outline?["role"] as? String == "AXMenu" && outline?["title"] as? String == "Menu" && outline?["pictureOnly"] as? Bool == true && (outline?["children"] as? [Any])?.isEmpty == true, "menu outline is one picture-only node")
         expect(timings?["captureMs"] as? Int == 0 && timings?["describeMs"] as? Int == 0, "menu looks report zero capture and describe time")
         lookIds.append(menu["lookId"] as? String ?? "")
@@ -90,23 +120,25 @@ func runRequestAdmissionAssertions() throws {
     expect(lookIds == (1...9).map { "look_\($0)" }, "each look mints the next look id")
     expect(owners == Array(repeating: menuWindowId, count: 9), "menu looks resolve ownership through the CG window id")
 
-    // Hit tests need a retained look; the ninth look evicted the first.
-    refused("invalid_args", "Missing string argument 'lookId'", ["cmd": "hitTest", "x": 0, "y": 0])
-    refused("stale_look", "Look id 'look_1' is no longer available", ["cmd": "hitTest", "lookId": "look_1", "x": 0, "y": 0])
-    refused("stale_look", "Look id 'look_404' is no longer available", ["cmd": "hitTest", "lookId": "look_404", "x": 0, "y": 0])
+    // Hit tests need a retained look: the ninth look evicted only the first. No probe carries a point,
+    // so the missing-coordinate error proves the lookup succeeded and nothing reaches the live hit test.
+    refused("invalid_args", "Missing string argument 'lookId'", ["cmd": "hitTest"])
+    refused("stale_look", "Look id 'look_1' is no longer available", ["cmd": "hitTest", "lookId": "look_1"])
+    refused("invalid_args", "Missing numeric argument 'x'", ["cmd": "hitTest", "lookId": "look_2"])
+    refused("stale_look", "Look id 'look_404' is no longer available", ["cmd": "hitTest", "lookId": "look_404"])
 
     // Desktop input validates the action before any pointer, keyboard, clipboard or Launch Services call.
     refused("invalid_args", "Missing string argument 'action'", ["cmd": "desktopInput"])
     refused("invalid_args", "moveMouse requires x and y", ["cmd": "desktopInput", "action": "moveMouse", "x": 10])
     refused("invalid_args", "click requires x and y", ["cmd": "desktopInput", "action": "click", "y": 10])
     refused("invalid_args", "Unknown desktop action 'teleport'", ["cmd": "desktopInput", "action": "teleport", "button": "right"])
-    refused("invalid_args", "writeClipboard requires non-empty text", ["cmd": "desktopInput", "action": "writeClipboard", "text": ""])
     refused("invalid_args", "Missing string argument 'text'", ["cmd": "desktopInput", "action": "writeClipboard"])
     refused("invalid_args", "Missing string argument 'app'", ["cmd": "desktopInput", "action": "activateApp"])
-    for app in ["   ", "/Applications/Fixture.app", "Fixture/Helper"] {
+    // No app can hold these names, so even a regressed guard cannot reach `/usr/bin/open`.
+    let missingApp = "pi-cu-absent-fixture-\(UUID().uuidString)"
+    for app in ["/Applications/\(missingApp).app", "\(missingApp)/Helper"] {
         refused("invalid_args", "activateApp requires an app name or bundle id (no paths)", ["cmd": "desktopInput", "action": "activateApp", "app": app])
     }
-    let missingApp = "pi-cu-absent-fixture-\(UUID().uuidString)"
     refused("app_not_found", "No running or installed app named '\(missingApp)'", ["cmd": "desktopInput", "action": "activateApp", "app": " \(missingApp) "])
 
     print("macos request admission assertions passed")
