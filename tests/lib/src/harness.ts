@@ -296,31 +296,44 @@ function restorerFor(fauxProvider: FauxProviderRegistration): () => void {
  *
  * Returns:
  *   Promise<Harness>: the session, its scripted provider and a `cleanup` the caller must run.
- *   When construction fails, what it acquired is released first: the scratch directory and an
- *   owned faux provider, never a caller-owned one.
+ *   When construction fails, what it acquired is released first: an owned faux provider (never a
+ *   caller-owned one), then the scratch directory. The construction error always propagates; a
+ *   release step that itself throws is reported as a process warning and the next step still runs.
  */
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
+	const releases = [() => rmSync(tempDir, { recursive: true, force: true })];
 	// Everything after the allocation runs inside the protected region, provider setup included.
 	try {
-		return await withFauxProvider(options, tempDir);
+		const owned = options.fauxProvider === undefined;
+		const fauxProvider: FauxProviderRegistration =
+			options.fauxProvider ?? registerFauxProvider({ models: options.models });
+		if (owned) {
+			releases.unshift(() => fauxProvider.unregister());
+			fauxProvider.setResponses([]);
+		}
+		return await buildHarness(options, tempDir, fauxProvider, owned);
 	} catch (error) {
-		rmSync(tempDir, { recursive: true, force: true });
+		releaseAfterFailure(releases);
 		throw error;
 	}
 }
 
-/** Register (or borrow) the faux provider and build on it, unregistering an owned one on failure. */
-async function withFauxProvider(options: HarnessOptions, tempDir: string): Promise<Harness> {
-	const owned = options.fauxProvider === undefined;
-	const fauxProvider: FauxProviderRegistration =
-		options.fauxProvider ?? registerFauxProvider({ models: options.models });
-	try {
-		if (owned) fauxProvider.setResponses([]);
-		return await buildHarness(options, tempDir, fauxProvider, owned);
-	} catch (error) {
-		if (owned) fauxProvider.unregister();
-		throw error;
+/**
+ * Run every release step of a failed construction. A step that throws must not replace the
+ * construction error the caller rethrows, so its failure is reported as a process warning instead.
+ */
+function releaseAfterFailure(releases: (() => void)[]): void {
+	const failures: unknown[] = [];
+	for (const release of releases) {
+		try {
+			release();
+		} catch (failure) {
+			failures.push(failure);
+		}
+	}
+	if (failures.length > 0) {
+		process.emitWarning(new AggregateError(failures, "createHarness could not release a failed construction"));
 	}
 }
 

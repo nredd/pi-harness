@@ -42,16 +42,15 @@ def test_failed_launch_kills_private_server(
 def test_failed_command_resolution_allocates_no_socket_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`pi_command()` resolves before the socket dir exists, so its failure strands nothing."""
+    """`pi_command()` resolves before the socket dir is allocated, so its failure strands nothing."""
     box = MagicMock(spec=Sandbox)
     box.root = tmp_path
-    socket_root = tmp_path / "sockets"
-    socket_root.mkdir()
-    monkeypatch.setattr(interactive, "SOCKET_ROOT", socket_root)
+    mkdtemp = MagicMock(return_value=str(tmp_path))
+    monkeypatch.setattr(interactive.tempfile, "mkdtemp", mkdtemp)
     monkeypatch.setattr(interactive, "pi_command", MagicMock(side_effect=FileNotFoundError("no pi")))
     with pytest.raises(FileNotFoundError, match="no pi"):
         interactive.launch_tui(box, {})
-    assert list(socket_root.iterdir()) == []
+    mkdtemp.assert_not_called()
 
 
 def test_failed_pane_construction_removes_socket_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

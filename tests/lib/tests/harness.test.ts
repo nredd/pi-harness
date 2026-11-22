@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { getApiProvider, getApiProviders } from "@earendil-works/pi-ai/compat";
 import { createReadTool, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
@@ -21,6 +21,16 @@ import {
 	registerFauxProvider,
 } from "../src/harness.ts";
 import { makeTestTempDir } from "../src/temp-dir.ts";
+
+// Passthrough spies, so a test can make one cleanup step itself throw.
+vi.mock(import("node:fs"), async (importOriginal) => {
+	const fs = await importOriginal();
+	return { ...fs, rmSync: vi.fn(fs.rmSync) };
+});
+vi.mock(import("@earendil-works/pi-ai/compat"), async (importOriginal) => {
+	const compat = await importOriginal();
+	return { ...compat, registerFauxProvider: vi.fn(compat.registerFauxProvider) };
+});
 
 const harnesses: Harness[] = [];
 afterEach(() => {
@@ -214,6 +224,69 @@ test("a provider registration that throws still releases the scratch directory",
 		if (previous === undefined) delete process.env.TMPDIR;
 		else process.env.TMPDIR = previous;
 	}
+});
+
+/** Point `os.tmpdir()` at a fresh scratch dir for one test, so leaked harness dirs are visible. */
+function isolateTmpdir(prefix: string, onTestFinished: (cleanup: () => void) => void): string {
+	const previous = process.env.TMPDIR;
+	const scratch = makeTestTempDir(prefix, onTestFinished);
+	process.env.TMPDIR = scratch;
+	onTestFinished(() => {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
+	});
+	return scratch;
+}
+
+const explode =
+	(error: Error): ExtensionFactory =>
+	() => {
+		throw error;
+	};
+
+test("a scratch removal that throws never replaces the construction error", async ({ onTestFinished }) => {
+	const scratch = isolateTmpdir("harness-rm-fail-", onTestFinished);
+	const boom = new Error("factory exploded");
+	const removal = Object.assign(new Error("permission denied"), { code: "EACCES" });
+	const before = getApiProviders().length;
+	const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+	onTestFinished(() => warn.mockRestore());
+	// Fail only the harness's own scratch removal; other helpers' scratch dirs still go.
+	const realRmSync = vi.mocked(rmSync).getMockImplementation() as typeof rmSync;
+	vi.mocked(rmSync).mockImplementation((path, options) => {
+		if (dirname(String(path)) === scratch && basename(String(path)).startsWith("pi-suite-")) throw removal;
+		realRmSync(path, options);
+	});
+	onTestFinished(() => {
+		vi.mocked(rmSync).mockImplementation(realRmSync);
+	});
+	await expect(createHarness({ extensionFactories: [explode(boom)] })).rejects.toBe(boom);
+	// The owned provider was still released, and the removal failure is reported, not swallowed.
+	expect(getApiProviders()).toHaveLength(before);
+	expect(warn).toHaveBeenCalledOnce();
+	expect(warn.mock.calls[0]?.[0]).toMatchObject({ errors: [removal] });
+	expect(readdirSync(scratch)).toHaveLength(1);
+});
+
+test("an unregister that throws never replaces the construction error or skips removal", async ({ onTestFinished }) => {
+	const scratch = isolateTmpdir("harness-unregister-fail-", onTestFinished);
+	const boom = new Error("factory exploded");
+	const unregisterError = new Error("unregister exploded");
+	const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+	onTestFinished(() => warn.mockRestore());
+	const real = registerFauxProvider();
+	onTestFinished(() => real.unregister());
+	vi.mocked(registerFauxProvider).mockImplementationOnce(() =>
+		Object.assign(Object.create(real) as typeof real, {
+			unregister() {
+				throw unregisterError;
+			},
+		}),
+	);
+	await expect(createHarness({ extensionFactories: [explode(boom)] })).rejects.toBe(boom);
+	expect(readdirSync(scratch)).toEqual([]);
+	expect(warn).toHaveBeenCalledOnce();
+	expect(warn.mock.calls[0]?.[0]).toMatchObject({ errors: [unregisterError] });
 });
 
 test("reload restores a transport the registry reset dropped", async () => {
