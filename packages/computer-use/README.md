@@ -446,8 +446,9 @@ confirmed foreground modal, so they can disagree with `act_ui` about which root 
 
 ### Post-action outcomes
 
-Terminal `act_ui` results say the action was delivered, or, after a timed-out action, name it
-(`Action N timed out; whether it was delivered is unknown.`) and say not to replay the transaction, and:
+Terminal `act_ui` results say the action was delivered, or, when the settled outcome is `unknown`,
+`Delivery of the action is unknown` and not to replay the transaction, or, after a timed-out action, name
+it (`Action N timed out; whether it was delivered is unknown.`) and say not to replay the transaction, and:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new window, dialog or sheet
   roots of the same pid appeared and are still live (menus and popovers do not count). Observe a successor via `find_roots`.
@@ -2893,7 +2894,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results say the action was delivered, or name the timed-out action and say its delivery is unknown, and:
+Terminal `act_ui` results say the action was delivered, say its delivery is unknown when the settled outcome is `unknown` (and not to replay it), or name the timed-out action and say its delivery is unknown, and:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.

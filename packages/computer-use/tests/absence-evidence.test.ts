@@ -513,6 +513,15 @@ test.for([
 			code: "postcondition_inconclusive",
 			message: `The absent postcondition is not proven: ${capture ? "the successor observation still shows the condition" : "no successor observation could be captured"}.`,
 		});
+		if (!capture) {
+			// The agent reads the settled outcome: an unknown delivery is never claimed, and no replay is suggested.
+			const text = fake.text(result);
+			assert.doesNotMatch(text, /action was delivered/);
+			assert.match(
+				text,
+				/^Delivery of the action is unknown, and its source root App1 — Main could not be observed afterward: capture failed\nNo successor state was created\. Do not replay the transaction: call find_roots, then observe_ui to check whether it took effect\.$/,
+			);
+		}
 	},
 );
 

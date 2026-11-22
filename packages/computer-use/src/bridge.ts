@@ -3011,14 +3011,20 @@ export async function terminalDesktopActionResult(
 	const rootFate = targetClosed
 		? `closed before a successor observation could be captured.${successorText}`
 		: `could not be observed afterward: ${message}`;
+	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay.
+	const deliveryUnknown = timedOutIndex < 0 && execution.outcome === "unknown";
 	const result =
 		timedOutIndex >= 0
 			? `${timeoutSentence(timedOutIndex)} Its source root ${root} ${rootFate}`
-			: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
+			: deliveryUnknown
+				? `Delivery of the action is unknown, and its source root ${root} ${rootFate}`
+				: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
 	const next =
 		timedOutIndex >= 0
 			? `Do not replay the transaction: call find_roots, then observe_ui to check whether action ${timedOutIndex + 1} took effect.`
-			: "Call find_roots, then observe_ui to continue.";
+			: deliveryUnknown
+				? "Do not replay the transaction: call find_roots, then observe_ui to check whether it took effect."
+				: "Call find_roots, then observe_ui to continue.";
 	return {
 		content: [
 			{
