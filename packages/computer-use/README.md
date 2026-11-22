@@ -277,7 +277,14 @@ Limits of the instance tag:
 - The tag binds the top-level HWND. For a frame-hosted app (e.g. `ApplicationFrameHost.exe`) it binds
   the host window, not the embedded app, so replacing only the hosted content is not detected
 - Checks are samples between steps; a replacement in the instant between the last check and a
-  mutation is not detected
+  mutation is not detected. Two known in-call races (#1284):
+  - Capture: after the post-lease check, the capture's baseline render window and explicit focus
+    validate only the HWND (focus may retry after a sleep), so they can raise a same-HWND replacement;
+    a capture whose foreground outcome was uncertain can then report plain `root_stale`
+  - Raw delivery: the final occlusion hit test (`ElementFromPoint` plus RuntimeId ancestry) is not
+    rechecked against a replacement arriving during it, and raw input can follow: ref click, press,
+    wheel and drag, type, keypress and raw set text, and point click, scroll and drag
+- The hosted native-helper workflow's bootstrap-failure receipt still says `protocol=5` (#1284)
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
