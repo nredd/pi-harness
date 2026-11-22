@@ -1673,3 +1673,33 @@ test("among blocked providers the cap keeps the lowest remaining quota", () => {
 	assert.equal(rows[0], "Left: E provider blocked inf 1h 1%");
 	assert.equal(rows.at(-1), "+1 more (1 blocked): /router status");
 });
+
+test("display labels are bounded at normalization while matching keeps the full id", () => {
+	const long = "x".repeat(10_000);
+	const family = `fam-${long}`;
+	const state = projected([
+		view("p", {
+			display: { full: long, compact: long },
+			snapshot: snap("p", [win(long, 40)], { expiresAt: CLOCK + hour }),
+			meters: [meter(long, 3, { scope: "model", families: [family] })],
+			pools: [{ name: long, unit: "credits", balance: 2 }],
+			marks: [
+				mark(
+					CLOCK + hour,
+					"inferred",
+					Array.from({ length: 1_000 }, (_, i) => `${long}${i}`),
+				),
+			],
+		}),
+	]);
+	const label = `${"x".repeat(footer.LABEL_MAX - 3)}...`;
+	const row = footer.formatQuotaRow(state, "full", plain, { ...fixed, model: { provider: "p", id: family } });
+	// The selected model matches its full family id; only the shown text is bounded.
+	assert.match(row, new RegExp(`^Quota left: ${label} ${label} 60%`));
+	assert.match(row, new RegExp(` ${label} 3 requests observed ${label} 2 credits; `));
+	assert.match(
+		row,
+		new RegExp(`(${label},){${footer.FAMILIES_MAX - 1}}${label}\\+${1_000 - footer.FAMILIES_MAX} blocked`),
+	);
+	assert.ok(row.length < 1_000);
+});

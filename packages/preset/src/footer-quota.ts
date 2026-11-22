@@ -83,7 +83,16 @@ type Cell =
 			basis: "reported" | "observed" | "inferred";
 			families: string[];
 	  })
-	| { kind: "mark"; families: string[]; until: number; evidence: "read" | "inferred" | "observed" | "unknown" }
+	| {
+			kind: "mark";
+			/** Full family ids, for matching. */
+			families: string[];
+			/** Bounded display labels for the first `FAMILIES_MAX` families; `extra` counts the rest. */
+			names: string[];
+			extra: number;
+			until: number;
+			evidence: "read" | "inferred" | "observed" | "unknown";
+	  }
 	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit }
 	/** A view whose snapshot failed with nothing else to show: the failure is the reading. */
 	| { kind: "status"; status: "error" | "unavailable" | "stale" };
@@ -141,6 +150,17 @@ function textOf(value: unknown): string | undefined {
 	return typeof value === "string" ? value.replace(/[^ -~]/g, "?").trim() || undefined : undefined;
 }
 
+/** Longest provider, bucket, pool or family label shown; longer text ends in `...`. Matching uses the full id. */
+export const LABEL_MAX = 48;
+/** Most families a mark names; the rest are counted as `+N`. */
+export const FAMILIES_MAX = 4;
+
+/** Display text bounded to `LABEL_MAX`, so layout never builds or measures an unbounded label. */
+function labelOf(value: unknown): string | undefined {
+	const text = textOf(value);
+	return text && text.length > LABEL_MAX ? `${text.slice(0, LABEL_MAX - 3)}...` : text;
+}
+
 function familiesOf(value: unknown): string[] {
 	return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
 }
@@ -156,8 +176,8 @@ function readDisplay(raw: unknown, id: string): Display {
 			})
 		: undefined;
 	return {
-		full: textOf(display?.full) ?? id,
-		compact: textOf(display?.compact) ?? id,
+		full: labelOf(display?.full) ?? id,
+		compact: labelOf(display?.compact) ?? id,
 		footer: { show, placeholder: footer?.placeholder === true },
 	};
 }
@@ -180,7 +200,7 @@ function windowLabel(raw: Record<string, unknown>, name: string): WindowLabel {
 
 function buckets(windows: unknown): { raw: Record<string, unknown>; label: WindowLabel; families: string[] }[] {
 	return records(windows).flatMap((raw) => {
-		const name = textOf(raw.name);
+		const name = labelOf(raw.name);
 		if (!name || (raw.scope !== "model" && raw.scope !== "provider")) return [];
 		const families = raw.scope === "model" ? familiesOf(raw.families) : [];
 		return raw.scope === "model" && families.length === 0 ? [] : [{ raw, label: windowLabel(raw, name), families }];
@@ -190,7 +210,7 @@ function buckets(windows: unknown): { raw: Record<string, unknown>; label: Windo
 function selectorLabel(selector: Selector): WindowLabel {
 	if (!("name" in selector)) return { name: "quota", durationMs: selector.durationMs, calendar: false };
 	const durationMs = selector.name === "five_hour" ? 5 * HOUR_MS : selector.name === "seven_day" ? WEEK_MS : undefined;
-	return { name: textOf(selector.name) ?? "quota", durationMs, calendar: false };
+	return { name: labelOf(selector.name) ?? "quota", durationMs, calendar: false };
 }
 
 function chooseWindows(raw: unknown, display: Display, legacy: boolean): PercentCell[] {
@@ -213,7 +233,8 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 		placeholder: false,
 	});
 	const show = display.footer?.show;
-	if (!show) return windows.map((window) => reading(window, JSON.stringify([window.label.name, window.families])));
+	// Keys use the full name: two long names sharing a bounded label stay distinct readings.
+	if (!show) return windows.map((window) => reading(window, JSON.stringify([window.raw.name, window.families])));
 	return show.flatMap((selector, i) => {
 		const chosenLabel = selectorLabel(selector);
 		const key = JSON.stringify(selector);
@@ -289,7 +310,7 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 		];
 	});
 	const pools = records(view.pools).flatMap<Cell>((pool) => {
-		const name = textOf(pool.name);
+		const name = labelOf(pool.name);
 		const unit = unitOf(pool.unit);
 		const balance = finite(pool.balance);
 		return name && unit ? [{ kind: "pool", name, unit, balance, unlimited: pool.unlimited === true }] : [];
@@ -304,8 +325,10 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 					? mark.evidence
 					: "unknown";
 		// Legacy reported rows already summarize collected quota. Do not add legacy read marks to them.
+		const families = familiesOf(mark.families);
+		const names = families.slice(0, FAMILIES_MAX).map((id) => labelOf(id) ?? "model");
 		return until !== undefined && !(legacy && evidence === "read")
-			? [{ kind: "mark", families: familiesOf(mark.families), until, evidence }]
+			? [{ kind: "mark", families, names, extra: families.length - names.length, until, evidence }]
 			: [];
 	});
 	return [...counts, ...pools, ...marks];
@@ -351,7 +374,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		if (typeof view.provider !== "string" || !view.provider) continue;
 		const id = view.provider;
 		const prior = previous && Object.hasOwn(previous, id) ? previous[id] : undefined;
-		const display = readDisplay(view.display, textOf(id) ?? "quota");
+		const display = readDisplay(view.display, labelOf(id) ?? "quota");
 		// Legacy quirks belong to the legacy footer selection (v1, or a v2 view that keeps it), not to the id.
 		const legacy =
 			Object.hasOwn(LEGACY_DISPLAY, id) &&
@@ -591,8 +614,9 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 		case "status":
 			return colorize("dim", `quota ${cell.status}`);
 		case "mark": {
-			const families = cell.families.map((id) => textOf(id) ?? "model");
-			const scope = (full ? families : families.map((id) => id.replace(/^[a-z]+-\d+-/, ""))).join(",") || "provider";
+			const families = cell.names;
+			const named = (full ? families : families.map((id) => id.replace(/^[a-z]+-\d+-/, ""))).join(",");
+			const scope = `${named}${cell.extra ? `+${cell.extra}` : ""}` || "provider";
 			const when = layout.resets ? formatResetAt(cell.until, opts.now, opts.timeZone, full) : undefined;
 			const evidence = full
 				? `(${cell.evidence})`
