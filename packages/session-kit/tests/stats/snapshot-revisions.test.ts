@@ -658,6 +658,31 @@ it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", 
 	expect(await read(fresh)).toEqual(before);
 });
 
+it("hands a fresher base reading over to an older, later-resetting delta at the base reset", async () => {
+	const baseReset = at("2026-10-03");
+	const deltaReset = at("2026-12-01");
+	const { before, snapshotDir } = await sealedFixture([
+		{ quota: [quotaRow(99, baseReset)] },
+		{ quota: [quotaRow(1, deltaReset)] },
+		{ quota: [quotaRow(2, at("2026-10-02"))] },
+		...filler,
+	]);
+	const times = [at("2026-10-02"), baseReset - 1, baseReset, baseReset + 1, deltaReset - 1, deltaReset];
+	const read = async (dir: string) => {
+		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
+		return Promise.all(times.map(async (now) => (await loadCombined(dir, undefined, now)).quota));
+	};
+	const uncompacted = await read(viewer);
+	expect(uncompacted.map((rows) => rows.find((row) => row.limitId === "fixture")?.usedPercent)).toEqual([
+		99, 99, 1, 1, 1, 99,
+	]);
+	await exportStats(agent, out);
+	const after = manifest(snapshotDir).shards;
+	expect(after.length).toBeLessThan(before.shards.length);
+	expect(after[0]).toEqual(before.shards[0]);
+	expect(await read(join(root, "fresh"))).toEqual(uncompacted);
+});
+
 it("keeps reader quota order when compacting a reverse-month manifest", async () => {
 	const november = at("2026-11-01");
 	vi.mocked(Date.now).mockReturnValue(at("2026-12-01"));
