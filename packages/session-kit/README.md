@@ -244,7 +244,8 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   account-wide (no harness, model or range filter applies), and are never fetched. Claude without
   a valid capture says `no local reading`. If present, `<agentDir>/router-state/v1/view.json` adds
   router rows to Overview and print output: window gauges, count or spend meters, and active blocks,
-  labelled `reported`, `observed`, or `inferred`. Observed counts are local only, not provider totals.
+  labelled `reported`, `observed`, or `inferred`. Assumed or inferred spans are labelled separately
+  from utilization. Observed counts are local only, not provider totals.
   The router view is read locally and never included in portable stats snapshots.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per

@@ -65,8 +65,10 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			for (const window of list(snapshot.windows).map(asRecordOf)) {
 				if (!text(window.name) || !number(window.usedPercent)) continue;
 				const expired = timestamp(window.resetAt) && window.resetAt <= now;
+				const source = window.spanSource;
+				const name = source === "assumed" || source === "inferred" ? `${window.name} (${source} span)` : window.name;
 				rows.push({
-					label: label(provider, window.families, window.name),
+					label: label(provider, window.families, name),
 					head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: window.usedPercent },
 					basis: basis(window.basis),
 					reset: resetDetail(window, now),

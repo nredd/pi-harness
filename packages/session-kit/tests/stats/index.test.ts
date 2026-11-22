@@ -93,29 +93,49 @@ function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir
 	return { run: (args: string) => handler(args, ctx), ctx, custom, sendMessage, rendered };
 }
 
+function seedRouterView(first: string, ...rest: string[]) {
+	const fixture = JSON.parse(
+		readFileSync(new URL("../../../subscription-router/tests/fixtures/views.json", import.meta.url), "utf8"),
+	) as { views: { name: string; now: number; usage: { views: unknown[] } }[] };
+	const readCase = (name: string) => {
+		const entry = fixture.views.find((view) => view.name === name);
+		if (!entry) throw new Error(`Missing router view fixture: ${name}`);
+		return entry;
+	};
+	const entry = readCase(first);
+	const root = join(dir, "router-state", "v1");
+	mkdirSync(root, { recursive: true });
+	writeFileSync(join(root, "view.json"), JSON.stringify([entry, ...rest.map(readCase)].flatMap((c) => c.usage.views)));
+	return { agentDir: dir, clock: { ...realClock, now: () => entry.now } };
+}
+
 describe("/stats command", () => {
+	it.each([
+		["legacy-assumed", "OpenAI 5h (assumed span)", "10%"],
+		["inferred-span", "faux-subscription short-quota (inferred span)", "100%"],
+	])("shows %s span provenance separately from the utilization basis", async (fixture, label, percent) => {
+		const opts = seedRouterView(fixture);
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		expect(rendered[0]?.join("\n")).toContain(label);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		expect(String(out.mock.calls[0]?.[0])).toContain(`${label}: ${percent} used · reported`);
+	});
+
 	it("shows router gauges, observed counts and inferred blocks without any session history", async () => {
-		const fixture = JSON.parse(
-			readFileSync(new URL("../../../subscription-router/tests/fixtures/views.json", import.meta.url), "utf8"),
-		) as { views: { name: string; now: number; usage: { views: unknown[] } }[] };
-		const metered = fixture.views.find((view) => view.name === "metered");
-		const window = fixture.views.find((view) => view.name === "inferred-span");
-		if (!metered || !window) throw new Error("Missing router view fixtures");
-		const root = join(dir, "router-state", "v1");
-		mkdirSync(root, { recursive: true });
-		writeFileSync(join(root, "view.json"), JSON.stringify([...window.usage.views, ...metered.usage.views]));
-		const opts = { agentDir: dir, clock: { ...realClock, now: () => metered.now } };
+		const opts = seedRouterView("inferred-span", "metered");
 		const { run, rendered } = setup("tui", opts);
 		await run("");
 		expect(rendered).toHaveLength(1);
 		const overlay = rendered[0]?.join("\n");
-		expect(overlay).toMatch(/short-quota +██████████ +100% +reported/);
+		expect(overlay).toMatch(/short-quota \(inferred span\) +██████████ +100% +reported/);
 		expect(overlay).toMatch(/rpd +37\/250 requests +observed · resets 00:00 PT/);
 		expect(overlay).toMatch(/blocked until 2026-01-16 08:00 UTC +inferred/);
 		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		await setup("print", opts).run("");
 		const printed = String(out.mock.calls[0]?.[0]);
-		expect(printed).toContain("short-quota: 100% used · reported");
+		expect(printed).toContain("short-quota (inferred span): 100% used · reported");
 		expect(printed).toContain("Google spend-10m: $1.24 · observed");
 		expect(printed).toContain("Google/faux-fast rpd: 37/250 requests · observed · resets 00:00 PT");
 		expect(printed).toContain("blocked until 2026-01-16 08:00 UTC · inferred");
