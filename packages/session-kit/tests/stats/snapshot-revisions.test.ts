@@ -766,6 +766,36 @@ it("compaction respects machine expansion budget", async () => {
 	expect(await importStats(join(root, "fresh"), out)).toMatchObject({ imported: 1, problems: [] });
 });
 
+it("reports one generated shard over 128 MiB expanded as the machine budget and keeps last-good", async () => {
+	const { before, snapshotDir } = await sealedFixture([
+		{},
+		{ quota: [quotaRow(32)] },
+		...filler,
+		{ quota: [quotaRow(31)] },
+	]);
+	const sealed = new Set(
+		before.shards.map((ref) => gunzipSync(readFileSync(join(snapshotDir, ref.file))).toString("utf8")),
+	);
+	const files = readdirSync(snapshotDir).sort();
+	const original = Buffer.byteLength;
+	// Only the newly generated compacted shard is oversized; every sealed shard still fits.
+	const measure = vi
+		.spyOn(Buffer, "byteLength")
+		.mockImplementation((value, encoding) =>
+			typeof value === "string" && value.startsWith('{"v":3,') && !sealed.has(value)
+				? 128 * 1024 * 1024 + 1
+				: original(value, encoding),
+		);
+	try {
+		await expect(exportStats(agent, out)).rejects.toThrow("Machine snapshot exceeds 128 MiB expanded");
+	} finally {
+		measure.mockRestore();
+	}
+	expect(manifest(snapshotDir)).toEqual(before);
+	expect(readdirSync(snapshotDir).sort()).toEqual(files);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+});
+
 it.each(["partial shard write", "manifest rename"])("keeps the old generation after a %s failure", async (failure) => {
 	const { before, snapshotDir } = await sealedFixture([
 		{},

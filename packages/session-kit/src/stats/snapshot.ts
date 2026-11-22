@@ -417,16 +417,18 @@ function compactJson(shard: Shard): string {
 			]),
 		q: shard.quota,
 	};
-	const text = JSON.stringify(compact);
-	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-	return text;
+	return JSON.stringify(compact);
 }
+
+/** zlib emits a zero mtime; canonical JSON and a fixed compression level make producer bytes stable. */
+const gzipCanonical = (text: string): Buffer => gzipSync(text, { level: 9 });
 
 /** Canonical v3 wire encoding. Collision-checked 96-bit entry identities deduplicate across versions. */
 export function encodeShard(shard: Shard): Buffer {
 	if (shard.version !== 3) return Buffer.from(JSON.stringify(shard));
-	// zlib emits a zero mtime; canonical JSON and a fixed compression level make producer bytes stable.
-	return gzipSync(compactJson(shard), { level: 9 });
+	const text = compactJson(shard);
+	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+	return gzipCanonical(text);
 }
 
 /** Decode bounded wire bytes into the existing strict, privacy-only aggregation schema. */
@@ -1185,9 +1187,12 @@ async function publishStats(
 		}
 		for (const shard of deltas) {
 			validateShard(shard, snapshot.manifest, month);
-			const bytes = encodeShard(shard);
+			// Charge the canonical text first: one oversized shard is the same machine-budget failure.
+			const text = compactJson(shard);
+			const expandedBytes = chargeExpansion(Buffer.byteLength(text), remaining);
+			const bytes = gzipCanonical(text);
 			if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-			remaining -= expandWithinBudget(bytes, SNAPSHOT_VERSION, remaining).expandedBytes;
+			remaining -= expandedBytes;
 			const sha256 = digest(bytes);
 			const file = `${month}-${sha256}.json.gz`;
 			writes.push({ file, bytes });
