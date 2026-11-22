@@ -2,6 +2,7 @@
 //!
 //! Built only for this crate's tests (`cfg(test)` or the `testing` feature its
 //! dev-dependency enables), so the shipped helper does not expose it.
+#![cfg(any(test, feature = "testing"))]
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::sync::{mpsc, Arc};
