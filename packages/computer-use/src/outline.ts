@@ -9,6 +9,11 @@ export interface OutlineText {
 	string: string;
 	confidence: number;
 	rect?: OutlineRect;
+	/**
+	 * `value` when the helper derived the box from the node's own AX value instead of pixels (the Linux helper, see
+	 * `ParseLookOptions.ownValueText`). Anything else, including a missing tag, is OCR.
+	 */
+	source?: "value";
 }
 
 export interface OutlineScrollExtent {
@@ -242,8 +247,8 @@ function redactPicture(node: OutlineNode): void {
  * Drop text that may show the pixels of a protected or unconfirmed node (#1263): a `text` box on another node, or
  * a picture-only node (whose title is OCR text), that overlaps such a node's rect. Fails closed: when any such
  * node has no known area, every box and picture-only title goes, and while one exists a box with no known area goes
- * too. The one exception is a box enclosed by its own readable node's rect under the protected ancestor (the Linux
- * helper's own-value text). A redacted
+ * too. The one exception is trusted provenance: a box the Linux helper derived from its readable node's own AX value
+ * (`source: "value"` and the same string), enclosed by that node's rect, under the protected ancestor. A redacted
  * picture-only node is itself protected, so its region joins the worklist; restore therefore gives the same result.
  * Mutates the tree.
  */
@@ -263,7 +268,7 @@ function dropTextOverProtected(root: OutlineNode): void {
 		return (
 			unknownRegion ||
 			!hasArea(box) ||
-			regions.some(({ node, rect }) => overlaps(rect, box) && !isOwnValueText(owner, box, node))
+			regions.some(({ node, rect }) => overlaps(rect, box) && !isOwnValueText(owner, text, box, node))
 		);
 	};
 
@@ -284,9 +289,18 @@ function dropTextOverProtected(root: OutlineNode): void {
 		if (isConfirmedReadable(node)) node.text = node.text.filter((text) => !mustDropBox(node, text));
 }
 
-/** Whether `box` sits inside `owner`'s rect under the unreadable `region` ancestor (Linux own-value text). */
-function isOwnValueText(owner: OutlineNode, box: OutlineRect, region: OutlineNode): boolean {
-	return hasArea(owner.rect) && isAncestor(region, owner) && encloses(owner.rect, box);
+/**
+ * Whether `text` is `owner`'s own AX value placed inside `owner`'s rect under the unreadable `region` ancestor. Only
+ * the Linux helper tags boxes `source: "value"`, and the string must still equal the node's value.
+ */
+function isOwnValueText(owner: OutlineNode, text: OutlineText, box: OutlineRect, region: OutlineNode): boolean {
+	return (
+		text.source === "value" &&
+		text.string === owner.value &&
+		hasArea(owner.rect) &&
+		isAncestor(region, owner) &&
+		encloses(owner.rect, box)
+	);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -335,20 +349,24 @@ function readRect(raw: unknown): OutlineRect | undefined {
 	return { x, y, w: Math.max(0, w), h: Math.max(0, h) };
 }
 
-/** Read one text box; its rect is kept only when complete. */
-function readText(item: unknown): OutlineText | undefined {
+/**
+ * Read one text box. `ownValueOf` is the node's own AX value when its helper derives boxes from it (Linux); only a
+ * box with exactly that string is tagged `source: "value"`, every other box is OCR.
+ */
+function readText(item: unknown, ownValueOf?: string): OutlineText | undefined {
 	if (!isRecord(item)) return undefined;
 	const string = toString(item.string);
 	if (!string) return undefined;
 	const text: OutlineText = { string, confidence: Math.max(0, Math.min(1, toNumber(item.confidence))) };
 	const rect = readRect(item.rect);
 	if (rect) text.rect = rect;
+	if (ownValueOf === string) text.source = "value";
 	return text;
 }
 
-function parseText(raw: unknown): OutlineText[] {
+function parseText(raw: unknown, ownValueOf?: string): OutlineText[] {
 	if (!Array.isArray(raw)) return [];
-	return raw.map(readText).filter((item): item is OutlineText => Boolean(item));
+	return raw.map((item) => readText(item, ownValueOf)).filter((item): item is OutlineText => Boolean(item));
 }
 
 /** How a backend's look payload is read. */
@@ -359,6 +377,11 @@ export interface ParseLookOptions {
 	 * unknown completeness, not proof the node was fully read.
 	 */
 	unmarkedNodesUnread?: boolean;
+	/**
+	 * The helper's `text` boxes repeat the node's own AX value rather than OCR (Linux AT-SPI2). A box whose string
+	 * equals the node's value is tagged `source: "value"` and may sit inside a protected ancestor's rect.
+	 */
+	ownValueText?: boolean;
 }
 
 function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode): OutlineNode {
@@ -395,7 +418,7 @@ function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode
 					total: Math.max(0, Math.trunc(toNumber(record.scrollExtent.total))),
 				}
 			: undefined,
-		text: parseText(record.text),
+		text: parseText(record.text, options.ownValueText ? toString(record.value) : undefined),
 		children: [],
 		parent,
 	};
@@ -901,7 +924,7 @@ function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): Ou
 			? record.actions.filter((value): value is string => typeof value === "string")
 			: [],
 		rect: readRect(record.rect),
-		text: Array.isArray(record.text) ? record.text.map(readText).filter((item) => item !== undefined) : [],
+		text: Array.isArray(record.text) ? record.text.map(restoreText).filter((item) => item !== undefined) : [],
 		children: [],
 		parent,
 	};
@@ -909,6 +932,13 @@ function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): Ou
 	if (record.unconfirmed === true) redactRetained(node);
 	else delete node.unconfirmed;
 	return node;
+}
+
+/** Normalize a stored text box: only a finite rect and the literal `source: "value"` tag survive. */
+function restoreText(raw: unknown): OutlineText | undefined {
+	const text = readText(raw);
+	if (text && (raw as { source?: unknown }).source === "value") text.source = "value";
+	return text;
 }
 
 function outlineRefNumber(ref: string): number {

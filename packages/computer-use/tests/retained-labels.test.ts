@@ -704,21 +704,25 @@ describe("OCR text over a protected node (#1263)", () => {
 		assert.equal(byWire(outline, "pic_1").title, "Logo");
 	});
 
-	test("a readable child's own text inside a protected ancestor stays; text spilling past it does not", () => {
+	test("a Linux child's own-value text inside a protected ancestor stays; text spilling past it does not", () => {
 		const child = { x: 20, y: 20, w: 50, h: 20 };
-		const outline = window([
-			{
-				ref: "u",
-				role: "unknown",
-				title: PROTECTED_LABEL,
-				rect: { x: 10, y: 10, w: 200, h: 100 },
-				children: [
-					{ ref: "own", role: "text", value: "Readable", rect: child, text: [box("Readable", child)] },
-					{ ref: "spill", role: "text", rect: child, text: [box(SECRET, { x: 20, y: 20, w: 120, h: 20 })] },
-					picture("pic_1", SECRET, { x: 30, y: 60, w: 30, h: 10 }),
-				],
-			},
-		]);
+		const outline = window(
+			[
+				{
+					ref: "u",
+					role: "unknown",
+					title: PROTECTED_LABEL,
+					rect: { x: 10, y: 10, w: 200, h: 100 },
+					children: [
+						{ ref: "own", role: "text", value: "Readable", rect: child, text: [box("Readable", child)] },
+						{ ref: "spill", role: "text", rect: child, text: [box(SECRET, { x: 20, y: 20, w: 120, h: 20 })] },
+						picture("pic_1", SECRET, { x: 30, y: 60, w: 30, h: 10 }),
+					],
+				},
+			],
+			{},
+			{ ownValueText: true },
+		);
 		assert.deepEqual([texts(outline, "own"), texts(outline, "spill")], [["Readable"], []]);
 		assert.equal(byWire(outline, "pic_1").title, PROTECTED_LABEL, "a picture-only box is nobody's own pixels");
 	});
@@ -842,6 +846,97 @@ describe("OCR text over a protected node (#1263)", () => {
 		{ ref: "u", role: "unknown", title: PROTECTED_LABEL, rect: { x: 10, y: 10, w: 200, h: 100 }, children: [child] },
 	];
 	const childRect = { x: 20, y: 20, w: 50, h: 20 };
+
+	test("macOS OCR under a protected ancestor is dropped even inside a readable child", () => {
+		const outline = window(
+			underProtected({
+				ref: "own",
+				role: "AXStaticText",
+				value: SECRET,
+				rect: childRect,
+				text: [box(SECRET, childRect)],
+			}),
+		);
+		assert.deepEqual(texts(outline, "own"), []);
+	});
+
+	test("Linux own-value text equal to the node value stays; a box with another string is dropped", () => {
+		const own = (value: string, string: string) =>
+			window(
+				underProtected({ ref: "own", role: "text", value, rect: childRect, text: [box(string, childRect)] }),
+				{},
+				{ ownValueText: true },
+			);
+		assert.deepEqual(texts(own("Readable", "Readable"), "own"), ["Readable"]);
+		assert.deepEqual(texts(own("Readable", SECRET), "own"), []);
+		assert.deepEqual(texts(own("", SECRET), "own"), [], "an empty value proves nothing");
+		const besideProtected = window(
+			[
+				{ ref: "s", role: "password text", title: PROTECTED_LABEL, rect: childRect },
+				{ ref: "own", role: "text", value: "Readable", rect: childRect, text: [box("Readable", childRect)] },
+			],
+			{},
+			{ ownValueText: true },
+		);
+		assert.deepEqual(texts(besideProtected, "own"), [], "a protected sibling is not an ancestor");
+	});
+
+	test("restore: a legacy box without provenance is OCR; a saved own-value box round-trips", () => {
+		const child = (text: object) =>
+			restoredNode("@e3", { role: "text", value: "Readable", rect: childRect, text: [text] });
+		const legacy = (text: object) =>
+			restoreOutline({
+				lookId: "l",
+				root: restoredNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 } }, [
+					restoredNode("@e2", { role: "unknown", rect: { x: 10, y: 10, w: 200, h: 100 } }, [child(text)]),
+				]),
+			});
+		assert.deepEqual(legacy(box("Readable", childRect)).nodes[2].text, []);
+		assert.deepEqual(legacy({ ...box("Readable", childRect), source: "ocr" }).nodes[2].text, []);
+		const otherString = legacy({ ...box(SECRET, childRect), source: "value" });
+		assert.deepEqual(otherString.nodes[2].text, [], "a tag never vouches for a string other than the value");
+		const linux = window(
+			underProtected({
+				ref: "own",
+				role: "text",
+				value: "Readable",
+				rect: childRect,
+				text: [box("Readable", childRect)],
+			}),
+			{},
+			{ ownValueText: true },
+		);
+		const again = restoreOutline(serializeOutline(linux));
+		assert.deepEqual(serializeOutline(again), serializeOutline(linux));
+		assert.deepEqual(texts(again as ReturnType<typeof parsed>, "own"), ["Readable"]);
+	});
+
+	test("the Linux backend marks its own-value text", async ({ onTestFinished }) => {
+		const { linuxHelper } = await import("../src/platform/linux/helper.ts");
+		const { linuxBackend } = await import("../src/platform/linux/backend.ts");
+		const command = vi.spyOn(linuxHelper, "command").mockResolvedValue({
+			lookId: "l1",
+			outline: {
+				ref: "w",
+				role: "frame",
+				truncated: false,
+				rect: { x: 0, y: 0, w: 300, h: 200 },
+				children: underProtected({
+					ref: "own",
+					role: "text",
+					truncated: false,
+					value: "Readable",
+					rect: childRect,
+					text: [box("Readable", childRect)],
+				}).map((node) => ({ ...node, truncated: false })),
+			},
+		});
+		onTestFinished(() => command.mockRestore());
+		const look = await linuxBackend.observe({ target: { pid: 1 } });
+		assert.deepEqual(present(look.parsedOutline).nodes[2].text, [
+			{ string: "Readable", confidence: 0.9, rect: childRect, source: "value" },
+		]);
+	});
 
 	test("an unconfirmed node alone filters OCR on restore and graft", () => {
 		const outline = restored([
