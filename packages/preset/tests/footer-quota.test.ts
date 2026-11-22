@@ -1646,3 +1646,30 @@ test("dispose before a mark expires disarms its timer and never repaints", () =>
 		[],
 	);
 });
+
+const healthyView = (id: string, left: number, extra: Record<string, unknown> = {}) =>
+	view(id, {
+		snapshot: snap(id, [{ ...win("q", 100 - left), durationMs: hour }], { expiresAt: CLOCK + hour }),
+		...extra,
+	});
+
+test("a reply with hundreds of thousands of windows renders the capped fallback without throwing", () => {
+	const windows = Array.from({ length: 300_000 }, (_, i) => ({ ...win(`w${i}`, 50), durationMs: hour }));
+	const huge = view("huge", { snapshot: snap("huge", windows, { expiresAt: CLOCK + hour }) });
+	const state = projected([huge, ...["A", "B", "C", "D"].map((id) => healthyView(id, 90))]);
+	const rows = footer.fitQuotaRows(state, 40, plain, fixed);
+	assert.equal(rows.length, 5);
+	assert.equal(rows.at(-1), "+1 more: /router status");
+});
+
+test("among blocked providers the cap keeps the lowest remaining quota", () => {
+	const blocked = (id: string, left: number) => healthyView(id, left, { marks: [mark(CLOCK + hour, "inferred")] });
+	const rows = footer.fitQuotaRows(
+		projected([blocked("A", 90), blocked("B", 90), blocked("C", 90), blocked("D", 90), blocked("E", 1)]),
+		40,
+		plain,
+		fixed,
+	);
+	assert.equal(rows[0], "Left: E provider blocked inf 1h 1%");
+	assert.equal(rows.at(-1), "+1 more (1 blocked): /router status");
+});

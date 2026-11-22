@@ -616,6 +616,15 @@ function priority(cell: QuotaCell): number {
 	return cell.kind === "percent" ? (cell.remaining ?? 101) : 102;
 }
 
+/** Lowest remaining percentage among `cells`, 101 when none is known. One pass: never spread an unbounded array. */
+function lowestRemaining(cells: readonly QuotaCell[]): number {
+	let lowest = 101;
+	for (const cell of cells) {
+		if (cell.kind === "percent" && cell.remaining !== undefined && cell.remaining < lowest) lowest = cell.remaining;
+	}
+	return lowest;
+}
+
 interface Segment {
 	quota: ProviderQuota;
 	cells: QuotaCell[];
@@ -663,9 +672,10 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 	const draw = (rows: typeof rendered) => rows.map(({ make }, i) => make(i === 0 ? lead : ""));
 	const cap = layout.cap;
 	if (!cap || rendered.length <= cap.rows) return draw(rendered);
-	// Before capping, rank blocked providers first, then the lowest remaining quota, so a cap never hides them silently.
+	// Before capping, rank blocked providers first, then the lowest remaining quota within each group,
+	// so a cap never hides a block silently and keeps the most constrained blocked provider.
 	const ranked = rendered
-		.map((row) => ({ row, blocked: blocked(row), lowest: Math.min(101, ...row.shown.map(priority)) }))
+		.map((row) => ({ row, blocked: blocked(row), lowest: lowestRemaining(row.shown) }))
 		.sort((a, b) => Number(b.blocked) - Number(a.blocked) || a.lowest - b.lowest)
 		.map(({ row }) => row);
 	const hidden = ranked.slice(cap.rows).filter(blocked).length;
