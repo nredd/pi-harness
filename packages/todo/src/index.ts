@@ -24,6 +24,7 @@ import type { KeyId } from "@earendil-works/pi-tui";
 import { applyAgentEvent, applyOtherSessionSurvivor, clearElsewhere, forgetAgents, setForkLineage } from "./agents.ts";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { applyMonitorEvent, forgetMonitors, keepLinks } from "./monitors.ts";
+import type { ToolCompletion } from "./plan/empty-reminder.ts";
 import { registerPlanHooks } from "./plan/hooks.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { forkAncestry } from "./state/lineage.ts";
@@ -215,14 +216,26 @@ export default function (
 		requeryOtherSurvivors,
 		{ homeDir: options.homeDir },
 	);
+	// Model-issued completions by call id, kept for one turn. Core emits a batch's tool_execution_end events before
+	// its tool-result message_end events, and no message_end handler can rewrite these fields.
+	const completions = new Map<string, ToolCompletion>();
+	pi.on("turn_start", () => completions.clear());
 	// Reads getTodos() at render time; do NOT call replayFromBranch here
 	// (branch is stale -- message_end runs after tool_execution_end).
-	pi.on("tool_execution_end", async (event, ctx) => {
-		// Parallel tool completions must update the counter in event order.
-		planHooks.toolFinished(event, ctx);
+	pi.on("tool_execution_end", async (event) => {
+		if (event.parentToolCallId === undefined) {
+			completions.set(event.toolCallId, { toolName: event.toolName, isError: event.isError });
+		}
 		if (event.toolName !== TOOL_NAME || event.isError) return;
 		// The tool itself succeeded, so a transient overlay-load failure is not an extension error.
 		await refreshTodoOverlay();
+	});
+	// Tool results arrive here serially in assistant source order, unlike parallel completions.
+	// The order comes from here, the tool name and outcome from the completion when one matches.
+	pi.on("message_end", (event, ctx) => {
+		const { message } = event;
+		if (message.role !== "toolResult") return;
+		planHooks.toolFinished(completions.get(message.toolCallId) ?? message, ctx);
 	});
 
 	// Collapse/expand hotkey for the todo overlay. The key is resolved once at

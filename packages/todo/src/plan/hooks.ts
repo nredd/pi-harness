@@ -17,7 +17,6 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	SessionBoundaryDraft,
-	ToolExecutionEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentRunState,
@@ -48,7 +47,7 @@ import {
 	type Task,
 	type TaskSnapshot,
 } from "../tool/types.ts";
-import { isChildActivation, trackEmptyReminder } from "./empty-reminder.ts";
+import { isChildActivation, type ToolCompletion, trackEmptyReminder } from "./empty-reminder.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./reconcile.ts";
 
 /** Persisted marker text; the `context` hook expands it on the request right after it. */
@@ -442,8 +441,12 @@ export function formatInProgressNotice(
  *   changed that session's list.
  */
 export interface PlanSessionHooks {
-	/** Track tool completions synchronously, before refreshing the overlay. */
-	toolFinished(event: ToolExecutionEndEvent, ctx: ExtensionContext): void;
+	/**
+	 * Count one tool result toward the empty-list nudge. Feed it from `message_end`: core emits
+	 * tool-result messages one at a time in assistant source order, while parallel
+	 * `tool_execution_end` events run concurrently and an earlier extension's handler can reorder them.
+	 */
+	toolFinished(event: ToolCompletion, ctx: ExtensionContext): void;
 	/**
 	 * Call from `session_start` after replay: binds the session and applies a pending approval.
 	 * `resumed` is true only for a process `startup`: `/new`, `/resume`, `/fork` and `/reload` detach live agents instead, so no owner is provably lost.

@@ -154,10 +154,19 @@ entry is written but the marker is not, no nudge runs and a resume still sees a 
 budget. Sessions from before this entry restore an unspent budget even with an old
 marker, so after upgrading they can nudge once more. A restored marker does not expand again. Core
 still needs a persisted `custom_message` to continue after an assistant reply, so
-these markers remain visible in `/tree` and in the generic `entry_appended` event. JSON, RPC and print sessions do not emit
-either nudge. An earlier extension handler that delays only a `todo`
-completion can reorder the reset, making the nudge late or missed until the next
-tool call, but cannot cause an extra nudge.
+these markers remain visible in `/tree` and in the generic `entry_appended` event
+([#1265](https://github.com/nredd/pi-harness/issues/1265) tracks request-local continuation in core). JSON, RPC and print sessions do not emit
+either nudge. The work count follows tool-result messages (`message_end`), which core emits one at a
+time in the order the assistant made the calls. Parallel `tool_execution_end` events do not set the
+order: they run concurrently, so another extension's slow handler could make a `todo` reset land
+after a later call and miss the nudge. In a parallel batch, calls listed after a `todo` call count
+and calls listed before it are reset. The tool name and `isError` come from the same turn's
+`tool_execution_end` with the matching `toolCallId`, so an extension registered before todo that
+replaces the result message in `message_end` (e.g. renames a `todo` result or flips an `Agent`
+result's `isError`) does not change the count. Limits: `isError` is the value after every
+`tool_result` handler, so an earlier extension can still change it there, and a replaced message
+whose `toolCallId` matches no completion is counted as delivered. Handler order matters for both.
+Core does not expose the original completion record yet ([#1265](https://github.com/nredd/pi-harness/issues/1265)).
 
 ### Session switches and survivors
 
