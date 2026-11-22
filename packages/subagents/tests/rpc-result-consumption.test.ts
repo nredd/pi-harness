@@ -142,13 +142,47 @@ describe("subagents:rpc:consume", () => {
 		expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent not found or still running" });
 	});
 
-	it("reports an unknown agent rather than silently succeeding", async () => {
+	it("reports an unknown agent rather than silently succeeding, and an owned one as owned", async () => {
+		vi.mocked(runAgent).mockResolvedValue({ responseText: "TASK_EXECUTE_AGENT_OK" } as any);
 		const { bus } = await boot();
-		const reply = vi.fn();
-		bus.on("subagents:rpc:consume:reply:req-consume-unknown", reply);
-		bus.emit("subagents:rpc:consume", { requestId: "req-consume-unknown", agentId: "no-such-agent" });
+		const ask = async (channel: string, agentId: unknown) => {
+			const requestId = `req-${channel}-${agentId}`;
+			const reply = vi.fn();
+			bus.on(`subagents:rpc:${channel}:reply:${requestId}`, reply);
+			bus.emit(`subagents:rpc:${channel}`, { requestId, agentId, message: "hi" });
+			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+			return reply.mock.calls[0]?.[0];
+		};
+		const missing = { success: false, error: "Agent not found or still running" };
+		expect(await ask("consume", "no-such-agent")).toEqual(missing);
+		// A payload with no string id gets each channel's own refusal, never a TypeError.
+		for (const agentId of [undefined, 42]) {
+			expect(await ask("consume", agentId)).toEqual(missing);
+			for (const channel of ["stop", "steer"])
+				expect(await ask(channel, agentId)).toEqual({ success: false, error: "Agent not found" });
+		}
 
-		await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-		expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent not found or still running" });
+		// Settled, then handed to a parent agent: the session cannot see it, but the
+		// manager holds it, so its exact id is refused as owned rather than missing.
+		const id = await spawnOverRpc(bus, "req-spawn-4");
+		const record = (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
+		await vi.waitFor(() => expect(record.status).toBe("completed"));
+		record.parentAgentId = "someone-else";
+		// An exact hidden id is terminal: another agent's alias spelling it does not redirect the call.
+		const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+		manager.getRecord(await spawnOverRpc(bus, "req-spawn-5")).alias = id;
+		expect(await ask("consume", id)).toEqual(missing);
+		for (const channel of ["stop", "steer"])
+			expect(await ask(channel, id)).toEqual({ success: false, error: "Agent is owned by another agent or workflow" });
+
+		// A settled workflow child: stop and steer refuse it as owned, consume reads it as before #1204.
+		const worker = manager.getRecord(await spawnOverRpc(bus, "req-spawn-6"));
+		await vi.waitFor(() => expect(worker.status).toBe("completed"));
+		worker.workflowId = "wf_abc123def456";
+		expect(await ask("consume", worker.id)).toEqual({ success: true });
+		expect(await ask("stop", worker.id)).toEqual({
+			success: false,
+			error: "Agent is owned by another agent or workflow",
+		});
 	});
 });

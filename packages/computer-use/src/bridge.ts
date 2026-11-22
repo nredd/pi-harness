@@ -290,6 +290,7 @@ interface ListWindowsDetails {
 		browserUseAllowed: boolean;
 		blocked: boolean;
 		identityUnresolved?: true;
+		instanceUnavailable?: true;
 		score: number;
 		url?: string;
 	}>;
@@ -772,6 +773,7 @@ function formatWindowLine(window: ListWindowsDetails["windows"][number]): string
 		window.browserUseAllowed ? undefined : "browser_use_disabled",
 		window.blocked ? "blocked" : undefined,
 		window.identityUnresolved ? "unidentified" : undefined,
+		window.instanceUnavailable ? "unbound" : undefined,
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -847,7 +849,9 @@ function windowRecordIdentity(
 	record: Pick<WindowRefRecord, "pid" | "windowId" | "nativeWindowRef" | "windowTitle" | "framePoints">,
 ): string {
 	if (record.windowId && record.windowId > 0) {
-		return `pid:${record.pid}|id:${record.windowId}`;
+		// A Windows native ref names one window instance: a same-HWND replacement gets a new `@r`.
+		const instance = currentPlatformBackend.name === "windows" ? `|ref:${record.nativeWindowRef}` : "";
+		return `pid:${record.pid}|id:${record.windowId}${instance}`;
 	}
 	if (record.nativeWindowRef) {
 		return `pid:${record.pid}|ref:${record.nativeWindowRef}`;
@@ -991,7 +995,10 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 	return trimOrUndefined(selector);
 }
 
-/** A Windows look is bound to its original owner and native root, not a matching title. */
+/**
+ * A Windows root is bound to its original owner and window instance, not a matching title or HWND: the
+ * helper issues a new native ref for a same-HWND replacement, so the saved ref must still be listed.
+ */
 async function resolveWindowsRoot(
 	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
 	signal?: AbortSignal,
@@ -1000,14 +1007,19 @@ async function resolveWindowsRoot(
 	const match = windows.find(
 		(window) =>
 			window.pid === saved.pid &&
-			(saved.windowId
-				? window.windowId === saved.windowId
-				: saved.nativeWindowRef && window.windowRef === saved.nativeWindowRef),
+			saved.nativeWindowRef !== undefined &&
+			window.windowRef === saved.nativeWindowRef &&
+			(!saved.windowId || window.windowId === saved.windowId),
 	);
 	if (!match)
 		throw new ComputerUseError(
 			"root_stale",
-			"Saved Windows root is no longer available for its original owner. Rediscover it with find_roots.",
+			"Saved Windows root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
+		);
+	if (match.instanceUnavailable)
+		throw new ComputerUseError(
+			"root_stale",
+			"Windows root could not be admitted: its owner or window instance is unverifiable, so it cannot be observed or controlled.",
 		);
 	assertAppNotBlocked({ appName: saved.appName, appId: match.appId });
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
@@ -1590,6 +1602,7 @@ function windowDetails(
 		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
 		blocked: blockReason !== undefined,
 		...(typeof blockReason === "object" ? blockReason : {}),
+		...(window.instanceUnavailable ? { instanceUnavailable: true as const } : {}),
 		score: scoreWindow(window),
 	};
 }
@@ -2135,6 +2148,9 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 
 function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
 	if (a.pid !== b.pid) return false;
+	// A Windows native ref names one window instance; a same-HWND replacement is another root.
+	if (currentPlatformBackend.name === "windows")
+		return a.nativeWindowRef !== undefined && a.nativeWindowRef === b.nativeWindowRef;
 	if (a.windowId > 0 && b.windowId > 0) return a.windowId === b.windowId;
 	if (a.nativeWindowRef && b.nativeWindowRef) return a.nativeWindowRef === b.nativeWindowRef;
 	return normalizeText(a.windowTitle) === normalizeText(b.windowTitle);
@@ -2586,6 +2602,8 @@ function exactPlatformRootMatchesTarget(root: HelperWindow, target: ResolvedTarg
 	const nativeRefMatches = Boolean(
 		target.nativeWindowRef && (root.rootRef === target.nativeWindowRef || root.windowRef === target.nativeWindowRef),
 	);
+	// Windows: only the instance's native ref identifies it; a same-HWND replacement must not pass.
+	if (currentPlatformBackend.name === "windows") return nativeRefMatches;
 	const windowIdMatches = target.windowId > 0 && root.windowId === target.windowId;
 	return nativeRefMatches || windowIdMatches;
 }

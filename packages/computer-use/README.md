@@ -34,8 +34,9 @@ The native source is `native/windows/bridge-rs/`. This source change is a siblin
 opt-in WSL transport (#981), not a second transport. It does not enable WSL interop,
 install a helper, change accessibility settings or grant privileges. #673 remains release-gating.
 
-- Protocol `5` (from `4`: `uiaReadText` and `uiaWaitFor` require the admitted `pid` and `windowId`,
-  so a v4 helper or client fails the version check) and architecture `1`. Diagnostics advertise
+- Protocol `6` (from `5`: native root refs are per window instance and `uiaWaitFor` without a look
+  requires `rootRef`; protocol `5` added the admitted `pid` and `windowId` to `uiaReadText` and
+  `uiaWaitFor`. An older helper or client fails the version check) and architecture `1`. Diagnostics advertise
   `capabilities: ["fail-closed-live-target-v1"]`. The coordinated WSL client must require this
   capability before accepting a helper; an owner-pinned SHA alone does not make an older executable safe.
   The literal is a STATIC claim in `diagnostics()`, not derived at runtime from the routes. It is guarded
@@ -207,8 +208,8 @@ Current implementation:
 
 | Rules | macOS native desktop delivery | Windows native desktop delivery | Linux native desktop delivery |
 | --- | --- | --- | --- |
-| 1, 2, 8: admission, stop and routing | PID delivery targets the selected process. HID checks focus and blocked apps, but web text fallback and multi-key input have stale-check gaps (#1173). | UIA and HWND delivery resolve the selected root; foreground `SendInput` uses target/focus guards but has no helper blocklist. | AT-SPI is target-scoped; X11 XTEST is global and checks the active window, not the blocklist. Per-unit conformance is unproven; #1183 tracks the test seam. |
-| 3, 4: cleanup and partial delivery | Paste restores the previous pasteboard contents only if no newer write intervenes. Drag reserves mouse-up. Release timestamps and unmatched-release coverage are open (#1174); no general partial-delivery count guarantee. | The helper attempts to release buttons after interrupted clicks and drags and keys after interrupted chords. Unicode typing sends down/up pairs in a single batch and does not attempt a release after partial insertion. No clipboard handling or general partial-delivery count guarantee. | X11 can leave held inputs on error (#1181) and report partial delivery as `didnt` (#1182). |
+| 1, 2, 8: admission, stop and routing | PID delivery targets the selected process. HID checks focus and blocked apps. Web `setText` rechecks after the focus write, value read and selection write, and before `cmd+a` and the replacement text; `typeText` and `keypress` admit every key-down and always send its key-up. Gap: AX key focus is probed on a cadence (up to eight units or 64 ms), so a blocked app that takes key focus without becoming frontmost can receive keys until the next probe (#1173). | UIA and HWND delivery resolve the selected root; foreground `SendInput` uses target/focus guards but has no helper blocklist. | AT-SPI is target-scoped; X11 XTEST is global and checks the active window, not the blocklist. Per-unit conformance is unproven; #1183 tracks the test seam. |
+| 3, 4: cleanup and partial delivery | Paste restores the previous pasteboard contents only if no newer write intervenes. Drag reserves mouse-up before any input and stamps every pointer event from a monotonic clock when it posts, so the reserved release never predates the down; a failed move or mouse-down allocation posts no unmatched release. No general partial-delivery count guarantee. | The helper attempts to release buttons after interrupted clicks and drags and keys after interrupted chords. Unicode typing sends down/up pairs in a single batch and does not attempt a release after partial insertion. No clipboard handling or general partial-delivery count guarantee. | X11 can leave held inputs on error (#1181) and report partial delivery as `didnt` (#1182). |
 | 5: retry | The bridge still retries some foreground refusals and checked `didnt` results outside strict headless; uncertain delivery is not blindly replayed. | Shared fallback; no conformance guarantee. | Shared fallback; #1182 means `didnt` does not always prove no input posted. |
 | 6: strict headless | Prohibits synthesized input, focus and cursor movement; input requiring foreground returns `foreground_required`. | Prohibits raw input and forced focus; raw-input refusal can be `coordinate_blocked`. | Prohibits XTEST and EWMH focus. Physical fallback refusal can be `coordinate_blocked` (X11 or no graphical session) or `capability_deferred` (Wayland). |
 | 7: root selection | Enforced by bundle id. | Enforced by executable basename. Unidentified roots are listed as blocked and refused with `app_blocked`. | Disabled: helper `processName` is the app-supplied AT-SPI accessible Name, not an executable basename or `WM_CLASS` (#1180). |
@@ -226,15 +227,64 @@ no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, 
 
 Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. Look IDs are scoped to one helper lifetime: after a restart, observe again before reading text.
 The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
-On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
-poll. A closed HWND, or one now owned by a different PID, fails the next poll with `root_stale`.
-Text reads and each wait poll recheck that owner after acquiring the UIA root, before walking it,
-and again after the walk, discarding the result as `root_stale` if a check detects ownership drift.
-These are samples, not continuous monitoring. A text read whose desktop access check refuses a
-closed or reassigned HWND also reports `root_stale`; `coordinate_blocked` means the owner still
-matched. A replacement that reuses the exact numeric HWND and PID pair passes every check
-(#1231). Semantic `act_ui` delivery
-checks the owner before resolving the element, not after acquiring the UIA root.
+Windows roots and looks are bound to a window instance: the owning PID, that process's creation
+time, and an opaque instance tag the helper stores as the `PiComputerUseWindowInstance-v1` window
+property (written once per window lifetime under a per-helper lock; an existing tag is kept). Windows
+drops window properties when the window is destroyed, so a replacement window that reuses the exact
+HWND, even in the same process, has no tag or a different one, and a reused PID has a different
+creation time. Each root ref names one instance:
+- Discovery issues the native root ref (`@w`) per HWND and tag, and `find_roots` issues the `@r` per
+  native ref, so a same-HWND replacement is listed under a NEW `@r`. A root ref denotes the instance it
+  was issued for; rediscovery never moves an old ref onto the replacement
+- Native root refs are namespaced per helper lifetime: each helper process numbers them from a random
+  nonzero 32-bit nonce in the high half of the ref number. After a helper restart an old `@r` stays
+  `root_stale` even when the same HWND and PID now host an untagged replacement that the new helper
+  tags (nonce collision ~2^-32)
+- An old `@r`, and every look, wait, focus or action that resolves through it, fails with `root_stale`
+  once its instance is gone; call `find_roots` and observe the new `@r`. A look stays bound to the
+  instance it observed, whatever a later discovery lists
+- A root whose owner, process start or tag cannot be verified at discovery (e.g. a UIPI-protected or
+  exited process) is listed as `unbound` and refused with `root_stale` and a "could not be admitted"
+  message, distinct from the stale-instance message
+- Without a look, the helper requires the exact `rootRef` for `uiaWaitFor` and resolves only that ref's
+  binding, never the latest binding of the HWND
+- The extension compares Windows roots by that instance's native ref, never the HWND: after an action
+  the closure probe reports `target_closed` when only a same-HWND replacement is listed, and a new
+  observation never reuses the old instance's outline refs
+
+On Windows, `wait_for` and `act_ui` postconditions check the admitted instance before every UIA
+poll. A closed HWND, a different owning PID or process, or a replacement window fails the next poll
+with `root_stale`. Text reads and each wait poll recheck that instance after acquiring the UIA root,
+before walking it, and again after the walk, discarding the result as `root_stale` if a check
+detects drift. These are samples, not continuous monitoring. Whenever a live call (desktop access
+check, capture, UIA resolution) fails, the helper samples the instance again before returning, so a
+closed or replaced window reports `root_stale`; `coordinate_blocked` means the instance still matched.
+Looks check the instance before capture, again after waiting for the input lease and after capture,
+and discard elements captured across a replacement. Focusing a saved root rechecks after the lease
+wait, before raising it. Point actions recheck after the lease wait, before delivery. Every ref action
+(semantic pattern, focus for typing, occlusion hit test and coordinate fallback) resolves its UIA
+element through that check: the instance is sampled before acquiring the root, after it and after
+the RuntimeId search, so the element a mutation uses is the one validated.
+
+Limits of the instance tag:
+- It detects NON-ADVERSARIAL replacement, not authenticity. Any process UIPI lets write the window
+  (the owner, or an equal or higher integrity process) can copy the admitted tag onto its own
+  replacement or overwrite it; neither is detected
+- A restarted helper accepts a tag that already exists without writing one, including one a previous
+  helper or another process wrote
+- Two helper processes (e.g. two Pi sessions) are not serialized against each other; concurrent first
+  admissions of one window can leave one helper's binding stale, which fails closed with `root_stale`
+- The tag binds the top-level HWND. For a frame-hosted app (e.g. `ApplicationFrameHost.exe`) it binds
+  the host window, not the embedded app, so replacing only the hosted content is not detected
+- Checks are samples between steps; a replacement in the instant between the last check and a
+  mutation is not detected. Two known in-call races (#1284):
+  - Capture: after the post-lease check, the capture's baseline render window and explicit focus
+    validate only the HWND (focus may retry after a sleep), so they can raise a same-HWND replacement;
+    a capture whose foreground outcome was uncertain can then report plain `root_stale`
+  - Raw delivery: the final occlusion hit test (`ElementFromPoint` plus RuntimeId ancestry) is not
+    rechecked against a replacement arriving during it, and raw input can follow: ref click, press,
+    wheel and drag, type, keypress and raw set text, and point click, scroll and drag
+- The hosted native-helper workflow's bootstrap-failure receipt still says `protocol=5` (#1284)
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
@@ -2833,13 +2883,13 @@ description: 'Windows backend contract, UIA behavior, refs, actions, deltas, pro
 
 {/* This file is generated by scripts/docs-generators/generate-source-references.mjs. Do not edit it directly. */}
 
-`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **5**.
+`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **6**.
 
 ## Backend contract
 
 The TypeScript Windows backend is intentionally stateless. It forwards root-forest seam calls to the Rust helper:
 
-- `listRoots({ pid? })`: cheap HWND metadata only. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
+- `listRoots({ pid? })`: cheap HWND metadata only, plus `instanceUnavailable` when the window could not be bound to a verifiable instance. `rootRef` is issued per HWND and instance tag. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
 - `look`: atomic observe result with `lookId`, outline, window payload (`rootRef`, `kind`, frame, scale), and optional image. Menu/outline-only roots omit `image`; coordinate acts against those roots fail with `coordinate_unavailable_for_root`.
 - `act`: forwards the typed `PlatformActRequest` whole. The helper validates `lookId`, resolves refs from helper-owned look state, applies policy, executes, and returns honest outcome/evidence plus `performed.deltaSource` and shallow `rootDelta`.
 - `uiaReadText` / `uiaWaitFor`: helper-side live UIA reads/polls. No TypeScript screenshot polling or module-level element state is used.
@@ -2864,7 +2914,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND still belongs to that PID before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`, and `waitFor` without `lookId` also requires the exact `rootRef`; each read and poll checks that the HWND is still the window instance that ref or the owning look was issued for (PID, process creation time and instance tag) before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 
@@ -2873,13 +2923,13 @@ Root deltas are baselined at act time. The helper polls a cheap top-level HWND s
 Request envelope:
 
 ```json
-{ "protocolVersion": 5, "id": "req_1", "cmd": "listRoots", "args": {} }
+{ "protocolVersion": 6, "id": "req_1", "cmd": "listRoots", "args": {} }
 ```
 
 Response envelope:
 
 ```json
-{ "protocolVersion": 5, "id": "req_1", "ok": true, "result": { } }
+{ "protocolVersion": 6, "id": "req_1", "ok": true, "result": { } }
 ```
 
 Diagnostics (`cmd: "diagnostics"`) returns the protocol version and helper process metadata. The TypeScript backend rejects a mismatched version with a “Restart Pi …” error.

@@ -177,10 +177,20 @@ function lookup(
 	const base = (via: AgentRefVia): RefBase => ({ requested: handle.raw, latest, via });
 	const survivors = sources.survivors();
 
+	// An exact id is terminal: a hidden one must not fall through to an alias that spells it.
 	const own = sources.getRecord(latest);
-	if (own && sees(asker, own)) return classify(own, "manager", base("id"));
-	const survivor = survivors.find((record) => record.id === latest && sees(asker, record));
-	if (survivor) return classify(survivor, "survivor", base("id"));
+	const exact = own ?? survivors.find((record) => record.id === latest);
+	if (exact) return sees(asker, exact) ? classify(exact, own ? "manager" : "survivor", base("id")) : miss(handle.raw);
+
+	/** Saved history under `tombstone`, else the eviction note of the id asked for. */
+	const saved = (tombstone: AgentTombstone | undefined): AgentRef | undefined => {
+		const note = sources.getEvictedNote(tombstone?.id ?? latest);
+		if (tombstone || note)
+			return { ...base("saved"), state: "saved", note, tombstone, resume: savedResume(tombstone, note) };
+	};
+	// Id beats name: a known saved id is answered before any run id or alias can take it.
+	const savedId = asker.kind === "session" && steps.has("saved") ? saved(sources.tombstoneById(latest)) : undefined;
+	if (savedId) return savedId;
 
 	const run = steps.has("run") ? locate(sources, survivors, asker, (record) => record.runId === handle.raw) : undefined;
 	if (run) return classify(run.record, run.home, base("run"));
@@ -200,15 +210,8 @@ function lookup(
 		if (named) return classify(named.record, named.home, base(via));
 	}
 
-	if (!steps.has("saved")) return miss(handle.raw);
-	// Id beats name here too: another conversation's alias must not take a saved id.
-	const tombstone =
-		sources.tombstoneById(latest) ??
-		sources.tombstoneByName(handle.key) ??
-		(prefixed ? sources.tombstoneByName(prefixed) : undefined);
-	const note = sources.getEvictedNote(tombstone?.id ?? latest);
-	if (!tombstone && !note) return miss(handle.raw);
-	return { ...base("saved"), state: "saved", note, tombstone, resume: savedResume(tombstone, note) };
+	const tombstone = sources.tombstoneByName(handle.key) ?? (prefixed ? sources.tombstoneByName(prefixed) : undefined);
+	return (steps.has("saved") && tombstone && saved(tombstone)) || miss(handle.raw);
 }
 
 /** The record a ref carries, if any: a workflow run and saved history have none. */
@@ -231,58 +234,54 @@ export function refRecord(ref: AgentRef): AgentRecord | undefined {
 }
 
 const SESSION: Asker = { kind: "session" };
-/** The legacy lookups never answered with a workflow run, so they read none. */
+/** The legacy lookup never answered with a workflow run, so it reads none. */
 const NO_WORKFLOWS: ReadonlyMap<string, WorkflowTask> = new Map();
+const ID_ONLY: ReadonlySet<Step> = new Set(["id"]);
 
 /**
- * What the pre-resolver lookups returned for `input`: a record matched by the
- * exact input under only `steps`, with no normalization and no successor
- * followed (callers follow `latestId` themselves). A workflow child is still
- * returned for the caller's own ownership check; a nested child is not.
+ * Which survivors of a session switch (#330) a session lookup reaches: none,
+ * those registered under this session file, or every one in the process. Only
+ * reads go process-wide; a stop or steer acts through this session's survivors.
  */
-function legacyRecord(input: string, sources: AgentSources, steps: ReadonlySet<Step>): AgentRecord | undefined {
-	return refRecord(lookup({ raw: input, key: input.toLowerCase() }, input, SESSION, sources, steps));
-}
+export type SurvivorReach = "none" | "session" | "process";
 
-const ID_ONLY: ReadonlySet<Step> = new Set(["id"]);
-const ID_THEN_NAME: ReadonlySet<Step> = new Set(["id", "name"]);
-
-export function createAgentLookup(manager: AgentManager, getCtx: () => ExtensionContext | undefined) {
-	/** Any live record by exact id, including survivors registered under another session file. */
-	const liveAgentById = (id: string) =>
-		legacyRecord(
-			id,
-			agentSources(manager, () => listAllRunningDetached().map(({ agent }) => agent.record), NO_WORKFLOWS),
-			ID_ONLY,
-		);
+export function createAgentLookup(
+	manager: AgentManager,
+	getCtx: () => ExtensionContext | undefined,
+	getWorkflowTasks: () => ReadonlyMap<string, WorkflowTask>,
+) {
+	const everySurvivor = () => listAllRunningDetached().map(({ agent }) => agent.record);
+	const sessionSurvivors = () => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record);
+	const survivorsFor = { none: () => [], session: sessionSurvivors, process: everySurvivor } as const;
 
 	/**
-	 * Resolve a tool's `agent_id` as an id OR a handle, so the model addresses
-	 * agents by the same names the user types. Ids are tried first. Only live
-	 * records: a tombstone has nothing to steer and no result to read. Callers
-	 * still enforce the workflow-ownership rejection. Survivors of a /reload,
-	 * /new or /resume live in the orphaned manager (#330) and answer by name
-	 * case-insensitively, like this manager's own records.
+	 * Any live record by the exact id, including survivors registered under
+	 * another session file: no normalization and no successor followed (callers
+	 * follow `latestId` themselves). A workflow child is still returned for the
+	 * caller's own ownership check; a nested child is not.
 	 */
-	const resolveAgentRef = (ref: string): AgentRecord | undefined =>
-		legacyRecord(
-			ref,
-			agentSources(
-				manager,
-				() => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record),
-				NO_WORKFLOWS,
+	const liveAgentById = (id: string) =>
+		refRecord(
+			lookup(
+				{ raw: id, key: id.toLowerCase() },
+				id,
+				SESSION,
+				agentSources(manager, everySurvivor, NO_WORKFLOWS),
+				ID_ONLY,
 			),
-			ID_THEN_NAME,
 		);
 
-	return { liveAgentById, resolveAgentRef };
+	/** What `input` names to the session, as `resolveAgent` reads it, with workflow runs and `reach`'s survivors. */
+	const resolveSessionRef = (input: string, reach: SurvivorReach): AgentRef =>
+		resolveAgent(input, SESSION, agentSources(manager, survivorsFor[reach], getWorkflowTasks()));
+
+	return { liveAgentById, resolveSessionRef };
 }
 
-/** "Not found", or what became of the agent when its record was evicted. */
-export function agentNotFound(manager: AgentManager, ref: string, withResult = false): string {
-	const note = manager.getEvictedNote(ref);
+/** "Not found" for `label` as asked, or what became of the agent by its resolved eviction `note`. */
+export function agentNotFound(label: string, note?: EvictedNote, withResult = false): string {
 	const result = withResult && note ? describeEvictedResult(note) : undefined;
 	return note
 		? describeEvicted(note) + (result ? `\n\n${result}` : "")
-		: `Agent not found: "${ref}". It may have been cleaned up.`;
+		: `Agent not found: "${label}". It may have been cleaned up.`;
 }
