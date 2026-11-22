@@ -379,6 +379,7 @@ it("validates the copied reading", async () => {
 		{ windows: Object.assign([valid], { length: 129 }) },
 		{ windows: Object.assign([], { 1: valid }) },
 		{ windows: stringLength },
+		{ windows: { 0: valid, length: 1 } },
 		Object.create({ windows: [valid] }),
 	];
 	const read = vi.fn(async () => hostile[read.mock.calls.length - 1]);
@@ -397,6 +398,7 @@ it("validates the copied reading", async () => {
 	expect(families.slice).not.toHaveBeenCalled();
 	expect(readings.slice(1).map(({ status, message }) => ({ status, message }))).toEqual([
 		{ status: "error", message: "Usage request failed." },
+		{ status: "error", message: "Usage response had an unsupported shape." },
 		{ status: "error", message: "Usage response had an unsupported shape." },
 		{ status: "error", message: "Usage response had an unsupported shape." },
 		{ status: "error", message: "Usage response had an unsupported shape." },
