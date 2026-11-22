@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -28,6 +28,7 @@ vi.mock("node:fs/promises", async (original) => {
 		unlink: vi.fn(actual.unlink),
 		rename: vi.fn(actual.rename),
 		readdir: vi.fn(actual.readdir),
+		readFile: vi.fn(actual.readFile),
 		writeFile: vi.fn(actual.writeFile),
 	};
 });
@@ -47,6 +48,7 @@ afterEach(() => {
 	vi.mocked(unlink).mockRestore();
 	vi.mocked(rename).mockRestore();
 	vi.mocked(readdir).mockRestore();
+	vi.mocked(readFile).mockRestore();
 	vi.mocked(writeFile).mockRestore();
 });
 const manifest = (path: string): Manifest => JSON.parse(readFileSync(join(path, "manifest.json"), "utf8")) as Manifest;
@@ -772,50 +774,70 @@ it.each(["partial shard write", "manifest rename"])("keeps the old generation af
 	expect(await importStats(join(root, "fresh"), out)).toMatchObject({ imported: 1, problems: [] });
 });
 
-it("concurrent exports preserve winning manifest", async () => {
-	const first = await exportStats(agent, out);
-	const path = join(first.snapshotDir, "manifest.json");
-	const seed = (input: number) =>
-		sessionFile(join(agent, "sessions", "active.jsonl"), {
-			startMs: at("2026-11-01"),
-			lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input })],
+it.each(["previous manifest read", "manifest rename", "pruning", "state recording"])(
+	"holds the export lock during %s",
+	async (checkpoint) => {
+		const seed = (input: number) =>
+			sessionFile(join(agent, "sessions", "active.jsonl"), {
+				startMs: at("2026-11-01"),
+				lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input })],
+			});
+		seed(3);
+		const first = await exportStats(agent, out);
+		const path = join(first.snapshotDir, "manifest.json");
+		const stale = manifest(first.snapshotDir).shards[0];
+		if (!stale) throw new Error("Missing obsolete shard");
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		let pause!: () => void;
+		const paused = new Promise<void>((resolve) => {
+			pause = resolve;
 		});
-	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-	let pause!: () => void;
-	const paused = new Promise<void>((resolve) => {
-		pause = resolve;
-	});
-	let resume!: () => void;
-	const release = new Promise<void>((resolve) => {
-		resume = resolve;
-	});
-	let blocked = false;
-	vi.mocked(rename).mockImplementation(async (from, to) => {
-		if (to === path && !blocked) {
+		let resume!: () => void;
+		const release = new Promise<void>((resolve) => {
+			resume = resolve;
+		});
+		let blocked = false;
+		const barrier = async () => {
+			if (blocked) return;
 			blocked = true;
 			pause();
 			await release;
+		};
+		vi.mocked(readFile).mockImplementation(async (...args) => {
+			if (checkpoint === "previous manifest read" && args[0] === path) await barrier();
+			return actual.readFile(...args);
+		});
+		vi.mocked(rename).mockImplementation(async (from, to) => {
+			if (checkpoint === "manifest rename" && to === path) await barrier();
+			if (checkpoint === "state recording" && to === join(agent, "pi-session-kit", "export-state.json"))
+				await barrier();
+			await actual.rename(from, to);
+		});
+		vi.mocked(unlink).mockImplementation(async (file) => {
+			if (checkpoint === "pruning" && file === join(first.snapshotDir, stale.file)) await barrier();
+			await actual.unlink(file);
+		});
+		seed(7);
+		const a = exportStats(agent, out);
+		try {
+			await Promise.race([paused, a]);
+			expect(blocked).toBe(true);
+			await expect(exportStats(agent, out)).rejects.toMatchObject({
+				code: "EEXIST",
+				path: join(first.snapshotDir, ".export.lock"),
+			});
+		} finally {
+			resume();
+			await a;
 		}
-		await actual.rename(from, to);
-	});
-	seed(7);
-	const a = exportStats(agent, out);
-	await Promise.race([paused, a]);
-	let result: unknown;
-	try {
+		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+		expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
 		seed(13);
-		result = await exportStats(agent, out).catch((error: unknown) => error);
-	} finally {
-		resume();
-		await a;
-	}
-	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
-	expect(result).toMatchObject({ code: "EEXIST", path: join(first.snapshotDir, ".export.lock") });
-	await exportStats(agent, out);
-	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
-});
+		await exportStats(agent, out);
+		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+		expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
+	},
+);
 
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {
 	const a = join(agent, "sessions", "a.jsonl");
