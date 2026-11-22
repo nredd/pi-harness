@@ -27,6 +27,9 @@ vi.mock("../src/cdp.ts", async (importOriginal) => ({
 const SECRET = "private fixture label";
 const SECRET_VALUE = "hunter2 fixture value";
 
+/** Simulated seconds `act_ui` may take to settle before the test fails instead of spinning. */
+const MAX_SETTLE_ADVANCES = 60;
+
 /** How each host reports a node that is no longer readable; macOS-only helpers still sent a value. */
 const PROTECTED_SHAPES = {
 	"linux password": { platform: "linux", fields: { role: "password text", title: PROTECTED_LABEL, label: "" } },
@@ -100,7 +103,9 @@ async function desktop(shape: Shape) {
 				.finally(() => {
 					settled = true;
 				});
-			while (!settled) await vi.advanceTimersByTimeAsync(1_000);
+			for (let advances = 0; !settled && advances < MAX_SETTLE_ADVANCES; advances++)
+				await vi.advanceTimersByTimeAsync(1_000);
+			assert.ok(settled, `act_ui did not settle within ${MAX_SETTLE_ADVANCES} simulated seconds`);
 			const acted = await acting;
 			return { acted, text: fake.text(acted), stateId: acted.details.capture.stateId as string };
 		} finally {
