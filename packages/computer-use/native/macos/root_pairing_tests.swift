@@ -167,8 +167,6 @@ private func assertPairing(_ bridge: Bridge) {
     expect(contested?.candidate?.windowId == 1 && contested?.score == 10, "one window between two candidates takes the higher-scoring one")
     let unpaired = bridge.windowPairings(windows: [windows[0]], candidates: [])[ObjectIdentifier(windows[0])]
     expect(unpaired?.candidate == nil && unpaired?.confidence == "low", "windows without candidates are unpaired")
-    expect(bridge.bestCandidate(for: windows[0], candidates: [offscreen, near])?.windowId == 1, "the best candidate is the highest score")
-    expect(bridge.bestCandidate(for: windows[0], candidates: []) == nil, "no candidates means no best candidate")
     assertPairingEvidence()
 }
 
@@ -202,6 +200,18 @@ private func assertPairingEvidence() {
     expect(unpaired?.candidate == nil && unpaired?.unread == true, "a window left unpaired keeps its unread evidence")
     let far = pairing(title: .absent, origin: CGPoint(x: 0, y: 100))
     expect(far?.candidate == nil && far?.score == -20 && far?.unread == false, "an untitled read frame 600 points off the only candidate scores below 0 and stays unpaired")
+
+    let parent = FakeRoot("parent")
+    let first = FakeRoot("first")
+    let second = FakeRoot("second")
+    let own = CGWindowCandidate(windowId: 8, title: "Save", bounds: .zero, isOnscreen: true, layer: 0, zOrder: 1)
+    let titled: (FakeRoot) -> WindowPairingRead = { WindowPairingRead(title: .value($0.name == "parent" ? "Doc" : "Save"), frame: .zero, frameRead: true) }
+    let windowPairings = pairWindows([parent], candidates: [sole, own], read: titled)
+    expect(windowPairings[ObjectIdentifier(parent)]?.candidate?.windowId == 7, "the window takes its own CG window")
+    let alone = pairSheets([first], candidates: [sole], windowPairings: windowPairings, read: titled)[ObjectIdentifier(first)]
+    expect(alone?.candidate == nil && alone?.score == -Double.greatestFiniteMagnitude, "a sheet whose window took the only candidate is unpaired")
+    let sheets = pairSheets([first, second], candidates: [sole, own], windowPairings: windowPairings, read: titled)
+    expect([first, second].compactMap { sheets[ObjectIdentifier($0)]?.candidate?.windowId } == [8], "two sheets never share one CG window")
 }
 
 /// Look geometry: screen frames scale into the image and clamp to it.
@@ -402,8 +412,7 @@ private final class FakeListing {
             pairingRead: { root in
                 let (frame, read) = self.frameRead(root)
                 return WindowPairingRead(title: self.string(root, .title), frame: frame, frameRead: read)
-            },
-            sheetCandidate: { _, _ in nil })
+            })
     }
     func classify(_ bridge: Bridge) -> (snapshot: RootInventorySnapshot, windows: [ClassifiedWindow<FakeRoot>], entries: [[String: Any]]) {
         let inventory = world.classify(candidates: candidates)
@@ -468,4 +477,19 @@ private func assertClassifiedIdentity(_ bridge: Bridge) {
     expect(entries.map { $0["rootRef"] as? String } == ["doc", "own", "bare"] && entries.map { $0["windowRef"] as? String } == ["doc", "own", "bare"], "each window is followed by its sheets")
     expect(entries.map { $0["title"] as? String } == ["", "Save", ""] && entries.map { $0["isFocused"] as? Bool } == [true, false, false], "identity fields override the extras, which carry the rest")
     expect(entries.allSatisfy { $0["windowId"] == nil } && before.entries.first?["windowId"] as? Int == 7, "only a paired root carries its CG window id")
+
+    // A sheet without a CG window of its own: its window's is the only candidate, and the sheet scores for it too.
+    let sheet = FakeRoot("sheet")
+    let borrowed = paired()
+    borrowed.sheets = ["doc": [sheet]]
+    borrowed.titles = ["sheet": .value("Save")]
+    let open = borrowed.classify(bridge)
+    expect(open.entries.map { $0["windowId"] as? Int } == [7, nil], "a sheet never borrows its window's CG window id")
+    expect(Set(open.snapshot.roots.keys) == ["window:7", "meta:sheet:AXSheet:Save:600,100,800,600"] && open.snapshot.complete, "the sheet keeps its own metadata identity beside its window")
+    let separate = paired()
+    separate.sheets = ["doc": [sheet]]
+    let sheetFrame = CGRect(x: 700, y: 150, width: 400, height: 300)
+    separate.frames = ["sheet": sheetFrame]
+    separate.candidates.append(CGWindowCandidate(windowId: 8, title: "", bounds: sheetFrame, isOnscreen: true, layer: 0, zOrder: 1))
+    expect(separate.classify(bridge).entries.map { $0["windowId"] as? Int } == [7, 8], "a sheet with a CG window of its own pairs with it")
 }

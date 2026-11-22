@@ -513,6 +513,15 @@ func pairWindows<Element: AnyObject>(_ windows: [Element], candidates: [CGWindow
 	return output
 }
 
+/// Pair sheets (see `pairWindows`) with the CG windows no window took. A sheet has a CG window id only when it pairs
+/// with a CG window of its own: one without (its window's is the only candidate) is unpaired, never its window's twin.
+func pairSheets<Element: AnyObject>(
+	_ sheets: [Element], candidates: [CGWindowCandidate], windowPairings: [ObjectIdentifier: WindowPairing], read: (Element) -> WindowPairingRead
+) -> [ObjectIdentifier: WindowPairing] {
+	let taken = Set(windowPairings.values.compactMap { $0.candidate?.windowId })
+	return pairWindows(sheets, candidates: candidates.filter { !taken.contains($0.windowId) }, read: read)
+}
+
 func rootKind(role: String, subrole: String) -> String {
 	if role == "AXSheet" { return "sheet" }
 	if subrole.localizedCaseInsensitiveContains("popover") { return "popover" }
@@ -585,18 +594,17 @@ struct RootInventoryWorld<Element: AnyObject> {
 	let frame: (Element) -> (frame: CGRect, read: Bool)
 	/// The title and frame one CG pairing scores.
 	let pairingRead: (Element) -> WindowPairingRead
-	/// A sheet's CG window.
-	let sheetCandidate: (Element, [CGWindowCandidate]) -> CGWindowCandidate?
 }
 
 extension RootInventoryWorld {
 	/// List the windows, pair them with `candidates`, keep the usable ones (see `WindowInventoryWorld.select`) and
-	/// classify each with its sheets. A sheet's absent title falls back to its window's.
+	/// classify each with its sheets (paired by `pairSheets`). A sheet's absent title falls back to its window's.
 	func classify(candidates: [CGWindowCandidate]) -> (windows: [ClassifiedWindow<Element>], complete: Bool) {
 		let listing = windows.listing()
 		let pairings = pairWindows(listing.windows, candidates: candidates, read: pairingRead)
 		let selection = windows.select(listing) { pairings[ObjectIdentifier($0)]?.candidate?.bounds }
 		let unpaired = WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
+		let sheetPairings = pairSheets(selection.windows.flatMap(\.sheets), candidates: candidates, windowPairings: pairings, read: pairingRead)
 		let classified = selection.windows.map { kept -> ClassifiedWindow<Element> in
 			let window = kept.element
 			let pairing = pairings[ObjectIdentifier(window)] ?? unpaired
@@ -611,8 +619,7 @@ extension RootInventoryWorld {
 				frame: kept.effectiveFrame, pairing: pairing,
 				comparable: rootIdentityComparable(pairing: pairing, fields: [title, role, subrole], frameRead: kept.axFrameRead))
 			let sheets = kept.sheets.map { sheet -> InventoryRoot<Element> in
-				let sheetCandidate = sheetCandidate(sheet, candidates)
-				let sheetPairing = sheetCandidate.map { WindowPairing(candidate: $0, score: 100, confidence: "high") } ?? unpaired
+				let sheetPairing = sheetPairings[ObjectIdentifier(sheet)] ?? unpaired
 				let sheetTitle = RootIdentityField(string(sheet, .title), fallback: title)
 				let sheetRole = RootIdentityField(string(sheet, .role), fallback: RootIdentityField(value: "AXSheet"))
 				let sheetSubrole = RootIdentityField(string(sheet, .subrole))
@@ -2707,8 +2714,7 @@ final class Bridge {
 			),
 			string: { self.stringRead($0, attribute: Bridge.identityAttribute($1)) },
 			frame: { self.frameRead($0) },
-			pairingRead: { self.pairingRead($0) },
-			sheetCandidate: { self.bestCandidate(for: $0, candidates: $1) }
+			pairingRead: { self.pairingRead($0) }
 		)
 		let inventory = world.classify(candidates: cgWindowCandidates(pid: pid, entries: cgEntries))
 		var windowStates: [ObjectIdentifier: (isMinimized: Bool, isFocused: Bool)] = [:]
@@ -2743,7 +2749,7 @@ final class Bridge {
 				"isOnscreen": sheetCandidate?.isOnscreen ?? candidate?.isOnscreen ?? !state.isMinimized,
 				"isMain": false,
 				"isFocused": state.isFocused,
-				"metadata": ["pairing": ["confidence": sheetCandidate == nil ? pairing.confidence : "high", "score": sheetCandidate == nil ? pairing.score : 100], "sheetCount": 0],
+				"metadata": ["pairing": ["confidence": sheetCandidate == nil ? pairing.confidence : sheet.pairing.confidence, "score": sheetCandidate == nil ? pairing.score : sheet.pairing.score], "sheetCount": 0],
 			]
 		}
 		return (entries.roots, inventory.complete, entries.unidentified)
@@ -4302,17 +4308,10 @@ final class Bridge {
 		}
 		let candidates = cgWindowCandidates(pid: pid)
 		let pairings = windowPairings(windows: windows, candidates: candidates)
-		for window in windows {
-			if pairings[ObjectIdentifier(window)]?.candidate?.windowId == windowId {
-				return window
-			}
-			for sheet in sheetElements(of: window) {
-				if bestCandidate(for: sheet, candidates: candidates)?.windowId == windowId {
-					return sheet
-				}
-			}
-		}
-		return nil
+		if let window = windows.first(where: { pairings[ObjectIdentifier($0)]?.candidate?.windowId == windowId }) { return window }
+		let sheets = windows.flatMap { sheetElements(of: $0) }
+		let sheetPairings = pairSheets(sheets, candidates: candidates, windowPairings: pairings, read: pairingRead)
+		return sheets.first { sheetPairings[ObjectIdentifier($0)]?.candidate?.windowId == windowId }
 	}
 
 	private func ensureEnhancedAccessibility(pid: Int32) {
@@ -5170,14 +5169,6 @@ final class Bridge {
 		return menus
 	}
 
-	func bestCandidate(for element: AXUIElement, candidates: [CGWindowCandidate]) -> CGWindowCandidate? {
-		let title = stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? ""
-		let frame = frameForWindow(element)
-		return candidates.max { left, right in
-			windowPairScore(frame: frame, title: title, candidate: left) < windowPairScore(frame: frame, title: title, candidate: right)
-		}
-	}
-
 	private func pairingForWindow(_ window: AXUIElement, pid: Int32) -> WindowPairing {
 		windowPairings(windows: [window], candidates: cgWindowCandidates(pid: pid))[ObjectIdentifier(window)] ?? WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
 	}
@@ -5964,7 +5955,7 @@ Discovery combines three sources:
 
 Single-window lookups call `CGWindowListCreateDescriptionFromArray(_:)` for the requested window ID first and fall back to an all-window `CGWindowListCopyWindowInfo` query when that returns no match ([Apple: `CGWindowListCreateDescriptionFromArray`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcreatedescriptionfromarray%28_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3317)).
 
-Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed. A failed title or frame read adds nothing to a pairing score, so it can neither pair a window nor cost it its match. `rootDelta` keys a paired root by its `windowId` and an unpaired one by kind, role, title and frame; a root whose pairing or identity reads failed, or whose key another root shares, is excluded from that comparison and makes the listing incomplete, but it is not removed from discovery: it still resolves as a positive match.
+Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed. A failed title or frame read adds nothing to a pairing score, so it can neither pair a window nor cost it its match. A sheet carries a `windowId` only when it pairs with a CG window no window took, never its window's; and since one helper process never gives two roots one native ref, the client re-identifies a saved root by `windowId` only when the listed root's native ref is from another helper process, never in place of a different ref from the same one. `rootDelta` keys a paired root by its `windowId` and an unpaired one by kind, role, title and frame; a root whose pairing or identity reads failed, or whose key another root shares, is excluded from that comparison and makes the listing incomplete, but it is not removed from discovery: it still resolves as a positive match.
 
 Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are identified by the Accessibility `AXMenu` role and Core Graphics popup-menu window level; a menu with no matching Accessibility element remains an outline-only, `pictureOnly` root ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1232), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3004)).
 

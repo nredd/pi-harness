@@ -1074,7 +1074,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 	// A partial listing admits the ref only by its verified identity: a same-title window is another root.
 	const partial = windows.complete === false;
 	const match =
-		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
+		windows.find((window) => windowIdIdentifies(fromRef, window)) ??
 		(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
 		(partial
 			? undefined
@@ -1120,9 +1120,7 @@ async function resolveCurrentTarget(
 				(window) => window.windowRef === current.nativeWindowRef || window.rootRef === current.nativeWindowRef,
 			)
 		: undefined;
-	match ??= hadStableWindowId
-		? windows.find((window) => window.windowId !== undefined && window.windowId === current.windowId)
-		: undefined;
+	match ??= windows.find((window) => windowIdIdentifies(current, window));
 	// A partial listing, or a caller that needs this exact root, admits it only by its verified identity: a
 	// title or ranking match could be another window.
 	if (!match && partial)
@@ -2806,8 +2804,30 @@ function exactPlatformRootMatchesTarget(root: HelperWindow, target: ResolvedTarg
 	);
 	// Windows: only the instance's native ref identifies it; a same-HWND replacement must not pass.
 	if (currentPlatformBackend.name === "windows") return nativeRefMatches;
-	const windowIdMatches = target.windowId > 0 && root.windowId === target.windowId;
-	return nativeRefMatches || windowIdMatches;
+	return nativeRefMatches || windowIdIdentifies(target, root);
+}
+
+/** The helper process epoch of a macOS root ref `w<epoch>-<n>`; `undefined` for any other ref. */
+function macosRefEpoch(ref: string): string | undefined {
+	return /^w([0-9a-f]+)-\d+$/.exec(ref)?.[1];
+}
+
+/**
+ * Whether `root` is the saved root by its CG window id. One macOS helper process (one random hex epoch in its
+ * `w<epoch>-<n>` refs) never gives two windows one ref nor one window two refs, so between refs of one epoch the
+ * native ref decides: a shared window id (an older helper gave a sheet its window's) never stands in for another
+ * root's ref. After a helper restart the epochs differ and the window id still re-identifies the root.
+ */
+function windowIdIdentifies(
+	saved: { windowId?: number; nativeWindowRef?: string },
+	root: Pick<HelperWindow, "windowId" | "rootRef" | "windowRef">,
+): boolean {
+	if (!saved.windowId || saved.windowId <= 0 || root.windowId !== saved.windowId) return false;
+	const savedRef = saved.nativeWindowRef;
+	const rootRef = root.rootRef ?? root.windowRef;
+	if (!savedRef || !rootRef || rootRef === savedRef) return true;
+	const epoch = macosRefEpoch(savedRef);
+	return epoch === undefined || epoch !== macosRefEpoch(rootRef);
 }
 
 function clearDesktopOperationState(state: OperationState): void {

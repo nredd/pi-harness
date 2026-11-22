@@ -258,6 +258,50 @@ test("a proven closure keeps a helper-verified absence verified", async ({ onTes
 	assert.equal(execution.error, undefined);
 });
 
+test.for([
+	{ name: "a root of the same helper session sharing its window id", parentRef: "wab12-1", status: "target_closed" },
+	{
+		name: "a root of a restarted helper with its window id",
+		parentRef: "wcd34-1",
+		status: "post_action_observation_failed",
+	},
+])(
+	"the closure probe of a sheet with its own native ref reads $name",
+	async ({ parentRef, status }, { onTestFinished }) => {
+		// An older helper gave a sheet without a CG window of its own its window's id (#1287): only the window is left.
+		vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+		const sheet = desktopRoot({
+			kind: "sheet",
+			rootRef: "wab12-2",
+			windowRef: "wab12-2",
+			windowId: 100,
+			title: "Save",
+		});
+		const parent = desktopRoot({ rootRef: parentRef, windowRef: parentRef, windowId: 100, title: "Main" });
+		const fake = await installFakeDesktop(onTestFinished, { roots: [sheet] });
+		fake.tree = [wireButton("go", "Go")];
+		const { stateId } = await fake.observe();
+		fake.actBatchResult = {
+			outcome: "worked",
+			performed: { delivery: "ax", transaction: true, actionCount: 1 },
+			steps: [{ outcome: "worked", performed: { delivery: "ax" } }],
+		};
+		fake.waitFor = async () => {
+			fake.listRootsHook = () => [parent];
+			fake.lookPayload = () => {
+				throw new Error("capture failed");
+			};
+			return { found: false, timedOut: true, incomplete: true, nodeCount: 2000 };
+		};
+		const result = await fake.call(fake.bridge.executeAct, {
+			stateId,
+			actions: [{ action: "press", ref: "@e2" }],
+			expect: { text: "Go", until: "absent", timeoutMs: 250 },
+		});
+		assert.equal(result.details.status, status);
+	},
+);
+
 test("an inventory the helper could not read completely cannot close the root", async ({ onTestFinished }) => {
 	// 129 roots: over the native cap, so only the positive listing answers; the authoritative probe fails closed.
 	const many = Array.from({ length: 129 }, (_, index) =>
