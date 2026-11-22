@@ -399,13 +399,18 @@ confirmed foreground modal, so they can disagree with `act_ui` about which root 
 
 ### Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or, after a timed-out action, name it
+(`Action N timed out; whether it was delivered is unknown.`) and say not to replay the transaction, and:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new window, dialog or sheet
   roots of the same pid appeared and are still live (menus and popovers do not count). Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: the root is still listed but the helper answers
   `root_not_found` for its ref (matched on the error code, not the message). A failed probe stays generic. Rediscover with `find_roots`.
+- The identity probe proves `target_closed` only from successful listings: a probe that fails after an
+  empty listing leaves the outcome `post_action_observation_failed`. macOS and Windows listings carry no
+  completeness information, so an empty listing from them is still read as closure; only the Linux helper
+  fails a PID-scoped listing that timed out instead of returning it empty.
 
 ### Ref lifecycle
 
@@ -872,7 +877,7 @@ Browser pages are roots, not a second agent-facing context hierarchy. `launch_br
 
 The macOS socket server and Windows line protocol accept multiple in-flight requests and correlate responses by request id. macOS protects shared AX ref/look stores and the root-event sequence; Windows uses a fixed worker pool and initializes UIA per worker thread. Both platforms keep eight immutable native look records and serialize global synthesized input. Target focus, bounded occlusion preflight, and event delivery share that same critical section; another worker cannot change the foreground between validation and delivery. UIA-only Windows batches do not acquire the global input lock, while any batch that may fall back to pointer or keyboard delivery holds it for the complete transaction. Further event-delivery and occlusion details live in the [macOS implementation reference](../reference/platforms/macos/implementation.mdx) and [Windows bridge reference](../reference/platforms/windows.mdx).
 
-The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. The helper validates numeric AT-SPI `GetRole` IDs, not role names. It treats password, invalid, unknown, extended, unrecognized and unavailable roles as secure and suppresses their accessible names, descriptions and text. Snapshot and explicit text reads check the live role before `GetText` and discard the reply if the role changes or cannot be confirmed afterward. Root discovery likewise rechecks each application and window role after reading its names and redacts them unless the same readable role is confirmed. These are separate calls: the recheck narrows the race but cannot catch a role that changes and switches back between checks. Observations can return partial trees, but `wait_for` with `gone` cannot confirm absence from incomplete data. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and a batch stops at that step with outcome `unknown`. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
+The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. The helper validates numeric AT-SPI `GetRole` IDs, not role names. It treats password, invalid, unknown, extended, unrecognized and unavailable roles as secure and suppresses their accessible names, descriptions and text. Snapshot and explicit text reads check the live role before `GetText` and discard the reply if the role changes or cannot be confirmed afterward. Root discovery likewise rechecks each application and window role after reading its names and redacts them unless the same readable role is confirmed. These are separate calls: the recheck narrows the race but cannot catch a role that changes and switches back between checks. Observations can return partial trees. The helper marks a node `truncated` when one of its interface, name, description or text reads timed out, when its role is unclassified or unavailable (a password role is secure but not unread), when a readable role's `GetRoleName` is blank or fails (`wait_for` matches role names; the numeric role alone still decides redaction), when its live role could not be reconfirmed after a read, when `GetChildren` failed, or when the node or depth bound skipped one of its children. Other field errors still default to empty without the mark, and a failed geometry read never marks a node. The bridge reads a Linux node sent without the marker as `truncated` too. `wait_for` with `gone` cannot confirm absence from incomplete data. A PID-scoped root listing that times out fails instead of returning an empty inventory, so it never proves a window closed. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and the transaction stops at that step with outcome `unknown` and `stoppedAt`, whether the helper returned the step (a batch) or rejected a single `act` with code `timeout`. Later actions do not run, the completed prefix is kept, and a later postcondition, observed value or closed root does not change that outcome. `act_ui` names the timed-out action and says not to replay the transaction, and the returned state's note marks the region `acted here; delivery unknown (action N timed out)` for every later call on that state. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
 
 Windows UIA extraction is bounded. When the native limit omits descendants, the nearest retained ancestors are marked `truncated`; `expand_ui` performs a scoped look and the helper carries forward the untouched refs into the new immutable look record. Windows root deltas combine an event journal with authoritative before/after snapshots. `SetWinEventHook` accelerates settling and retains short-lived root transitions, while snapshots remain the source of truth for persistent state.
 
@@ -1696,7 +1701,7 @@ expand_ui({ stateId, ref: "@e7", depth: 3 })
 inspect_ui({ stateId, ref: "@e12" })
 ```
 
-`semantic` observation is cheapest, `fused` is the default, and `visual` forces visual text evidence. Search requires at least one of `text`, `role`, or `capability`. It ranks exact, prefix, and substring text before conservative fuzzy matches, returns a fixed top set with the total match count, and asks the caller to refine broad queries. Search can escalate OCR once when the original desktop look omitted it; that refresh is checked against the state's resource epoch.
+`semantic` observation is cheapest, `fused` is the default, and `visual` forces visual text evidence. Search requires at least one of `text`, `role`, or `capability`. It ranks exact, prefix, and substring text before conservative fuzzy matches, returns a fixed top set with the total match count, and asks the caller to refine broad queries. Search can escalate OCR once when the original desktop look omitted it; that refresh is checked against the state's resource epoch. A desktop search with zero matches in an outline that has `truncated` (unread) nodes leads with `Inconclusive: no matches in the part of the outline that could be read; N nodes unread (...)` instead of a zero count; its details keep `totalMatches: 0` and add `inconclusive: true` and `unreadRefs`, the unread refs to `expand_ui`. Both fields are omitted when there is a match or nothing is unread. Likewise an empty `read_text` page from a `truncated` node returns `inconclusive: true` and says the text was not read.
 
 ## Acting and batching
 
@@ -1765,7 +1770,7 @@ Successor diff (1 change, S1 → S2):
 Use stateId S2 for subsequent actions and queries.
 ```
 
-Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
+Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly; a node missing under any surviving ancestor the successor could not read (`truncated`) is not reported as removed. A `search_ui` with zero matches in an outline with `truncated` nodes is `inconclusive` and lists them in `unreadRefs`. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
 
 Coordinate fallback uses image pixels from the observed state:
 
@@ -2791,11 +2796,15 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or name the timed-out action and say its delivery is unknown, and:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
+- The identity probe proves `target_closed` only from successful listings: a probe that fails after an
+  empty listing leaves the outcome `post_action_observation_failed`. macOS and Windows listings carry no
+  completeness information, so an empty listing from them is still read as closure; only the Linux helper
+  fails a PID-scoped listing that timed out instead of returning it empty.
 
 ## Ref lifecycle
 
