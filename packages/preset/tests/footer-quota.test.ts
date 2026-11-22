@@ -1171,7 +1171,7 @@ test("preset reads the shared metered and inferred-span v2 fixture", () => {
 	const opts = { now: metered.now, timeZone: metered.timeZone };
 	assert.equal(
 		footer.formatQuotaRow(state, "compact", plain, opts),
-		"Left: Goog 1d 37/250 req obs $1.24/10m obs prepaid-credits 12 credits | faux-fast blocked->08:00 inf",
+		"Left: Goog 1d 37/250 req obs @Jan 16 08:00 $1.24/10m obs prepaid-credits 12 credits | faux-fast blocked->08:00 inf",
 	);
 	assert.deepEqual(footer.fitQuotaRows(state, 120, plain, opts).length, 1);
 	const inferred = present(fixture.views.find(({ name }) => name === "inferred-span"));
@@ -1372,6 +1372,48 @@ test("inferred and assumed spans are qualified on windows and meters, whatever t
 	assert.match(
 		footer.formatQuotaRow(state({ show: [{ durationMs: ten }] }), "compact", plain, fixed),
 		/^Left: F 10m~ 0% @13:00 /,
+	);
+});
+
+test("meters keep their resets and only an observed zero is dropped", () => {
+	const state = projected([
+		view("m", {
+			snapshot: fresh("m"),
+			meters: [
+				meter("rpd", 37, {
+					kind: "calendar",
+					resetRule: { every: "day" },
+					resetAt: CLOCK + hour,
+					spanSource: "inferred",
+				}),
+				meter("past", 1, { resetAt: CLOCK - hour }),
+				meter("idle", 0),
+				meter("granted", 0, { basis: "reported" }),
+				meter("guess", 0, { basis: "inferred" }),
+			],
+		}),
+	]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: m 1d~ 37 req obs @13:00 past 1 req obs granted 0 req rep guess 0 req inf",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, fixed),
+		"Quota left: m day 37 requests observed (resets 13:00; span inferred); past 1 requests observed; granted 0 requests reported; guess 0 requests inferred",
+	);
+	// Layouts without reset times drop the meter reset too.
+	assert.deepEqual(footer.fitQuotaRows(state, 70, plain, fixed), [
+		"Left: m 1d~ 37 req obs past 1 req obs granted 0 req rep guess 0 req inf",
+	]);
+	// The Google rule: no calls and no mark, no row.
+	assert.deepEqual(
+		footer.fitQuotaRows(
+			projected([view("g", { snapshot: fresh("g"), meters: [meter("calls", 0)] })]),
+			80,
+			plain,
+			fixed,
+		),
+		[],
 	);
 });
 

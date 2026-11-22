@@ -78,6 +78,7 @@ type Cell =
 			amount: number;
 			left: boolean;
 			limit?: number;
+			resetAt: number | undefined;
 			unit: Unit;
 			basis: "reported" | "observed" | "inferred";
 			families: string[];
@@ -266,11 +267,11 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 		const unit = unitOf(quantity?.unit);
 		const used = finite(quantity?.used);
 		const amount = used ?? finite(quantity?.remaining);
-		// Zero observed calls do not create a quota row on their own.
-		if (!unit || amount === undefined || used === 0) return [];
 		// Absent means reported; an unrecognized basis is skipped rather than promoted.
 		const basis = raw.basis === undefined ? "reported" : raw.basis;
 		if (basis !== "reported" && basis !== "observed" && basis !== "inferred") return [];
+		// Zero observed calls do not create a quota row on their own; a reported or inferred zero is a reading.
+		if (!unit || amount === undefined || (used === 0 && basis === "observed")) return [];
 		return [
 			{
 				...label,
@@ -280,6 +281,7 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 				left: used === undefined,
 				unit,
 				limit: finite(quantity?.limit),
+				resetAt: epoch(raw.resetAt),
 				basis,
 			},
 		];
@@ -522,17 +524,18 @@ function quantityText(value: number, unit: Unit): string {
 	return unit === "usd" ? `$${value.toFixed(2)}` : String(value);
 }
 
-function countText(cell: Extract<QuotaCell, { kind: "count" }>, full: boolean): string {
+function countText(cell: Extract<QuotaCell, { kind: "count" }>, full: boolean, when: string | undefined): string {
 	const basis = full ? cell.basis : { reported: "rep", observed: "obs", inferred: "inf" }[cell.basis];
 	const amount = quantityText(cell.amount, cell.unit);
 	const total = cell.limit === undefined ? amount : `${amount}/${quantityText(cell.limit, cell.unit)}`;
 	// An unknown span is named, not converted to a duration.
 	const [long, short] = cell.span === "assumed" ? [cell.name, cell.name] : labels(cell);
 	const mark = qualifierMark(cell.span);
-	const note = full && cell.span ? ` (${spanNote(cell.span)})` : "";
+	const parts = [when && `resets ${when}`, spanNote(cell.span)].filter(Boolean).join("; ");
+	const note = full ? (parts ? ` (${parts})` : "") : when ? ` @${when}` : "";
 	const tail = cell.left ? " left" : "";
 	if (cell.unit === "usd" && cell.durationMs !== undefined && !cell.calendar && cell.span !== "assumed") {
-		return full ? `${total}${tail} last ${long} ${basis}${note}` : `${total}${tail}/${short}${mark} ${basis}`;
+		return full ? `${total}${tail} last ${long} ${basis}${note}` : `${total}${tail}/${short}${mark} ${basis}${note}`;
 	}
 	const unit = cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`;
 	return `${full ? long : `${short}${mark}`} ${total}${unit}${tail} ${basis}${note}`;
@@ -554,8 +557,14 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 				cell.span,
 			);
 		}
-		case "count":
-			return colorize("dim", countText(cell, full));
+		case "count": {
+			// Like windows: a missing or already-past reset is just not shown.
+			const when =
+				layout.resets && cell.resetAt !== undefined && cell.resetAt > opts.now
+					? formatResetAt(cell.resetAt, opts.now, opts.timeZone)
+					: undefined;
+			return colorize("dim", countText(cell, full, when));
+		}
 		case "pool": {
 			const balance = cell.unlimited
 				? "unlimited"
