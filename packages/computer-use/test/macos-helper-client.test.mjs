@@ -616,7 +616,7 @@ describe("install, launch and runProcess", () => {
 		await new MacosHelperClient().ensureInstalled();
 		const [call] = spawn.calls;
 		assert.equal(call.command, process.execPath);
-		assert.deepEqual(call.args.slice(1), ["--runtime"]);
+		assert.deepEqual(call.args.slice(1), ["--runtime", "--automatic"]);
 		assert.match(call.args[0], /scripts[\\/]setup-helper\.mjs$/);
 		assert.equal(call.options.env.ELECTRON_RUN_AS_NODE, "1");
 		assert.equal(call.options.env.BUN_BE_BUN, "1");
@@ -636,7 +636,7 @@ describe("install, launch and runProcess", () => {
 		route = { exitCode: 2, stderr: "swiftc missing\n", stdout: "partial\n" };
 		await assert.rejects(
 			client.ensureInstalled(),
-			/Command failed \(2\): .*setup-helper\.mjs --runtime\nswiftc missing\npartial$/,
+			/Command failed \(2\): .*setup-helper\.mjs --runtime --automatic\nswiftc missing\npartial$/,
 		);
 	});
 

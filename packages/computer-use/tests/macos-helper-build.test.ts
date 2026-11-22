@@ -8,7 +8,16 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, onTestFinished, test, vi } from "vitest";
 import { main } from "../scripts/build-native.mjs";
 import { macosHelperBuild, writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
-import { drop, ok, raw, shortSocketPath, silent, startFakeHelper } from "../test/support/fake-helper.mjs";
+import {
+	createFakeChild,
+	drop,
+	ok,
+	raw,
+	shortSocketPath,
+	silent,
+	slow,
+	startFakeHelper,
+} from "../test/support/fake-helper.mjs";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 assert.ok(platformDescriptor);
@@ -24,6 +33,7 @@ afterEach(() => {
 	vi.doUnmock("node:net");
 	vi.doUnmock("node:os");
 	vi.doUnmock("node:child_process");
+	vi.doUnmock("../src/platform/macos/helper-build.mjs");
 	vi.resetModules();
 });
 
@@ -62,7 +72,11 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 	}
 	vi.stubEnv("PI_CU_SOCKET_PATH", override);
 	vi.stubEnv("PI_COMPUTER_USE_HELPER_APP_PATH", app);
-	const connect = { afterConnect: undefined as ((socket: import("node:net").Socket) => void) | undefined };
+	const connect = {
+		afterConnect: undefined as ((socket: import("node:net").Socket) => void) | undefined,
+		/** An `errno` code every connection emits instead of connecting. */
+		failWith: undefined as string | undefined,
+	};
 	vi.doMock("node:net", async (original) => {
 		const real = await original<typeof import("node:net")>();
 		return {
@@ -70,6 +84,12 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 			default: {
 				...real,
 				createConnection: () => {
+					if (connect.failWith) {
+						const failing = new real.Socket();
+						const code = connect.failWith;
+						queueMicrotask(() => failing.destroy(Object.assign(new Error(`connect ${code}`), { code })));
+						return failing;
+					}
 					const socket = real.createConnection(socketPath);
 					socket.once("connect", () => queueMicrotask(() => connect.afterConnect?.(socket)));
 					return socket;
@@ -81,11 +101,26 @@ async function rig(buildIdentity: string | undefined, { external = false, instal
 		throw new Error("Unexpected helper process launch");
 	});
 	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn }));
+	// `before` runs as a client takes the lifecycle lock: another client's daemon binding in between.
+	const lock = { paths: [] as string[], before: undefined as (() => Promise<void>) | undefined };
+	vi.doMock("../src/platform/macos/helper-build.mjs", async (original) => {
+		const real = await original<typeof import("../src/platform/macos/helper-build.mjs")>();
+		return {
+			...real,
+			withDirectoryLock: async (...args: Parameters<typeof real.withDirectoryLock>) => {
+				lock.paths.push(args[0]);
+				await lock.before?.();
+				return await real.withDirectoryLock(...args);
+			},
+		};
+	});
 	const { macosHelper, macosActivityGlow } = await import("../src/platform/macos/helper.ts");
 	onTestFinished(() => macosActivityGlow.close());
 	return {
 		client: macosHelper,
 		connect,
+		lock,
+		home,
 		glow: macosActivityGlow,
 		fake,
 		spawn,
@@ -140,10 +175,96 @@ test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}
 	async (reply) => {
 		const { client, fake, spawn, commands } = await rig(current, { installed: false });
 		fake.script("diagnostics", reply);
-		await assert.rejects(client.ensureInstalled(), /setup was not run/);
-		assert.deepEqual(commands(), ["diagnostics"]);
+		await assert.rejects(client.ensureInstalled(), { code: "helper_inconclusive", message: /setup was not run/ });
+		assert.ok(commands().length >= 1 && commands().every((cmd: string) => cmd === "diagnostics"));
 		assert.equal(spawn.mock.calls.length, 0);
 	},
+	30_000,
+);
+
+test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}\n'), "EACCES"])(
+	"never launches after an inconclusive probe: %o",
+	async (outcome) => {
+		const { client, fake, connect, spawn, lock } = await rig(current);
+		if (typeof outcome === "string") connect.failWith = outcome;
+		else fake.script("diagnostics", outcome);
+		const launch = vi.spyOn(client, "launchDaemon");
+		await assert.rejects(client.command("listApps"), {
+			name: "HelperTransportError",
+			code: "helper_inconclusive",
+			message: /was not launched and setup was not run/,
+		});
+		assert.equal(launch.mock.calls.length, 0);
+		assert.deepEqual(lock.paths, []);
+		assert.equal(spawn.mock.calls.length, 0);
+		assert.ok(!fake.requests.some((request: { cmd: string }) => request.cmd === "listApps"));
+	},
+	30_000,
+);
+
+test.each(["ENOENT", "ECONNREFUSED"])(
+	"runs automatic setup only after %s before connecting, under the lifecycle lock",
+	async (code) => {
+		const { client, connect, spawn, lock, executable, home } = await rig(current, { installed: false });
+		connect.failWith = code;
+		spawn.mockImplementation(() => {
+			mkdirSync(path.dirname(executable), { recursive: true });
+			writeFileSync(executable, "installed\n", { mode: 0o755 });
+			return createFakeChild({ exitCode: 0 });
+		});
+		await client.ensureInstalled();
+		assert.equal(spawn.mock.calls.length, 1);
+		assert.deepEqual((spawn.mock.calls[0] as unknown[])[1], [
+			fileURLToPath(new URL("../scripts/setup-helper.mjs", import.meta.url)),
+			"--runtime",
+			"--automatic",
+		]);
+		const socket = path.join(home, "Library", "Caches", "pi-computer-use", "bridge.sock");
+		assert.deepEqual(lock.paths, [`${socket}.lifecycle.lock`]);
+	},
+);
+
+test("a daemon that binds between the probe and setup is used, not replaced", async () => {
+	const { client, fake, spawn, lock, commands } = await rig(current, { installed: false });
+	await fake.stop();
+	lock.before = () => fake.start();
+	await client.ensureInstalled();
+	assert.equal(lock.paths.length, 1);
+	assert.deepEqual(commands(), ["diagnostics"]);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test("a daemon that binds between the probe and launch is used, not launched again", async () => {
+	const { client, fake, spawn, lock, commands } = await rig(current);
+	await fake.stop();
+	lock.before = () => fake.start();
+	const launch = vi.spyOn(client, "launchDaemon");
+	assert.equal(await client.ensureDaemon(), true);
+	assert.equal(lock.paths.length, 1);
+	assert.equal(launch.mock.calls.length, 0);
+	assert.deepEqual(commands(), ["diagnostics"]);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test.each([
+	[1_200, false],
+	[3_000, false],
+	[1_200, true],
+	[3_000, true],
+])(
+	"a healthy resident whose diagnostics take %i ms is used, not launched or reinstalled (installed: %s)",
+	async (ms, installed) => {
+		const { client, fake, spawn, lock, commands } = await rig(current, { installed });
+		fake.script("diagnostics", slow(ms, ok({ protocolVersion: 7, pid: 0, buildIdentity: current })));
+		const launch = vi.spyOn(client, "launchDaemon");
+		if (installed) assert.deepEqual(await client.command("listApps"), []);
+		else await client.ensureInstalled();
+		assert.equal(launch.mock.calls.length, 0);
+		assert.deepEqual(lock.paths, []);
+		assert.equal(spawn.mock.calls.length, 0);
+		assert.ok(commands().every((cmd: string) => cmd === "diagnostics" || cmd === "listApps"));
+	},
+	30_000,
 );
 
 test("a socket error after connecting is not proof that the daemon was absent", async () => {
@@ -204,9 +325,10 @@ test("an invalid build probe never sends the tool command", async () => {
 
 test("refuses the wrong build even on a newly launched daemon", async () => {
 	const { client, fake } = await rig(older);
-	fake.script("diagnostics", [drop(), ok({ buildIdentity: older })]);
-	vi.spyOn(client, "launchDaemon").mockResolvedValue(undefined);
+	await fake.stop();
+	const launch = vi.spyOn(client, "launchDaemon").mockImplementation(() => fake.start());
 	await assert.rejects(client.ensureDaemon(), { code: "stale_helper" });
+	assert.equal(launch.mock.calls.length, 1);
 });
 
 test("keeps the external socket override and shows its reported build in macOS status", async () => {

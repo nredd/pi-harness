@@ -4,6 +4,7 @@ import { execFile as execFileCallback, execFileSync, spawn } from "node:child_pr
 import { createHash } from "node:crypto";
 import { createWriteStream, constants as fsConstants, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -13,6 +14,7 @@ import {
 	macosHelperBuild,
 	macosSigningRecovery,
 	macosSigningRefusalPath,
+	withDirectoryLock,
 	writeMacosBuildStamp,
 } from "../src/platform/macos/helper-build.mjs";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
@@ -37,6 +39,10 @@ export const GROUP_TERM_GRACE_MS = 800;
 export const GROUP_KILL_WAIT_MS = 500;
 /** Bound on one `ps` listing; a timeout or kill throws and reads as inconclusive. */
 export const PS_TIMEOUT_MS = 250;
+/** Bound on one exchange with the macOS helper daemon over its socket. */
+export const HELPER_SOCKET_TIMEOUT_MS = 5_000;
+/** `lockf -t 0` exits with `EX_TEMPFAIL` when another process holds the lock. */
+const LOCKF_HELD_EXIT = 75;
 
 /**
  * List the `ps` state of every member of `pgid`, zombies included.
@@ -325,29 +331,7 @@ function delay(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function withDirectoryLock(lockPath, callback, { waitMs = 15_000, staleMs = 300_000, retryMs = 50 } = {}) {
-	const deadline = Date.now() + waitMs;
-	while (true) {
-		try {
-			await fs.mkdir(lockPath);
-			break;
-		} catch (error) {
-			if (error?.code !== "EEXIST") throw error;
-			const stat = await fs.stat(lockPath).catch(() => undefined);
-			if (stat && Date.now() - stat.mtimeMs > staleMs) {
-				await fs.rm(lockPath, { force: true, recursive: true }).catch(() => undefined);
-				continue;
-			}
-			if (Date.now() >= deadline) throw new Error(`Timed out waiting for local signing identity lock at ${lockPath}.`);
-			await delay(retryMs);
-		}
-	}
-	try {
-		return await callback();
-	} finally {
-		await fs.rm(lockPath, { force: true, recursive: true }).catch(() => undefined);
-	}
-}
+export { withDirectoryLock };
 
 export async function ensureIdentityOnce(findIdentity, createIdentity, withLock) {
 	return (await findIdentity()) ?? (await withLock(async () => (await findIdentity()) ?? (await createIdentity())));
@@ -364,6 +348,7 @@ export async function ensureIdentityOnce(findIdentity, createIdentity, withLock)
  * @property {string} rootDir Package root holding `native/`, `prebuilt/` and `package.json`.
  * @property {typeof import("node:fs/promises")} fs Filesystem seam.
  * @property {typeof import("node:os")} os `homedir`, `tmpdir` and signal numbers.
+ * @property {Pick<typeof import("node:net"), "createConnection">} net Socket seam for the macOS helper daemon.
  * @property {typeof spawn} spawn Streaming child-process seam, used by `run`.
  * @property {(command: string, args: string[], options?: object) => Promise<{stdout: string, stderr: string}>} execFile Buffered child-process seam.
  * @property {typeof runCancellable} runCancellable Cancellable child-process seam for the Linux cargo build.
@@ -393,6 +378,7 @@ function createSetup(argv, deps) {
 		rootDir,
 		fs,
 		os,
+		net,
 		spawn,
 		execFile,
 		runCancellable,
@@ -406,6 +392,8 @@ function createSetup(argv, deps) {
 	const helperAppPath = resolveMacosHelperAppPath({ env, homeDir: os.homedir() });
 	const helperAppExecutablePath = path.join(helperAppPath, "Contents", "MacOS", "bridge");
 	const helperSourceHashPath = path.join(helperAppPath, "Contents", "Resources", "source.sha256");
+	// The daemon's default socket, the one the runtime launches and manages; bridge.swift holds `<socket>.lock`.
+	const managedSocketPath = path.join(os.homedir(), "Library", "Caches", "pi-computer-use", "bridge.sock");
 	const windowsCrateDir = path.join(rootDir, "native", "windows", "bridge-rs");
 	const windowsHelperDestPath =
 		env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH ||
@@ -436,6 +424,8 @@ function createSetup(argv, deps) {
 		args.has("--allow-build") || args.has("--runtime") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
 	const allowLinuxBuildFallback = args.has("--allow-build") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
 	const allowAdhocUpdate = args.has("--allow-adhoc-update") || env.PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE === "1";
+	// Set by the runtime client: refuse, never stop, a helper that is running.
+	const automatic = args.has("--automatic");
 
 	function getArg(name) {
 		const index = argv.indexOf(name);
@@ -768,13 +758,120 @@ function createSetup(argv, deps) {
 		await fs.access(parentPath, fsConstants.W_OK);
 	}
 
+	// -f takes an extended regex: escape the path so `.`, `+`, `(` and spaces match literally.
+	const helperProcessPattern = `${helperAppExecutablePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
+
+	/**
+	 * One exchange with the daemon on `socketPath`: `next` gets `undefined` on connect, then each reply, and
+	 * returns the next request or `undefined` to finish.
+	 * @param {string} socketPath Daemon socket.
+	 * @param {(reply: any) => object | undefined} next Conversation step.
+	 * @returns {Promise<{absent: boolean, replies: any[]}>} `absent` only for `ENOENT`/`ECONNREFUSED` before connecting.
+	 * @throws {Error} For every inconclusive outcome: another connect error, an error after connecting, a timeout,
+	 * a malformed reply, a disconnect before the conversation ends, or what `next` throws.
+	 */
+	function talkToHelper(socketPath, next) {
+		return new Promise((resolve, reject) => {
+			const socket = net.createConnection(socketPath);
+			const replies = [];
+			let buffer = "";
+			let connected = false;
+			let settled = false;
+			const settle = (error, absent = false) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				socket.destroy();
+				if (error) reject(new Error(`Cannot verify the helper daemon at ${socketPath}: ${error.message}`));
+				else resolve({ absent, replies });
+			};
+			const step = (reply) => {
+				try {
+					const request = next(reply);
+					if (request === undefined) settle();
+					else socket.write(`${JSON.stringify(request)}\n`);
+				} catch (error) {
+					settle(error);
+				}
+			};
+			const timer = setTimeout(
+				() => settle(new Error(`no reply within ${HELPER_SOCKET_TIMEOUT_MS}ms`)),
+				HELPER_SOCKET_TIMEOUT_MS,
+			);
+			socket.setEncoding("utf8");
+			socket.on("connect", () => {
+				connected = true;
+				step(undefined);
+			});
+			socket.on("data", (chunk) => {
+				buffer += chunk;
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) return;
+				const line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				let reply;
+				try {
+					reply = JSON.parse(line);
+				} catch {
+					settle(new Error("malformed reply"));
+					return;
+				}
+				replies.push(reply);
+				step(reply);
+			});
+			socket.on("error", (error) => {
+				const absent = !connected && (error.code === "ENOENT" || error.code === "ECONNREFUSED");
+				settle(absent ? undefined : error, absent);
+			});
+			socket.on("close", () => settle(new Error("disconnected before replying")));
+		});
+	}
+
+	/**
+	 * Why automatic setup must not replace the bundle now, or `undefined` when no helper is running: a listener
+	 * on the managed socket, the daemon lock bridge.swift holds from before it binds, or a daemon process from
+	 * this bundle. Anything that cannot be checked is a reason too.
+	 * @returns {Promise<string | undefined>} The refusal reason.
+	 * @throws {never} Failures become reasons.
+	 */
+	async function runningHelperReason() {
+		try {
+			if (!(await talkToHelper(managedSocketPath, () => undefined)).absent)
+				return `a helper is listening at ${managedSocketPath}`;
+		} catch (error) {
+			return error.message;
+		}
+		const daemonLockPath = `${managedSocketPath}.lock`;
+		if (await exists(daemonLockPath)) {
+			try {
+				// -k keeps the daemon's lock file; -t 0 never waits.
+				await execFile("/usr/bin/lockf", ["-k", "-s", "-t", "0", daemonLockPath, "/usr/bin/true"]);
+			} catch (error) {
+				return error?.code === LOCKF_HELD_EXIT
+					? `a helper daemon holds ${daemonLockPath}`
+					: `cannot check the helper daemon lock at ${daemonLockPath}: ${error.message}`;
+			}
+		}
+		const alive = await execFile("pgrep", ["-f", helperProcessPattern]).then(
+			() => true,
+			() => false,
+		);
+		return alive ? `a helper process from ${helperAppExecutablePath} is running` : undefined;
+	}
+
 	/** A running helper keeps its old code after the bundle is replaced; stop it so the next command relaunches the new one. */
 	async function stopRunningHelper() {
-		// -f takes an extended regex: escape the path so `.`, `+`, `(` and spaces match literally.
-		const pattern = `${helperAppExecutablePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
-		await execFile("pkill", ["-f", pattern]).catch(() => {});
+		if (automatic) {
+			// Stopping a daemon is an operator action; automatic setup refuses instead.
+			const reason = await runningHelperReason();
+			if (reason === undefined) return;
+			throw new Error(
+				`Automatic helper setup refused to replace ${helperAppPath}: ${reason}. It never stops a running helper. Re-run \`node scripts/setup-helper.mjs --runtime\` from the package root to replace and restart it.`,
+			);
+		}
+		await execFile("pkill", ["-f", helperProcessPattern]).catch(() => {});
 		for (let attempt = 0; attempt < 20; attempt += 1) {
-			const alive = await execFile("pgrep", ["-f", pattern]).then(
+			const alive = await execFile("pgrep", ["-f", helperProcessPattern]).then(
 				() => true,
 				() => false,
 			);
@@ -1091,6 +1188,7 @@ export function defaultDeps() {
 		rootDir: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
 		fs,
 		os,
+		net,
 		spawn,
 		execFile,
 		runCancellable,

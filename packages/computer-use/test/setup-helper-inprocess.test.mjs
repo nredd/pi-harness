@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { createWriteStream, rmSync } from "node:fs";
 import realFs from "node:fs/promises";
+import realNet from "node:net";
 import realOs from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -139,8 +140,35 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 		failRm: () => false,
 		accessFail: () => false,
 		renameError: undefined,
+		/** Where the managed-socket probe really connects: a short, nonexistent path unless a fake listens there. */
+		socketPath: shortSocketPath(),
+		/** An `errno` code the probe's connection emits instead of connecting. */
+		socketError: undefined,
+		/** What `lockf` throws, or `undefined` when the daemon lock is free. */
+		lockfError: undefined,
 	};
-	const rec = { spawn: [], exec: [], sleep: 0, exit: [], log: [], warn: [], error: [], cargo: [], fetch: [], pgrep: 0 };
+	const rec = {
+		spawn: [],
+		exec: [],
+		sleep: 0,
+		exit: [],
+		log: [],
+		warn: [],
+		error: [],
+		cargo: [],
+		fetch: [],
+		pgrep: 0,
+		connect: [],
+	};
+	const netFake = {
+		createConnection: (target) => {
+			rec.connect.push(target);
+			if (state.socketError === undefined) return realNet.createConnection(state.socketPath);
+			const socket = new realNet.Socket();
+			queueMicrotask(() => socket.destroy(sysError(`connect ${state.socketError}`, state.socketError)));
+			return socket;
+		},
+	};
 	const fsFake = {
 		...realFs,
 		access: async (target, mode) => {
@@ -214,6 +242,10 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			if (state.codesignInfo instanceof Error) throw state.codesignInfo;
 			return state.codesignInfo;
 		}
+		if (command === "/usr/bin/lockf") {
+			if (state.lockfError !== undefined) throw state.lockfError;
+			return { stdout: "", stderr: "" };
+		}
 		if (command === "pgrep") {
 			rec.pgrep += 1;
 			if (state.pgrepForever || rec.pgrep <= state.pgrepAlive) return { stdout: "1\n", stderr: "" };
@@ -242,6 +274,7 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 		rootDir: dirs.root,
 		fs: fsFake,
 		os: osFake,
+		net: netFake,
 		spawn,
 		execFile,
 		runCancellable: async (command, args) => {
@@ -339,6 +372,7 @@ describe("CLI wiring", () => {
 		assert.equal(deps.uid, typeof process.getuid === "function" ? String(process.getuid()) : undefined);
 		assert.equal(deps.rootDir, path.resolve(import.meta.dirname, ".."));
 		assert.equal(deps.fetch, fetch);
+		assert.equal(deps.net, realNet);
 		assert.ok(Math.abs(deps.now() - Date.now()) < 1000);
 		assert.equal(typeof deps.exit, "function");
 		assert.equal(deps.console, console);
@@ -631,6 +665,93 @@ describe("platform routing", () => {
 		const host = await makeHost({ hostArch: "riscv64" });
 		const rec = await runMain(host, []);
 		assert.equal(rec.error[0], "Unsupported architecture 'riscv64'. Supported: arm64, x64.");
+	});
+});
+
+describe("automatic runtime setup never stops a running helper", () => {
+	const universal = (host) => path.join(host.dirs.root, "prebuilt", "macos", "universal", "pi-computer-use.app");
+	const bridge = (host) => path.join(host.dirs.app, "Contents", "MacOS", "bridge");
+	const managed = (host) => path.join(host.dirs.home, "Library", "Caches", "pi-computer-use", "bridge.sock");
+
+	async function replacing() {
+		const host = await makeHost();
+		await makeApp(universal(host), "one");
+		await runMain(host, []);
+		await put(path.join(universal(host), "Contents", "MacOS", "bridge"), "two");
+		return host;
+	}
+
+	/** Run `--runtime --automatic` and assert it refused for `reason` with the old bundle and no stop. */
+	async function assertRefused(host, reason) {
+		const rec = await runMain(host, ["--runtime", "--automatic"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], new RegExp(`^Automatic helper setup refused to replace .*: ${reason}`));
+		assert.match(rec.error[0], /It never stops a running helper/);
+		assert.equal(await realFs.readFile(bridge(host), "utf8"), "one");
+		assert.ok(!rec.exec.some(([command]) => command === "pkill"));
+		assert.ok(!rec.spawn.some(([command]) => command === "/usr/bin/ditto"));
+		return rec;
+	}
+
+	test("replaces the bundle when the managed socket, the daemon lock and the process table are all clear", async () => {
+		const host = await replacing();
+		await put(`${managed(host)}.lock`, "");
+		const rec = await runMain(host, ["--runtime", "--automatic"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(bridge(host), "utf8"), "two");
+		assert.deepEqual(rec.connect.at(-1), managed(host));
+		assert.deepEqual(
+			rec.exec.find(([command]) => command === "/usr/bin/lockf"),
+			["/usr/bin/lockf", "-k", "-s", "-t", "0", `${managed(host)}.lock`, "/usr/bin/true"],
+		);
+		assert.ok(!rec.exec.some(([command]) => command === "pkill"));
+	});
+
+	test.each(["ENOENT", "ECONNREFUSED"])("%s from the managed socket reads as no listener", async (code) => {
+		const host = await replacing();
+		host.state.socketError = code;
+		const rec = await runMain(host, ["--runtime", "--automatic"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(bridge(host), "utf8"), "two");
+	});
+
+	test("refuses while a helper listens on the managed socket (an old daemon between probe and setup)", async () => {
+		const host = await replacing();
+		const fake = await startFakeHelper({ socketPath: host.state.socketPath });
+		onTestFinished(() => fake.stop());
+		await assertRefused(host, `a helper is listening at ${managed(host)}`);
+		assert.deepEqual(fake.requests, [], "the probe sends nothing");
+	});
+
+	test("refuses on a connect error that does not prove absence", async () => {
+		const host = await replacing();
+		host.state.socketError = "EACCES";
+		await assertRefused(host, `Cannot verify the helper daemon at ${managed(host)}: connect EACCES`);
+	});
+
+	test("refuses while a daemon holds the Swift daemon lock (bound but not yet listening)", async () => {
+		const host = await replacing();
+		await put(`${managed(host)}.lock`, "");
+		host.state.lockfError = Object.assign(new Error("held"), { code: 75 });
+		await assertRefused(host, `a helper daemon holds ${managed(host)}.lock`);
+		host.state.lockfError = Object.assign(new Error("lockf: not found"), { code: "ENOENT" });
+		await assertRefused(host, `cannot check the helper daemon lock at ${managed(host)}.lock: lockf: not found`);
+	});
+
+	test("refuses while a helper process from this bundle runs", async () => {
+		const host = await replacing();
+		host.state.pgrepForever = true;
+		await assertRefused(host, "a helper process from .* is running");
+	});
+
+	test("an operator's --runtime setup still stops the old helper before replacing it", async () => {
+		const host = await replacing();
+		const fake = await startFakeHelper({ socketPath: host.state.socketPath });
+		onTestFinished(() => fake.stop());
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.ok(rec.exec.some(([command]) => command === "pkill"));
+		assert.equal(await realFs.readFile(bridge(host), "utf8"), "two");
 	});
 });
 

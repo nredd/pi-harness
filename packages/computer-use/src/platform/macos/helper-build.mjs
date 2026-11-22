@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -53,5 +54,43 @@ export function macosSigningRefusal(appPath, expectedBuild) {
 			: "";
 	} catch {
 		return "";
+	}
+}
+
+/**
+ * Run `callback` while holding a `mkdir` lock shared by every process of this user. A holder that died is
+ * presumed after `staleMs`; a live holder makes the caller wait up to `waitMs`.
+ * @template T
+ * @param {string} lockPath Lock directory to create; its parent must exist.
+ * @param {() => Promise<T>} callback Work done under the lock.
+ * @param {{waitMs?: number, staleMs?: number, retryMs?: number, label?: string}} [options] Timing and the lock's name in errors.
+ * @returns {Promise<T>} What `callback` resolves to.
+ * @throws {Error} On timeout, on a creation failure other than `EEXIST`, or what `callback` throws.
+ */
+export async function withDirectoryLock(
+	lockPath,
+	callback,
+	{ waitMs = 15_000, staleMs = 300_000, retryMs = 50, label = "local signing identity" } = {},
+) {
+	const deadline = Date.now() + waitMs;
+	while (true) {
+		try {
+			await fs.mkdir(lockPath);
+			break;
+		} catch (error) {
+			if (/** @type {NodeJS.ErrnoException} */ (error)?.code !== "EEXIST") throw error;
+			const stat = await fs.stat(lockPath).catch(() => undefined);
+			if (stat && Date.now() - stat.mtimeMs > staleMs) {
+				await fs.rm(lockPath, { force: true, recursive: true }).catch(() => undefined);
+				continue;
+			}
+			if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${label} lock at ${lockPath}.`);
+			await new Promise((resolve) => setTimeout(resolve, retryMs));
+		}
+	}
+	try {
+		return await callback();
+	} finally {
+		await fs.rm(lockPath, { force: true, recursive: true }).catch(() => undefined);
 	}
 }

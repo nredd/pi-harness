@@ -7,13 +7,27 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { PlatformDiagnostics } from "../types.ts";
-import { macosHelperBuild, macosSigningRefusal } from "./helper-build.mjs";
+import { macosHelperBuild, macosSigningRefusal, withDirectoryLock } from "./helper-build.mjs";
 import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
 const NO_LISTENER_CODES = new Set<string | undefined>(["ENOENT", "ECONNREFUSED"]);
 const HELPER_PROTOCOL_VERSION = 7;
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
+/** Deadline of one read-only diagnostics probe. A resident that answers within it is used as is. */
+const DIAGNOSTICS_PROBE_TIMEOUT_MS = 4_000;
+/**
+ * Total time read-only probes keep retrying a resident that has not answered yet. Slow is not absent: the
+ * client never launches or installs because diagnostics timed out, it fails closed when this runs out.
+ */
+const READ_ONLY_PROBE_BUDGET_MS = 8_000;
+/** Polls, `LAUNCH_POLL_MS` apart, for a launched daemon to start listening. */
+const LAUNCH_POLLS = 30;
+const LAUNCH_POLL_MS = 100;
+/** Bound on waiting for another client's launch or setup; above `HELPER_SETUP_TIMEOUT_MS`. */
+const LIFECYCLE_LOCK_WAIT_MS = 75_000;
+/** A lifecycle lock older than this belongs to a client that died mid-launch or mid-setup. */
+const LIFECYCLE_LOCK_STALE_MS = 120_000;
 
 export const HELPER_BUNDLE_ID = "com.injaneity.pi-computer-use";
 export const HELPER_APP_PATH = resolveMacosHelperAppPath();
@@ -48,6 +62,19 @@ let expectedBuild: string | undefined;
 
 function rethrowStaleHelper(error: unknown): void {
 	if (error instanceof HelperCommandError && error.code === "stale_helper") throw error;
+}
+
+/**
+ * Serialize launch and runtime setup across every client of the managed socket. Beside the daemon's own
+ * `<socket>.lock`, which the daemon holds for its lifetime, so the two never contend.
+ */
+async function withLifecycleLock<T>(callback: () => Promise<T>): Promise<T> {
+	await mkdir(path.dirname(HELPER_SOCKET_PATH), { recursive: true });
+	return await withDirectoryLock(`${HELPER_SOCKET_PATH}.lifecycle.lock`, callback, {
+		waitMs: LIFECYCLE_LOCK_WAIT_MS,
+		staleMs: LIFECYCLE_LOCK_STALE_MS,
+		label: "pi-computer-use helper lifecycle",
+	});
 }
 
 export class HelperTransportError extends Error {
@@ -229,27 +256,23 @@ export class MacosHelperClient {
 			return;
 		}
 
-		// Never run setup (which can replace the app and kill the daemon) unless the
-		// connection itself proved that the managed socket had no listener.
-		try {
-			await this.daemonCommand("diagnostics", {}, 1_000, signal);
-			return;
-		} catch (error) {
-			rethrowStaleHelper(error);
-			if (!(error instanceof HelperTransportError && error.code === "helper_not_listening")) {
-				throw new Error(
-					`Cannot verify that no pi-computer-use helper is listening at ${HELPER_SOCKET_PATH}; setup was not run: ${String(error)}`,
-					{ cause: error },
-				);
-			}
-		}
-
-		// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
-		await runProcess(process.execPath, [SETUP_HELPER_SCRIPT, "--runtime"], HELPER_SETUP_TIMEOUT_MS, signal, {
-			...process.env,
-			ELECTRON_RUN_AS_NODE: "1",
-			BUN_BE_BUN: "1",
+		// Setup can replace the app, so it runs only on positive absence, rechecked under the lifecycle lock
+		// so a daemon another client started meanwhile is used, not replaced. `--automatic` makes setup
+		// refuse, never stop, any helper it still finds running.
+		if (await this.probeResident(signal)) return;
+		const installed = await withLifecycleLock(async () => {
+			if (await this.probeResident(signal)) return true;
+			// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
+			await runProcess(
+				process.execPath,
+				[SETUP_HELPER_SCRIPT, "--runtime", "--automatic"],
+				HELPER_SETUP_TIMEOUT_MS,
+				signal,
+				{ ...process.env, ELECTRON_RUN_AS_NODE: "1", BUN_BE_BUN: "1" },
+			);
+			return false;
 		});
+		if (installed) return;
 
 		if (!(await isExecutable(HELPER_APP_EXECUTABLE_PATH))) {
 			throw new Error(`Failed to install pi-computer-use helper app at ${HELPER_APP_PATH}.`);
@@ -299,7 +322,9 @@ export class MacosHelperClient {
 				() =>
 					settle(() => {
 						socket.destroy();
-						reject(new HelperTransportError(`Daemon command '${cmd}' timed out after ${timeoutMs}ms.`));
+						reject(
+							new HelperTransportError(`Daemon command '${cmd}' timed out after ${timeoutMs}ms.`, "helper_timeout"),
+						);
 					}),
 				timeoutMs,
 			);
@@ -383,25 +408,58 @@ export class MacosHelperClient {
 		});
 	}
 
-	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
-		if (this.daemonAvailable) return true;
-		try {
-			await this.daemonCommand("diagnostics", {}, 1_000, signal);
-			this.daemonAvailable = true;
-			return true;
-		} catch (error) {
-			rethrowStaleHelper(error);
-		}
-		await this.launchDaemon(signal).catch(() => undefined);
-		for (let index = 0; index < 30; index += 1) {
+	/**
+	 * Read-only diagnostics probe of the resident helper.
+	 * @returns true when a resident answered, false only on positive absence: `ENOENT` or `ECONNREFUSED`
+	 * before any connection. A resident that is slow to answer is retried within `READ_ONLY_PROBE_BUDGET_MS`.
+	 * @throws The helper's own refusal (`stale_helper`, an error reply), an abort, or a `helper_inconclusive`
+	 * transport error for anything else: a timeout past the budget, a malformed reply, a disconnect or a
+	 * connect error such as `EACCES`. Callers must not launch or install after a throw.
+	 */
+	private async probeResident(signal?: AbortSignal): Promise<boolean> {
+		const deadline = Date.now() + READ_ONLY_PROBE_BUDGET_MS;
+		while (true) {
 			try {
-				await this.daemonCommand("diagnostics", {}, 1_000, signal);
-				this.daemonAvailable = true;
+				const remaining = Math.max(deadline - Date.now(), 1);
+				await this.daemonCommand("diagnostics", {}, Math.min(DIAGNOSTICS_PROBE_TIMEOUT_MS, remaining), signal);
 				return true;
 			} catch (error) {
-				rethrowStaleHelper(error);
-				await sleep(100, signal);
+				if (!(error instanceof HelperTransportError || error instanceof SyntaxError)) throw error;
+				if (error instanceof HelperTransportError && error.code === "helper_not_listening") return false;
+				if (error instanceof HelperTransportError && error.code === "helper_timeout" && Date.now() < deadline) continue;
+				throw new HelperTransportError(
+					`Cannot verify the pi-computer-use helper at ${HELPER_SOCKET_PATH}; it was not launched and setup was not run: ${String(error)}`,
+					"helper_inconclusive",
+				);
 			}
+		}
+	}
+
+	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
+		if (this.daemonAvailable) return true;
+		if (!(await this.probeResident(signal))) {
+			if (usingExternalHelperSocket) return await this.awaitListener(signal);
+			// Launch only on positive absence, rechecked under the lifecycle lock, and hold the lock until the
+			// daemon listens so a concurrent client neither launches a second one nor runs setup under it.
+			return await withLifecycleLock(async () => {
+				if (await this.probeResident(signal)) return this.markAvailable();
+				await this.launchDaemon(signal).catch(() => undefined);
+				return await this.awaitListener(signal);
+			});
+		}
+		return this.markAvailable();
+	}
+
+	private markAvailable(): true {
+		this.daemonAvailable = true;
+		return true;
+	}
+
+	/** Poll for a listener; absence keeps waiting, every inconclusive or refused probe throws. */
+	private async awaitListener(signal?: AbortSignal): Promise<boolean> {
+		for (let index = 0; index < LAUNCH_POLLS; index += 1) {
+			if (await this.probeResident(signal)) return this.markAvailable();
+			await sleep(LAUNCH_POLL_MS, signal);
 		}
 		return false;
 	}
