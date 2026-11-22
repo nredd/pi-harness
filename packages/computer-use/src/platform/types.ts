@@ -80,6 +80,8 @@ export interface PlatformRoot extends PlatformAppIdentity {
 	isMain: boolean;
 	/** Platform-reported modality fact, including platform-specific modal/dialog/sheet signals. */
 	isModal: boolean;
+	/** Windows: discovery could not bind this root to a verifiable window instance, so it is refused. */
+	instanceUnavailable?: true;
 	metadata?: Record<string, unknown>;
 }
 

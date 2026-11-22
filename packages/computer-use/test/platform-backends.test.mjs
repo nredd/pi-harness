@@ -26,7 +26,7 @@ vi.mock("../src/platform/linux/helper.ts", () => ({
 	resetLinuxHelper: fakes.resetLinux,
 }));
 vi.mock("../src/platform/windows/helper.ts", () => ({
-	WINDOWS_HELPER_PROTOCOL_VERSION: 5,
+	WINDOWS_HELPER_PROTOCOL_VERSION: 6,
 	windowsHelper: fakes.windows,
 }));
 
@@ -440,18 +440,18 @@ describe("Windows backend", () => {
 	});
 
 	test("ensureReady validates protocol and architecture then stamps the state", async () => {
-		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 5 }));
+		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 6 }));
 		const state = await backend.ensureReady({}, { lastPermissionCheckAt: 0, keep: true }, signal);
 		assert.equal(state.keep, true);
 		assert.ok(state.lastPermissionCheckAt > 0);
-		assert.equal(state.helperDiagnostics.protocolVersion, 5);
+		assert.equal(state.helperDiagnostics.protocolVersion, 6);
 		assert.deepEqual(lastCall(fakes.windows), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
-		// A v4 helper ignores the read owner fields and wait ownership rechecks, so it must not pass readiness.
-		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 4 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 5, got 4/);
+		// A v5 helper keeps PID/HWND-only root checks, so a same-HWND replacement would pass it.
+		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 5 }));
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 6, got 5/);
 		fakes.windows.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
-		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 5, architectureVersion: 0 }));
+		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 6, architectureVersion: 0 }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Windows helper architecture mismatch/);
 	});
 

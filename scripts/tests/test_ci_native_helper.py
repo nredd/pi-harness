@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import runpy
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import native_lint
 
 SCRIPT = Path(__file__).resolve().parents[1] / "ci_native_helper.py"
 WORKFLOW = SCRIPT.parents[1] / ".github/workflows/native-helper.yml"
+RUST_PROTOCOL = SCRIPT.parents[1] / "packages/computer-use/native/windows/bridge-rs/src/protocol.rs"
 SOURCE_SHA = "0123456789abcdef0123456789abcdef01234567"
 BUILD_PREFIX = (
     b"source=0123456789abcdef0123456789abcdef01234567\n"
@@ -123,6 +125,13 @@ def test_missing_build_and_fixture_emit_only_build_status(runner: tuple[Path, Pa
     ).read_bytes() == BUILD_PREFIX + b"executable=NOT_BUILT\nfixture=NOT_REACHED\r\n"
 
 
+def test_receipt_protocol_is_the_rust_protocol_version() -> None:
+    """Label staged executables with the protocol the helper source actually speaks."""
+    match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", RUST_PROTOCOL.read_text())
+    assert match, f"PROTOCOL_VERSION not found in '{RUST_PROTOCOL}'"
+    assert int(match.group(1)) == ci_native_helper.PROTOCOL
+
+
 def test_windows_workflow_routes_bootstrap_failures_to_receipt_only() -> None:
     """Run fallback on either bootstrap failure without clearing the job failure."""
     steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["windows-helper"]["steps"]
@@ -201,6 +210,11 @@ def test_bootstrap_failure_script_writes_receipt_without_uv(
     executable, normal_dir = runner
     ci_native_helper.stage(executable, normal_dir, SOURCE_SHA)
     normal_receipt = (normal_dir / "build.txt").read_bytes()
+    # KNOWN DRIFT: the workflow fallback still writes `protocol=5` and workflow edits are
+    # owner-gated (#1284). Pin the stale line so fixing the workflow fails here.
+    normal_receipt = normal_receipt.replace(
+        f"protocol={ci_native_helper.PROTOCOL}\n".encode(), b"protocol=5\n"
+    )
     assert (artifact_dir / "build.txt").read_bytes() == (
         normal_receipt.removesuffix(b"\r\n") + b"\nstaging=BOOTSTRAP_FAILED\r\n"
     )
