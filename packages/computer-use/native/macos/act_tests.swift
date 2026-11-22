@@ -487,11 +487,15 @@ private func runPIDAdmissionAssertions() throws {
         failures.append("invalid act performed lookups or actions: \(fixture.lookups), \(fixture.trace)")
     }
 
-    let bridge = Bridge(activityGlow: nil, readSession: { nil })
+    let refStore = AXRefStore()
+    let axPid = getpid()
+    let windowRef = refStore.storeWindow(AXUIElementCreateApplication(axPid))
+    let bridge = Bridge(activityGlow: nil, readSession: { nil }, refStore: refStore)
     var observations: [String] = []
-    func look(pid: Any?, readText: String, owner: Int32? = 1234) throws -> Any {
-        var request: [String: Any] = ["cmd": "look", "windowId": 42, "readText": readText]
+    func look(pid: Any?, readText: String, owner: Int32? = 1234, includeImage: Bool = true, windowRef: String? = nil) throws -> Any {
+        var request: [String: Any] = ["cmd": "look", "windowId": 42, "readText": readText, "includeImage": includeImage]
         request["pid"] = pid
+        request["windowRef"] = windowRef
         return try bridge.handleRequest(request, clientID: nil, lookWindowOwner: { id in
             observations.append("owner:\(id)")
             return owner
@@ -511,10 +515,18 @@ private func runPIDAdmissionAssertions() throws {
     }
     if observations != ["owner:42"] { failures.append("wrong owner did not stop at ownership: \(observations)") }
     observations = []
-    try check("unresolved owner", code: "root_not_found", message: "Root is not owned by a running app") {
-        try look(pid: 1234, readText: "never", owner: nil)
+    // Ownership mismatch proves the semantic look resolved the stored AX owner without
+    // walking a live AX tree. An image look for the same root must not use the AX fallback.
+    let otherPid = axPid == 1 ? 2 : 1
+    try check("semantic look uses the stored AX owner", code: "pid_mismatch", message: "pid does not match the resolved root owner") {
+        try look(pid: otherPid, readText: "never", owner: nil, includeImage: false, windowRef: windowRef)
     }
-    if observations != ["owner:42"] { failures.append("unresolved owner did not stop before capture: \(observations)") }
+    if observations != ["owner:42"] { failures.append("semantic look attempted capture: \(observations)") }
+    observations = []
+    try check("image look requires a CG owner", code: "root_not_found", message: "Root is not owned by a running app") {
+        try look(pid: axPid, readText: "never", owner: nil, windowRef: windowRef)
+    }
+    if observations != ["owner:42"] { failures.append("unresolved CG owner did not stop before capture: \(observations)") }
     for pid in [nil, NSNull(), 1234] as [Any?] {
         observations = []
         try check("omitted, null or matching owner", code: "fixture_capture", message: "capture fixture") {

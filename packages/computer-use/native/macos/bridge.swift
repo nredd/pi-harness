@@ -1057,7 +1057,7 @@ final class InputSuppressionGuard {
 
 final class Bridge {
 	private let protocolVersion = 7
-	private let refStore = AXRefStore()
+	private let refStore: AXRefStore
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -1081,8 +1081,10 @@ final class Bridge {
 		readSession: @escaping () -> [String: Any]? = { CGSessionCopyCurrentDictionary() as? [String: Any] },
 		writeOutput: @escaping (Data) throws -> Void = { try FileHandle.standardOutput.write(contentsOf: $0) },
 		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) },
-		inputSink: NativeInputSink = .live
+		inputSink: NativeInputSink = .live,
+		refStore: AXRefStore = AXRefStore()
 	) {
+		self.refStore = refStore
 		self.activityGlow = activityGlow
 		self.inputSink = inputSink
 		self.dispatchRequest = dispatchRequest
