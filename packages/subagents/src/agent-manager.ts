@@ -2232,6 +2232,16 @@ export class AgentManager {
 		return this.tombstonesById.get(id);
 	}
 
+	/** The tombstone holding handle or alias `name`, matched case-insensitively. */
+	tombstoneByName(name: string): AgentTombstone | undefined {
+		return this.tombstonesByName.get(name.toLowerCase());
+	}
+
+	/** Every record in insertion order, unsorted: a lookup must not pay for `listAgents`' sort. */
+	records(): IterableIterator<AgentRecord> {
+		return this.agents.values();
+	}
+
 	/** Evicted agents whose conversation can still be reopened, newest first. */
 	listTombstones(): AgentTombstone[] {
 		return [...this.tombstones.values()].sort((a, b) => b.completedAt - a.completedAt);
