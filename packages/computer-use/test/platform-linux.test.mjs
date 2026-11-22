@@ -34,7 +34,7 @@ const readline = require("node:readline");
 const invariants = ["state-scoped-observations","bounded-observation-history","multi-root-forest","progressive-disclosure","atomic-physical-input","concurrent-requests","transactional-batching"];
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line); let result;
-  if (request.cmd === "diagnostics") result = { protocolVersion: 4, architectureVersion: 1, invariants, pid: process.pid, accessibility: true };
+  if (request.cmd === "diagnostics") result = { protocolVersion: 5, architectureVersion: 1, invariants, pid: process.pid, accessibility: true };
   else if (request.cmd === "listRoots") result = { roots: [{ kind: "window", rootRef: "root:1", pid: 42, appName: "google-chrome-stable", title: "Linux fixture", framePoints: { x: 10, y: 20, w: 800, h: 600 }, isFocused: true }] };
   else if (request.cmd === "atspiReadText") result = { text: "fixture", offset: 0, limit: 7, totalChars: 7, hasMore: false };
   else if (request.cmd === "atspiWaitFor") result = { found: true };
@@ -42,7 +42,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   else if (request.cmd === "actBatch") result = { outcome: "worked", performed: { transaction: true, actionCount: request.args.actions.length } };
   else if (request.cmd === "openBrowserLocation") result = { opened: true };
   else result = { focused: true };
-  process.stdout.write(JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result }) + "\\n");
+  process.stdout.write(JSON.stringify({ protocolVersion: 5, id: request.id, ok: true, result }) + "\\n");
 });
 `,
 	);
@@ -75,7 +75,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	assert.equal(linux.isBrowserApp("gnome-text-editor"), false);
 
 	const ready = await linux.ensureReady({}, { lastPermissionCheckAt: 0 });
-	assert.equal(ready.helperDiagnostics?.protocolVersion, 4);
+	assert.equal(ready.helperDiagnostics?.protocolVersion, 5);
 	assert.equal((await linux.listApps())[0]?.appName, "google-chrome-stable");
 	assert.equal((await linux.listRoots({ title: "fixture" }))[0]?.rootRef, "root:1");
 	assert.equal((await linux.getFrontmost()).pid, 42);
@@ -128,8 +128,8 @@ const readline = require("node:readline");
 fs.appendFileSync(process.env.PI_TEST_LINUX_START_COUNT, "start\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
-  const result = request.cmd === "diagnostics" ? { protocolVersion: 4, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
-  process.stdout.write(JSON.stringify({ protocolVersion: 4, id: request.id, ok: true, result }) + "\\n");
+  const result = request.cmd === "diagnostics" ? { protocolVersion: 5, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  process.stdout.write(JSON.stringify({ protocolVersion: 5, id: request.id, ok: true, result }) + "\\n");
 });
 `,
 	);
@@ -183,7 +183,7 @@ fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o755);
 	 * @throws {TypeError} If fixture options cannot be serialized.
 	 */
 	const helperScript = ({
-		protocol = 4,
+		protocol = 5,
 		architecture = 1,
 		startFile,
 		diagnosticsDelayMs = NO_DIAGNOSTICS_DELAY_MS,
@@ -262,7 +262,7 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 	}
 
 	for (const [label, writeStale] of [
-		["protocol 3", (c) => fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: `${c.starts}.stale` }))],
+		["protocol 4", (c) => fs.writeFile(c.helper, helperScript({ protocol: 4, startFile: `${c.starts}.stale` }))],
 		[
 			"architecture version 2",
 			(c) => fs.writeFile(c.helper, helperScript({ architecture: 2, startFile: `${c.starts}.stale` })),
@@ -294,14 +294,14 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 	{
 		// Stale helper and setup unavailable: actionable error naming both causes; fixing it later recovers (retry).
 		const c = await makeCase({ installs: false });
-		await fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: c.starts }));
+		await fs.writeFile(c.helper, helperScript({ protocol: 4, startFile: c.starts }));
 		await fs.chmod(c.helper, 0o755);
 		const client = c.client();
 		await assert.rejects(client.command("echo", {}), (error) => {
 			assert.match(error.message, /no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set/);
 			assert.match(
 				error.message,
-				/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 4, got 3\./,
+				/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 5, got 4\./,
 			);
 			return true;
 		});
@@ -322,11 +322,11 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 	{
 		// Setup that "succeeds" but leaves an incompatible helper fails validation instead of looping.
 		const c = await makeCase();
-		await fs.writeFile(c.good, helperScript({ protocol: 3, startFile: c.starts }));
+		await fs.writeFile(c.good, helperScript({ protocol: 4, startFile: c.starts }));
 		const client = c.client();
 		await assert.rejects(
 			client.command("echo", {}),
-			/installed at .* failed validation: Linux helper protocol mismatch: expected 4, got 3\./,
+			/installed at .* failed validation: Linux helper protocol mismatch: expected 5, got 4\./,
 		);
 		assert.equal((await lines(c.setupCount)).length, 1, "no recursive or repeated setup within one attempt");
 		client.dispose();
@@ -380,11 +380,11 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 	{
 		// A stale helper's rejection says nothing about restarting Pi: setup is about to replace it.
 		const c = await makeCase({ installs: false });
-		await fs.writeFile(c.helper, helperScript({ protocol: 3, startFile: c.starts }));
+		await fs.writeFile(c.helper, helperScript({ protocol: 4, startFile: c.starts }));
 		await fs.chmod(c.helper, 0o755);
 		await assert.rejects(c.client().command("echo", {}), (error) => {
 			assert.doesNotMatch(error.message, /Restart Pi/);
-			assert.match(error.message, /was rejected: Linux helper protocol mismatch: expected 4, got 3\./);
+			assert.match(error.message, /was rejected: Linux helper protocol mismatch: expected 5, got 4\./);
 			return true;
 		});
 	}
@@ -550,12 +550,19 @@ setInterval(() => {}, 1000);
 		await assert.rejects(cancelled, /Operation aborted/);
 		const pending = client.send(child, "hold", {}, 5000);
 		// Attach every assertion immediately, including while the acknowledgement is pending.
+		// The helper read `hold` before its stdin closed, so that reply is lost, not refused. A write that
+		// fails outright is EPIPE; one still pending when the stream error lands is lost the same way.
+		const epipe = (lost) => (error) => {
+			assert.equal(error.code === "reply_lost" ? error.cause.code : error.code, "EPIPE");
+			if (lost) assert.equal(error.code, "reply_lost");
+			return true;
+		};
 		await Promise.all([
-			assert.rejects(pending, { code: "EPIPE" }),
+			assert.rejects(pending, epipe(true)),
 			// Bun can acknowledge a small write into its own buffer after the peer closes stdin.
 			// Exceed that buffer so the OS write actually fails; a write callback is not delivery proof.
 			ready.then(() =>
-				assert.rejects(client.send(child, "test", { payload: "x".repeat(64 * 1024) }, 5000), { code: "EPIPE" }),
+				assert.rejects(client.send(child, "test", { payload: "x".repeat(64 * 1024) }, 5000), epipe(false)),
 			),
 			exit,
 		]);

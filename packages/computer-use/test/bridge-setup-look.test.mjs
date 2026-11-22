@@ -57,6 +57,16 @@ afterEach(async () => {
 });
 
 describe("setup", () => {
+	test("session shutdown hands a platform shutdown warning to the caller", async () => {
+		const warnings = [];
+		currentPlatformBackend.shutdown = async () => "Refusing physical input: keycode 50 may still be held.";
+		await bridge.shutdownComputerUseSession((message) => warnings.push(message));
+		assert.deepEqual(warnings, ["Refusing physical input: keycode 50 may still be held."]);
+		currentPlatformBackend.shutdown = async () => undefined;
+		await bridge.shutdownComputerUseSession((message) => warnings.push(message));
+		assert.equal(warnings.length, 1, "nothing to surface after a clean shutdown");
+	});
+
 	test("activity toggles reach the backend and tolerate a backend without one", async () => {
 		await bridge.setComputerUseActivity(true);
 		await bridge.setComputerUseActivity(false);

@@ -474,6 +474,7 @@ name = "linux-bridge"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "linux-bridge",
  "png",
  "serde",
  "serde_json",
