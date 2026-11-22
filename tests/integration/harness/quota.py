@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from pi_release.stack import find_package, package_directory
 
-from harness.paths import PROVIDERS_DIR
+from harness.paths import PROVIDERS_DIR, REPO_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -27,10 +27,112 @@ USAGE_FIXTURE_EXTENSION = PROVIDERS_DIR / "usage_fixture.ts"
 # `expiresAt` offset of a fresh snapshot; long, so the footer's wall-clock expiry never fires mid-test.
 FRESH_FOR_MS = 3_600_000
 ROUTER_PACKAGE = "pi-subscription-router"
+VIEW_CASES_PATH = REPO_ROOT.parents[1] / "packages/subscription-router/tests/fixtures/views.json"
 # Span of the 5h and weekly windows, as the router reports them.
 SPANS_MS = (18_000_000, 604_800_000)
 # Provider-native window names the router reports, keyed by provider.
 WINDOWS = {"anthropic": ("five_hour", "seven_day"), "openai-codex": ("5h", "7d")}
+
+
+type Access = Literal["subscription", "metered", "unknown"]
+
+
+class MeterQuantity(TypedDict):
+    """Non-percent quota quantity."""
+
+    unit: Literal["requests", "tokens", "usd", "credits"]
+    used: NotRequired[float]
+    limit: NotRequired[float]
+    remaining: NotRequired[float]
+
+
+class ResetRule(TypedDict):
+    """Calendar window reset schedule."""
+
+    at: str
+    timeZone: str
+    every: Literal["day", "week"]
+
+
+class UsageMeter(TypedDict):
+    """Non-percent quota window."""
+
+    name: str
+    scope: Literal["provider", "model"]
+    quantity: MeterQuantity
+    families: NotRequired[list[str]]
+    kind: NotRequired[Literal["rolling", "calendar"]]
+    basis: NotRequired[Literal["reported", "observed", "inferred"]]
+    durationMs: NotRequired[int]
+    spanSource: NotRequired[Literal["reported", "assumed", "inferred"]]
+    resetAt: NotRequired[int]
+    resetRule: NotRequired[ResetRule]
+
+
+class CreditPool(TypedDict):
+    """Prepaid or overage balance."""
+
+    name: str
+    unit: Literal["usd", "credits"]
+    role: Literal["overage", "prepaid"]
+    balance: NotRequired[float]
+    unlimited: NotRequired[bool]
+    appliesAfter: NotRequired[list[str]]
+
+
+class ExhaustionMark(TypedDict):
+    """Active router block."""
+
+    provider: str
+    window: str
+    until: int
+    resetKnown: bool
+    confirmations: int
+    families: NotRequired[list[str]]
+    evidence: NotRequired[Literal["inferred", "observed"]]
+    expiry: NotRequired[Literal["hinted", "window-reset", "backoff"]]
+    cause: NotRequired[Literal["quota", "billing"]]
+    access: NotRequired[Literal["subscription", "metered"]]
+    markedAt: NotRequired[int]
+
+
+class WindowName(TypedDict):
+    """Select a footer window by name."""
+
+    name: str
+
+
+class WindowDuration(TypedDict):
+    """Select a footer window by duration."""
+
+    durationMs: int
+
+
+class FooterDisplay(TypedDict, total=False):
+    """Footer window selection and missing-data display."""
+
+    show: list[WindowName | WindowDuration]
+    placeholder: bool
+
+
+class ProviderDisplay(TypedDict):
+    """Provider labels and optional footer options."""
+
+    full: str
+    compact: str
+    footer: NotRequired[FooterDisplay]
+
+
+class ProviderView(TypedDict):
+    """Provider view sent in v2 fixture replies."""
+
+    provider: str
+    display: ProviderDisplay
+    access: Access
+    snapshot: NotRequired[dict[str, Any]]
+    meters: list[UsageMeter]
+    pools: list[CreditPool]
+    marks: list[ExhaustionMark]
 
 
 def snapshot(
@@ -80,6 +182,83 @@ def snapshot(
     }
 
 
+def view(
+    provider: str,
+    full: str,
+    compact: str,
+    *,
+    access: Access = "unknown",
+    display_footer: FooterDisplay | None = None,
+    reading: dict[str, Any] | None = None,
+    meters: list[UsageMeter] | None = None,
+    pools: list[CreditPool] | None = None,
+    marks: list[ExhaustionMark] | None = None,
+) -> ProviderView:
+    """Build a router `ProviderView`, independent of the legacy collected-provider list.
+
+    Parameters:
+        provider (str): Pi provider ID.
+        full (str): full display label.
+        compact (str): compact display label.
+        access (Literal["subscription", "metered", "unknown"]): access classification.
+        display_footer (FooterDisplay | None): optional footer display options.
+        reading (dict[str, Any] | None): optional opaque legacy snapshot.
+        meters (list[UsageMeter] | None): non-percent usage windows.
+        pools (list[CreditPool] | None): credit pools.
+        marks (list[ExhaustionMark] | None): active exhaustion marks.
+
+    Returns:
+        ProviderView: JSON-ready provider view.
+    """
+    display: ProviderDisplay = {"full": full, "compact": compact}
+    if display_footer is not None:
+        display["footer"] = display_footer
+    result: ProviderView = {
+        "provider": provider,
+        "display": display,
+        "access": access,
+        "meters": meters or [],
+        "pools": pools or [],
+        "marks": marks or [],
+    }
+    if reading is not None:
+        result["snapshot"] = reading
+    return result
+
+
+def shared_views(case_name: str) -> list[ProviderView]:
+    """Read provider views from the router's schema-tested fixture.
+
+    Parameters:
+        case_name (str): named fixture case.
+
+    Returns:
+        list[ProviderView]: fresh views decoded from that case.
+
+    Raises:
+        KeyError: the named case is missing.
+    """
+    cases = json.loads(VIEW_CASES_PATH.read_text())["views"]
+    return {case["name"]: case["usage"]["views"] for case in cases}[case_name]
+
+
+def google_rpd_view() -> ProviderView:
+    """Project the shared Google case used for the faux stack, without a snapshot, pool or mark.
+
+    Returns:
+        ProviderView: Google view with just the request meter and no fixed-date `resetAt`.
+
+    Raises:
+        KeyError: the shared Google view or its named request meter is missing.
+    """
+    google = {row["provider"]: row for row in shared_views("metered")}["google"]
+    meter = {entry["name"]: entry for entry in google["meters"]}["rpd"]
+    # Keep the calendar rule, not the contract fixture's historical absolute timestamp.
+    meter.pop("resetAt", None)
+    display = google["display"]
+    return view("google", display["full"], display["compact"], access=google["access"], meters=[meter])
+
+
 @dataclass(frozen=True)
 class UsageFixture:
     """The fixture's state file and request log inside one sandbox.
@@ -99,6 +278,7 @@ class UsageFixture:
         *,
         mode: str = "ok",
         statuses: tuple[str, str] = ("available", "available"),
+        views: list[ProviderView] | None = None,
     ) -> None:
         """Rewrite the state; a `None` provider is omitted from `snapshots` (missing data).
 
@@ -107,6 +287,7 @@ class UsageFixture:
             codex (tuple[float, float] | None): same for OpenAI Codex.
             mode (str): `ok`, `hang` or `error`.
             statuses (tuple[str, str]): snapshot status for Anthropic and Codex.
+            views (list[ProviderView] | None): opt into a v2 reply, including for an empty list.
         """
         snapshots = [
             snapshot(provider, used, status=status)
@@ -116,7 +297,10 @@ class UsageFixture:
             )
             if used is not None
         ]
-        self.state_path.write_text(json.dumps({"mode": mode, "snapshots": snapshots, "blocks": []}))
+        state: dict[str, Any] = {"mode": mode, "snapshots": snapshots, "blocks": []}
+        if views is not None:
+            state["views"] = views
+        self.state_path.write_text(json.dumps(state))
 
 
 def install_usage_fixture(box: Sandbox, *, keep_router: bool = False) -> UsageFixture:

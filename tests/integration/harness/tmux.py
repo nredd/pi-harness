@@ -261,11 +261,13 @@ class TmuxPane:
         """
         return plain_rows(self.capture())
 
-    def wait_for(self, pattern: str, *, timeout_s: float = 30.0, absent: bool = False) -> str:
+    def wait_for(
+        self, pattern: str | re.Pattern[str], *, timeout_s: float = 30.0, absent: bool = False
+    ) -> str:
         """Poll until a regex matches (or stops matching) the plain screen.
 
         Parameters:
-            pattern (str): regex searched in the plain capture.
+            pattern (str | re.Pattern[str]): regex searched in the plain capture; strings use multiline mode.
             timeout_s (float): give up after this long.
             absent (bool): wait for the pattern to disappear instead.
 
@@ -275,7 +277,7 @@ class TmuxPane:
         Raises:
             TmuxTimeoutError: the condition never held.
         """
-        compiled = re.compile(pattern, re.MULTILINE)
+        compiled = re.compile(pattern, re.MULTILINE) if isinstance(pattern, str) else pattern
         deadline = time.monotonic() + timeout_s
         capture = ""
         while time.monotonic() < deadline:
@@ -284,7 +286,9 @@ class TmuxPane:
                 return capture
             time.sleep(POLL_INTERVAL_S)
         state = "disappear" if absent else "appear"
-        raise TmuxTimeoutError(f"Timed out after {timeout_s}s waiting for /{pattern}/ to {state}", capture)
+        raise TmuxTimeoutError(
+            f"Timed out after {timeout_s}s waiting for /{compiled.pattern}/ to {state}", capture
+        )
 
     def wait_stable(self, *, quiet_s: float = 2.0, timeout_s: float = 30.0) -> list[str]:
         """Wait until the plain screen stops changing for `quiet_s`.
