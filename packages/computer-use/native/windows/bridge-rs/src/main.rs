@@ -67,12 +67,17 @@ static INPUT_CLOSED: AtomicBool = AtomicBool::new(false);
 
 impl Default for HelperState {
     fn default() -> Self {
-        // RandomState is seeded per process; the counter alone restarts at 1.
-        Self::new(RandomState::new().hash_one(std::process::id()))
+        // RandomState is randomly keyed; the counter alone restarts at 1.
+        Self::from_entropy(&RandomState::new())
     }
 }
 
 impl HelperState {
+    /// Key this helper lifetime's look generation with `entropy`.
+    fn from_entropy(entropy: &impl BuildHasher) -> Self {
+        Self::new(entropy.hash_one(std::process::id()))
+    }
+
     fn new(look_generation: u64) -> Self {
         Self {
             store: RefStore::new(),
@@ -2260,10 +2265,33 @@ mod tests {
         assert!(error.message.contains("protocol 4; expected 5"));
     }
 
+    /// Deterministic stand-in for `RandomState`, keyed by an explicit seed.
+    struct SeededEntropy(u64);
+
+    impl BuildHasher for SeededEntropy {
+        type Hasher = std::collections::hash_map::DefaultHasher;
+
+        fn build_hasher(&self) -> Self::Hasher {
+            let mut hasher = Self::Hasher::new();
+            std::hash::Hasher::write_u64(&mut hasher, self.0);
+            hasher
+        }
+    }
+
     #[test]
-    fn default_helper_states_mint_distinct_look_generations() {
-        // Production init keys each generation with a fresh RandomState. Two values are
-        // 64-bit keyed hashes, so a collision is possible but has probability ~2^-64.
+    fn look_generations_follow_the_injected_entropy() {
+        let generation = |seed| HelperState::from_entropy(&SeededEntropy(seed)).look_generation;
+        assert_eq!(generation(1), generation(1), "the same seed reproduces");
+        assert_ne!(generation(1), generation(2), "different seeds differ");
+        let mut first = HelperState::from_entropy(&SeededEntropy(1));
+        let mut second = HelperState::from_entropy(&SeededEntropy(2));
+        assert_ne!(first.fresh_look_id(), second.fresh_look_id());
+    }
+
+    #[test]
+    fn default_helper_states_mint_distinct_look_generations_smoke() {
+        // Probabilistic smoke test of real production randomness: two 64-bit keyed
+        // hashes collide with probability ~2^-64. Determinism lives in the test above.
         let mut first = HelperState::default();
         let mut second = HelperState::default();
         assert_ne!(first.look_generation, second.look_generation);
