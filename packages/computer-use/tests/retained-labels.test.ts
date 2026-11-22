@@ -594,3 +594,199 @@ describe("note retention", () => {
 		assert.equal(noteForOutline(undefined, outline), undefined);
 	});
 });
+
+describe("OCR text over a protected node (#1263)", () => {
+	const field = { x: 100, y: 50, w: 80, h: 20 };
+	const box = (string: string, rect?: object) => ({ string, confidence: 0.9, ...(rect ? { rect } : {}) });
+	const secure = (extra = {}) => ({ ref: "s", role: "AXSecureTextField", rect: field, ...extra });
+	const picture = (ref: string, title: string, rect: object) => ({
+		ref,
+		role: "AXImage",
+		title,
+		pictureOnly: true,
+		rect,
+	});
+	const window = (children: object[], extra = {}) =>
+		parsed({
+			lookId: "l",
+			outline: { ref: "w", role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, children, ...extra },
+		});
+	const byWire = (outline: ReturnType<typeof parsed>, wireRef: string) =>
+		present(outline.nodes.find((node) => node.wireRef === wireRef));
+	const texts = (outline: ReturnType<typeof parsed>, wireRef: string) =>
+		byWire(outline, wireRef).text.map((item) => item.string);
+
+	test("a box attributed to another node is dropped where it overlaps the field", () => {
+		const outline = window([
+			{
+				ref: "g",
+				role: "AXGroup",
+				rect: { x: 90, y: 40, w: 200, h: 100 },
+				text: [box(SECRET, { x: 95, y: 52, w: 30, h: 10 }), box("Shown", { x: 200, y: 100, w: 40, h: 10 })],
+				children: [secure()],
+			},
+		]);
+		assert.deepEqual(texts(outline, "g"), ["Shown"]);
+		assert.equal(searchOutlineRanked(outline, SECRET).totalMatches, 0);
+		assert.ok(!JSON.stringify(serializeOutline(outline)).includes(SECRET));
+	});
+
+	test("a picture-only title over the field reads as protected; one beside it stays", () => {
+		const outline = window([
+			secure(),
+			picture("pic_1", SECRET, { x: 170, y: 55, w: 30, h: 10 }),
+			picture("pic_2", "Beside", { x: 10, y: 150, w: 30, h: 10 }),
+		]);
+		const redacted = byWire(outline, "pic_1");
+		assert.deepEqual(
+			[redacted.title, redacted.pictureOnly, redacted.rect],
+			[PROTECTED_LABEL, true, { x: 170, y: 55, w: 30, h: 10 }],
+		);
+		assert.equal(byWire(outline, "pic_2").title, "Beside");
+		assert.ok(!foldToBudget(outline).text.includes(SECRET));
+	});
+
+	test("a picture-only node over a redacted one is redacted too, and restore agrees", () => {
+		const outline = window([
+			secure(),
+			picture("pic_1", SECRET, { x: 170, y: 55, w: 30, h: 10 }),
+			picture("pic_2", `${SECRET} tail`, { x: 195, y: 55, w: 30, h: 10 }),
+			picture("pic_3", "Far", { x: 10, y: 150, w: 30, h: 10 }),
+		]);
+		assert.deepEqual(
+			["pic_1", "pic_2", "pic_3"].map((ref) => byWire(outline, ref).title),
+			[PROTECTED_LABEL, PROTECTED_LABEL, "Far"],
+		);
+		const restored = restoreOutline(serializeOutline(outline));
+		assert.deepEqual(serializeOutline(restored), serializeOutline(outline), "a second pass changes nothing");
+	});
+
+	test("a protected node of unknown area drops every OCR box and picture-only title", () => {
+		const outline = window(
+			[
+				secure({ rect: { x: 0, y: 0, w: 0, h: 0 } }),
+				{
+					ref: "t",
+					role: "AXStaticText",
+					title: "Kept",
+					rect: { x: 10, y: 150, w: 30, h: 10 },
+					text: [box(SECRET, { x: 10, y: 150, w: 30, h: 10 })],
+				},
+				picture("pic_1", SECRET, { x: 200, y: 150, w: 30, h: 10 }),
+			],
+			{ text: [box(SECRET, { x: 250, y: 180, w: 20, h: 10 })] },
+		);
+		assert.deepEqual([texts(outline, "w"), texts(outline, "t")], [[], []]);
+		assert.equal(byWire(outline, "t").title, "Kept", "AX fields are not OCR and stay");
+		assert.equal(byWire(outline, "pic_1").title, PROTECTED_LABEL);
+	});
+
+	test("a box without area is dropped once the outline holds a protected node", () => {
+		const outline = window([
+			secure(),
+			{ ref: "g", role: "AXGroup", rect: { x: 10, y: 150, w: 30, h: 10 }, text: [box(SECRET)] },
+		]);
+		assert.deepEqual(texts(outline, "g"), []);
+	});
+
+	test("an outline without protected nodes keeps every box, placed or not", () => {
+		const outline = window([
+			{ ref: "g", role: "AXGroup", rect: field, text: [box("Placed", field), box("Unplaced")] },
+			picture("pic_1", "Logo", field),
+		]);
+		assert.deepEqual(texts(outline, "g"), ["Placed", "Unplaced"]);
+		assert.equal(byWire(outline, "pic_1").title, "Logo");
+	});
+
+	test("a readable child's own text inside a protected ancestor stays; text spilling past it does not", () => {
+		const child = { x: 20, y: 20, w: 50, h: 20 };
+		const outline = window([
+			{
+				ref: "u",
+				role: "unknown",
+				title: PROTECTED_LABEL,
+				rect: { x: 10, y: 10, w: 200, h: 100 },
+				children: [
+					{ ref: "own", role: "text", value: "Readable", rect: child, text: [box("Readable", child)] },
+					{ ref: "spill", role: "text", rect: child, text: [box(SECRET, { x: 20, y: 20, w: 120, h: 20 })] },
+					picture("pic_1", SECRET, { x: 30, y: 60, w: 30, h: 10 }),
+				],
+			},
+		]);
+		assert.deepEqual([texts(outline, "own"), texts(outline, "spill")], [["Readable"], []]);
+		assert.equal(byWire(outline, "pic_1").title, PROTECTED_LABEL, "a picture-only box is nobody's own pixels");
+	});
+
+	test("restoring an outline stored before the fix drops boxes over a protected node", () => {
+		const restored = restoreOutline({
+			lookId: "l",
+			root: {
+				...outlineNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, text: [box(SECRET, field)] }),
+				children: [{ ...outlineNode("@e2", { role: "AXSecureTextField", rect: field }), children: [] }],
+			},
+		});
+		assert.deepEqual(restored.root.text, []);
+	});
+
+	test("a graft that sees protection drops OCR boxes it can no longer place", () => {
+		const outline = outlineOf(
+			outlineNode("@e1", {
+				role: "AXWindow",
+				rect: { x: 0, y: 0, w: 300, h: 200 },
+				children: [
+					outlineNode("@e2", { wireRef: "g", rect: field, truncated: true }),
+					outlineNode("@e3", {
+						wireRef: "t",
+						rect: { x: 10, y: 150, w: 30, h: 10 },
+						text: [box(SECRET, { x: 10, y: 150, w: 30, h: 10 })],
+					}),
+					outlineNode("@e4", {
+						wireRef: "pic",
+						pictureOnly: true,
+						role: "AXImage",
+						title: SECRET,
+						rect: { x: 200, y: 150, w: 30, h: 10 },
+					}),
+				],
+			}),
+		);
+		graftScopedOutline(
+			outline,
+			"@e2",
+			outlineOf(
+				outlineNode("g", {
+					wireRef: "g",
+					children: [outlineNode("n", { wireRef: "n", role: "AXSecureTextField", rect: field })],
+				}),
+			),
+		);
+		assert.deepEqual(present(outline.nodes.find((node) => node.ref === "@e3")).text, []);
+		assert.equal(present(outline.nodes.find((node) => node.ref === "@e4")).title, PROTECTED_LABEL);
+		assert.ok(!JSON.stringify(serializeOutline(outline)).includes(SECRET));
+	});
+
+	test("observe_ui and search_ui never echo OCR read over a secure field", async () => {
+		const fake = await installFakeDesktop(onTestFinished, { platform: "macos" });
+		fake.lookPayload = () =>
+			lookPayload({
+				children: [
+					wireNode("g", "AXGroup", "Form", {
+						rect: { x: 90, y: 40, w: 200, h: 100 },
+						text: [box(SECRET, { x: 95, y: 52, w: 30, h: 10 })],
+						children: [wireNode("s", "AXSecureTextField", "", { label: "", rect: field })],
+					}),
+					wireNode("pic_1", "AXImage", SECRET, {
+						pictureOnly: true,
+						label: SECRET,
+						rect: { x: 170, y: 55, w: 30, h: 10 },
+					}),
+				],
+			});
+		const { stateId, text, result } = await fake.observe({ detail: "outline" });
+		assertNoSecret(result, text, "observe_ui");
+		for (const query of [SECRET, "private"]) {
+			const found = await fake.call(fake.bridge.executeSearchUi, { stateId, text: query });
+			assertNoSecret(found, fake.text(found), `search_ui(${query})`);
+		}
+	});
+});

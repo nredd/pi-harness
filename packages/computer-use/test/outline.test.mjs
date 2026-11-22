@@ -141,7 +141,17 @@ describe("parseLookResponse fallbacks", () => {
 		assert.deepEqual(root.actions, ["AXPress", "AXShowMenu"]);
 		assert.equal(root.canPress, false, "only literal true is truthy");
 		assert.equal(root.focused, true);
-		assert.deepEqual(root.text, [
+		// The malformed children parse as blank-role nodes: protected, with no known area, so no OCR box is placed (#1263).
+		assert.deepEqual(root.text, []);
+		const childless = look({
+			ref: "r",
+			role: "AXGroup",
+			text: [
+				{ string: "hi", confidence: 9, rect: { x: 1, y: 2, w: 3, h: 4 } },
+				{ string: "lo", confidence: -1 },
+			],
+		}).outline;
+		assert.deepEqual(childless.text, [
 			{ string: "hi", confidence: 1, rect: { x: 1, y: 2, w: 3, h: 4 } },
 			{ string: "lo", confidence: 0, rect: { x: 0, y: 0, w: 0, h: 0 } },
 		]);
@@ -423,7 +433,8 @@ describe("graftScopedOutline", () => {
 	});
 
 	test("target without a rect stays rectless; scoped text without rect stays rectless", () => {
-		const outline = outlineOf({ ref: "win", children: [{ ref: "t", role: "AXGroup" }] });
+		// A readable window: with no protected node, a rectless box has nothing to overlap and stays.
+		const outline = outlineOf({ ref: "win", role: "AXWindow", children: [{ ref: "t", role: "AXGroup" }] });
 		outline.nodes[1].rect = undefined;
 		const scoped = outlineOf({ ref: "t", role: "AXGroup", children: [] });
 		scoped.root.rect = { x: 9, y: 9, w: 9, h: 9 };
