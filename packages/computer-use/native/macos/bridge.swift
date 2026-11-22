@@ -5536,7 +5536,7 @@ The resulting outline preserves native semantics where they are available. It do
 The helper prefers AX operations before synthesized input:
 
 - press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
-- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; an accepted write that the readback does not confirm is `unknown`, never written again;
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field);
 - semantic scrolling walks the target and its ancestors for supported AX scroll actions;
 - foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
 
