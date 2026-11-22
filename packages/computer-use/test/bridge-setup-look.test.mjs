@@ -937,6 +937,22 @@ describe("outline node helpers through inspect, act and expand", () => {
 			],
 		});
 
+	test("inspect and search only see the Linux helper's redacted metadata", async () => {
+		const secret = "private fixture label";
+		fake.lookPayload = () =>
+			lookPayload({
+				children: [makeNode("protected", { role: "password text", title: "[protected]", description: "" })],
+			});
+		const stateId = stateOf(await call(executeObserve, { mode: "semantic" }));
+		const protectedMatch = await call(executeSearchUi, { stateId, text: "[protected]" });
+		assert.equal(protectedMatch.details.totalMatches, 1);
+		const inspected = await call(executeInspectUi, { stateId, ref: protectedMatch.details.matches[0].ref });
+		assert.match(textOf(inspected), /\[protected\]/);
+		assert.ok(!JSON.stringify(inspected).includes(secret));
+		const secretMatch = await call(executeSearchUi, { stateId, text: secret });
+		assert.equal(secretMatch.details.totalMatches, 0);
+	});
+
 	test("inspect_ui labels every capability and an unlabeled picture", async () => {
 		fake.lookPayload = rich;
 		const stateId = stateOf(await call(executeObserve, { mode: "semantic" }));

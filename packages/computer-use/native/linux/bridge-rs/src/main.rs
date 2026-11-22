@@ -1343,7 +1343,7 @@ mod tests {
 
         #[zbus(property)]
         fn description(&self) -> &str {
-            ""
+            self.name
         }
 
         fn get_role_name(&self) -> &str {
@@ -1430,7 +1430,7 @@ mod tests {
                 .result
                 .unwrap();
                 assert_eq!(requests.try_recv(), Ok(()));
-                assert_eq!(look["outline"]["title"], "Password");
+                assert_eq!(look["outline"]["title"], "[protected]");
                 assert_eq!(look["outline"]["value"], "");
                 assert_eq!(reads.load(Ordering::SeqCst), 0);
                 let reply = peer_request(
@@ -1495,6 +1495,75 @@ mod tests {
                 .await;
                 assert_eq!(reply.error.unwrap().code, ErrorCode::SecureTextUnreadable);
                 assert_eq!(reads.load(Ordering::SeqCst), 0);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn protected_metadata_never_reaches_the_cached_outline() {
+        const SECRET: &str = "private fixture label";
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (role, current_role) = watch::channel(Some(61));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: SECRET,
+                        role: current_role,
+                        role_name: "fixture role",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: None,
+                        text: true,
+                    },
+                )?
+                .serve_at("/window", PeerText(Arc::clone(&reads)))
+            },
+            async |connection| {
+                let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                let observed = peer_request(&state, &connection, "look", look_args.clone())
+                    .await
+                    .result
+                    .unwrap();
+                assert_eq!(observed["outline"]["title"], SECRET);
+                assert_eq!(observed["outline"]["description"], SECRET);
+                let permitted_reads = reads.load(Ordering::SeqCst);
+                for id in [40, 67] {
+                    role.send(Some(id)).unwrap();
+                    let fresh = peer_request(&state, &connection, "look", look_args.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    let scoped = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({
+                            "rootRef":root_ref,"includeImage":false,
+                            "baseLookId":fresh["lookId"],"scopeRef":fresh["outline"]["ref"],
+                        }),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    for look in [fresh, scoped] {
+                        assert!(!look.to_string().contains(SECRET), "role ID {id}");
+                        let node = lock(&state)
+                            .unwrap()
+                            .element(
+                                look["lookId"].as_str().unwrap(),
+                                look["outline"]["ref"].as_str().unwrap(),
+                            )
+                            .unwrap();
+                        assert_eq!(node.name, "[protected]");
+                        assert!(node.description.is_empty());
+                        assert!(!node.searchable_text().contains(SECRET));
+                    }
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
+                }
             },
         )
         .await;

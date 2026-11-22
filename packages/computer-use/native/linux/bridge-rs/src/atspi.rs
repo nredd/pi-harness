@@ -25,6 +25,7 @@ const COMPONENT: &str = "org.a11y.atspi.Component";
 const ACTION: &str = "org.a11y.atspi.Action";
 // AtspiRole wire IDs from atspi/atspi-constants.h in GNOME/at-spi2-core.
 const PASSWORD_TEXT_ROLE: u32 = 40;
+const PROTECTED_LABEL: &str = "[protected]";
 const MAX_ATSPI_ACTIONS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
@@ -273,14 +274,27 @@ impl AtspiClient {
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
-            let app_name = self.string_property(&app, "Name").await.unwrap_or_default();
+            let app_name = if permits_text(self.role_id(&app).await) {
+                self.string_property(&app, "Name").await.unwrap_or_default()
+            } else {
+                PROTECTED_LABEL.to_owned()
+            };
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let role = self.role_name(&window).await.unwrap_or_default();
-                let name = self
-                    .string_property(&window, "Name")
-                    .await
-                    .unwrap_or_default();
+                let role_id = self.role_id(&window).await;
+                let (role, name) = if permits_text(role_id) {
+                    (
+                        self.role_name(&window).await.unwrap_or_default(),
+                        self.string_property(&window, "Name")
+                            .await
+                            .unwrap_or_default(),
+                    )
+                } else {
+                    (
+                        protected_role_name(role_id).to_owned(),
+                        PROTECTED_LABEL.to_owned(),
+                    )
+                };
                 roots.push(RootSnapshot {
                     frame: self.bounds(&window).await,
                     accessible: window,
@@ -334,21 +348,27 @@ impl AtspiClient {
             }
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
             let role_id = self.role_id(&accessible).await;
-            let role = match role_id {
-                None => "unknown".to_owned(),
-                Some(PASSWORD_TEXT_ROLE) => "password text".to_owned(),
-                Some(_) => field_or_default(self.role_name(&accessible).await, &mut incomplete),
-            };
             incomplete |= role_id.is_none();
-            let name = field_or_default(
-                self.string_property(&accessible, "Name").await,
-                &mut incomplete,
-            );
-            let description = field_or_default(
-                self.string_property(&accessible, "Description").await,
-                &mut incomplete,
-            );
-            let is_secure = matches!(role_id, None | Some(PASSWORD_TEXT_ROLE));
+            let is_secure = !permits_text(role_id);
+            let (role, name, description) = if is_secure {
+                (
+                    protected_role_name(role_id).to_owned(),
+                    PROTECTED_LABEL.to_owned(),
+                    String::new(),
+                )
+            } else {
+                (
+                    field_or_default(self.role_name(&accessible).await, &mut incomplete),
+                    field_or_default(
+                        self.string_property(&accessible, "Name").await,
+                        &mut incomplete,
+                    ),
+                    field_or_default(
+                        self.string_property(&accessible, "Description").await,
+                        &mut incomplete,
+                    ),
+                )
+            };
             let value = if !is_secure && interfaces.contains(TEXT) {
                 field_or_default(self.read_text(&accessible).await, &mut incomplete)
             } else {
@@ -650,6 +670,20 @@ async fn accessibility_bus_address(
         .await?
         .map_err(unavailable)?;
     address.parse().map_err(unavailable)
+}
+
+/// Allow text only for a validated non-password role ID.
+fn permits_text(role_id: Option<u32>) -> bool {
+    matches!(role_id, Some(id) if id != PASSWORD_TEXT_ROLE)
+}
+
+/// Use a fixed role label rather than provider strings for a protected node.
+fn protected_role_name(role_id: Option<u32>) -> &'static str {
+    if role_id == Some(PASSWORD_TEXT_ROLE) {
+        "password text"
+    } else {
+        "unknown"
+    }
 }
 
 /// Retain optional field defaults, but do not use a missing timed-out field to prove absence.
