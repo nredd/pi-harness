@@ -36,7 +36,10 @@ test("a step the helper reports as didnt stops the transaction and only the exec
 	assert.equal(fake.actCalls.length, 1, "later steps are not dispatched after a didnt");
 	assert.equal(result.details.execution.outcome, "didnt");
 	assert.equal(result.details.execution.actionCount, 1);
-	assert.match(fake.text(result), /^Executed 1 checked UI action in/);
+	assert.match(
+		fake.text(result),
+		/^Stopped at action 1; whether the transaction was delivered is unknown\. Do not replay the transaction: check state [\w-]+ for whether it took effect before retrying it\./,
+	);
 });
 
 test.for([
@@ -63,7 +66,7 @@ test.for([
 		);
 		assert.deepEqual(execution.steps[1].evidence, evidence);
 		assert.equal(execution.error.code, code);
-		assert.ok(fake.text(result).startsWith(`Stopped at action 2 (${code}).${posted} Do not replay the transaction.`));
+		assert.ok(fake.text(result).startsWith(`Stopped at action 2 (${code}).${posted} Do not replay the transaction:`));
 	},
 );
 
@@ -93,7 +96,7 @@ test.for([
 		assert.ok(
 			fake
 				.text(result)
-				.startsWith(`Stopped at action 2 (foreground_required). ${posted} Do not replay the transaction.`),
+				.startsWith(`Stopped at action 2 (foreground_required). ${posted} Do not replay the transaction:`),
 		);
 	},
 );
@@ -120,7 +123,7 @@ test.for([{ first: true }, { first: false }])(
 			fake
 				.text(result)
 				.startsWith(
-					`Stopped at action ${at + 1} (reply_lost). More input may have been delivered. Do not replay the transaction.`,
+					`Stopped at action ${at + 1} (reply_lost). More input may have been delivered. Do not replay the transaction:`,
 				),
 		);
 	},
@@ -146,7 +149,7 @@ test("a strict-headless batch whose reply was lost is unknown without inventing 
 	assert.ok(
 		fake
 			.text(result)
-			.startsWith("Stopped (reply_lost). More input may have been delivered. Do not replay the transaction."),
+			.startsWith("Stopped (reply_lost). More input may have been delivered. Do not replay the transaction:"),
 	);
 	// Any other batch failure still escapes as an error.
 	currentPlatformBackend.actBatch = async () => {
@@ -169,7 +172,7 @@ test("an abort after a lost reply keeps the unknown stop instead of a bare abort
 		(error) => {
 			assert.ok(
 				error.message.startsWith(
-					"Stopped at action 1 (reply_lost). More input may have been delivered. Do not replay the transaction.",
+					"Stopped at action 1 (reply_lost). More input may have been delivered. The follow-up observation was aborted. Do not replay the transaction: call find_roots, then observe_ui to check whether it took effect.",
 				),
 				error.message,
 			);
@@ -206,7 +209,7 @@ test("a stop that left input held names the unconfirmed release", async ({ onTes
 		fake
 			.text(result)
 			.startsWith(
-				"Stopped at action 1 (foreground_required). 0 input events posted. More input may have been delivered. Release of keycode 37 is unconfirmed. Do not replay the transaction.",
+				"Stopped at action 1 (foreground_required). 0 input events posted. More input may have been delivered. Release of keycode 37 is unconfirmed. Do not replay the transaction:",
 			),
 	);
 });
@@ -228,9 +231,7 @@ test("partial stop survives root closure", async ({ onTestFinished }) => {
 	assert.deepEqual(execution.error, error, "the original refusal is kept");
 	assert.equal(execution.verification.status, "failed", "the check is still recorded");
 	assert.ok(
-		fake
-			.text(result)
-			.startsWith("Stopped at action 1 (foreground_required). 2 input events posted. Do not replay the transaction."),
+		fake.text(result).startsWith("Stopped at action 1 (foreground_required). 2 input events posted.\nIts source root"),
 	);
 });
 
@@ -313,7 +314,7 @@ test.for([false, true])(
 		assert.equal(fake.actBatchCalls.length, 1);
 		assert.equal(result.details.execution.stoppedAt, undefined);
 		assert.deepEqual(result.details.execution.error, error);
-		assert.ok(fake.text(result).startsWith("Stopped (app_blocked). Do not replay the transaction."));
+		assert.ok(fake.text(result).startsWith("Stopped (app_blocked). Do not replay the transaction:"));
 	},
 );
 

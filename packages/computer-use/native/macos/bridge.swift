@@ -3382,11 +3382,16 @@ final class Bridge {
 				try keyboard.deliver { try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard) }
 				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
-				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
+				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString)
 				performed["grounding"] = "keyboard-events"
 				performed["delivery"] = delivery
 				performed["selectionGrounding"] = selected ? "ax" : "keyboard"
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The replacement text was posted, so a stale or failed readback may hide text that landed: unknown, never
+				// `didnt`, which would read as not delivered and invite a replay.
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			var targetElement = element
 			var status = world.setAttribute(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
@@ -3397,11 +3402,13 @@ final class Bridge {
 			if status == .success {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
-				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString) ?? ""
-				if value != text && policy != "foreground" {
-					throw BridgeFailure(message: "The background accessibility value write was accepted but did not take effect", code: "foreground_required")
-				}
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString)
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The write was accepted, so a stale or failed readback may hide a value that landed: unknown, never
+				// `didnt` or `foreground_required`, either of which invites a second write (#1290).
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			try executeCoordinates(coordinatePoint())
 		} else if action == "typeText" {
@@ -5549,7 +5556,7 @@ The resulting outline preserves native semantics where they are available. It do
 The helper prefers AX operations before synthesized input:
 
 - press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
-- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back;
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field);
 - semantic scrolling walks the target and its ancestors for supported AX scroll actions;
 - foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
 
@@ -5709,7 +5716,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or say its delivery is unknown when the settled outcome is `unknown` without a stop (and not to replay it). A stopped transaction (`stoppedAt`, a keyboard stop or a timed-out or otherwise indeterminate action) is never called delivered, in a terminal or a successor result: its first line names the stopped action and its literal refusal or error code, the root observation follows on its own line, and the replay decision comes once. Only a first action refused with a code or `0` posted units says nothing was posted and a retry is safe; every other stop says not to replay the transaction (#1281). The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
