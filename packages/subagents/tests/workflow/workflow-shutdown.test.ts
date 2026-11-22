@@ -18,6 +18,7 @@ import {
 	createSubagentsExtension,
 	WORKFLOW_ENTRY_TYPE,
 	WORKFLOW_FILE_FLAG,
+	WORKFLOW_SHUTDOWN_DEADLINE_MS,
 	WORKFLOW_SHUTDOWN_REFUSAL,
 } from "../../src/index.ts";
 import { runWorkflow, type WorkflowRunResult } from "../../src/workflow/runtime.ts";
@@ -208,6 +209,54 @@ it("refuses a flag-launched workflow while shutdown waits", async () => {
 	expect(warn).toHaveBeenCalledWith(`[pi-subagents] ${WORKFLOW_SHUTDOWN_REFUSAL}`);
 	expect(runWorkflow).toHaveBeenCalledOnce();
 	warn.mockRestore();
+});
+
+/** Shut down across a run that settles only after the deadline, then let it settle late. */
+async function shutDownPastDeadline(run: ReturnType<typeof holdNextRun>) {
+	let returned = false;
+	const shutdown = booted.lifecycle.get("session_shutdown")!({ type: "session_shutdown", reason: "new" }, context).then(
+		() => {
+			returned = true;
+		},
+	);
+	await run.aborted;
+	clock.advance(WORKFLOW_SHUTDOWN_DEADLINE_MS - 1);
+	await flush();
+	const returnedBeforeDeadline = returned;
+	clock.advance(1);
+	await shutdown;
+	const disposedAtReturn = booted.emitted.filter((e) => e.event === "subagents:disposed").length;
+	run.complete();
+	await flush();
+	return { returnedBeforeDeadline, disposedAtReturn };
+}
+
+it("stops waiting for a stalled tool-launched run at the deadline, and fences its late completion", async () => {
+	const run = await startToolRun();
+
+	const { returnedBeforeDeadline, disposedAtReturn } = await shutDownPastDeadline(run);
+
+	expect(returnedBeforeDeadline).toBe(false);
+	expect(disposedAtReturn).toBe(1);
+	expect(clock.pending, "a late completion arms no timer").toBe(0);
+	clock.advance(60_000);
+	expect(notices()).toEqual([]);
+	expect(drainDetached(sessionFile)).toEqual([]);
+});
+
+it("fences a stalled flag-launched run's late completion", async () => {
+	const path = join(hermetic.dir, "flow.js");
+	writeFileSync(path, script);
+	const run = holdNextRun();
+	await startSession({ [WORKFLOW_FILE_FLAG]: path });
+
+	await shutDownPastDeadline(run);
+
+	expect(booted.pi.appendEntry.mock.calls.filter((call: any[]) => call[0] === WORKFLOW_ENTRY_TYPE)).toEqual([]);
+	expect(booted.pi.sendMessage.mock.calls.filter((call: any[]) => call[0]?.customType === "workflow-result")).toEqual(
+		[],
+	);
+	expect(clock.pending).toBe(0);
 });
 
 it("records a flag-launched run's outcome before shutdown returns", async () => {

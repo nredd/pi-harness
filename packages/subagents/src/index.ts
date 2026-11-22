@@ -86,7 +86,7 @@ import {
 	setFallbackSubagent,
 } from "./agent-types.ts";
 import { inChildSessionContext } from "./child-context.ts";
-import { type Clock, realClock } from "./clock.ts";
+import { type Clock, realClock, type TimerHandle } from "./clock.ts";
 import { CompletionOutbox } from "./completion-outbox.ts";
 import { createStopActions, isLiveWorkflow, registerControlTools } from "./control-tools.ts";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.ts";
@@ -511,6 +511,14 @@ export const WORKFLOW_FILE_FLAG = "subagents-workflow-file";
 
 /** What a workflow launch gets once `session_shutdown` has begun: shutdown would neither stop nor join it. */
 export const WORKFLOW_SHUTDOWN_REFUSAL = "The session is shutting down: no new workflow can start.";
+
+/**
+ * How long `session_shutdown` waits for aborted workflows to settle. An abort
+ * settles once `worker.terminate()` resolves, normally within milliseconds; a
+ * stalled one must not hold quit or session replacement, which the host awaits
+ * with no timeout of its own. Same ceiling as a child session's shutdown handlers.
+ */
+export const WORKFLOW_SHUTDOWN_DEADLINE_MS = 3_000;
 
 /**
  * Re-exported from where they now live, because this is where they were
@@ -1802,7 +1810,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// Joined, completion callbacks included, while the outbox is still open: an
 		// aborted run settles once its worker is down, and its Stopped notice is then
 		// spooled below on a switch or dropped with the outbox on quit (#1257).
-		await Promise.allSettled(pendingWorkflowRuns);
+		await joinWorkflowRuns();
 		const switching = event?.reason !== "quit" && sessionFile !== undefined;
 		if (switching) {
 			// A group may still be held, or not registered until the parent's turn
@@ -3398,17 +3406,39 @@ Terse command-style prompts produce shallow, generic work.
 	 * joins these before disposing the outbox, widget and fleet: a callback that
 	 * ran afterwards armed its notice timer on the closed outbox (#1257).
 	 */
-	const pendingWorkflowRuns = new Set<Promise<void>>();
+	const pendingWorkflowRuns = new Map<Promise<void>, { fenced: boolean }>();
 
 	/** Set once `session_shutdown` begins: both launch paths then refuse. */
 	let workflowsClosing = false;
 
 	/** Run a task in the background, then `settled`, for `session_shutdown` to join. */
 	function detachWorkflowRun(ctx: ExtensionContext, task: WorkflowTask, settled: () => void): void {
+		const state = { fenced: false };
 		const run = runWorkflowTask(ctx, task)
-			.then(settled)
+			.then(() => {
+				if (!state.fenced) settled();
+			})
 			.finally(() => pendingWorkflowRuns.delete(run));
-		pendingWorkflowRuns.add(run);
+		pendingWorkflowRuns.set(run, state);
+	}
+
+	/**
+	 * Wait for the pending runs, for at most {@link WORKFLOW_SHUTDOWN_DEADLINE_MS}.
+	 * A run still going at the deadline is fenced: its callback, once it settles,
+	 * would act on the disposed outbox and a session that has gone, so it is skipped.
+	 */
+	async function joinWorkflowRuns(): Promise<void> {
+		if (pendingWorkflowRuns.size === 0) return;
+		let deadline: TimerHandle | undefined;
+		await Promise.race([
+			Promise.allSettled(pendingWorkflowRuns.keys()),
+			new Promise<void>((resolve) => {
+				deadline = clock.setTimeout(resolve, WORKFLOW_SHUTDOWN_DEADLINE_MS);
+				deadline.unref?.();
+			}),
+		]);
+		deadline!.cancel();
+		for (const state of pendingWorkflowRuns.values()) state.fenced = true;
 	}
 
 	/**
