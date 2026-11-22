@@ -55,7 +55,7 @@ async function setup({
 	return {
 		emit,
 		tool: (toolName = "read", isError = false, context = ctx) =>
-			emit("tool_execution_end", { toolName, isError }, context),
+			emit("message_end", { message: { role: "toolResult", toolName, isError } }, context),
 		settle: (outcome = "completed", context = ctx) =>
 			emit("agent_before_settle", { outcome, entries: [], context: { contextMessages: [] } }, context),
 		input: (source = "interactive") => emit("input", { source }),
@@ -84,6 +84,15 @@ it("counts work across settles, skips conversation, and expands the trailing mar
 	expect(message.content).toBe(EMPTY_REMINDER_MARKER);
 	expect(await emit("context", { messages: [message] })).toBeUndefined();
 	expect(await emit("context", { messages: [message, { role: "assistant" }] })).toBeUndefined();
+});
+
+it("counts only tool-result messages, not other messages or raw tool completions", async () => {
+	const { tool, settle, emit } = await setup({ calls: 1 });
+	await emit("message_end", { message: { role: "assistant", content: [] } });
+	await emit("tool_execution_end", { toolName: "read", isError: false });
+	expect(await settle()).toBeUndefined();
+	await tool();
+	expect(await settle()).toEqual(reminder);
 });
 
 it("nudges for a successful Agent call, but not a failed one or an unfinished run", async () => {
@@ -247,12 +256,15 @@ it("counts a read that completes while the todo overlay refresh is pending", asy
 	const overlay = await import("../../src/todo-overlay.ts");
 	const releaseImport = deferred<typeof overlay>();
 	const importOverlay = vi.fn(() => releaseImport.promise);
-	const { tool, settle, callTodo } = await setup({ calls: 1, importOverlay });
+	const { tool, settle, callTodo, emit } = await setup({ calls: 1, importOverlay });
+	const todoEnd = () => emit("tool_execution_end", { toolName: "todo", isError: false });
 	await callTodo({ action: "create", subject: "Visible todo" });
 	const refreshed = vi.fn();
-	const firstRefresh = tool("todo").then(refreshed);
+	const firstRefresh = todoEnd().then(refreshed);
 	try {
+		await tool("todo");
 		await callTodo({ action: "clear" });
+		await todoEnd();
 		await tool("todo");
 		// Clear needs no new overlay, but the first completion still awaits the import.
 		expect(importOverlay).toHaveBeenCalledTimes(1);
