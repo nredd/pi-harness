@@ -63,7 +63,14 @@ import {
 } from "./contract.ts";
 import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
 import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, reconcileNote, renderNote, type WindowNote } from "./note.ts";
+import {
+	noteAfterAct,
+	noteForOutline,
+	noteFromLook,
+	noteRegionKeyForRef,
+	renderNote,
+	type WindowNote,
+} from "./note.ts";
 import {
 	controlLine,
 	foldToBudget,
@@ -1205,15 +1212,6 @@ async function performLook(
 	);
 }
 
-/**
- * Re-check the state's note against `outline` before a cached query shows it: a graft or a restored session note
- * may name a node that is no longer readable. Looks rebuild the note from their own outline and need no recheck.
- */
-function currentNoteFor(state: OperationState, outline: Outline): WindowNote | undefined {
-	state.currentNote = reconcileNote(state.currentNote, outline);
-	return state.currentNote;
-}
-
 function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: LookResponse) {
 	return {
 		windowRef: target.windowRef,
@@ -2261,6 +2259,8 @@ async function performSearchUi(
 		escalatedOCR = true;
 	}
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
+	// A cached query rechecks the note: a graft or a restored session note may name a node no longer readable.
+	const note = noteForOutline(state.currentNote, outline);
 	const details: OutlineToolDetails = {
 		tool: "search_ui",
 		stateId: state.currentCapture?.stateId,
@@ -2269,7 +2269,7 @@ async function performSearchUi(
 		totalMatches: ranked.totalMatches,
 		returned: matches.length,
 		hasMore: ranked.totalMatches > matches.length,
-		note: currentNoteFor(state, outline),
+		note,
 	};
 	const collides = (match: OutlineSearchMatch) =>
 		matches.some((other) => other !== match && other.role === match.role && other.label === match.label);
@@ -2277,7 +2277,7 @@ async function performSearchUi(
 		(match) =>
 			`${controlLine(match.node)} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score!.toFixed(2)}` : ""}]${collides(match) ? `\n  path: ${match.path}` : ""}`,
 	);
-	const noteHeader = renderNote(state.currentNote);
+	const noteHeader = renderNote(note);
 	const noteText = noteHeader ? `${noteHeader}\n\n` : "";
 	const escalationText = escalatedOCR
 		? " OCR text was escalated for this search after the cached outline had no matches."
@@ -2356,7 +2356,7 @@ async function performExpandUi(
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
 		renderedOutline: folded.text,
-		note: currentNoteFor(state, outline),
+		note: noteForOutline(state.currentNote, outline),
 	};
 	return {
 		content: [
@@ -2379,7 +2379,7 @@ async function performInspectUi(params: InspectUiParams): Promise<AgentToolResul
 		stateId: state.currentCapture?.stateId,
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
-		note: currentNoteFor(state, outline),
+		note: noteForOutline(state.currentNote, outline),
 	};
 	const fields = [
 		formatOutlineNodeLabel(target),

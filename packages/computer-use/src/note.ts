@@ -77,7 +77,7 @@ function regionLabel(node: OutlineNode): string {
  * present and readable; a protected node's region takes its current marker, and an absent or unattributed node's
  * region is redacted. Root and window regions carry no outline text and pass through. Returns a new note.
  */
-export function reconcileNote(note: WindowNote | undefined, outline: Outline): WindowNote | undefined {
+export function noteForOutline(note: WindowNote | undefined, outline: Outline): WindowNote | undefined {
 	if (!note) return undefined;
 	const regions = note.regions.map((region): NoteRegion => {
 		if (region.key === REDACTED_KEY || NON_OUTLINE_KEY.test(region.key)) return region;

@@ -150,9 +150,10 @@ const PROTECTED_ROLES = new Set(["axsecuretextfield", "password text", "unknown"
  * role, or one the helper could not classify, counts as protected.
  */
 export function isProtectedNode(node: Pick<OutlineNode, "role" | "subrole" | "title" | "description">): boolean {
+	// Restored session outlines are untrusted JSON and may omit either field.
 	return (
-		PROTECTED_ROLES.has(node.role.trim().toLowerCase()) ||
-		node.subrole.trim().toLowerCase() === "axsecuretextfield" ||
+		PROTECTED_ROLES.has((node.role ?? "").trim().toLowerCase()) ||
+		(node.subrole ?? "").trim().toLowerCase() === "axsecuretextfield" ||
 		node.title === PROTECTED_LABEL ||
 		node.description === PROTECTED_LABEL
 	);

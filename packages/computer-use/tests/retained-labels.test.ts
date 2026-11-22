@@ -1,7 +1,7 @@
 // Retained outline labels never outlive a node's readable classification (#1234): notes, grafts, searches, diffs.
 import assert from "node:assert/strict";
 import { describe, onTestFinished, test, vi } from "vitest";
-import { noteFromLook, reconcileNote, renderNote, type WindowNote } from "../src/note.ts";
+import { noteForOutline, noteFromLook, renderNote, type WindowNote } from "../src/note.ts";
 import {
 	graftScopedOutline,
 	isProtectedNode,
@@ -262,6 +262,22 @@ describe("outline sanitizing", () => {
 		assert.deepEqual([restored.nodes[1].value, restored.nodes[1].text], ["", []]);
 	});
 
+	test("a restored node missing its role or subrole is unclassified, not a crash", () => {
+		const bare = { ref: "@e2", title: "Bare", value: SECRET_VALUE, text: [], children: [] };
+		const noSubrole = { ...bare, ref: "@e3", role: "AXTextField", value: "kept" };
+		const restored = restoreOutline({
+			lookId: "l",
+			root: { ...outlineNode("@e1", { role: "AXWindow" }), children: [bare as never, noSubrole as never] },
+		});
+		assert.deepEqual(
+			restored.nodes.slice(1).map((node) => [node.title, node.value]),
+			[
+				["Bare", ""],
+				["Bare", "kept"],
+			],
+		);
+	});
+
 	test("diffs between a readable and a protected look name only the new fields", () => {
 		const parse = (lookId: string, child: object) =>
 			parsed({ lookId, outline: { ref: "w", role: "AXWindow", children: [child] } });
@@ -362,7 +378,7 @@ describe("note retention", () => {
 		});
 	});
 
-	test("reconcileNote consults the outline's current classification", () => {
+	test("noteForOutline consults the outline's current classification", () => {
 		const note: WindowNote = {
 			windowRef: "w",
 			title: "Main",
@@ -381,7 +397,7 @@ describe("note retention", () => {
 			outlineNode("@e2", { title: "Readable" }),
 			outlineNode("@e3", { role: "password text", title: PROTECTED_LABEL, identifier: "/path" }),
 		]);
-		const reconciled = present(reconcileNote(note, outline));
+		const reconciled = present(noteForOutline(note, outline));
 		assert.deepEqual(reconciled.regions, [
 			{ key: "AXGroup:readable", label: "readable", status: "seen", ref: "@e2" },
 			{ key: "password text:/path", label: PROTECTED_LABEL, status: "changed", detail: "acted here", ref: "@e3" },
@@ -391,6 +407,6 @@ describe("note retention", () => {
 			{ key: "redacted", label: REDACTED_LABEL, status: "changed" },
 		]);
 		assert.equal(note.regions[1].label, SECRET, "the input note is not mutated");
-		assert.equal(reconcileNote(undefined, outline), undefined);
+		assert.equal(noteForOutline(undefined, outline), undefined);
 	});
 });
