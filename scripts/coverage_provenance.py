@@ -18,6 +18,7 @@ import sys
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+from ci_paths import OWNED_SHARDS
 from coverage_provenance_record import (
     MAX_JSON_BYTES,
     SEMANTICS_FIELD,
@@ -102,26 +103,35 @@ SEMANTICS_FILENAMES = (
 
 
 def attest_shards(directory: Path, run: Provenance, cell: str) -> None:
-    """Refuse to label merged reports as current if any input lacks matching provenance.
+    """Refuse to label merged reports as current unless every planned shard has matching provenance.
+
+    The download only sees artifacts that exist, so the expected set comes from the CI plan's
+    `OWNED_SHARDS`, the table that expands into the shard matrix.
 
     Parameters:
         directory (Path): Download directory containing one directory per shard artifact.
         run (Provenance): The fan-in's independently known run and checkout identity.
         cell (str): The fan-in's declared coverage artifact name.
     Returns:
-        None: Every downloaded shard agrees with the fan-in.
+        None: Exactly the planned shards were downloaded, and each agrees with the fan-in.
     Raises:
-        ValueError: No shards were found, or a shard has missing or mismatched provenance.
+        ValueError: A planned shard is missing, an unplanned one is present, or a shard has missing
+            or mismatched provenance.
+        KeyError: The cell has no coverage producer.
         OSError: An input could not be read.
     """
-    shards = sorted(directory.glob(f"{cell}-*/"))
-    if not shards:
-        raise ValueError("No downloaded coverage shards to verify")
-    for shard in shards:
-        shard_name = shard.name.removeprefix(f"{cell}-")
-        record = read_record(shard / "coverage" / f"provenance-{shard_name}.json")
-        job = producer_job_for_cell(cell, shard=True)
-        validate_record(record, run.record(job, shard.name))
+    job = producer_job_for_cell(cell, shard=True)
+    expected = {f"{cell}-{shard.name}" for shard in OWNED_SHARDS[cell.removeprefix("coverage-")]}
+    found = {shard.name for shard in directory.glob(f"{cell}-*/")}
+    if found != expected:
+        raise ValueError(
+            f"Downloaded coverage shards differ from the plan: missing {sorted(expected - found)}, "
+            f"unexpected {sorted(found - expected)}"
+        )
+    for name in sorted(expected):
+        shard_name = name.removeprefix(f"{cell}-")
+        record = read_record(directory / name / "coverage" / f"provenance-{shard_name}.json")
+        validate_record(record, run.record(job, name))
 
 
 def checkout_sha() -> str:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -34,6 +35,8 @@ def ci_job(name: str) -> str:
     Returns:
         str: Job id; each OS has its own `owned-shards-<os>` and `owned-<os>` (fan-in) job.
     """
+    if name == gate.WINDOWS_JOB:
+        return "computer-use-windows"
     if name.startswith("owned "):
         system = name.split("(", maxsplit=1)[1].rstrip(")").split(",", maxsplit=1)[0]
         os_key = system.split("-", maxsplit=1)[0]
@@ -74,7 +77,7 @@ def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any
     ]
     artifacts = [
         {
-            "name": name,
+            "name": name.replace("<attempt>", "1"),
             "expired": False,
             "size_in_bytes": 1,
             "workflow_run": {"id": 42, "head_sha": SHA},
@@ -235,13 +238,88 @@ def test_required_job_names_are_pinned() -> None:
         "stack (ubuntu-24.04, local)",
         "stack (macos-14, local)",
         "release-core / core (forks/pi)",
+        "computer-use Rust (windows-x64)",
     }
+    assert gate.expected_jobs()["owned (ubuntu-24.04)"] == {
+        "Require every planned shard to succeed",
+        "Coverage accounting (existing reports, including test failures)",
+        "Download Windows x64 coverage",
+        "Account for Windows x64 coverage separately",
+    }
+    assert gate.expected_jobs()["computer-use Rust (windows-x64)"] == {
+        "Native Windows tests and LLVM reports (no desktop interaction)",
+        "Preserve Windows source-bound native reports",
+    }
+    assert set(gate.expected_artifacts()) >= {"computer-use-rust-windows-x64-<attempt>"}
     assert gate.expected_jobs()["release-core / core (forks/pi)"] == {
         "Build",
         "Check without rewriting",
         "Build the pi-env daemon",
         "Test (isolated HOME, no credentials)",
     }
+
+
+@pytest.mark.parametrize(
+    ("job", "step"),
+    [
+        ("owned (ubuntu-24.04)", "Download Windows x64 coverage"),
+        ("owned (ubuntu-24.04)", "Account for Windows x64 coverage separately"),
+        ("computer-use Rust (windows-x64)", "Native Windows tests and LLVM reports (no desktop interaction)"),
+        ("computer-use Rust (windows-x64)", "Preserve Windows source-bound native reports"),
+        ("computer-use Rust (windows-x64)", None),
+    ],
+)
+def test_windows_coverage_must_execute(job: str, step: str | None) -> None:
+    """A green dispatch whose Windows producer or accounting was skipped is not release evidence.
+
+    Parameters:
+        job (str): Job whose Windows evidence is removed.
+        step (str | None): Step reported as skipped, or null to drop the whole job.
+
+    Returns:
+        None: Admission refuses the skipped Windows check.
+    """
+    run, jobs, artifacts = evidence()
+    record = next(item for item in jobs if item["name"] == job)
+    if step is None:
+        jobs.remove(record)
+    else:
+        next(item for item in record["steps"] if item["name"] == step)["conclusion"] = "skipped"
+    with pytest.raises(ValueError, match=re.escape(job)):
+        gate.validate_execution(SHA, run, jobs, artifacts)
+
+
+@pytest.mark.parametrize(
+    ("name", "admitted"),
+    [
+        ("computer-use-rust-windows-x64-1", True),
+        ("computer-use-rust-windows-x64-12", True),
+        ("computer-use-rust-windows-x64-0", False),
+        ("computer-use-rust-windows-x64-01", False),
+        ("computer-use-rust-windows-x64-", False),
+        ("computer-use-rust-windows-x64-1a", False),
+        ("computer-use-rust-windows-x64-<attempt>", False),
+        ("computer-use-rust-linux-x64-1", False),
+    ],
+)
+def test_windows_artifact_is_the_producers_attempt_numbered_upload(name: str, admitted: bool) -> None:
+    """Accept only the producer's `computer-use-rust-windows-x64-<attempt>` upload.
+
+    Parameters:
+        name (str): Listed artifact name.
+        admitted (bool): Whether it is the Windows producer's upload.
+
+    Returns:
+        None: Only a positive attempt number qualifies; the job window still binds it.
+    """
+    run, jobs, artifacts = evidence()
+    windows = next(item for item in artifacts if item["name"].startswith("computer-use-rust-windows-x64-"))
+    windows["name"] = name
+    if admitted:
+        assert gate.validate_execution(SHA, run, jobs, artifacts) == 42
+    else:
+        with pytest.raises(ValueError, match=r"\['computer-use-rust-windows-x64-<attempt>'\]"):
+            gate.validate_execution(SHA, run, jobs, artifacts)
 
 
 def rerun_failed_jobs_evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -377,7 +455,8 @@ def test_owned_gate_steps_follow_the_plan_and_exist_in_the_workflow() -> None:
         fan_in_steps = {step.get("name") for step in jobs[ci_job(f"owned ({system})")]["steps"]}
         assert set(gate.OWNED_GATE_STEPS.values()) <= shard_steps
         assert set(gate.OWNED_FAN_IN_STEPS) <= fan_in_steps
-        assert gate.expected_jobs()[f"owned ({system})"] == set(gate.OWNED_FAN_IN_STEPS)
+        windows = set(gate.WINDOWS_FAN_IN_STEPS) if system == "ubuntu-24.04" else set()
+        assert gate.expected_jobs()[f"owned ({system})"] == set(gate.OWNED_FAN_IN_STEPS) | windows
         for shard, gates in plan[system].items():
             required = gate.expected_jobs()[f"owned shard ({system}, {shard})"]
             assert required == {gate.OWNED_GATE_STEPS[name] for name in gates}

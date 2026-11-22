@@ -8,6 +8,7 @@ References:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from hashlib import sha256
@@ -22,13 +23,18 @@ from coverage_fixtures import SCRIPT, commit_base
 
 from coverage_accounting import (
     Counts,
+    MappedFile,
     Package,
     Policy,
+    Remeasurement,
     Signal,
     account,
+    check_ratchet,
+    check_remeasurements,
     check_signal_ratchet,
     is_llvm_producer,
     parse_lcov,
+    weakened_mapped_totals,
 )
 
 
@@ -311,6 +317,21 @@ def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Pa
         reporters=["text", "lcov", "json"],
         producer="llvm-lcov",
         platforms=["win32"],
+        mapped_totals={
+            "win32": {
+                f"native/windows/bridge-rs/src/{name}": MappedFile(
+                    sha256=sha256((crate / "src" / name).read_bytes()).hexdigest(),
+                    lines=total,
+                    functions=total,
+                )
+                for name, total in (
+                    ("lib.rs", 0),
+                    ("main.rs", 3),
+                    ("policy_tests.rs", 3),
+                    ("tests/mod.rs", 3),
+                )
+            }
+        },
     )
     package.signals["primary"] = signal
     reports = tmp_path / "download"
@@ -334,6 +355,46 @@ def windows_artifact_fixture(tmp_path: Path) -> tuple[Policy, dict[str, Any], Pa
     }
     path.with_name("metadata.json").write_text(json.dumps({"sourceHashes": source_hashes}))
     return cfg, report, path, reports
+
+
+def windows_export(report: dict[str, Any], sysroot: str = "library") -> tuple[list[dict[str, Any]], str]:
+    """Point a fixture export at a Windows checkout and render the LCOV that matches it.
+
+    Parameters:
+        report (dict[str, Any]): Raw export from `native_fixture`, changed in place.
+        sysroot (str): Sysroot directory of the appended dependency file.
+    Returns:
+        tuple[list[dict[str, Any]], str]: JSON file records, with the ignored sysroot last, and LCOV.
+    Raises:
+        None.
+    """
+    files = report["data"][0]["files"]
+    prefix = r"D:\a\repo\repo\packages\computer-use\native\windows\bridge-rs"
+    for file in files:
+        relative = file["filename"].split("/src/")[1].replace("/", "\\")
+        file["filename"] = f"{prefix}\\src\\{relative}"
+    files.append({"filename": f"{prefix}\\rustc\\{'a' * 40}\\{sysroot}\\std\\thread_local.rs", "summary": {}})
+    return files, "".join(windows_record(file) for file in files)
+
+
+def windows_record(file: dict[str, Any]) -> str:
+    """Render one LLVM LCOV record whose summaries agree with the JSON file record.
+
+    Parameters:
+        file (dict[str, Any]): JSON file record; an empty summary renders the default totals.
+    Returns:
+        str: LCOV record with instantiation-style function rows.
+    Raises:
+        None.
+    """
+    summary = file["summary"]
+    lines = summary["lines"]["count"] if summary else 3
+    functions = summary["functions"]["count"] if summary else 3
+    return (
+        f"SF:{file['filename']}\nFN:1,first\nFN:1,second\nFN:2,third\nFN:2,fourth\n"
+        "FNDA:1,first\nFNDA:0,second\nFNDA:0,third\nFNDA:0,fourth\nDA:1,1\n"
+        f"LF:{lines}\nLH:1\nFNF:{functions}\nFNH:1\nBRF:0\nBRH:0\nend_of_record\n"
+    )
 
 
 def alter_windows_metadata(path: Path, source: Path, case: str) -> None:
@@ -423,21 +484,7 @@ def test_windows_llvm_lcov_requires_a_matching_native_export(tmp_path: Path, cas
     """
     cfg, report, path, reports = windows_artifact_fixture(tmp_path)
     signal = cfg.packages["windows"].signals["primary"]
-    files = report["data"][0]["files"]
-    prefix = r"D:\a\repo\repo\packages\computer-use\native\windows\bridge-rs"
-    for file in files:
-        relative = file["filename"].split("/src/")[1].replace("/", "\\")
-        file["filename"] = f"{prefix}\\src\\{relative}"
-    sysroot = f"\\rustc\\{'a' * 40}\\library\\std\\thread_local.rs"
-    if case == "sysroot-lookalike":
-        sysroot = sysroot.replace("library", "src")
-    files.append({"filename": prefix + sysroot, "summary": {}})
-    rows = (
-        "\nFN:1,first\nFN:1,second\nFN:2,third\nFN:2,fourth\n"
-        "FNDA:1,first\nFNDA:0,second\nFNDA:0,third\nFNDA:0,fourth\nDA:1,1\n"
-        "LF:3\nLH:1\nFNF:3\nFNH:1\nBRF:0\nBRH:0\nend_of_record\n"
-    )
-    lcov = "".join(f"SF:{file['filename']}{rows}" for file in files)
+    files, lcov = windows_export(report, "src" if case == "sysroot-lookalike" else "library")
     if case == "missing-source":
         lcov = lcov.split("end_of_record\n", 1)[1]
     lcov = alter_windows_counters(lcov, files, signal, case)
@@ -566,3 +613,295 @@ def test_windows_native_policy_cannot_loosen_or_remove_platform() -> None:
     new.platforms = ["linux"]
     with pytest.raises(ValueError, match="Cannot remove measured platforms"):
         check_signal_ratchet("computer-use-windows-native/primary", new, old)
+
+
+MAIN_RS = "native/windows/bridge-rs/src/main.rs"
+
+
+def write_windows_reports(report: dict[str, Any], path: Path, case: str) -> None:
+    """Write a matching Windows pair after an instrumentation or source change.
+
+    Parameters:
+        report (dict[str, Any]): Raw export from `windows_artifact_fixture`.
+        path (Path): LCOV report path; the JSON export and metadata sit beside it.
+        case (str): `shrunk-lines`, `shrunk-functions`, `report-only` and `changed-source` drop one
+            mapped unit from `main.rs` and `grown` adds one; `changed-source` also edits `main.rs`
+            with matching producer metadata. Other cases write the unchanged pair.
+    Returns:
+        None.
+    Raises:
+        OSError: A fixture file cannot be written.
+    """
+    files = report["data"][0]["files"]
+    main = next(file for file in files if file["filename"].endswith("/main.rs"))
+    if case in {"shrunk-lines", "shrunk-functions", "grown", "changed-source", "report-only"}:
+        metric = "functions" if case == "shrunk-functions" else "lines"
+        main["summary"][metric]["count"] += 1 if case == "grown" else -1
+    _, lcov = windows_export(report)
+    path.write_text(lcov)
+    path.with_name("coverage.json").write_text(json.dumps(report))
+    if case == "changed-source":
+        crate = path.parents[5] / "packages/computer-use/native/windows/bridge-rs"
+        metadata = path.with_name("metadata.json")
+        hashes = json.loads(metadata.read_text())
+        (crate / "src/main.rs").write_text("fn main() { work(); }\n")
+        hashes["sourceHashes"]["src/main.rs"] = sha256((crate / "src/main.rs").read_bytes()).hexdigest()
+        metadata.write_text(json.dumps(hashes))
+
+
+@pytest.mark.parametrize(
+    ("case", "error"),
+    [
+        ("unchanged", ""),
+        ("grown", ""),
+        ("changed-source", ""),
+        ("report-only", ""),
+        ("shrunk-lines", f"'{MAIN_RS}' lines 3 -> 2, functions 3 -> 3"),
+        ("shrunk-functions", f"'{MAIN_RS}' lines 3 -> 3, functions 3 -> 2"),
+        ("left-signal", "'native/windows/bridge-rs/tests/protocol.rs' lines 1 -> 0"),
+        ("missing-os", "Missing mapped totals"),
+    ],
+)
+def test_windows_mapped_totals_refuse_a_shrinking_denominator(
+    tmp_path: Path, case: str, error: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Fail when both exports lose mapped units of unchanged source, even under the caps.
+
+    Parameters:
+        tmp_path (Path): Disposable source and separate reports roots.
+        case (str): Instrumentation, source or policy change.
+        error (str): Expected failure, empty when the run passes.
+        caplog (pytest.LogCaptureFixture): Stale-record warnings.
+    Returns:
+        None.
+    Raises:
+        AssertionError: A smaller agreeing denominator passes, or a real source change fails.
+    """
+    cfg, report, path, reports = windows_artifact_fixture(tmp_path)
+    signal = cfg.packages["windows"].signals["primary"]
+    mapped = signal.mapped_totals["win32"]
+    if case == "report-only":
+        signal.enforcement = "report-only"
+        signal.reason = "Fixture"
+    if case == "left-signal":
+        # A recorded source outside this run's records, e.g. reclassified without a source change.
+        protocol = tmp_path / "packages/computer-use/native/windows/bridge-rs/tests/protocol.rs"
+        digest = sha256(protocol.read_bytes()).hexdigest()
+        mapped["native/windows/bridge-rs/tests/protocol.rs"] = MappedFile(sha256=digest, lines=1, functions=0)
+    if case == "missing-os":
+        signal.mapped_totals = {}
+    write_windows_reports(report, path, case)
+    results, failures = account(tmp_path, cfg, "win32", reports)
+    assert failures == ([f"windows/primary: {failures[0].split(': ', 1)[1]}"] if error else [])
+    if error:
+        assert error in failures[0]
+        assert ("Mapped totals shrank without a source change" in failures[0]) != (case == "missing-os")
+    else:
+        assert len(results) == 4
+    assert ("STALE mapped totals" in caplog.text) == (case == "changed-source")
+    # Measurement replays never gate on recorded totals.
+    assert account(tmp_path, cfg, "win32", reports, measure=True)[1] == []
+
+
+def ratchet_fixture(tmp_path: Path) -> tuple[Policy, Policy, MappedFile]:
+    """Pair a base policy that recorded Windows totals with an identical current policy.
+
+    Parameters:
+        tmp_path (Path): Disposable checkout.
+    Returns:
+        tuple[Policy, Policy, MappedFile]: Current policy, base policy and the base `main.rs` record.
+    Raises:
+        OSError: Fixture files cannot be written.
+    """
+    base, _, _, _ = windows_artifact_fixture(tmp_path)
+    return (
+        base.model_copy(deep=True),
+        base,
+        base.packages["windows"].signals["primary"].mapped_totals["win32"][MAIN_RS],
+    )
+
+
+@pytest.mark.parametrize(
+    ("change", "unchanged_source", "needs_entry"),
+    [
+        ("none", True, False),
+        ("grow", True, False),
+        ("lower-lines", True, True),
+        ("lower-functions", True, True),
+        ("drop", True, True),
+        ("drop-os", True, True),
+        ("rehash", True, True),
+        ("lower-lines", False, False),
+        ("drop", False, False),
+        ("rehash", False, False),
+    ],
+)
+def test_lowering_recorded_totals_needs_a_reviewed_remeasurement(
+    tmp_path: Path, change: str, unchanged_source: bool, needs_entry: bool
+) -> None:
+    """Treat lowering, dropping or rehashing a still-current record as a remeasurement.
+
+    Parameters:
+        tmp_path (Path): Disposable checkout.
+        change (str): Edit to the current `main.rs` record or its OS.
+        unchanged_source (bool): Whether `main.rs` still matches the base record's hash.
+        needs_entry (bool): Whether the change requires a new `remeasurements` entry.
+    Returns:
+        None.
+    Raises:
+        AssertionError: A shrink of unchanged source passes unreviewed, or a refresh is refused.
+    """
+    current, base, before = ratchet_fixture(tmp_path)
+    signal = current.packages["windows"].signals["primary"]
+    records = signal.mapped_totals["win32"]
+    if not unchanged_source:
+        (tmp_path / "packages/computer-use" / MAIN_RS).write_text("fn main() { work(); }\n")
+    if change == "grow":
+        records[MAIN_RS] = before.model_copy(update={"lines": 4})
+    if change == "lower-lines":
+        records[MAIN_RS] = before.model_copy(update={"lines": 2})
+    if change == "lower-functions":
+        records[MAIN_RS] = before.model_copy(update={"functions": 2})
+    if change == "drop":
+        del records[MAIN_RS]
+    if change == "drop-os":
+        signal.mapped_totals = {}
+    if change == "rehash":
+        records[MAIN_RS] = before.model_copy(update={"sha256": "0" * 64})
+    if needs_entry:
+        with pytest.raises(ValueError, match=r"new `remeasurements`: .*'windows', 'primary', 'win32'"):
+            check_remeasurements(current, base, tmp_path)
+    else:
+        check_remeasurements(current, base, tmp_path)
+    current.remeasurements = [Remeasurement(package="windows", signal="primary", os="win32", reason="Run 1")]
+    if needs_entry:
+        check_remeasurements(current, base, tmp_path)
+    else:
+        with pytest.raises(ValueError, match="Duplicate or stale `remeasurements` entry"):
+            check_remeasurements(current, base, tmp_path)
+
+
+def test_remeasurement_ledger_is_fresh_exact_and_reasoned(tmp_path: Path) -> None:
+    """Base entries never justify a new shrink, duplicates refuse and a reason is mandatory.
+
+    Parameters:
+        tmp_path (Path): Disposable checkout.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The ledger accepts a reused, duplicate or blank declaration.
+    """
+    current, base, before = ratchet_fixture(tmp_path)
+    entry = Remeasurement(package="windows", signal="primary", os="win32", reason="Run 1")
+    base.remeasurements = [entry]
+    current.remeasurements = [entry]
+    check_remeasurements(current, base, tmp_path)
+    current.packages["windows"].signals["primary"].mapped_totals["win32"][MAIN_RS] = before.model_copy(
+        update={"lines": 2}
+    )
+    with pytest.raises(ValueError, match="requires new `remeasurements`"):
+        check_remeasurements(current, base, tmp_path)
+    fresh = entry.model_copy(update={"reason": "Run 2"})
+    current.remeasurements = [entry, fresh, fresh]
+    with pytest.raises(ValueError, match="Duplicate or stale `remeasurements` entry"):
+        check_remeasurements(current, base, tmp_path)
+    current.remeasurements = [entry, fresh]
+    check_remeasurements(current, base, tmp_path)
+    # Without a checkout to hash, every recorded source counts as unchanged.
+    current.remeasurements = [entry]
+    with pytest.raises(ValueError, match="requires new `remeasurements`"):
+        check_remeasurements(current, base, None)
+    # `check_ratchet` applies the ledger before its package checks.
+    with pytest.raises(ValueError, match="requires new `remeasurements`"):
+        check_ratchet(current, base)
+    with pytest.raises(ValidationError, match="nonblank reason"):
+        Remeasurement(package="windows", signal="primary", os="win32", reason=" ")
+
+
+def test_removed_package_or_signal_is_left_to_the_base_ratchet(tmp_path: Path) -> None:
+    """Removed signals have no mapped totals to compare; `check_ratchet` decides their removal.
+
+    Parameters:
+        tmp_path (Path): Disposable checkout.
+    Returns:
+        None.
+    Raises:
+        AssertionError: A removal is attributed to mapped totals.
+    """
+    current, base, _ = ratchet_fixture(tmp_path)
+    del current.packages["windows"].signals["primary"]
+    assert weakened_mapped_totals(current, base, tmp_path) == set()
+    del current.packages["windows"]
+    assert weakened_mapped_totals(current, base, tmp_path) == set()
+    with pytest.raises(ValueError, match="Removed package: 'windows'"):
+        check_ratchet(current, base)
+
+
+@pytest.mark.parametrize(
+    ("mapped", "error"),
+    [
+        ({"win32": {}}, "package-relative files on a measured platform"),
+        ({"win32": {"/abs/main.rs": {"sha256": "0" * 64, "lines": 1, "functions": 1}}}, "package-relative"),
+        ({"win32": {"../main.rs": {"sha256": "0" * 64, "lines": 1, "functions": 1}}}, "package-relative"),
+        ({"linux": {"main.rs": {"sha256": "0" * 64, "lines": 1, "functions": 1}}}, "measured platform"),
+        ({"win32": {"main.rs": {"sha256": "0" * 63, "lines": 1, "functions": 1}}}, "String should match"),
+        ({"win32": {"main.rs": {"sha256": "0" * 64, "lines": -1, "functions": 1}}}, "greater than or equal"),
+    ],
+)
+def test_mapped_totals_schema(mapped: dict[str, Any], error: str) -> None:
+    """Reject vacuous, escaping, off-platform or malformed records.
+
+    Parameters:
+        mapped (dict[str, Any]): Invalid `mapped_totals` declaration.
+        error (str): Expected validation message.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The schema accepts the declaration.
+    """
+    with pytest.raises(ValidationError, match=error):
+        Signal.model_validate(
+            {
+                "report": "lcov.info",
+                "producer": "llvm-lcov",
+                "platforms": ["win32"],
+                "max_uncovered": {"win32": {"lines": 1, "functions": 1}},
+                "reporters": ["text", "lcov"],
+                "mapped_totals": mapped,
+            }
+        )
+
+
+def test_windows_cli_proposes_and_records_mapped_totals(tmp_path: Path) -> None:
+    """The real entrypoint replays an artifact, records totals and proposes a refresh diff.
+
+    Parameters:
+        tmp_path (Path): Disposable committed checkout and separate reports root.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The summary or the review diff lacks current mapped totals.
+    """
+    cfg, report, path, reports = windows_artifact_fixture(tmp_path)
+    (tmp_path / "package.json").write_text(json.dumps({"workspaces": ["packages/*"]}))
+    (tmp_path / "packages/computer-use/package.json").write_text("{}")
+    write_windows_reports(report, path, "shrunk-lines")
+    commit_base(tmp_path, cfg)
+    summary = tmp_path / "summary.json"
+    common = [sys.executable, str(SCRIPT), "--root", str(tmp_path), "--os", "win32"]
+    common += ["--reports-root", str(reports), "--summary", str(summary)]
+    gate = subprocess.run(
+        [*common, "--base", "HEAD"], capture_output=True, text=True, check=False, timeout=30
+    )
+    assert gate.returncode == 1
+    assert "Mapped totals shrank without a source change" in gate.stderr
+    measured = json.loads(summary.read_text())["measured_mapped_totals"]["windows/primary"]["win32"]
+    assert measured[MAIN_RS] == {
+        "sha256": sha256((tmp_path / "packages/computer-use" / MAIN_RS).read_bytes()).hexdigest(),
+        "lines": 2,
+        "functions": 3,
+    }
+    assert len(measured) == 4
+    replay = subprocess.run([*common, "--measure"], capture_output=True, text=True, check=True, timeout=30)
+    assert re.search(r'^\+\s+"lines": 2,$', replay.stderr, re.MULTILINE)
+    assert re.search(r'^-\s+"lines": 3,$', replay.stderr, re.MULTILINE)

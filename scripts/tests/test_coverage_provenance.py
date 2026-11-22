@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -21,6 +22,7 @@ from coverage_report_fixtures import document, plan
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import coverage_provenance as producer
 import coverage_report as report
+from ci_paths import OWNED_SHARDS
 from coverage_provenance_record import (
     MAX_PROVENANCE_BYTES,
     SEMANTICS_FIELD,
@@ -142,10 +144,7 @@ def test_producer_fan_in_refuses_old_and_missing_shards(
     """
     monkeypatch.setattr(producer, "checkout_sha", lambda: RUN.tested_sha)
     downloads = tmp_path / "downloads"
-    shard = f"{CELL}-ts"
-    shard_receipt = downloads / shard / "coverage/provenance-ts.json"
-    set_run_env(monkeypatch, "owned-shards-ubuntu")
-    assert producer.main(["--cell", shard, "--output", str(shard_receipt)]) == 0
+    shard_receipt = write_shard_receipts(downloads, monkeypatch)["ts"]
     set_run_env(monkeypatch, "owned-ubuntu")
     output = tmp_path / CELL / "coverage/provenance.json"
     args = ["--cell", CELL, "--output", str(output), "--shards", str(downloads)]
@@ -163,6 +162,63 @@ def test_producer_fan_in_refuses_old_and_missing_shards(
     shard_receipt.parent.rmdir()
     shard_receipt.parent.parent.rmdir()
     assert producer.main(args) == 1
+
+
+def write_shard_receipts(downloads: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    """Run the real shard producer once per planned Ubuntu shard.
+
+    Parameters:
+        downloads (Path): Fan-in download directory, one directory per shard artifact.
+        monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+    Returns:
+        dict[str, Path]: Receipt path by shard name.
+    Raises:
+        AssertionError: A shard producer fails.
+    """
+    set_run_env(monkeypatch, "owned-shards-ubuntu")
+    receipts = {}
+    for shard in OWNED_SHARDS[HOST]:
+        receipt = downloads / f"{CELL}-{shard.name}" / f"coverage/provenance-{shard.name}.json"
+        assert producer.main(["--cell", f"{CELL}-{shard.name}", "--output", str(receipt)]) == 0
+        receipts[shard.name] = receipt
+    return receipts
+
+
+@pytest.mark.parametrize("change", ["missing", "unplanned", "none"])
+def test_fan_in_requires_exactly_the_planned_shards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """A shard whose artifact never arrived cannot pass as current by its absence.
+
+    Parameters:
+        tmp_path (Path): Download and producer output directory.
+        monkeypatch (pytest.MonkeyPatch): Simulated producer environment.
+        change (str): Remove one planned shard, add an unplanned one, or download nothing.
+    Returns:
+        None: The boundary contract is satisfied.
+    Raises:
+        AssertionError: The boundary contract regresses.
+    """
+    monkeypatch.setattr(producer, "checkout_sha", lambda: RUN.tested_sha)
+    downloads = tmp_path / "downloads"
+    receipts = write_shard_receipts(downloads, monkeypatch)
+    assert set(receipts) == {"subagents", "computer-use", "ts", "python"}
+    if change == "missing":
+        receipts["python"].unlink()
+        receipts["python"].parent.rmdir()
+        receipts["python"].parent.parent.rmdir()
+        expected = "missing ['coverage-ubuntu-24.04-python'], unexpected []"
+    elif change == "unplanned":
+        (downloads / f"{CELL}-scripts").mkdir()
+        expected = "missing [], unexpected ['coverage-ubuntu-24.04-scripts']"
+    else:
+        for receipt in receipts.values():
+            receipt.unlink()
+            receipt.parent.rmdir()
+            receipt.parent.parent.rmdir()
+        expected = "missing ['coverage-ubuntu-24.04-computer-use', "
+    with pytest.raises(ValueError, match=re.escape(expected)):
+        producer.attest_shards(downloads, RUN, CELL)
 
 
 @pytest.mark.parametrize("event", ["push", "workflow_dispatch"])

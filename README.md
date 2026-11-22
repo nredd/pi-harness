@@ -40,8 +40,9 @@ put the why in the commit.
     reads the checkout SHA from Git stdout, and refuses unknown job keys. Non-PR reports show
     `head: n/a` separately from the tested SHA. Swift
     and native Windows keep their independent diagnostic uploads without a presentation sidecar.
-    The fan-in stamps the summary only when all downloaded shards match its run,
-    attempt and checkout; a partial rerun that reuses older shards can retain reports without a stamp.
+    The fan-in stamps the summary only when the downloaded shards are exactly the planned set
+    (`OWNED_SHARDS` in `scripts/ci_paths.py`, which expands into the shard matrix) and all match its run,
+    attempt and checkout, so a shard whose artifact never arrived cannot pass by its absence; a partial rerun that reuses older shards can retain reports without a stamp.
     Missing, malformed or mismatched records render `unavailable`, never zero. Accounting and floors
     are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,
     `--event-name`, `--workflow-ref` and (on PRs only) `--head-sha`; measured-main comparison also
@@ -350,7 +351,13 @@ the original commit. No branch is moved forward merely to satisfy release freshn
 `pi_release.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
 candidate `head_sha`, the current attempt's complete matrix and core jobs, the successful actual
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
-contract, Node stack and standalone stack artifacts bound to that run and SHA.
+contract, Node stack and standalone stack artifacts bound to that run and SHA. The Windows x64
+coverage ratchet is part of that roster: the `computer-use Rust (windows-x64)` producer with its
+`Native Windows tests and LLVM reports (no desktop interaction)` and `Preserve Windows source-bound
+native reports` steps, its `computer-use-rust-windows-x64-<attempt>` upload (any positive attempt,
+bound to the producer's job window like every artifact), and the `owned (ubuntu-24.04)` fan-in's
+`Download Windows x64 coverage` and `Account for Windows x64 coverage separately` steps. A green
+dispatch that skipped any of them refuses.
 
 The required job set is the verifier's own `OWNED_SHARDS`, not the candidate's. Each caller runs
 the verifier that matches its candidate: `publish.yml` runs from the tag's commit, and

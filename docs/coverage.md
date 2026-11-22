@@ -453,6 +453,36 @@ inline source tests count. Declaration-only Windows modules can lack an LLVM map
 contain block comments; the Linux declaration check is unchanged. This is not Windows ARM64 or
 live desktop evidence.
 
+The caps alone cannot see a shrinking denominator: a build or instrumentation change can drop an
+uncovered block from BOTH exports, which then agree on the smaller map, and the uncovered count
+falls without a new test (#1192). So the signal also records reviewed `mapped_totals`: per OS, per
+package-relative source, the file's SHA-256 and its mapped `lines` / `functions` (main run
+[here](https://github.com/nredd/pi-harness/actions/runs/45009970545) measured 5181 / 619; its
+producer `metadata.json` hashes match the recorded ones). An enforced `llvm-lcov` signal must record
+them for every OS it accounts. Accounting then fails when a source whose hash still matches its
+record maps fewer lines or functions than recorded, or leaves the signal's records. A changed or
+deleted source makes its record stale: it is logged `STALE mapped totals` and not compared until a
+refresh. Growth is allowed. Every run writes the current records to the summary's
+`measured_mapped_totals`, and `--measure` proposes them in its review diff. Records are separate from
+the uncovered caps and never loosen them.
+
+The base ratchet treats lowering, dropping or rehashing a record whose source still matches the
+base record as a remeasurement. It needs a new, exact `remeasurements` entry, like
+`enforcement_changes`:
+
+```json
+{
+  "package": "computer-use-windows-native",
+  "signal": "primary",
+  "os": "win32",
+  "reason": "Toolchain bump drops inlined helper regions; hosted runs <id> and <id> agree."
+}
+```
+
+Missing, blank, duplicate, stale or recycled base entries fail. Refreshing the record of a changed
+source needs no entry. Refresh stale records from a hosted artifact with the replay below, `--measure`
+in place of `--base HEAD`, and review the `mapped_totals` hunk.
+
 To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
 `coverage.json` and `metadata.json` from its single `windows-*` directory into
 `<reports-root>/packages/computer-use/coverage/native-windows/`, and run:
