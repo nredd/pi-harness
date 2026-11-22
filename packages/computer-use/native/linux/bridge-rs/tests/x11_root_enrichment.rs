@@ -1,7 +1,7 @@
 //! Exercise production X11 root matching using snapshots, without a display server.
 
 use linux_bridge::atspi::{AccessibleRef, Rect, RootSnapshot};
-use linux_bridge::x11::{enrich_roots, parse_wm_class, WindowInfo};
+use linux_bridge::x11::{enrich_roots, parse_wm_class, wm_class_property, WindowInfo};
 
 fn frame(x: i32) -> Rect {
     Rect {
@@ -140,6 +140,23 @@ fn parses_only_well_formed_wm_class_values() {
     ] {
         assert_eq!(parse_wm_class(malformed), None, "{malformed:?}");
     }
+}
+
+#[test]
+fn reads_only_complete_8_bit_wm_class_properties() {
+    let value = b"keepassxc\0KeePassXC\0";
+    assert_eq!(
+        wm_class_property(8, 0, value),
+        Some(("keepassxc".into(), "KeePassXC".into()))
+    );
+    for (format, bytes_after) in [(16, 0), (32, 0), (0, 0), (8, 1)] {
+        assert_eq!(
+            wm_class_property(format, bytes_after, value),
+            None,
+            "format {format}, bytes_after {bytes_after}"
+        );
+    }
+    assert_eq!(wm_class_property(8, 0, b"keepassxc"), None);
 }
 
 #[test]

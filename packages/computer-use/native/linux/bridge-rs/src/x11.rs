@@ -153,7 +153,7 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
                 .get_property(false, id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
                 .ok()
                 .and_then(|cookie| cookie.reply().ok())
-                .and_then(|reply| parse_wm_class(&reply.value)),
+                .and_then(|reply| wm_class_property(reply.format, reply.bytes_after, &reply.value)),
             frame: Rect {
                 x: translated
                     .as_ref()
@@ -203,6 +203,13 @@ pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
             }
         }
     }
+}
+/// Parse a `WM_CLASS` property reply: only a complete 8-bit value, never a truncated or
+/// differently formatted one.
+pub fn wm_class_property(format: u8, bytes_after: u32, value: &[u8]) -> Option<(String, String)> {
+    (format == 8 && bytes_after == 0)
+        .then(|| parse_wm_class(value))
+        .flatten()
 }
 /// Parse an ICCCM `WM_CLASS` value: two NUL-terminated Latin-1 strings, instance then class.
 /// Anything else is unattributed rather than guessed.
