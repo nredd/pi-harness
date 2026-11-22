@@ -224,6 +224,8 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 	): PercentCell => ({
 		...label,
 		...override,
+		// Only legacy rows name an unknown span `quota`; generic rows keep the bucket's own name.
+		...(legacy && label.span === "assumed" && { name: "quota" }),
 		kind: "percent",
 		key,
 		families,
@@ -580,7 +582,8 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 	const full = layout.tier === "full";
 	switch (cell.kind) {
 		case "percent": {
-			const label = cell.unidentified ? "quota" : labels(cell)[full ? 0 : 1];
+			// An unknown span is named, not converted to a duration.
+			const label = cell.unidentified ? cell.name : labels(cell)[full ? 0 : 1];
 			return windowText(
 				label,
 				cell.remaining,

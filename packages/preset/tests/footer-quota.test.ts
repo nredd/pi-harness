@@ -1728,3 +1728,23 @@ test("the capped fallback fits every width it is given and keeps the hidden bloc
 	// Below the lead, the label-only row still fits rather than forcing a character past the width.
 	assert.deepEqual(footer.fitQuotaRows(projected([marked("A")]), 4, plain, fixed), ["Left"]);
 });
+
+test("generic assumed and unrecognized percentage spans keep their own name", () => {
+	const state = projected([
+		view("g", {
+			snapshot: snap(
+				"g",
+				[span("rpm", 40, hour, "assumed", CLOCK + hour), span("tpm", 30, hour, "guessed", CLOCK + hour)],
+				{ expiresAt: CLOCK + hour },
+			),
+		}),
+	]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: g rpm? 60% @Jan 10 13:00 tpm? 70% @Jan 10 13:00",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, fixed),
+		"Quota left: g rpm 60% (resets Jan 10 13:00; window unknown) tpm 70% (resets Jan 10 13:00; window unknown)",
+	);
+});
