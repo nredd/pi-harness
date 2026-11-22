@@ -310,16 +310,37 @@ private func runLookOutlineAssertions() {
       actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false,
       canDecrement: false, isTextInput: false, rect: .zero)
   }
-  func build(_ root: Node, children: [String: [Node]], unreadable: Set<String> = [], nodeLimit: Int = 2000, expiresAfter: Int = .max) -> LookNode {
-    var checks = 0
+  /// The clock reads 0 when the walk sets its deadline and one second more at each later reading, so the walk
+  /// expires at its `expiresAfter + 1`-th budget check.
+  func build(_ root: Node, children: [String: [Node]], unreadable: Set<String> = [], nodeLimit: Int = 2000, expiresAfter: Int = 1_000_000) -> LookNode {
+    var readings = 0.0
     let world = LookOutlineWorld<Node>(
       children: { unreadable.contains($0.name) ? nil : children[$0.name] ?? [] },
+      rootNode: { node($0.name) },
       childNodes: { _ in { node($0.name) } },
-      expired: {
-        checks += 1
-        return checks > expiresAfter
+      now: {
+        defer { readings += 1 }
+        return Date(timeIntervalSinceReferenceDate: readings)
       })
-    return world.build(root: root, rootNode: node(root.name), nodeLimit: nodeLimit)
+    return world.build(root: root, nodeLimit: nodeLimit, timeLimit: Double(expiresAfter) + 0.5)
+  }
+  /// Root construction costs `rootCost` seconds and each child node `childCost` seconds on the walk's clock.
+  func timed(_ root: Node, children: [String: [Node]], rootCost: Double, childCost: Double) -> LookNode {
+    var clock = 0.0
+    let world = LookOutlineWorld<Node>(
+      children: { children[$0.name] ?? [] },
+      rootNode: {
+        clock += rootCost
+        return node($0.name)
+      },
+      childNodes: { _ in
+        { child in
+          clock += childCost
+          return node(child.name)
+        }
+      },
+      now: { Date(timeIntervalSinceReferenceDate: clock) })
+    return world.build(root: root, nodeLimit: 2000, timeLimit: 20)
   }
   func find(_ name: String, in tree: LookNode) -> LookNode? {
     tree.ref == name ? tree : tree.children.lazy.compactMap { find(name, in: $0) }.first
@@ -348,6 +369,12 @@ private func runLookOutlineAssertions() {
   check(build(root, children: tree, expiresAfter: 0).truncated, "an expired deadline marks the node it stops at")
   let late = build(root, children: tree, expiresAfter: 2)
   check(late.truncated && late.children.map(\.ref) == ["unread"], "a deadline during the children marks the parent")
+  let slowRoot = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 19, childCost: 2)
+  check(
+    !slowRoot.truncated && find("parent", in: slowRoot)?.truncated == false && find("grandchild", in: slowRoot) != nil,
+    "the root node's reads never spend the walk's 20 s budget")
+  let slowChildren = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 0, childCost: 21)
+  check(find("parent", in: slowChildren)?.truncated == true, "child construction still spends it")
   print("macos look outline evidence checks passed")
 }
 

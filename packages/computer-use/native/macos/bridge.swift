@@ -206,14 +206,20 @@ struct AXTraversalWorld<Element: AnyObject> {
 struct LookOutlineWorld<Element: AnyObject> {
 	/// `nil` when the children could not be read; an authoritative empty list is `[]`.
 	let children: (Element) -> [Element]?
+	/// The root's node.
+	let rootNode: (Element) -> LookNode
 	/// The node builder for one parent's children, so per-parent reads (e.g. visible children) run once.
 	let childNodes: (Element) -> (Element) -> LookNode
-	/// True once the walk's time budget is spent.
-	let expired: () -> Bool
+	/// The clock the walk's time budget runs on.
+	let now: () -> Date
 
-	/// Walk breadth-first below `root` (whose node is `rootNode`) until `nodeLimit` nodes or `expired`. A node whose
-	/// children could not be read, or whose children the budget cut, is `truncated`: its subtree is unread, never a leaf.
-	func build(root: Element, rootNode: LookNode, nodeLimit: Int) -> LookNode {
+	/// Build `root`'s node, then walk breadth-first below it until `nodeLimit` nodes or `timeLimit` seconds after the
+	/// root node was built: the root's own reads never spend the walk's budget. A node whose children could not be
+	/// read, or whose children the budget cut, is `truncated`: its subtree is unread, never a leaf.
+	func build(root: Element, nodeLimit: Int, timeLimit: TimeInterval) -> LookNode {
+		let rootNode = self.rootNode(root)
+		let deadline = now().addingTimeInterval(timeLimit)
+		let expired = { now() >= deadline }
 		var walked = 1
 		var seen = Set<ObjectIdentifier>([ObjectIdentifier(root)])
 		var queue: [(Element, LookNode)] = [(root, rootNode)]
@@ -2772,12 +2778,9 @@ final class Bridge {
 
 	/// The look's outline (see `LookOutlineWorld.build`): a failed children read marks the node `truncated`.
 	private func buildLookOutline(root: AXUIElement, owner: String, transform: @escaping (CGRect) -> CGRect) -> LookNode {
-		// Apps with slow AX servers (e.g. Outlook) can take >30s to describe; the
-		// client aborts at 33s, so stop walking well before that and return a
-		// truncated outline instead.
-		let deadline = Date().addingTimeInterval(20.0)
 		let world = LookOutlineWorld<AXUIElement>(
 			children: { self.axElementArrayEvidence($0, attribute: kAXChildrenAttribute as CFString) },
+			rootNode: { self.lookNode(element: $0, transform: transform, offscreen: false, owner: owner) },
 			childNodes: { parent in
 				let visibleByKind = self.visibleChildrenByKind(parent)
 				return { child in
@@ -2786,9 +2789,12 @@ final class Bridge {
 					return self.lookNode(element: child, transform: transform, offscreen: offscreen, owner: owner)
 				}
 			},
-			expired: { Date() >= deadline }
+			now: { Date() }
 		)
-		return world.build(root: root, rootNode: lookNode(element: root, transform: transform, offscreen: false, owner: owner), nodeLimit: 2000)
+		// Apps with slow AX servers (e.g. Outlook) can take >30s to describe; the
+		// client aborts at 33s, so stop walking well before that and return a
+		// truncated outline instead.
+		return world.build(root: root, nodeLimit: 2000, timeLimit: 20.0)
 	}
 
 	/// `owner` is the look whose lifetime bounds the element ref; nil for one-off element queries.
