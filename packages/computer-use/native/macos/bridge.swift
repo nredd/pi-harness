@@ -4109,16 +4109,16 @@ final class Bridge {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
 		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request)))
-		var dragVertices: [CGPoint] = []
+		var vertices: [CGPoint] = []
 		switch action {
 		case "type", "key":
 			try refuseBlockedKeyboard(true, false)
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
-			dragVertices = try dragRequestPoints(request["path"])
+			vertices = try dragRequestPoints(request["path"])
 			// Every vertex, not just the endpoints, is subject to pointer refusal.
-			try refuseBlockedPoints(dragVertices, blocked: blocked)
+			try refuseBlockedPoints(vertices, blocked: blocked)
 		default:
 			break
 		}
@@ -4152,7 +4152,7 @@ final class Bridge {
 		case "scroll":
 			try postScrollWheel(at: try point(), deltaX: optionalIntArg(request, "scrollX") ?? 0, deltaY: optionalIntArg(request, "scrollY") ?? 0, pid: 0)
 		case "drag":
-			try postMouseDrag(points: dragVertices, pid: 0)
+			try postMouseDrag(points: vertices, pid: 0)
 		case "type":
 			try postUnicodeText(try stringArg(request, "text"), pid: 0, beforeKeyDown: refuseBlockedKeyboard)
 		case "key":
