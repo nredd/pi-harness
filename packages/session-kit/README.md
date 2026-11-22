@@ -516,9 +516,18 @@ refused unless `--replace-harnesses` is given; with a recorded set it still guar
 (If both the state and the snapshot have gone bad, a stale state can understate a widening that
 was never recorded; that double fault is not defended.)
 
-Callers must not run two exports into the same outbox at once: nothing in the artifact locks. The
-only scheduled caller, `pi-usage-sync`, already serializes its runs under its own lock, so a manual
-export should go through it (or not overlap one).
+Exports lock the machine outbox from reading the previous manifest through pruning and recording
+export state. A concurrent export fails without publishing; the CLI exits 1 and prints the lock
+path and age. At one hour it reports a *suspected* stale lock, not proof that the writer stopped.
+A crash can leave `.export.lock` behind. Stop scheduled writers, verify no export is running,
+then run `rmdir` on the reported lock directory and retry the export. No export reclaims a lock
+by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
+with the lock path. A failed publication still reports the original error; if releasing the lock
+also fails, it is an `AggregateError` whose message is the original error followed by the same lock
+warning, with `errors` `[original, unlock]` and the original as `cause`. A lock that vanishes before
+its age is read is still contention; any other failure to inspect it is reported with its code.
+`pi-usage-sync`
+separately serializes whole sync runs.
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
 `PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History
@@ -691,17 +700,22 @@ counters or timestamps cannot be identified and can append beside the old row in
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 
-A v3 month can have multiple referenced delta shards. There is no fixed per-month delta-count
-cap: file count grows with late updates, not with unchanged or whole-month exports. The regression
-covers 40 successive deltas and a repeat export; the total machine expansion budget still applies.
-A separate compaction/archival follow-up must define an explicit maintenance protocol before
-rewriting sealed generations; never drop referenced files just to reduce their count.
-Session metadata repeats only with consistent start/child attribution; aggregation takes the
-maximum end. Quota aggregation selects the freshest observation, not their sum.
-The transport must publish only manifest-referenced files and prune unreferenced files in the
-producer's own directory, never another machine's directory. This PR only fixes the exporter/outbox:
-the published tree and the 60-second `git add` budget still require the separate sync-helper pruning
-follow-up. Issue #1033 remains partly open until that lands.
+New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
+that limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte
+and compacts later shards and any new delta. It keeps archived calls and the maximum session end
+even after transcripts leave the scan. The viewer orders equal-time imported calls within a session
+by event ID regardless of shard boundaries. Compaction keeps quota readings that can win as windows
+reset, using separate shards for readings of the same key. Base readings participate without
+occupying any delta slots. The combined reader orders quota by the serialized
+`[provider, limitId, window, account]` key in UTF-16 code-unit order, independent of manifest order.
+If the quota history cannot fit the cap
+or the candidate exceeds the reader's cumulative expansion budget, including one generated shard
+above 128 MiB expanded on its own (`Machine snapshot exceeds 128 MiB expanded`), export fails without publishing or pruning. No format change is required; readers still accept older, larger manifests.
+
+The manifest switches to the new references before obsolete files are pruned. Write errors before
+manifest publication leave the previous manifest and its shards readable; frozen recovery copies
+stay protected. Rename provides atomic visibility, not power-loss durability: files and directories
+are not fsynced. Usage data stays local; compaction does not enable remote sharing.
 
 Event exact keys:
 

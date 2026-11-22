@@ -1,10 +1,10 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
-import { mergeQuota, type QuotaObservation } from "./harness/common.ts";
+import { compareFreshness, mergeQuota, type QuotaObservation } from "./harness/common.ts";
 import {
 	EXTERNAL_HARNESSES,
 	type ExternalHarness,
@@ -36,6 +36,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 const HASH = /^[a-f0-9]{64}$/;
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const MAX_BYTES = 128 * 1024 * 1024;
+const MAX_SEALED_SHARDS = 32;
 const SHARD_FILE = /^\d{4}-\d{2}-[a-f0-9]{64}\.json(?:\.gz)?$/;
 export interface Identity {
 	machineId: string;
@@ -74,6 +75,8 @@ export interface Shard {
 	/** v2 only; each reading lives in the UTC month of its `observedAt`. */
 	quota?: SnapshotQuota[];
 }
+type CompactShard = Shard & { version: 3; quota: SnapshotQuota[] };
+
 export interface Manifest extends Identity {
 	version: number;
 	exportedAt: number;
@@ -308,10 +311,10 @@ export function makeSnapshot(
 	exportedAt = Date.now(),
 	quota: readonly QuotaObservation[] = [],
 	lastGoodAt: Manifest["lastGoodAt"] = {},
-): MachineSnapshot {
+): Omit<MachineSnapshot, "shards"> & { shards: CompactShard[] } {
 	checkEntryIds(loaded.calls);
-	const shards = new Map<string, Shard>();
-	const shard = (month: string): Shard => {
+	const shards = new Map<string, CompactShard>();
+	const shard = (month: string): CompactShard => {
 		let s = shards.get(month);
 		if (!s) {
 			s = { version: SNAPSHOT_VERSION, machineId: identity.machineId, month, events: [], sessions: [], quota: [] };
@@ -337,7 +340,7 @@ export function makeSnapshot(
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
 	for (const q of mergeQuota(quota, exportedAt))
-		shard(monthOf(q.observedAt)).quota?.push({
+		shard(monthOf(q.observedAt)).quota.push({
 			harness: q.harness,
 			provider: q.provider,
 			limitId: q.limitId,
@@ -414,16 +417,18 @@ function compactJson(shard: Shard): string {
 			]),
 		q: shard.quota,
 	};
-	const text = JSON.stringify(compact);
-	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-	return text;
+	return JSON.stringify(compact);
 }
+
+/** zlib emits a zero mtime; canonical JSON and a fixed compression level make producer bytes stable. */
+const gzipCanonical = (text: string): Buffer => gzipSync(text, { level: 9 });
 
 /** Canonical v3 wire encoding. Collision-checked 96-bit entry identities deduplicate across versions. */
 export function encodeShard(shard: Shard): Buffer {
 	if (shard.version !== 3) return Buffer.from(JSON.stringify(shard));
-	// zlib emits a zero mtime; canonical JSON and a fixed compression level make producer bytes stable.
-	return gzipSync(compactJson(shard), { level: 9 });
+	const text = compactJson(shard);
+	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+	return gzipCanonical(text);
 }
 
 /** Decode bounded wire bytes into the existing strict, privacy-only aggregation schema. */
@@ -431,17 +436,36 @@ export function decodeShard(bytes: Buffer, manifest: Manifest, month: string): S
 	return decodeWithinBudget(bytes, manifest, month, MAX_BYTES).shard;
 }
 
-/** Charge decompressed bytes before parsing or retaining another shard in a machine transaction. */
+/** Charge actual wire bytes before parsing another shard or publishing its reference. */
+function expandWithinBudget(
+	bytes: Buffer,
+	version: number,
+	remaining: number,
+): { text: string; expandedBytes: number } {
+	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	let text: string;
+	try {
+		text = (version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ERR_BUFFER_TOO_LARGE")
+			throw new Error("Machine snapshot exceeds 128 MiB expanded", { cause: error });
+		throw error;
+	}
+	return { text, expandedBytes: chargeExpansion(Buffer.byteLength(text), remaining) };
+}
+
+function chargeExpansion(expandedBytes: number, remaining: number): number {
+	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	return expandedBytes;
+}
+
 function decodeWithinBudget(
 	bytes: Buffer,
 	manifest: Manifest,
 	month: string,
 	remaining: number,
 ): { shard: Shard; expandedBytes: number } {
-	if (remaining <= 0) throw new Error("Machine snapshot exceeds 128 MiB expanded");
-	const text = (manifest.version === 3 ? gunzipSync(bytes, { maxOutputLength: remaining }) : bytes).toString("utf8");
-	const expandedBytes = Buffer.byteLength(text);
-	if (expandedBytes > remaining) throw new Error("Machine snapshot exceeds 128 MiB expanded");
+	const { text, expandedBytes } = expandWithinBudget(bytes, manifest.version, remaining);
 	if (manifest.version !== 3) {
 		const shard = validateShard(JSON.parse(text) as unknown, manifest, month);
 		if (JSON.stringify(shard) !== text) throw new Error("Noncanonical shard JSON");
@@ -739,7 +763,7 @@ interface Contribution {
 const emptyContribution = (): Contribution => ({ calls: [], sessions: [], quota: [] });
 
 /** This machine's last published snapshot: `null` if there is none, `"unreadable"` if it cannot be trusted. */
-type Previous = { manifest: Manifest; shards: Shard[] } | null | "unreadable";
+type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unreadable";
 
 async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	let manifest: Manifest;
@@ -750,14 +774,16 @@ async function loadPrevious(snapshotDir: string): Promise<Previous> {
 	}
 	try {
 		const shards: Shard[] = [];
+		const expandedSizes: number[] = [];
 		let remaining = MAX_BYTES;
 		for (const ref of manifest.shards) {
 			const read = await readShard(snapshotDir, manifest, ref, remaining);
 			shards.push(read.shard);
+			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
 		}
 		validateSnapshot({ manifest, shards });
-		return { manifest, shards };
+		return { manifest, shards, expandedSizes };
 	} catch {
 		return "unreadable";
 	}
@@ -847,6 +873,70 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 	return revised;
 }
 
+/** Compact late updates without rewriting the base or consulting the current transcript scan. */
+function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
+	const baseSessions = new Map(base.sessions.map((session) => [session.id, session]));
+	const sessions = new Map(baseSessions);
+	for (const delta of deltas)
+		for (const session of delta.sessions) {
+			const prior = sessions.get(session.id);
+			if (!prior || prior.endMs < session.endMs) sessions.set(session.id, session);
+		}
+	const byKey = new Map<string, SnapshotQuota[]>();
+	const baseRows = new Set(base.quota);
+	for (const { quota } of [base, ...deltas])
+		for (const q of quota) {
+			const key = quotaKey(q);
+			const rows = byKey.get(key) ?? [];
+			rows.push(q);
+			byKey.set(key, rows);
+		}
+	const compacted: CompactShard[] = [
+		{
+			...base,
+			events: deltas.flatMap((delta) => delta.events),
+			sessions: [...sessions.values()].filter((session) => session !== baseSessions.get(session.id)),
+			quota: [],
+		},
+	];
+	for (const rows of byKey.values()) {
+		// The freshest row wins once all are expired. Before then, every less fresh row
+		// is dominated unless it stays active beyond all higher-ranked rows.
+		rows.sort((a, b) => compareFreshness(b, a));
+		let latestReset = 0;
+		let slot = 0;
+		for (const q of rows) {
+			if (q.resetAt <= latestReset) continue;
+			latestReset = q.resetAt;
+			// The base can dominate deltas without occupying a delta slot itself.
+			if (baseRows.has(q)) continue;
+			const shard = compacted[slot] ?? { ...base, events: [], sessions: [], quota: [] };
+			shard.quota.push(q);
+			compacted[slot++] = shard;
+		}
+	}
+	// Do not silently throw away a candidate just to fit the cap.
+	if (compacted.length >= MAX_SEALED_SHARDS) throw new Error("Sealed month quota history exceeds shard limit");
+	return compacted.filter(nonempty);
+}
+
+const nonempty = (shard: CompactShard): boolean => shard.events.length + shard.sessions.length + shard.quota.length > 0;
+
+function monthDelta(full: CompactShard, old: readonly CompactShard[]): CompactShard | undefined {
+	const events = new Set(old.flatMap((shard) => shard.events.map((event) => event.id)));
+	const ends = new Map<string, number>();
+	for (const shard of old)
+		for (const session of shard.sessions) ends.set(session.id, Math.max(ends.get(session.id) ?? 0, session.endMs));
+	const quotas = new Set(old.flatMap((shard) => shard.quota.map((q) => JSON.stringify(q))));
+	const delta = {
+		...full,
+		events: full.events.filter((event) => !events.has(event.id)),
+		sessions: full.sessions.filter((session) => session.endMs > (ends.get(session.id) ?? 0)),
+		quota: full.quota.filter((q) => !quotas.has(JSON.stringify(q))),
+	};
+	return nonempty(delta) ? delta : undefined;
+}
+
 /** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
 async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
 	const cleanupErrors = new Map<string, number>();
@@ -886,20 +976,70 @@ export interface ExportResult {
 	warnings?: string[];
 }
 
-/**
- * Write only this machine's immutable shards, publishing its manifest last. Callers must not run two exports
- * into one outbox at once (`pi-usage-sync` serializes its runs); nothing here locks.
- */
+/** Write only this machine's immutable shards, publishing its manifest last under an exclusive local lock. */
 export async function exportStats(
 	dir: string,
 	output: string,
 	root = sessionsDir(dir),
 	options: ExportOptions = {},
 ): Promise<ExportResult> {
-	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const identity = await machineIdentity(dir);
-	const state = await exportState(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
+	const lock = join(snapshotDir, ".export.lock");
+	await mkdir(snapshotDir, { recursive: true });
+	// The portable kit cannot import the dev-tools lock. Fail closed on contention or a
+	// crashed writer; never infer that another writer is dead from the age of the lock.
+	await mkdir(lock).catch(async (error: NodeJS.ErrnoException) => {
+		if (error.code !== "EEXIST") throw error;
+		// A winner can release the lock before stat (ENOENT). Still reject this attempt; retry from scratch.
+		const info = await lstat(lock).catch((cause: NodeJS.ErrnoException) => {
+			if (cause.code === "ENOENT") return undefined;
+			throw Object.assign(
+				new Error(
+					`Export lock exists at ${JSON.stringify(lock)} but could not be inspected (${cause.code}); verify no export is running before removing the lock directory`,
+					{ cause },
+				),
+				{ code: cause.code, path: lock },
+			);
+		});
+		const age = info && Math.max(0, Math.floor((Date.now() - info.mtimeMs) / 1000));
+		const details = `${JSON.stringify(lock)} (age ${age === undefined ? "unknown" : `${age}s`})`;
+		const message =
+			age !== undefined && age >= 3600
+				? `Suspected stale export lock ${details}; verify no export is running before removing the lock directory, then retry`
+				: `Export lock is held at ${details}; retry after the other export finishes. If this persists, verify no export is running before removing the lock directory`;
+		throw Object.assign(new Error(message, { cause: error }), { code: error.code, path: lock });
+	});
+	let outcome: { ok: true; result: ExportResult } | { ok: false; error: unknown };
+	try {
+		outcome = { ok: true, result: await publishStats(dir, snapshotDir, root, options, identity) };
+	} catch (error) {
+		outcome = { ok: false, error };
+	}
+	try {
+		await rmdir(lock);
+	} catch (unlockError) {
+		const warning = `could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`;
+		// Never turn an already-visible publish into a failure, nor hide the primary publication error.
+		if (!outcome.ok)
+			throw new AggregateError([outcome.error, unlockError], `${String(outcome.error)}\n${warning}`, {
+				cause: outcome.error,
+			});
+		outcome.result.warnings = [...(outcome.result.warnings ?? []), warning];
+	}
+	if (!outcome.ok) throw outcome.error;
+	return outcome.result;
+}
+
+async function publishStats(
+	dir: string,
+	snapshotDir: string,
+	root: string,
+	options: ExportOptions,
+	identity: Identity,
+): Promise<ExportResult> {
+	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
+	const state = await exportState(dir);
 	const previous = await loadPrevious(snapshotDir);
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
@@ -1003,7 +1143,6 @@ export async function exportStats(
 		!options.replaceHarnesses && (state.recoveryPending || previous === "unreadable" || reportedLost.length > 0);
 	const protectedFiles = new Set(options.replaceHarnesses ? [] : (state.recoveryFiles ?? []));
 	const captureRecovery = recoveryPending && (previous === "unreadable" || state.recoveryFiles === null);
-	await mkdir(snapshotDir, { recursive: true });
 	if (captureRecovery) {
 		for (const entry of await readdir(snapshotDir, { withFileTypes: true }))
 			if (entry.isFile() && SHARD_FILE.test(entry.name)) protectedFiles.add(entry.name);
@@ -1013,45 +1152,68 @@ export async function exportStats(
 	// superseded files to this set, so subsequent active generations still prune automatically.
 	if (recoveryPending && (captureRecovery || !state.recoveryPending))
 		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending, recoveryFiles, lostHarnesses });
-	// Uncorrected past months stay sealed: append only newly discovered events/metadata.
-	// An explicit harness replacement starts a new generation rather than retaining dropped history.
+	// Uncorrected past months stay sealed. An explicit replacement drops their old generations.
 	const sealed =
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
 			? previous
 			: null;
 	const current = monthOf(exportedAt);
 	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
-	const publishedShards: Shard[] = [];
+	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
 	if (sealed)
-		for (const [i, previousShard] of sealed.shards.entries()) {
-			if (previousShard.month >= current || revised.has(previousShard.month)) continue;
-			snapshot.manifest.shards.push(nth(sealed.manifest.shards, i));
-			publishedShards.push(previousShard);
+		for (const [i, shard] of sealed.shards.entries()) {
+			if (shard.month >= current || revised.has(shard.month)) continue;
+			const refs = prior.get(shard.month) ?? [];
+			// loadPrevious authenticated and validated every shard against this v3 manifest.
+			refs.push({
+				ref: nth(sealed.manifest.shards, i),
+				shard: shard as CompactShard,
+				expandedBytes: nth(sealed.expandedSizes, i),
+			});
+			prior.set(shard.month, refs);
 		}
-	for (const full of snapshot.shards) {
-		const old = publishedShards.filter((previousShard) => previousShard.month === full.month);
-		const events = new Set(old.flatMap((previousShard) => previousShard.events.map((event) => event.id)));
-		const sessions = new Map(
-			old.flatMap((previousShard) => previousShard.sessions.map((session) => [session.id, session] as const)),
-		);
-		const quotas = new Set(
-			old.flatMap((previousShard) => (previousShard.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))),
-		);
-		const delta: Shard = {
-			...full,
-			events: full.events.filter((event) => !events.has(event.id)),
-			sessions: full.sessions.filter((session) => {
-				const prior = sessions.get(session.id);
-				return !prior || session.endMs > prior.endMs;
-			}),
-			quota: (full.quota as SnapshotQuota[]).filter((q) => !quotas.has(JSON.stringify(q))),
-		};
-		if (!delta.events.length && !delta.sessions.length && !(delta.quota as SnapshotQuota[]).length) continue;
-		validateShard(delta, snapshot.manifest, delta.month);
-		const bytes = encodeShard(delta);
-		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-		const sha256 = digest(bytes);
-		const file = `${delta.month}-${sha256}.json.gz`;
+	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
+	const publishedShards: CompactShard[] = [];
+	const writes: { file: string; bytes: Buffer }[] = [];
+	let remaining = MAX_BYTES;
+	for (const month of [...new Set([...prior.keys(), ...fresh.keys()])].sort()) {
+		let old = prior.get(month) ?? [];
+		const full = fresh.get(month);
+		const delta =
+			full &&
+			monthDelta(
+				full,
+				old.map(({ shard }) => shard),
+			);
+		let deltas = delta ? [delta] : [];
+		if (old.length + deltas.length > MAX_SEALED_SHARDS) {
+			const base = nth(old, 0);
+			deltas = compactDeltas(base.shard, [...old.slice(1).map(({ shard }) => shard), ...deltas]);
+			old = [base];
+		}
+		for (const { ref, shard, expandedBytes } of old) {
+			remaining -= chargeExpansion(expandedBytes, remaining);
+			snapshot.manifest.shards.push(ref);
+			publishedShards.push(shard);
+		}
+		for (const shard of deltas) {
+			validateShard(shard, snapshot.manifest, month);
+			// Charge the canonical text first: one oversized shard is the same machine-budget failure.
+			const text = compactJson(shard);
+			const expandedBytes = chargeExpansion(Buffer.byteLength(text), remaining);
+			const bytes = gzipCanonical(text);
+			if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+			remaining -= expandedBytes;
+			const sha256 = digest(bytes);
+			const file = `${month}-${sha256}.json.gz`;
+			writes.push({ file, bytes });
+			snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
+			publishedShards.push(shard);
+		}
+	}
+	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
+	validateManifest(snapshot.manifest);
+	for (const { file, bytes } of writes) {
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {
 			await writeFile(join(snapshotDir, file), bytes, { flag: "wx", mode: 0o600 });
@@ -1060,11 +1222,8 @@ export async function exportStats(
 			if (!(await readFile(join(snapshotDir, file))).equals(bytes))
 				await atomicContents(join(snapshotDir, file), bytes);
 		}
-		snapshot.manifest.shards.push({ month: delta.month, file, sha256, bytes: bytes.length });
-		publishedShards.push(delta);
 	}
-	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
-	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
+	await atomicJson(join(snapshotDir, "manifest.json"), snapshot.manifest);
 	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
@@ -1085,9 +1244,7 @@ export async function exportStats(
 		lostHarnesses,
 		historyHarnesses: HARNESSES.filter((h) =>
 			publishedShards.some(
-				(shard) =>
-					shard.events.some((event) => event.harness === h) ||
-					(shard.quota as SnapshotQuota[]).some((q) => q.harness === h),
+				(shard) => shard.events.some((event) => event.harness === h) || shard.quota.some((q) => q.harness === h),
 			),
 		),
 	}).then(
@@ -1300,22 +1457,25 @@ export async function loadCombined(
 			]),
 		);
 	};
-	for (const machine of remotes)
+	for (const machine of remotes) {
+		// Match wire tie ordering across shard boundaries too, so an event cannot move
+		// within its session merely because a sealed month is compacted.
+		const events = machine.shards.flatMap((s) => s.events).sort((a, b) => a.ms - b.ms || codeUnits(a.id, b.id));
+		for (const e of events)
+			candidates.push({
+				harness: e.harness ?? "pi",
+				session: e.sessionId,
+				entryId: e.entryId ?? undefined,
+				ms: e.ms,
+				provider: e.provider,
+				model: e.model,
+				input: e.input,
+				output: e.output,
+				cacheRead: e.cacheRead,
+				cacheWrite: e.cacheWrite,
+				cost: e.cost,
+			});
 		for (const s of machine.shards) {
-			for (const e of s.events)
-				candidates.push({
-					harness: e.harness ?? "pi",
-					session: e.sessionId,
-					entryId: e.entryId ?? undefined,
-					ms: e.ms,
-					provider: e.provider,
-					model: e.model,
-					input: e.input,
-					output: e.output,
-					cacheRead: e.cacheRead,
-					cacheWrite: e.cacheWrite,
-					cost: e.cost,
-				});
 			quotaCandidates.push(...(s.quota ?? []));
 			for (const session of s.sessions)
 				sessionCandidates.push({
@@ -1325,6 +1485,7 @@ export async function loadCombined(
 					child: session.child,
 				});
 		}
+	}
 	const sessions = mergeSessionMetadata(sessionCandidates);
 	// Every candidate's session is in `sessions`: local calls come with their session, remote events are
 	// validated against their shard's sessions.
@@ -1335,7 +1496,7 @@ export async function loadCombined(
 	return {
 		...local,
 		calls,
-		quota: mergeQuota(quotaCandidates, now),
+		quota: mergeQuota(quotaCandidates, now).sort((a, b) => codeUnits(quotaKey(a), quotaKey(b))),
 		harnessProblems,
 		sessionMetadata: [...sessions.values()],
 		sessions: [...sessions.values()].filter((s) => !s.child && owners.has(s.path)),
