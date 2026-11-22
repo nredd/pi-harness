@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- On macOS, restate a `desktop_input` keyboard stop's code and posted key-pair count in its message, with a do-not-replay warning; keep an explicit delivery error from being promoted to `worked` by observed `setText` values; carry the keyboard deadline in the helper's boot-relative clock instead of a wall-clock stamp (macOS helper protocol `8`); inject activation, settle wait and the final HID post into the production input sink so headless tests cover its ordering (#1198).
 - Reject out-of-range macOS drag paths before HID lock, focus or event allocation, and return `invalid_args` for malformed window IDs in all five native request sites (#1173).
 - Always block the macOS Touch ID/password prompt hosted by `com.apple.LocalAuthenticationRemoteService` (#688).
 - Refuse stale managed macOS helpers, including older helpers with no build stamp, without reinstalling, restarting or stopping them. Show the reported build and, on refusal, the expected build in `/computer-use`. Launch the daemon or run setup only when the socket provably has no listener; inconclusive or slow probes never launch. A probe that timed out after connecting is never proof of absence. Check an external helper's protocol on every connection, classifying the socket before and at connect, and recheck an external helper's permissions without restarting it. The build stamp hashes only the Swift sources `build:native` compiles (#1211).

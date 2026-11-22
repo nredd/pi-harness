@@ -877,7 +877,7 @@ async function liveChecks() {
 			process.env.PI_CU_SOCKET_PATH ?? path.join(os.homedir(), "Library/Caches/pi-computer-use/bridge.sock");
 		const diagnostics = await call(socketPath, { id: "inv-diagnostics", cmd: "diagnostics" });
 		check("LIVE diagnostics current protocol", () =>
-			assert(diagnostics.protocolVersion === 7, `protocolVersion=${diagnostics.protocolVersion}`),
+			assert(diagnostics.protocolVersion === 8, `protocolVersion=${diagnostics.protocolVersion}`),
 		);
 		const broadDiscoveryStarted = Date.now();
 		const broadRoots = await call(socketPath, { id: "inv-broad-roots", cmd: "listRoots" }, 10000);
@@ -889,14 +889,14 @@ async function liveChecks() {
 		check("LIVE broad root discovery is bounded and keeps helper alive", () => {
 			assert(Array.isArray(broadRoots?.roots), "broad listRoots did not return roots");
 			assert(broadDiscoveryMs < 10000, `broad listRoots took ${broadDiscoveryMs}ms`);
-			assert(diagnosticsAfterBroadDiscovery.protocolVersion === 7, "helper did not survive broad listRoots");
+			assert(diagnosticsAfterBroadDiscovery.protocolVersion === 8, "helper did not survive broad listRoots");
 		});
 		const abandonedRequestId = `inv-abandoned-roots-${process.pid}-${Date.now()}`;
 		await abandon(socketPath, { id: abandonedRequestId, cmd: "listRoots" });
 		const diagnosticsAfterAbandon = await waitForCompletedRequest(socketPath, abandonedRequestId);
 		check("LIVE abandoned root discovery keeps helper alive", () => {
 			assert(
-				diagnosticsAfterAbandon.protocolVersion === 7,
+				diagnosticsAfterAbandon.protocolVersion === 8,
 				"helper died after writing to an abandoned root-discovery socket",
 			);
 		});

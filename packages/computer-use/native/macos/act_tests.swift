@@ -226,6 +226,8 @@ func runActAssertions() throws {
     expect(suppressionTapShouldReenable(.tapDisabledByTimeout) && suppressionTapShouldReenable(.tapDisabledByUserInput), "re-enable the tap on either disable notification")
     expect(!suppressionTapShouldReenable(.keyDown) && !suppressionTapShouldReenable(.mouseMoved), "ordinary user events stay suppressed")
     try runEventAssertions()
+    runKeyboardDeadlineAssertions()
+    try runProductionSinkAssertions()
     print("macos action dispatch assertions passed")
 }
 
@@ -955,4 +957,49 @@ private func runWebReplacementRefusals(sink: NativeInputSink, posted: () -> [CGE
     }
     try actionFailure("app_blocked", postedUnits: 1) { try fallback.act("setText", params: params) }
     expect(posted() == [.keyDown, .keyUp], "focus moving during fallback wait stops replacement text after the Cmd+A pair: \(posted()), \(fallback.trace)")
+}
+
+private func runKeyboardDeadlineAssertions() {
+    let now = 1_000.0
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_012_500], now: now) == 1_012.5, "the uptime deadline is used as is, with no wall-clock conversion")
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 999_000], now: now) == 999, "a deadline already past stays past")
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_031_000], now: now) == 1_030, "a deadline beyond 30 s is bounded")
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": Double.nan], now: now) == 1_030, "a non-finite deadline is bounded to 30 s")
+    expect(keyboardDeadline(["keyboardDeadlineMs": 1_012_500], now: now) == 1_030, "the retired wall-clock field grants nothing")
+    expect(keyboardDeadline([:], now: now) == 1_030, "a missing deadline is bounded to 30 s")
+}
+
+/// The production sink with activation, its settle wait and the final OS post injected one at a time.
+private func runProductionSinkAssertions() throws {
+    expect(!NativeInputSink.activateIfInactive(-1), "no running app at the pid means no activation")
+    var effects: [String] = []
+    var activates = true
+    var onActivate: () -> Void = {}
+    let sink = NativeInputSink.production(
+        activate: { pid in
+            effects.append("activate:\(pid)")
+            onActivate()
+            return activates
+        },
+        sleep: { effects.append("sleep:\($0)") },
+        post: { effects.append("post:\($0.type == .keyDown ? "down" : "up"):\($0.getIntegerValueField(.keyboardEventKeycode))") }
+    )
+    let keys = ActFixture(inputSink: sink)
+    keys.admissionOverride = { _ in effects.append("admit") }
+    _ = try keys.act("keypress", coords: true, params: ["keys": ["tab"]])
+    // The first admission is the forced check before any activation.
+    expect(effects == ["admit", "activate:1234", "sleep:20000", "admit", "post:down:48", "post:up:48", "sleep:8000"],
+           "activation settles before admission and the final post adds no wait: \(effects)")
+
+    effects = []
+    activates = false
+    _ = try keys.act("keypress", coords: true, params: ["keys": ["tab"]])
+    expect(effects == ["admit", "activate:1234", "admit", "post:down:48", "post:up:48", "sleep:8000"], "an active target posts with no settle wait: \(effects)")
+
+    effects = []
+    activates = true
+    keys.admissionOverride = nil
+    onActivate = { keys.blocked = true }
+    try actionFailure("app_blocked", postedUnits: 0) { try keys.act("keypress", coords: true, params: ["keys": ["tab"]]) }
+    expect(effects == ["activate:1234", "sleep:20000"], "focus lost during the settle wait refuses before any post: \(effects)")
 }

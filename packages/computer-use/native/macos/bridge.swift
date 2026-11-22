@@ -716,6 +716,15 @@ private func trackKeyboardPosts(_ check: @escaping FocusCheck) -> BeforeKeyDown 
 	}
 }
 
+/// The absolute keyboard deadline in `systemUptime` seconds, the boot-relative clock `diagnostics` reports as
+/// `uptimeMs`. The client sends `keyboardDeadlineUptimeMs` in that clock, so no wall-clock step can move it.
+/// A missing or non-finite deadline, or one more than 30 s past `now`, is bounded to 30 s.
+func keyboardDeadline(_ request: [String: Any], now: TimeInterval) -> TimeInterval {
+	let bound = now + 30
+	guard let ms = (request["keyboardDeadlineUptimeMs"] as? NSNumber)?.doubleValue, ms.isFinite else { return bound }
+	return min(ms / 1000, bound)
+}
+
 final class KeyboardAdmission {
 	private var lastProbe: TimeInterval = -.infinity
 	private var probedFrontmost: Int32?
@@ -837,29 +846,39 @@ struct NativeInputSink {
 		CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
 	}
 
-	static let live = NativeInputSink(
-		mouseEvent: createMouseEvent,
-		wheelEvent: createWheelEvent,
-		keyEvent: createKeyEvent,
-		postToPid: { $0.postToPid($1) },
-		prepareHID: { pid in
-			// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
-			// target frontmost when posting at the HID event tap instead.
-			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
-				if #available(macOS 14.0, *) {
-					_ = app.activate()
-				} else {
-					_ = app.activate(options: [.activateIgnoringOtherApps])
-				}
-				usleep(20_000)
+	/// Activates `pid` when it is not already active; true when it asked for activation.
+	static func activateIfInactive(_ pid: Int32) -> Bool {
+		guard let app = NSRunningApplication(processIdentifier: pid), !app.isActive else { return false }
+		if #available(macOS 14.0, *) {
+			_ = app.activate()
+		} else {
+			_ = app.activate(options: [.activateIgnoringOtherApps])
+		}
+		return true
+	}
+
+	/// The production HID wiring over its three OS effects, injected one by one so tests run the real ordering:
+	/// an activation settles for 20 ms before admission, and the final post adds no wait of its own.
+	static func production(activate: @escaping (Int32) -> Bool, sleep: @escaping (useconds_t) -> Void, post: @escaping (CGEvent) -> Void) -> NativeInputSink {
+		NativeInputSink(
+			mouseEvent: createMouseEvent,
+			wheelEvent: createWheelEvent,
+			keyEvent: createKeyEvent,
+			postToPid: { $0.postToPid($1) },
+			prepareHID: { pid in
+				// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
+				// target frontmost when posting at the HID event tap instead.
+				guard activate(pid) else { return false }
+				sleep(20_000)
 				return true
-			}
-			return false
-		},
-		postHID: { event, _ in event.post(tap: .cghidEventTap) },
-		sleep: { _ = usleep($0) },
-		keyboardInputSource: currentKeyboardInputSource
-	)
+			},
+			postHID: { event, _ in post(event) },
+			sleep: sleep,
+			keyboardInputSource: currentKeyboardInputSource
+		)
+	}
+
+	static let live = production(activate: activateIfInactive, sleep: { _ = usleep($0) }, post: { $0.post(tap: .cghidEventTap) })
 }
 
 private struct RootAXEvent {
@@ -1126,7 +1145,7 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 7
+	private let protocolVersion = 8
 	private let refStore: AXRefStore
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
@@ -1575,6 +1594,8 @@ final class Bridge {
 			"screenRecording": permissions["screenRecording"] ?? false,
 			"activityGlowActive": activityGlow?.isActive ?? false,
 			"recentCompletedRequestIds": completedRequestIds(),
+			// The boot-relative clock keyboard deadlines are expressed in (see `keyboardDeadline`).
+			"uptimeMs": ProcessInfo.processInfo.systemUptime * 1000,
 		]
 		if let parentPath {
 			output["parentPath"] = parentPath
@@ -2765,7 +2786,7 @@ final class Bridge {
 
 	func act(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let deadline = keyboardDeadline(request)
+		let deadline = keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime)
 		let lookId = try stringArg(request, "lookId")
 		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
@@ -3313,7 +3334,7 @@ final class Bridge {
 		for (index, action) in actions.enumerated() {
 			var deferred = action
 			deferred["deferRootDelta"] = true
-			deferred["keyboardDeadlineMs"] = request["keyboardDeadlineMs"]
+			deferred["keyboardDeadlineUptimeMs"] = request["keyboardDeadlineUptimeMs"]
 			do {
 				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
@@ -3988,11 +4009,6 @@ final class Bridge {
 		}
 	}
 
-	private func keyboardDeadline(_ request: [String: Any]) -> TimeInterval {
-		let now = ProcessInfo.processInfo.systemUptime
-		guard let wallMs = (request["keyboardDeadlineMs"] as? NSNumber)?.doubleValue, wallMs.isFinite else { return now + 30 }
-		return now + (wallMs / 1000 - Date().timeIntervalSince1970)
-	}
 
 	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
 	private func systemFocusedPid() -> Int32? {
@@ -4121,7 +4137,7 @@ final class Bridge {
 		func refuseBlockedWindow(at point: CGPoint) throws {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
-		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request)))
+		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime)))
 		var vertices: [CGPoint] = []
 		switch action {
 		case "type", "key":

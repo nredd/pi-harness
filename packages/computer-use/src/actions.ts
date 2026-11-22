@@ -355,12 +355,19 @@ export function outcomeAfterCheck(
 	return current;
 }
 
+/**
+ * Promote an all-`setText` outcome to `worked` when every field now holds its requested text.
+ * @param deliveryError The transaction's explicit error, e.g. `app_blocked` after a posted `cmd+a`. It always wins:
+ * a field that already held the text proves nothing about the refused delivery.
+ */
 export function outcomeAfterObservedValues(
 	current: "worked" | "didnt" | "unknown",
 	actions: UiAction[],
 	valueForRef: (ref: string) => string | undefined,
+	deliveryError: { code?: string } | undefined,
 ): "worked" | "didnt" | "unknown" {
-	if (actions.length === 0 || actions.some((action) => action.action !== "setText" || !action.ref)) return current;
+	if (deliveryError || actions.length === 0 || actions.some((action) => action.action !== "setText" || !action.ref))
+		return current;
 	const matches = actions.every((action) => valueForRef(action.ref!) === (action.text ?? ""));
 	return matches ? "worked" : current;
 }

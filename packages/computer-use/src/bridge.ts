@@ -2823,6 +2823,7 @@ async function performDesktopTransaction(
 					execution.outcome ?? "unknown",
 					executedActions,
 					(ref) => nodeByRef(capture.outline, ref)?.value,
+					execution.error,
 				);
 				for (const action of executedActions) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {

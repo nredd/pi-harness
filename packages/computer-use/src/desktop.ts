@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { effectiveBlockedBundleIds, getComputerUseConfig } from "./config.ts";
-import { macosHelper } from "./platform/macos/helper.ts";
+import { HelperCommandError, macosHelper } from "./platform/macos/helper.ts";
 
 /** Global-desktop tools: whole-screen capture and physical input in global point coordinates (macOS). */
 
@@ -226,6 +226,26 @@ export function desktopInputText(result: DesktopInputResult): string {
 	}
 }
 
+/**
+ * Restate a keyboard stop so the model can see it: Pi's tool dispatcher keeps only `error.message`, which would drop
+ * the helper's code and `evidence.postedUnits`. Names both and, when any key pair was posted, warns against replaying
+ * the call. The input text and keys are never included.
+ * @returns A `HelperCommandError` keeping code and evidence, or the same error when it is not a coded keyboard stop.
+ */
+function desktopInputFailure(error: unknown): unknown {
+	const units = error instanceof HelperCommandError ? error.evidence?.postedUnits : undefined;
+	if (!(error instanceof HelperCommandError) || error.code === undefined || typeof units !== "number") return error;
+	const posted =
+		units === 0
+			? "No key pairs posted."
+			: `${units} key ${units === 1 ? "pair" : "pairs"} posted. Do not replay this call; take a desktop_screenshot to see what arrived.`;
+	return new HelperCommandError(
+		`desktop_input stopped (${error.code}): ${error.message.replace(/\.$/, "")}. ${posted}`,
+		error.code,
+		error.evidence,
+	);
+}
+
 export async function executeDesktopInput(
 	_id: string,
 	params: DesktopInputParams,
@@ -251,7 +271,9 @@ export async function executeDesktopInput(
 				{ signal, timeoutMs: 30_000 },
 			),
 		signal,
-	);
+	).catch((error: unknown) => {
+		throw desktopInputFailure(error);
+	});
 	return {
 		content: [{ type: "text", text: desktopInputText(result) }],
 		details: {
