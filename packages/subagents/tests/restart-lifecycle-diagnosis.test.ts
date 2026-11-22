@@ -1,4 +1,4 @@
-/** Synthetic #330 diagnosis: distinguish activation reload, terminal stop and process-state loss. */
+/** Restart-safe child recovery (#1086, #1115) and the synthetic #330 activation/stop/restart diagnosis. */
 import { execFileSync } from "node:child_process";
 import {
 	existsSync,
@@ -68,6 +68,93 @@ it("reopens the newest id after two restarts through a symlinked child directory
 	host.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: first.id } }), answer("CHECKED")]);
 	await host.session.prompt("look up the original id");
 	expect(outcomes(host, "get_subagent_result").at(-1)?.text).toContain(`Agent: ${third.id}`);
+});
+
+it("links a successor journaled through a symlinked directory after its transcript is deleted", {
+	timeout: 30_000,
+}, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const sessionDir = join(fixture.agentDir, "sessions");
+	const target = join(fixture.root, "child-sessions");
+	mkdirSync(target);
+	symlinkSync(target, sessionDir, "dir");
+	fixture.physical("kid", "child", [answer("ORIGINAL"), answer("FIRST RESUME")]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const parentPath = parent.getSessionFile()!;
+	let host = await fixture.start({ harness: { sessionManager: parent } });
+	const run = async (resume?: string) => {
+		host.setResponses([toolCalls(spawn("continue child", { resume })), answer("CHECKED")]);
+		await host.session.prompt("run child");
+		const record = fixture.record(agentId(outcomes(host, "Agent").at(-1)?.text));
+		await record.promise;
+		await host.session.waitForIdle();
+		return record;
+	};
+	const restart = async () => {
+		host.cleanup();
+		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+		host = await fixture.start({ harness: { sessionManager: SessionManager.open(parentPath) } });
+	};
+	const first = await run();
+	await restart();
+	const second = await run(first.id);
+	expect(second.sessionFile).toBe(realpathSync(first.sessionFile!));
+	// The first row names the symlinked spelling; with the file gone, only the
+	// canonical form journaled at write time can still link the two rows.
+	unlinkSync(second.sessionFile!);
+	await restart();
+	host.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: first.id } }), answer("CHECKED")]);
+	await host.session.prompt("look up the original id");
+	expect(outcomes(host, "get_subagent_result").at(-1)?.text).toContain(`Agent "${second.id}"`);
+	host.cleanup();
+});
+
+it("validates a reopened row against the creation directory its predecessor journaled", {
+	timeout: 30_000,
+}, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	fixture.physical("kid", "child", [answer("ORIGINAL"), answer("REOPENED")]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("first run")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	const record = fixture.record(agentId(outcomes(h, "Agent")[0]?.text));
+	await record.promise;
+	await h.session.waitForIdle();
+	const parentFile = parent.getSessionFile();
+	const file = record.sessionFile;
+	if (!parentFile || !file) throw new Error("Missing session path");
+	const journaled = parent
+		.getBranch()
+		.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record")
+		.at(-1);
+	expect(journaled).toMatchObject({ data: { sessionDir: dirname(file), canonicalSessionFile: realpathSync(file) } });
+	// A reopen from another cwd journals no directory of its own (its manager's
+	// differs from the file's), and the project's settings move on afterwards.
+	const {
+		sessionDir: _dir,
+		canonicalSessionFile: _canonical,
+		...row
+	} = (journaled as { data: object }).data as Record<string, unknown>;
+	parent.appendCustomEntry("subagents:record", { ...row, id: "successor", previousId: record.id, status: "running" });
+	parent.appendCustomEntry("subagents:record", { ...row, id: "successor", previousId: record.id });
+	mkdirSync(join(fixture.cwd, ".pi"), { recursive: true });
+	writeFileSync(
+		join(fixture.cwd, ".pi", "settings.json"),
+		JSON.stringify({ sessionDir: join(fixture.root, "moved-sessions") }),
+	);
+	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	h.cleanup();
+	const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	next.setResponses([toolCalls(spawn("resume after settings moved", { resume: record.id })), answer("CHECKED")]);
+	await next.session.prompt("resume");
+	const receipt = outcomes(next, "Agent").at(-1);
+	expect(receipt?.isError, receipt?.text).toBe(false);
+	expect(receipt?.text).toContain("reopening evicted agent successor");
+	const continued = fixture.record(agentId(receipt?.text));
+	await continued.promise;
+	expect(continued.result).toBe("REOPENED");
+	next.cleanup();
 });
 
 it("loads host settings once when restoring 200 saved rows across different child directories", async () => {
@@ -150,6 +237,9 @@ it.each([
 	"cwd",
 	"relative-dir",
 	"worktree",
+	"worktree-parent-settings",
+	"worktree-child-settings",
+	"future",
 	"parent-alias",
 ] as const)("recovers a saved running child after a crash: %s", { timeout: 30_000 }, async (mode) => {
 	const chain = mode === "chain-A" || mode === "chain-B";
@@ -168,10 +258,14 @@ it.each([
 			"---\ndescription: Crash probe\nsession_dir: child-sessions\n---\nCrash probe.\n",
 		);
 	}
-	if (mode === "worktree") {
+	const worktree = mode.startsWith("worktree");
+	const settingsFile = join(fixture.cwd, ".pi", "settings.json");
+	if (mode === "worktree-child-settings")
+		writeFileSync(settingsFile, JSON.stringify({ sessionDir: join(fixture.root, "committed-sessions") }));
+	if (worktree) {
 		const git = (...args: string[]) => execFileSync("git", args, { cwd: fixture.cwd, stdio: "pipe" });
 		git("init");
-		git("add", ".pi/extensions/hold.ts");
+		git("add", ".pi/extensions/hold.ts", ...(mode === "worktree-child-settings" ? [".pi/settings.json"] : []));
 		git(
 			"-c",
 			"user.email=fixture@example.com",
@@ -183,6 +277,11 @@ it.each([
 			"-m",
 			"Initialize fixture",
 		);
+		// The worktree child is created with the worktree's settings, which differ
+		// from the parent's uncommitted ones in either direction.
+		if (mode === "worktree-child-settings") unlinkSync(settingsFile);
+		if (mode === "worktree-parent-settings")
+			writeFileSync(settingsFile, JSON.stringify({ sessionDir: join(fixture.root, "uncommitted-sessions") }));
 	}
 	const progress = fauxAssistantMessage([{ type: "text", text: "PROGRESS BEFORE CRASH" }, fauxToolCall("hold", {})], {
 		stopReason: "toolUse",
@@ -212,7 +311,7 @@ it.each([
 			name: "crash-probe",
 			...(mode === "cwd" || mode === "relative-dir" ? { cwd: subdir } : {}),
 			...(mode === "relative-dir" ? { subagent_type: "crash-relative" } : {}),
-			...(mode === "worktree" ? { isolation: "worktree" } : {}),
+			...(worktree ? { isolation: "worktree" } : {}),
 		}),
 	);
 	const first = agentId(outcomes(h, "Agent")[0]?.text);
@@ -239,12 +338,17 @@ it.each([
 		expect(existsSync(childFile)).toBe(true);
 		if (mode === "deleted") unlinkSync(childFile);
 		else {
-			const written = new Date(fixture.clock.now() - (mode === "recent" ? 23_000 : 121_000));
+			// A future timestamp (clock skew, a synced volume) is not evidence of a live writer.
+			const age = mode === "recent" ? 23_000 : mode === "future" ? -3_600_000 : 121_000;
+			const written = new Date(fixture.clock.now() - age);
 			utimesSync(childFile, written, written);
 		}
 		if (mode === "cwd") expect(lost.session?.sessionManager.getHeader()?.cwd).toBe(subdir);
 		if (mode === "relative-dir") expect(dirname(childFile)).toBe(join(subdir, "child-sessions"));
-		if (mode === "worktree") expect(lost.worktree?.path).toBe(lost.session?.sessionManager.getHeader()?.cwd);
+		if (worktree) expect(lost.worktree?.path).toBe(lost.session?.sessionManager.getHeader()?.cwd);
+		if (mode === "worktree-child-settings") expect(dirname(childFile)).toBe(join(fixture.root, "committed-sessions"));
+		if (mode === "worktree-parent-settings")
+			expect(dirname(childFile)).not.toBe(join(fixture.root, "uncommitted-sessions"));
 		if (chain) {
 			const row = { id, type: lost.type, description: lost.description, status: "running", sessionFile: childFile };
 			// An update is not another edge, and a different conversation cannot
@@ -334,7 +438,7 @@ it.each([
 		const tool = mode === "chain-B" ? steer(id) : mode === "steer_subagent" ? steer(first) : resume(first);
 		await call(reopened, tool);
 		const receipt = outcomes(reopened, tool.name).at(-1);
-		expect(receipt?.isError).toBe(false);
+		expect(receipt?.isError, receipt?.text).toBe(false);
 		expect(receipt?.text).toContain(`Agent resumed in background, reopening evicted agent ${id}`);
 		const next = agentId(receipt?.text);
 		expect(next).not.toBe(id);

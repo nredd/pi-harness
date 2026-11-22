@@ -237,9 +237,17 @@ export interface EvictedNote {
 	evictedAfterMin: number;
 	/** The diagnostic came from the saved parent, not a retention sweep. */
 	fromSavedSession?: true;
-	/** Reason startup could not safely reopen a saved child, when available. */
+	/**
+	 * Why startup could not safely reopen a saved child (missing file, foreign
+	 * parent, a possibly live writer). Shown by `steer_subagent` and `Agent`
+	 * `resume`; a dispatch rechecks the file, so a stale refusal can clear.
+	 */
 	reopenRefusal?: string;
-	/** The saved running child had a recent transcript write at bind time. */
+	/**
+	 * The saved running child's transcript was written within
+	 * `RECENT_CHILD_WRITE_SECONDS` at bind time, so another process may still
+	 * own it. Lookups then report the refusal instead of "interrupted".
+	 */
 	possiblyRunning?: true;
 	/** The `.output` transcript when one was written, else the session file. */
 	transcript?: string;
@@ -247,6 +255,10 @@ export interface EvictedNote {
 	sessionFile?: string;
 	/** The cwd in the child header that determined its session directory. */
 	sessionCwd?: string;
+	/** The directory the child session was created in, journaled because settings can differ by then. */
+	sessionDir?: string;
+	/** `sessionFile` resolved when its row was written, so links survive the file's deletion. */
+	canonicalSessionFile?: string;
 	/** The run's model fallback, so even an evicted agent's id still discloses it. */
 	modelFallback?: ModelFallback;
 	modelTier?: TierDisclosure;

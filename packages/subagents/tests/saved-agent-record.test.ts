@@ -1,12 +1,19 @@
 /** Saved history is diagnostic data, not a live record or a request to run a child. */
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { describe, expect, it, onTestFinished } from "vitest";
 import { describeEvicted, describeEvictedResult } from "../src/agent-manager.ts";
 import { savedAgentNote } from "../src/saved-agent-record.ts";
-import { checkSavedChild, sameSavedChild } from "../src/saved-child-session.ts";
+import {
+	canonicalChildPath,
+	canonicalPaths,
+	checkSavedChild,
+	FUTURE_WRITE_TOLERANCE_MS,
+	RECENT_CHILD_WRITE_SECONDS,
+	sameSavedChild,
+} from "../src/saved-child-session.ts";
 
 const base = { id: "synthetic-child", type: "general-purpose", description: "synthetic job", status: "completed" };
 
@@ -83,20 +90,46 @@ describe("saved agent lookup notes", () => {
 });
 
 describe("saved child transcript identity", () => {
+	const row = (sessionFile?: string, canonicalSessionFile?: string) => ({ sessionFile, canonicalSessionFile });
+
 	it("keeps exact links to missing transcripts but rejects mismatches and path traversal aliases", () => {
 		const root = makeTestTempDir("saved-child-", onTestFinished);
 		const one = join(root, "one.jsonl");
 		const two = join(root, "two.jsonl");
-		expect(sameSavedChild(undefined, one)).toBe(false);
-		expect(sameSavedChild(one, undefined)).toBe(false);
-		expect(sameSavedChild(one, one)).toBe(true);
-		expect(sameSavedChild(one, two)).toBe(false);
+		expect(sameSavedChild(row(), row(one))).toBe(false);
+		expect(sameSavedChild(row(one), row())).toBe(false);
+		expect(sameSavedChild(row(one), row(one))).toBe(true);
+		expect(sameSavedChild(row(one), row(two))).toBe(false);
 		writeFileSync(one, "");
 		writeFileSync(two, "");
-		expect(sameSavedChild(one, two)).toBe(false);
+		expect(sameSavedChild(row(one), row(two))).toBe(false);
 		const traversal = `${root}/../${basename(root)}/one.jsonl`;
-		expect(sameSavedChild(traversal, one)).toBe(false);
-		expect(sameSavedChild(one, traversal)).toBe(false);
+		expect(sameSavedChild(row(traversal), row(one))).toBe(false);
+		expect(sameSavedChild(row(one), row(traversal))).toBe(false);
+	});
+
+	it("links through the canonical form journaled at write time, after the file is gone", () => {
+		const root = makeTestTempDir("saved-child-", onTestFinished);
+		const real = join(root, "real");
+		const alias = join(root, "alias");
+		mkdirSync(real);
+		symlinkSync(real, alias, "dir");
+		const spelled = join(alias, "child.jsonl");
+		const canonical = join(realpathSync(real), "child.jsonl");
+		// Not flushed yet: the directory still resolves.
+		expect(canonicalChildPath(spelled)).toBe(canonical);
+		writeFileSync(canonical, "");
+		expect(canonicalChildPath(spelled)).toBe(canonical);
+		expect(canonicalChildPath("relative.jsonl")).toBeUndefined();
+		expect(canonicalChildPath(join(root, "missing", "child.jsonl"))).toBeUndefined();
+		// While the file exists, legacy rows still link by resolving both spellings.
+		expect(sameSavedChild(row(spelled), row(canonical))).toBe(true);
+		unlinkSync(canonical);
+		expect(sameSavedChild(row(spelled), row(canonical))).toBe(false);
+		expect(sameSavedChild(row(spelled, canonical), row(canonical))).toBe(true);
+		expect(sameSavedChild(row(spelled, canonical), row(canonical, canonical))).toBe(true);
+		expect(sameSavedChild(row(canonical), row(spelled, canonical))).toBe(true);
+		expect(sameSavedChild(row(spelled, canonical), row(join(root, "other.jsonl")))).toBe(false);
 	});
 
 	it("names the missing parent path, whether it comes from the header or current session", () => {
@@ -105,9 +138,84 @@ describe("saved child transcript identity", () => {
 		const recorded = join(root, "recorded.jsonl");
 		const current = join(root, "current.jsonl");
 		writeFileSync(file, `${JSON.stringify({ type: "session", parentSession: recorded })}\n`);
-		const check = () => checkSavedChild(file, root, current, "completed", 0);
+		const check = () =>
+			checkSavedChild({ file, directories: [root], parentFile: current, status: "completed", now: 0 });
 		expect(check()).toEqual({ refusal: `parent session is missing or unreadable: ${recorded}` });
 		writeFileSync(recorded, "");
 		expect(check()).toEqual({ refusal: `parent session is missing or unreadable: ${current}` });
+	});
+});
+
+describe("saved child validation", () => {
+	function child(header: Record<string, unknown> = {}) {
+		const root = makeTestTempDir("saved-child-", onTestFinished);
+		const parentFile = join(root, "parent.jsonl");
+		const directory = join(root, "sessions");
+		const file = join(directory, "child.jsonl");
+		mkdirSync(directory);
+		writeFileSync(parentFile, "");
+		writeFileSync(file, `${JSON.stringify({ type: "session", parentSession: parentFile, ...header })}\n`);
+		return { root, parentFile, directory, file };
+	}
+
+	it("accepts the journaled creation directory when current settings give another", () => {
+		const { root, parentFile, directory, file } = child();
+		const elsewhere = join(root, "elsewhere");
+		const options = { file, parentFile, status: "completed", now: 0 } as const;
+		expect(checkSavedChild({ ...options, directories: [undefined, elsewhere] })).toEqual({
+			refusal: `child session is outside its configured directory: ${file}`,
+		});
+		expect(checkSavedChild({ ...options, directories: [directory, elsewhere] })).toEqual({
+			file: realpathSync(file),
+		});
+		expect(checkSavedChild({ ...options, directories: [elsewhere, directory] })).toEqual({
+			file: realpathSync(file),
+		});
+	});
+
+	it("treats a transcript written in the future as skew, not a live writer", () => {
+		const { directory, parentFile, file } = child();
+		const mtime = statSync(file).mtimeMs;
+		const check = (now: number) =>
+			checkSavedChild({ file, directories: [directory], parentFile, status: "running", now });
+		// Within the tolerance the write counts as just now.
+		expect(check(mtime - FUTURE_WRITE_TOLERANCE_MS)).toMatchObject({
+			recent: true,
+			refusal: expect.stringContaining("last write 0s ago; retry in 120 s"),
+		});
+		expect(check(mtime - FUTURE_WRITE_TOLERANCE_MS - 1)).toEqual({ file: realpathSync(file) });
+		expect(check(mtime - 3_600_000)).toEqual({ file: realpathSync(file) });
+		expect(check(mtime + 30_000)).toMatchObject({ recent: true, refusal: expect.stringContaining("30s ago") });
+		expect(check(mtime + RECENT_CHILD_WRITE_SECONDS * 1000)).toEqual({ file: realpathSync(file) });
+	});
+
+	it("reads a header line past the first chunk and refuses one past the cap", () => {
+		const { directory, parentFile, file } = child({ padding: "x".repeat(10_000) });
+		const options = { directories: [directory], parentFile, status: "completed", now: 0 } as const;
+		expect(checkSavedChild({ ...options, file })).toEqual({ file: realpathSync(file) });
+		writeFileSync(file, `${JSON.stringify({ type: "session", parentSession: parentFile })}`);
+		expect(checkSavedChild({ ...options, file })).toEqual({
+			refusal: `child session has no readable header: ${file}`,
+		});
+		writeFileSync(file, "x".repeat(70_000));
+		expect(checkSavedChild({ ...options, file })).toEqual({
+			refusal: `child session has no readable header: ${file}`,
+		});
+	});
+
+	it("resolves the shared directory and parent once across rows", () => {
+		const { root, directory, parentFile, file } = child();
+		const link = join(root, "link");
+		symlinkSync(directory, link, "dir");
+		const canonical = canonicalPaths();
+		const options = { file, directories: [link], parentFile, status: "completed", now: 0, canonical } as const;
+		expect(checkSavedChild(options)).toEqual({ file: realpathSync(file) });
+		// A later row reuses the first resolution instead of resolving the link again.
+		unlinkSync(link);
+		expect(checkSavedChild(options)).toEqual({ file: realpathSync(file) });
+		expect(checkSavedChild({ ...options, canonical: canonicalPaths() })).toEqual({
+			refusal: `child session is outside its configured directory: ${file}`,
+		});
+		expect(() => canonical(join(directory, "missing"))).toThrow();
 	});
 });
