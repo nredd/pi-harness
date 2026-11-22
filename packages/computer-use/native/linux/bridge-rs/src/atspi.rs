@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -13,6 +14,7 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Address, Connection, Proxy};
 
+use crate::x11::InputState;
 use crate::{ErrorCode, ProtocolError};
 
 const DBUS_DESTINATION: &str = "org.freedesktop.DBus";
@@ -109,6 +111,8 @@ impl NodeSnapshot {
 pub struct AtspiClient {
     connection: Connection,
     request_timeout: Duration,
+    /// Its shutdown flag is checked at each semantic mutation.
+    input: Arc<InputState>,
 }
 
 impl AtspiClient {
@@ -132,12 +136,33 @@ impl AtspiClient {
         Ok(Self::from_connection(connection, REQUEST_TIMEOUT))
     }
 
-    /// Use an established accessibility connection with a per-request deadline.
+    /// Use an established accessibility connection with a per-request deadline, and
+    /// the helper-wide input state's shutdown flag.
     pub fn from_connection(connection: Connection, request_timeout: Duration) -> Self {
         Self {
             connection,
             request_timeout,
+            input: InputState::shared(),
         }
+    }
+
+    /// Check `input`'s shutdown flag at each semantic mutation instead, e.g. in tests.
+    pub fn with_input_state(self, input: Arc<InputState>) -> Self {
+        Self { input, ..self }
+    }
+
+    /// Refuse a semantic mutation once shutdown began. Checked right before `DoAction`
+    /// or `SetTextContents`, after every preparatory request, so an action admitted
+    /// before shutdown never first mutates the UI after it; a mutation already sent
+    /// finishes and is never replayed.
+    fn admit_mutation(&self) -> Result<(), ProtocolError> {
+        if self.input.is_cancelled() {
+            return Err(ProtocolError::new(
+                "Helper is shutting down; the semantic action did not run",
+                ErrorCode::Cancelled,
+            ));
+        }
+        Ok(())
     }
 
     /// Bound a single request, keeping transport and reply errors distinct from a deadline.
@@ -511,6 +536,7 @@ impl AtspiClient {
         let Some(action_index) = selected_action_index(action_count, &names) else {
             return Ok(false);
         };
+        self.admit_mutation()?;
         let member = "DoAction";
         self.request(member, proxy.call(member, &(action_index)))
             .await
@@ -524,6 +550,7 @@ impl AtspiClient {
             ));
         }
         let proxy = self.proxy(&node.accessible, EDITABLE_TEXT).await?;
+        self.admit_mutation()?;
         let member = "SetTextContents";
         self.request(member, proxy.call(member, &(text))).await
     }
@@ -807,10 +834,7 @@ mod tests {
     const FIXTURE_DBUS_ROOT: &str = "/org/freedesktop/DBus";
 
     fn peer_client(connection: Connection) -> AtspiClient {
-        AtspiClient {
-            connection,
-            request_timeout: REQUEST_TIMEOUT,
-        }
+        AtspiClient::from_connection(connection, REQUEST_TIMEOUT)
     }
 
     #[test]
@@ -1290,10 +1314,7 @@ mod tests {
         with_peer(
             |server| server.serve_at(FIXTURE_REGISTRY_ROOT, StalledRegistry(stall)),
             async |connection| {
-                let client = AtspiClient {
-                    connection,
-                    request_timeout: STALLED_REQUEST_TIMEOUT,
-                };
+                let client = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT);
                 let (result, received) = tokio::join!(client.list_roots(None), requests.recv());
                 assert_eq!(received, Some(()));
                 let error = result.unwrap_err();
@@ -1321,10 +1342,7 @@ mod tests {
         with_peer(
             |server| server.serve_at("/node", StalledAction(stall)),
             async |connection| {
-                let client = AtspiClient {
-                    connection,
-                    request_timeout: STALLED_REQUEST_TIMEOUT,
-                };
+                let client = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT);
                 let mut node = NodeSnapshot::minimal(AccessibleRef {
                     destination: ":1.42".into(),
                     path: "/node".into(),

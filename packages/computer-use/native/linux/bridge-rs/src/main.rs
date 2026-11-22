@@ -196,19 +196,27 @@ fn action_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-/// Wait for the action lock: actions and batches run one at a time. Shutdown may
-/// begin while a request waits, so it is refused with `cancelled` before it starts,
-/// semantic (AT-SPI) actions included.
+/// Wait for the action lock: actions and batches run one at a time. Any request that
+/// holds the lock once shutdown began answers `cancelled` without starting, whether it
+/// waited or got the lock at once, semantic (AT-SPI) actions included: nothing admitted
+/// after cancellation began may mutate the desktop.
 async fn begin_transaction(
     id: &str,
+    input: &InputState,
 ) -> Result<tokio::sync::MutexGuard<'static, ()>, ProtocolError> {
     testing_ready("waiting", id);
     let guard = action_lock().lock().await;
     testing_ready("locked", id);
-    if InputState::shared().is_cancelled() {
+    admit_mutation(input)?;
+    Ok(guard)
+}
+
+/// Refuse a desktop mutation (action, focus, browser launch) once shutdown began.
+fn admit_mutation(input: &InputState) -> Result<(), ProtocolError> {
+    if input.is_cancelled() {
         return Err(shutting_down());
     }
-    Ok(guard)
+    Ok(())
 }
 
 /// Report a scheduling point on stderr, so process tests establish their preconditions
@@ -229,12 +237,21 @@ fn extract_id(line: &str) -> Option<String> {
 }
 
 async fn handle_request(state: &Arc<Mutex<HelperState>>, request: &Request) -> Response {
-    handle_request_with(state, request, AtspiClient::connect, physical_act).await
+    handle_request_with(
+        state,
+        request,
+        &InputState::shared(),
+        AtspiClient::connect,
+        physical_act,
+    )
+    .await
 }
 
+/// Answer `request`; `input` carries the shutdown flag mutations are admitted against.
 async fn handle_request_with(
     state: &Arc<Mutex<HelperState>>,
     request: &Request,
+    input: &InputState,
     connect: impl AsyncFn() -> Result<AtspiClient, ProtocolError>,
     physical: PhysicalAct,
 ) -> Response {
@@ -253,15 +270,15 @@ async fn handle_request_with(
         "look" | "screenshot" => {
             look_with(state, &request.args, &connect, x11::capture_window).await
         }
-        "act" => match begin_transaction(&request.id).await {
+        "act" => match begin_transaction(&request.id, input).await {
             Ok(_transaction) => act(state, &request.args, &connect, physical).await,
             Err(error) => Err(error),
         },
-        "actBatch" => match begin_transaction(&request.id).await {
+        "actBatch" => match begin_transaction(&request.id, input).await {
             Ok(_transaction) => {
                 act_batch_with(
                     &request.args,
-                    || InputState::shared().is_cancelled(),
+                    || input.is_cancelled(),
                     |args| act(state, args, &connect, physical),
                 )
                 .await
@@ -269,7 +286,7 @@ async fn handle_request_with(
             Err(error) => Err(error),
         },
         #[cfg(feature = "testing")]
-        "testingAct" => match begin_transaction(&request.id).await {
+        "testingAct" => match begin_transaction(&request.id, input).await {
             Ok(_transaction) => testing_act(&request.args),
             Err(error) => Err(error),
         },
@@ -282,8 +299,10 @@ async fn handle_request_with(
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
-        "focusWindow" => focus_window(state, &request.args),
-        "openBrowserLocation" => open_browser_location(&request.args),
+        "focusWindow" => admit_mutation(input).and_then(|()| focus_window(state, &request.args)),
+        "openBrowserLocation" => {
+            admit_mutation(input).and_then(|()| open_browser_location(&request.args))
+        }
         other => Err(ProtocolError::new(
             format!("Unknown command '{other}'"),
             ErrorCode::UnsupportedCommand,
@@ -662,6 +681,8 @@ async fn act(
                 }
                 return Ok(result);
             }
+            // Shutdown began before the mutation: nothing ran, and nothing may fall back.
+            Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
             Some(Err(error)) if error.code == ErrorCode::Timeout => {
                 return Err(ProtocolError::new(
                     format!("{}; semantic action outcome is unknown", error.message),
@@ -1588,6 +1609,7 @@ mod tests {
                 cmd: cmd.into(),
                 args,
             },
+            &InputState::default(),
             async || {
                 Ok(AtspiClient::from_connection(
                     connection.clone(),
@@ -2209,6 +2231,148 @@ mod tests {
                 assert_eq!(mutations.load(Ordering::SeqCst), 2);
             },
         ).await;
+    }
+
+    #[tokio::test]
+    async fn a_request_admitted_after_cancellation_never_mutates() {
+        let input = InputState::default();
+        drop(begin_transaction("before", &input).await.unwrap());
+        input.cancel();
+        // The lock is free, so this request does not wait: it is refused all the same.
+        assert_eq!(
+            begin_transaction("after", &input).await.unwrap_err().code,
+            ErrorCode::Cancelled
+        );
+        let (state, root_ref) = peer_root_state();
+        for (cmd, args) in [
+            (
+                "act",
+                json!({"lookId":"l1","action":"press","target":{"x":1,"y":1}}),
+            ),
+            ("actBatch", json!({"actions":[]})),
+            ("focusWindow", json!({"rootRef":root_ref})),
+            (
+                "openBrowserLocation",
+                json!({"url":"https://example.invalid/"}),
+            ),
+        ] {
+            let reply = handle_request_with(
+                &state,
+                &Request {
+                    protocol_version: PROTOCOL_VERSION,
+                    id: "late".into(),
+                    cmd: cmd.into(),
+                    args,
+                },
+                &input,
+                async || -> Result<AtspiClient, ProtocolError> { panic!("{cmd} connected") },
+                |_, _, _, _, _, _| panic!("attempted physical input"),
+            )
+            .await;
+            assert_eq!(
+                reply.error.map(|error| error.code),
+                Some(ErrorCode::Cancelled),
+                "{cmd}"
+            );
+        }
+    }
+
+    /// An Action whose preparatory `NActions` read is where shutdown begins.
+    struct CancelledDuringPreparation {
+        input: Arc<InputState>,
+        mutations: Arc<AtomicUsize>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Action")]
+    impl CancelledDuringPreparation {
+        #[zbus(property, name = "NActions")]
+        async fn n_actions(&self) -> i32 {
+            self.input.cancel();
+            1
+        }
+
+        async fn do_action(&self, _index: i32) -> bool {
+            self.mutations.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+
+    struct CountedEdit(Arc<AtomicUsize>);
+
+    #[zbus::interface(name = "org.a11y.atspi.EditableText")]
+    impl CountedEdit {
+        async fn set_text_contents(&self, _text: &str) -> bool {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_actions_check_shutdown_at_the_mutation() {
+        let input = Arc::new(InputState::default());
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let (state, _) = peer_root_state();
+        let mut target = node();
+        target.interfaces.extend([
+            "org.a11y.atspi.Action".into(),
+            "org.a11y.atspi.EditableText".into(),
+        ]);
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![target.clone()], None);
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/node",
+                    CancelledDuringPreparation {
+                        input: Arc::clone(&input),
+                        mutations: Arc::clone(&mutations),
+                    },
+                )?
+                .serve_at("/node", CountedEdit(Arc::clone(&mutations)))
+            },
+            async |connection| {
+                let client = || {
+                    AtspiClient::from_connection(connection.clone(), Duration::from_millis(250))
+                        .with_input_state(Arc::clone(&input))
+                };
+                // Admitted before shutdown; shutdown begins during the preparatory read.
+                let reply = handle_request_with(
+                    &state,
+                    &Request {
+                        protocol_version: PROTOCOL_VERSION,
+                        id: "press".into(),
+                        cmd: "act".into(),
+                        args: json!({"lookId":look_id,"action":"press","target":{"ref":nodes[0].reference},"policy":"foreground"}),
+                    },
+                    &input,
+                    async || Ok(client()),
+                    |_, _, _, _, _, _| panic!("attempted physical fallback"),
+                )
+                .await;
+                assert_eq!(
+                    reply.error.map(|error| error.code),
+                    Some(ErrorCode::Cancelled)
+                );
+                // The text replacement checks the same boundary.
+                assert_eq!(
+                    client()
+                        .set_text(&target, "replacement")
+                        .await
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::Cancelled
+                );
+                assert_eq!(mutations.load(Ordering::SeqCst), 0, "no semantic mutation");
+                // Before shutdown, the same calls do mutate.
+                let live = AtspiClient::from_connection(connection.clone(), Duration::from_millis(250))
+                    .with_input_state(Arc::new(InputState::default()));
+                assert!(live.set_text(&target, "replacement").await.unwrap());
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+            },
+        )
+        .await;
     }
 
     #[tokio::test]
