@@ -1194,6 +1194,7 @@ test("Google rows show counts without invented limits and marks in warning color
 		[
 			view("google", {
 				display: { full: "Google", compact: "Goog" },
+				snapshot: snap("google", [], { expiresAt: until + hour }),
 				meters: [
 					meter("rpd", 37, {
 						kind: "calendar",
@@ -1315,7 +1316,8 @@ test("custom selectors, scope, provenance and display-only quantities stay disti
 	assert.match(footer.formatQuotaRow(stale, "full", plain, fixed), /Custom\?Display \(stale\) 2h 20% 1h 10% quota --/);
 	const metered = view("meter", { meters: [meter("very-long-meter", 10), meter("second", 3)] });
 	assert.deepEqual(footer.fitQuotaRows(projected([metered]), 5, plain, fixed), [
-		"Left: meter very-long-meter 10 req obs second 3 req obs",
+		// No snapshot vouches for these meters, so they are stale.
+		"Left: meter (stale) very-long-meter 10 req obs second 3 req obs",
 	]);
 	assert.deepEqual(
 		footer.fitQuotaRows(projected([metered, view("read", { marks: [mark(CLOCK + hour)] })]), 30, plain, fixed),
@@ -1328,7 +1330,7 @@ test("custom selectors, scope, provenance and display-only quantities stay disti
 		}),
 	]);
 	assert.deepEqual(footer.fitQuotaRows(narrow, 5, plain, fixed), [
-		"Left: custom (stale) provider blocked read ok 40% unknown --",
+		"Left: custom provider blocked read | (stale) ok 40% unknown --",
 	]);
 });
 
@@ -1373,6 +1375,67 @@ test("inferred and assumed spans are qualified on windows and meters, whatever t
 		footer.formatQuotaRow(state({ show: [{ durationMs: ten }] }), "compact", plain, fixed),
 		/^Left: F 10m~ 0% @13:00 /,
 	);
+});
+
+test("freshness covers meters and pools, never marks, and error-only views keep a row", () => {
+	const data = (extra: Record<string, unknown> = {}) =>
+		view("m", {
+			snapshot: fresh("m", extra),
+			meters: [meter("calls", 3)],
+			pools: [{ name: "wallet", unit: "credits", balance: 4 }],
+		});
+	const row = (input: unknown[], now = CLOCK) =>
+		footer.formatQuotaRow(projected(input, now), "compact", plain, { ...fixed, now });
+	// A fresh meter-only snapshot is current; once it expires the meters and pools say stale.
+	assert.equal(row([data()]), "Left: m calls 3 req obs wallet 4 credits");
+	assert.equal(row([data()], CLOCK + hour), "Left: m (stale) calls 3 req obs wallet 4 credits");
+	// Rendering a parsed fresh reading after its expiry also says stale.
+	assert.equal(
+		footer.formatQuotaRow(projected([data()]), "compact", plain, { ...fixed, now: CLOCK + hour }),
+		"Left: m (stale) calls 3 req obs wallet 4 credits",
+	);
+	assert.equal(row([data({ status: "error" })]), "Left: m (stale) calls 3 req obs wallet 4 credits");
+	assert.equal(
+		row([view("p", { pools: [{ name: "wallet", unit: "usd", balance: 1 }] })]),
+		"Left: p (stale) wallet $1.00",
+	);
+	// The poller ages a fresh meter reading with the clock.
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(
+		v2([view("m", { snapshot: snap("m", [], { expiresAt: NOW + 5 }), meters: [meter("calls", 3)] })]),
+	);
+	const polled = () => footer.formatQuotaRow(present(poller.getState()), "compact", plain, { now: env.clock.now });
+	assert.equal(polled(), "Left: m calls 3 req obs");
+	assert.equal(env.live(5).length, 1);
+	env.clock.now += 5;
+	assert.equal(polled(), "Left: m (stale) calls 3 req obs");
+	poller.dispose();
+	// Active marks are current whatever the snapshot: stale data is labelled apart from them.
+	const marked = projected([{ ...data(), marks: [mark(CLOCK + 2 * hour, "observed")] }], CLOCK + hour);
+	const at = { ...fixed, now: CLOCK + hour };
+	assert.equal(
+		footer.formatQuotaRow(marked, "compact", plain, at),
+		"Left: m (stale) calls 3 req obs wallet 4 credits | provider blocked->14:00 obs",
+	);
+	assert.deepEqual(footer.fitQuotaRows(marked, 8, plain, at), ["Left: m provider blocked obs"]);
+	const onlyMark = projected([view("m", { marks: [mark(CLOCK + hour, "observed")] })]);
+	assert.equal(footer.formatQuotaRow(onlyMark, "compact", plain, fixed), "Left: m provider blocked->13:00 obs");
+	// Error, unavailable and stale views with nothing to show still render a row.
+	const status = (value: string) => view("e", { snapshot: snap("e", [], { status: value, expiresAt: CLOCK + hour }) });
+	assert.equal(row([status("error")]), "Left: e quota error");
+	assert.equal(
+		footer.formatQuotaRow(projected([status("unavailable")]), "full", plain, fixed),
+		"Quota left: e quota unavailable",
+	);
+	assert.deepEqual(footer.fitQuotaRows(projected([status("stale")]), 5, plain, fixed), ["Left: e quota stale"]);
+	assert.equal(
+		row([{ ...status("error"), marks: [mark(CLOCK + hour, "inferred")] }]),
+		"Left: e quota error | provider blocked->13:00 inf",
+	);
+	// An available but empty snapshot, or no snapshot at all, still has no row.
+	assert.equal(row([status("available"), view("none")]), "");
 });
 
 test("meters keep their resets and only an observed zero is dropped", () => {

@@ -84,7 +84,9 @@ type Cell =
 			families: string[];
 	  })
 	| { kind: "mark"; families: string[]; until: number; evidence: "read" | "inferred" | "observed" | "unknown" }
-	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit };
+	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit }
+	/** A view whose snapshot failed with nothing else to show: the failure is the reading. */
+	| { kind: "status"; status: "error" | "unavailable" | "stale" };
 
 /** Recursively readonly: state is shared between the poller and every render. */
 type Frozen<T> = T extends object ? { readonly [K in keyof T]: Frozen<T[K]> } : T;
@@ -357,20 +359,26 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
+		// Freshness covers meters and pools too, so only legacy rows need a percentage window.
 		const fresh =
 			snapshot?.status === "available" &&
 			Array.isArray(windows) &&
-			windows.length > 0 &&
+			(windows.length > 0 || !legacy) &&
 			expiresAt !== undefined &&
 			expiresAt > now;
 		const seen = chooseWindows(windows, display, legacy);
-		state[id] = {
-			display,
-			legacy,
-			stale: !fresh,
-			expiresAt: fresh ? expiresAt : prior?.expiresAt,
-			cells: [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...auxiliaryCells(view, legacy)],
-		};
+		const cells: QuotaCell[] = [
+			...(fresh ? seen : mergePercents(seen, prior, legacy)),
+			...auxiliaryCells(view, legacy),
+		];
+		const status = snapshot?.status;
+		if (
+			(status === "error" || status === "unavailable" || status === "stale") &&
+			!cells.some((cell) => cell.kind !== "mark")
+		) {
+			cells.unshift({ kind: "status", status });
+		}
+		state[id] = { display, legacy, stale: !fresh, expiresAt: fresh ? expiresAt : prior?.expiresAt, cells };
 	}
 	return deepFreeze(state);
 }
@@ -513,7 +521,7 @@ function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): Q
 	if (opts.model?.provider === id) models.push(opts.model.id);
 	return quota.cells.filter((cell) => {
 		if (cell.kind === "mark") return cell.until > opts.now;
-		if (cell.kind === "pool") return true;
+		if (cell.kind === "pool" || cell.kind === "status") return true;
 		return !cell.families.length || cell.families.some((family) => models.some((model) => matchesModel(model, family)));
 	});
 }
@@ -576,6 +584,8 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 				`${cell.name} ${balance}${cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`}`,
 			);
 		}
+		case "status":
+			return colorize("dim", `quota ${cell.status}`);
 		case "mark": {
 			const families = cell.families.map((id) => textOf(id) ?? "model");
 			const scope = (full ? families : families.map((id) => id.replace(/^[a-z]+-\d+-/, ""))).join(",") || "provider";
@@ -591,12 +601,12 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 	}
 }
 
-function isEssential(cell: QuotaCell): cell is Extract<QuotaCell, { kind: "mark" | "percent" }> {
-	return cell.kind === "mark" || cell.kind === "percent";
+function isEssential(cell: QuotaCell): cell is Extract<QuotaCell, { kind: "mark" | "percent" | "status" }> {
+	return cell.kind === "mark" || cell.kind === "percent" || cell.kind === "status";
 }
 
 function priority(cell: QuotaCell): number {
-	if (cell.kind === "mark") return -1;
+	if (cell.kind === "mark" || cell.kind === "status") return -1;
 	return cell.kind === "percent" ? (cell.remaining ?? 101) : 102;
 }
 
@@ -611,20 +621,28 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 	const rows = segments.flatMap(({ quota, cells }) => {
 		const shown = layout.essential ? cells.filter(isEssential) : cells;
 		if (!shown.length) return [];
-		const stale = quota.stale && shown.some((cell) => cell.kind === "percent");
-		const label = `${full ? quota.display.full : quota.display.compact}${stale ? " (stale)" : ""}`;
-		const groups = [shown.filter((cell) => cell.kind !== "mark"), shown.filter((cell) => cell.kind === "mark")];
+		const marks = shown.filter((cell) => cell.kind === "mark");
+		const data = shown.filter((cell) => cell.kind !== "mark");
+		// Staleness qualifies cached readings only. Marks carry their own expiry, so never read as stale.
+		// Generic rows also age at the render clock; legacy rows keep their parsed flag byte for byte.
+		const expired = quota.stale || (!quota.legacy && isStale(quota, opts.now));
+		const stale = expired && data.some((cell) => cell.kind !== "status");
 		const groupText = (group: QuotaCell[]) =>
 			group
 				.map((cell) => cellText(cell, layout, colorize, opts))
 				.join(full && group.every((cell) => cell.kind !== "percent") ? dim("; ") : " ");
-		const ordered = layout.prioritize
-			? groupText([...shown].sort((a, b) => priority(a) - priority(b)))
-			: groups
-					.filter((group) => group.length)
-					.map(groupText)
-					.join(dim(full ? "; " : " | "));
-		return [dim(`${label} `) + ordered];
+		const name = full ? quota.display.full : quota.display.compact;
+		if (layout.prioritize) {
+			const ranked = data.sort((a, b) => priority(a) - priority(b));
+			// Marks lead; stale data follows them behind its own label.
+			if (stale && marks.length) return [dim(`${name} `) + groupText(marks) + dim(" | (stale) ") + groupText(ranked)];
+			return [dim(`${name}${stale ? " (stale)" : ""} `) + groupText([...marks, ...ranked])];
+		}
+		const ordered = [data, marks]
+			.filter((group) => group.length)
+			.map(groupText)
+			.join(dim(full ? "; " : " | "));
+		return [dim(`${name}${stale ? " (stale)" : ""} `) + ordered];
 	});
 	if (!rows.length) return [];
 	const lead = dim(full ? "Quota left: " : "Left: ");
