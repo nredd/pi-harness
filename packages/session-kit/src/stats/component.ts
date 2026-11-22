@@ -481,14 +481,19 @@ export class StatsView implements Component {
 				row.head.kind === "gauge"
 					? `${this.paint(row.old ? "dim" : "accent", gauge(row.head.percent))} ${this.paint(tone, usedLabel(row.head.percent).padStart(5))}`
 					: row.head.text && this.paint(tone, row.head.text);
-			const label = this.paint(row.old || row.expired ? "dim" : "text", pad(row.label));
-			const joined = `${label}${head}${head ? "  " : ""}${detail}`;
+			const labelTone = row.old || row.expired ? "dim" : "text";
+			const label = this.paint(labelTone, pad(row.label));
+			const left = `${label}${head}`;
+			const joined = `${left}${head ? "  " : ""}${detail}`;
 			if (visibleWidth(joined) <= inner) out.push(joined);
-			else
-				out.push(
-					truncateToWidth(`${label}${head}`.trimEnd(), inner, "…"),
-					truncateToWidth(`    ${detail}`, inner, "…"),
-				);
+			else {
+				// Do not spend the head’s width on padding to an unrelated quota label.
+				if (visibleWidth(left) > inner) {
+					out.push(...wrapTextWithAnsi(this.paint(labelTone, `  ${sanitize(row.label)}`), inner));
+					if (head) out.push(...wrapTextWithAnsi(`    ${head}`, inner));
+				} else out.push(left.trimEnd());
+				if (detail) out.push(truncateToWidth(`    ${detail}`, inner, "…"));
+			}
 		}
 		if (noClaude) out.push(this.paint("muted", `${pad(ANTHROPIC)}${NO_LOCAL_READING}`));
 		return out;

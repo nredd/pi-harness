@@ -60,7 +60,7 @@ function seed(): void {
 	});
 }
 
-function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir: join(dir, "home") }) {
+function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir: join(dir, "home") }, width = 100) {
 	let handler: Any;
 	const sendMessage = vi.fn();
 	register(
@@ -82,7 +82,7 @@ function setup(mode: string, options: Parameters<typeof register>[2] = { homeDir
 			{},
 			() => {},
 		);
-		rendered.push(view.render(100));
+		rendered.push(view.render(width));
 	});
 	const ctx = {
 		mode,
@@ -168,6 +168,39 @@ describe("/stats command", () => {
 		const printed = String(out.mock.calls[0]?.[0]);
 		expect(printed).toMatch(/^\/stats: no usage recorded yet/);
 		expect(printed).toContain("Google prepaid-credits: 12 credits balance\n");
+	});
+
+	it("keeps every quota head visible in a narrow overlay with mixed label lengths", async () => {
+		const root = join(dir, "router-state", "v1");
+		mkdirSync(root, { recursive: true });
+		const now = 1768478400000;
+		writeFileSync(
+			join(root, "view.json"),
+			JSON.stringify([
+				{
+					provider: "vendor",
+					snapshot: {
+						status: "available",
+						windows: [
+							{ name: "weekly", families: ["family".repeat(14)], usedPercent: 40 },
+							{ name: "expired", usedPercent: 91, resetAt: now },
+						],
+					},
+					pools: [{ name: "prepaid", unit: "credits", balance: 12 }],
+					meters: [{ name: "day", quantity: { unit: "requests", used: 37, limit: 250 } }],
+					marks: [{ window: "blocked", until: 1768550400000, evidence: "inferred" }],
+				},
+			]),
+		);
+		const { run, rendered } = setup("tui", { agentDir: dir, clock: { ...realClock, now: () => now } }, 55);
+		await run("");
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/████░░░░░░ +40%/);
+		expect(overlay).toContain("37/250 requests");
+		expect(overlay).toContain("blocked until 2026-01-16 08:00 UTC");
+		expect(overlay).toContain("12 credits balance");
+		expect(overlay).toContain("reset 0s ago, no newer reading");
+		expect(overlay).not.toContain("91%");
 	});
 
 	it("opens a full-screen overlay, shows loading status, clears it, and writes the cache", async () => {
