@@ -7,6 +7,7 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { type AgentRunState, applyAgentEvent } from "../../src/agents.ts";
 import {
+	formatCompactionList,
 	formatHeldReminder,
 	formatInProgressNotice,
 	formatPlanReminder,
@@ -20,12 +21,14 @@ import { replayFromBranch } from "../../src/state/replay.ts";
 import { getState } from "../../src/state/store.ts";
 import { __resetState } from "../../src/todo.ts";
 import {
+	COMPACTION_LIST_MESSAGE_TYPE,
 	HELD_REMINDER_MESSAGE_TYPE,
 	MONITOR_STARTED_EVENT,
 	MONITOR_STOPPED_EVENT,
 	NUDGE_BUDGET_ENTRY_TYPE,
 	PLAN_APPROVED_EVENT,
 	PLAN_REMINDER_MESSAGE_TYPE,
+	STALE_REMINDER_MESSAGE_TYPE,
 	STATE_ENTRY_TYPE,
 	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
@@ -642,8 +645,89 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
 	});
 
+	describe("open list after a compaction", () => {
+		const planning = { role: "custom", customType: "plan-mode-transition", details: { version: 1, mode: "plan" } };
+		const mixed = {
+			persistenceVersion: 1,
+			nextId: 6,
+			tasks: [
+				{ id: 1, subject: "done work", status: "completed" },
+				{ id: 2, subject: "ship \u001b[31mwidgets", status: "in_progress", owner: "worker" },
+				{ id: 3, subject: "verify", status: "pending", blockedBy: [1, 2, 5] },
+				{ id: 4, subject: "descoped", status: "deferred", reason: "later" },
+				{ id: 5, subject: "gone", status: "deleted" },
+			],
+		};
+		const LIST = [
+			"[rpiv-todo] The conversation was compacted, so here is the todo list it no longer shows. These todos are still open:",
+			"- #2 in_progress ship widgets (@worker)",
+			"- #3 pending verify (blocked by #2)",
+			"They already exist: update them by id with `todo`, do not recreate them. Complete only with evidence and defer with a reason.",
+		].join("\n");
+		const appended = { role: "custom", customType: COMPACTION_LIST_MESSAGE_TYPE, content: LIST, display: false };
+
+		it("appends the open list to the first request after a compaction only", async () => {
+			const { handler, ctx } = await start(mixed as never);
+			const context = handler("context");
+			expect(await context({ messages: [user] }, ctx)).toBeUndefined();
+			await handler("session_compact")({}, ctx);
+			expect(await context({ messages: [user] }, ctx)).toEqual({
+				messages: [user, { ...appended, timestamp: expect.any(Number) }],
+			});
+			expect(await context({ messages: [user, assistant] }, ctx)).toBeUndefined();
+		});
+
+		it("waits out Plan mode and expands a trailing reminder in the same request", async () => {
+			const { handler, ctx } = await start(tasks({ id: 1 }));
+			const context = handler("context");
+			await handler("session_compact")({}, ctx);
+			expect(await context({ messages: [planning, user] }, ctx)).toBeUndefined();
+			const result = (await context({ messages: [user, assistant, marker] }, ctx)) as {
+				messages: Array<{ customType?: string; content: string }>;
+			};
+			expect(result.messages).toHaveLength(4);
+			expect(result.messages[2]).toMatchObject({ customType: HELD_REMINDER_MESSAGE_TYPE });
+			expect(result.messages[2].content).toContain("Nothing is armed to wake you");
+			expect(result.messages[3]).toMatchObject({ customType: COMPACTION_LIST_MESSAGE_TYPE });
+			expect(result.messages[3].content).toContain("- #1 in_progress t1\n");
+			expect(await context({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it("spends the list on a request with nothing open", async () => {
+			const { handler, ctx, call } = await start({ persistenceVersion: 1, nextId: 1, tasks: [] } as never);
+			await handler("session_compact")({}, ctx);
+			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+			await call(ctx, { action: "create", subject: "later work" });
+			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it.each(["session_start", "session_shutdown"])("drops a pending list on %s", async (event) => {
+			const { handler, ctx } = await start(tasks({ id: 1 }));
+			await handler("session_compact")({}, ctx);
+			await handler(event)({ reason: event === "session_start" ? "new" : "quit" }, ctx);
+			if (event === "session_shutdown") await handler("session_start")({ reason: "new" }, ctx);
+			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it("skips a blocker missing from the list", () => {
+			const state = { nextId: 3, tasks: [{ id: 2, subject: "orphan", status: "pending", blockedBy: [1] }] };
+			expect(formatCompactionList(state as never)).toContain("\n- #2 pending orphan\n");
+		});
+
+		it("lists open todos in child and non-TUI sessions too", async () => {
+			const childContext = new AsyncLocalStorage<boolean>();
+			vi.stubGlobal(Symbol.for("pi-subagents:child-session-context"), childContext);
+			onTestFinished(() => {
+				vi.unstubAllGlobals();
+			});
+			const { handler, ctx } = await start(mixed as never, { mode: "rpc", childContext });
+			await handler("session_compact")({}, ctx);
+			expect(await handler("context")({ messages: [user] }, ctx)).toMatchObject({ messages: [user, appended] });
+		});
+	});
+
 	describe("stale open lists", () => {
-		const customType = "rpiv-todo-stale-reminder";
+		const customType = STALE_REMINDER_MESSAGE_TYPE;
 		const budget = {
 			type: "custom",
 			customType: NUDGE_BUDGET_ENTRY_TYPE,

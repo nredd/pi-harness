@@ -127,9 +127,9 @@ completion; only the parent changes todo status with evidence.
 
 In parent TUI sessions only, an unchanged list with `pending` or `in_progress` todos adds a hidden
 `rpiv-todo-stale-reminder` after `staleAfterSettles` completed settles (default 10, set in
-`~/.config/rpiv-todo/config.json`; a non-positive-integer value falls back to the default) that would otherwise stop, even when a
-background agent is armed. It asks the parent to run `todo list` and reconcile actual progress.
-A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
+`~/.config/rpiv-todo/config.json`; see [Stale-list reminders](#stale-list-reminders)) that
+would otherwise stop, even when a background agent is armed. It asks the parent to run
+`todo list` and reconcile actual progress. A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
 On resume or `/reload`, a restored spent budget blocks another nudge until fresh human input.
 
@@ -158,6 +158,15 @@ these markers remain visible in `/tree` and in the generic `entry_appended` even
 either nudge. An earlier extension handler that delays only a `todo`
 completion can reorder the reset, making the nudge late or missed until the next
 tool call, but cannot cause an extra nudge.
+
+A compaction keeps the list, but the compacted model context no longer shows it. So the first
+model request after `session_compact` outside Plan mode gets one hidden `rpiv-todo-compaction-list` message
+appended, listing every `pending` and `in_progress` todo with its owner and open blockers, and
+asking the model to update them by id instead of recreating them. This applies in every session
+mode, child agents included. The message is never persisted and later requests do not carry it.
+A request with nothing open spends it. Plan mode defers it to the first request after Plan mode.
+The pending list is in memory only, so a `/reload` or session switch before the next request
+drops it.
 
 ### Session switches and survivors
 
@@ -688,6 +697,12 @@ Examples: `alt+o`, `ctrl+shift+t`, `super+alt+f5`.
   run `/reload` to rebind; until you do, the old key stays active even though the
   collapsed panel's hint text (which is resolved per render) already shows the
   new one.
+
+### Stale-list reminders
+
+`staleAfterSettles` defaults to `10` and accepts positive integers; any other
+value falls back to the default. It is read at each eligible settle, so an edit
+applies without `/reload`.
 
 ### Empty-list reminders
 

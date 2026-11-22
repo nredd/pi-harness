@@ -252,12 +252,14 @@ export default function (
 	// the replacement session's session_start replays it. Other errors are real replay
 	// bugs and must propagate. The render is sid-gated so a child never refreshes the
 	// foreground overlay.
+	// Resolves to the replayed session id, or `undefined` for a stale ctx.
 	const replayAndRefresh = async (
 		ctx: Parameters<typeof sid>[0] & Parameters<typeof replayFromBranch>[0],
-	): Promise<void> => {
+	): Promise<string | undefined> => {
 		let isForeground = false;
+		let id: string | undefined;
 		try {
-			const id = sid(ctx);
+			id = sid(ctx);
 			const before = getState(id);
 			const after = replayFromBranch(ctx);
 			replaceState(id, after);
@@ -268,8 +270,10 @@ export default function (
 			isForeground = id === getActiveRenderSession();
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
+			return undefined;
 		}
 		if (isForeground) await updateTodoOverlay();
+		return id;
 	};
 
 	pi.on("session_start", async (event, ctx) => {
@@ -321,7 +325,9 @@ export default function (
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
-		await replayAndRefresh(ctx);
+		// The compacted context no longer carries the list: restore it on the next request.
+		const id = await replayAndRefresh(ctx);
+		if (id !== undefined) planHooks.sessionCompacted(id);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
