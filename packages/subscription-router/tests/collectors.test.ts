@@ -205,6 +205,30 @@ it("does not let old cleanup or an in-flight reading survive replacement", async
 	expect(await usage.get(ctx, provider, { force: true })).toMatchObject({ status: "available", windows: [] });
 });
 
+it("retires reentrant registrations", async () => {
+	const { usage, getAccessToken } = harness();
+	const credential = deferred<string>();
+	getAccessToken.mockReturnValueOnce(credential.promise);
+	const nested = vi.fn(fake.read);
+	install(fake);
+	let pending: Promise<UsageSnapshot> | undefined;
+	const outer = {
+		...fake,
+		get read() {
+			if (!pending) {
+				install({ ...fake, read: nested });
+				pending = usage.get(ctx, provider);
+			}
+			return fake.read;
+		},
+	};
+	install(outer);
+	credential.resolve("fake-token");
+	expect(await pending).toMatchObject({ status: "unavailable" });
+	expect(nested).not.toHaveBeenCalled();
+	expect(collectorFor(provider)).toEqual(fake);
+});
+
 it("retires cache and pending reads even when the same adapter is reinstalled", async () => {
 	const { usage } = harness();
 	const pending = deferred<CollectorReading>();

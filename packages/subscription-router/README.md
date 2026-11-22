@@ -312,7 +312,10 @@ are never coerced, because Pi resolves a non-string credential argument as a mod
 `provider`. For external IDs the last registration wins.
 Only the returned unregister function owns that registration; old cleanup cannot remove a replacement
 or restore a previous registration. Retirement drops cached usage and confirmed blocks, aborts
-reads, and ignores late results. `collectorFor(id)` returns the frozen adapter.
+reads, and ignores late results. Registration reads each adapter field (`provider`, `display`,
+`acceptsCredential`, `kind`, `request`, `parse`, `read`) once into a frozen copy before it looks at
+the current owner, so a getter that registers reentrantly is itself displaced and retired.
+`collectorFor(id)` returns that frozen copy.
 
 Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
 of `src/collectors.ts` has initialized it, even before the router extension loads. The frozen

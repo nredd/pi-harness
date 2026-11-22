@@ -59,12 +59,27 @@ const builtins = new Map(
 	]),
 );
 
+const ADAPTER_KEYS = ["provider", "display", "acceptsCredential", "kind", "request", "parse", "read"] as const;
+
+/** Read each declared adapter field once. Getters run here, before any registry state is read. */
+function snapshotAdapter(adapter: Collector): Readonly<Collector> {
+	const source = adapter as Partial<Record<(typeof ADAPTER_KEYS)[number], unknown>>;
+	const copy: Record<string, unknown> = {};
+	for (const key of ADAPTER_KEYS) {
+		const value = source[key];
+		if (value !== undefined) copy[key] = value;
+	}
+	return Object.freeze(copy) as Readonly<Collector>;
+}
+
 function createRegistry(): CollectorRegistry {
 	const entries = new Map<string, CollectorRegistration>();
 	const controllers = new WeakMap<CollectorRegistration, AbortController>();
 	return Object.freeze({
 		version: 1 as const,
-		register(collector: Collector) {
+		register(adapter: Collector) {
+			const collector = snapshotAdapter(adapter);
+			// No extension code runs from here through predecessor selection and publication.
 			const { provider } = collector;
 			if (!isCollectorId(provider)) {
 				throw new TypeError(
@@ -75,7 +90,7 @@ function createRegistry(): CollectorRegistry {
 				throw new Error(`Cannot register collector "${provider}": ID is reserved for a built-in.`);
 			const old = entries.get(provider);
 			const lifetime = new AbortController();
-			const entry = Object.freeze({ collector: Object.freeze({ ...collector }), signal: lifetime.signal });
+			const entry = Object.freeze({ collector, signal: lifetime.signal });
 			controllers.set(entry, lifetime);
 			entries.set(provider, entry);
 			if (old) controllers.get(old)?.abort();
