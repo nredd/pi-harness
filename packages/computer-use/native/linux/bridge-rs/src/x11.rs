@@ -2,6 +2,7 @@
 use crate::atspi::{Rect, RootSnapshot};
 use crate::{ErrorCode, ProtocolError};
 use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -619,12 +620,23 @@ impl Owed {
     }
 }
 
+/// An owed release as recorded across helper restarts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordedRelease {
+    pub button: bool,
+    pub detail: u8,
+    pub ambiguous: bool,
+}
+
 /// Helper-wide physical input state shared by every action: releases a cleanup
-/// could not confirm, and the shutdown flag.
+/// could not confirm, a reason input is blocked outright, and the shutdown flag.
 #[derive(Debug, Default)]
 pub struct InputState {
     /// Unconfirmed releases in press order; the newest is released first.
     debt: Mutex<Vec<Owed>>,
+    /// Set when the record of an earlier helper's debt cannot be read: nothing can
+    /// settle what it named, so physical input stays refused.
+    blocked: Mutex<Option<String>>,
     cancelled: AtomicBool,
 }
 impl InputState {
@@ -644,10 +656,95 @@ impl InputState {
     pub fn unconfirmed_releases(&self) -> Vec<String> {
         self.debt().iter().map(|owed| owed.describe()).collect()
     }
+    /// The owed releases, oldest first, for the restart record.
+    pub fn recorded(&self) -> Vec<RecordedRelease> {
+        self.debt()
+            .iter()
+            .map(|owed| RecordedRelease {
+                button: owed.button(),
+                detail: owed.detail,
+                ambiguous: owed.ambiguous,
+            })
+            .collect()
+    }
+    /// Take on releases an earlier helper left owed, ahead of any newer debt.
+    pub fn restore(&self, releases: &[RecordedRelease]) {
+        let restored = releases.iter().map(|release| Owed {
+            event: if release.button {
+                BUTTON_RELEASE_EVENT
+            } else {
+                KEY_RELEASE_EVENT
+            },
+            detail: release.detail,
+            ambiguous: release.ambiguous,
+        });
+        self.debt().splice(0..0, restored);
+    }
+    /// Refuse every physical input from now on, for `reason`.
+    pub fn block(&self, reason: impl Into<String>) {
+        *self.blocked.lock().unwrap_or_else(PoisonError::into_inner) = Some(reason.into());
+    }
+    pub fn blocked(&self) -> Option<String> {
+        self.blocked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    /// Refuse while input is blocked or a release is unconfirmed.
+    fn refusal(&self) -> Option<ProtocolError> {
+        if let Some(reason) = self.blocked() {
+            return Some(err(reason, ErrorCode::InputUnsafe));
+        }
+        let unconfirmed = self.unconfirmed_releases();
+        (!unconfirmed.is_empty()).then(|| {
+            err(
+                format!(
+                    "Refusing physical input: the release of {} is unconfirmed",
+                    unconfirmed.join(", ")
+                ),
+                ErrorCode::InputUnsafe,
+            )
+        })
+    }
+    /// A failure before owed releases could be consulted, e.g. on reconnect, still
+    /// names them: the caller must learn the input may be held, not only the cause.
+    fn with_owed(&self, error: ProtocolError) -> ProtocolError {
+        match self.refusal() {
+            Some(refusal) => err(
+                format!(
+                    "{}; they could not be settled: {}",
+                    refusal.message, error.message
+                ),
+                ErrorCode::InputUnsafe,
+            ),
+            None => error,
+        }
+    }
     fn debt(&self) -> std::sync::MutexGuard<'_, Vec<Owed>> {
         // Debt is plain data: a panic elsewhere cannot leave it inconsistent.
         self.debt.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// Settle owed releases on a fresh X11 connection with no target window, e.g.
+/// before the helper exits. Fails without touching the debt when X11 is unreachable.
+pub fn settle_released(state: Arc<InputState>) -> Result<(), ProtocolError> {
+    if SessionKind::detect() != SessionKind::X11 {
+        return Err(err(
+            "No X11 session to settle owed releases on",
+            ErrorCode::CapabilityDeferred,
+        ));
+    }
+    let (conn, root) = connect_xtest()?;
+    Input::with_state(
+        XtestSink {
+            conn,
+            root,
+            target: root,
+        },
+        state,
+    )
+    .settle()
 }
 
 /// Guarded physical input. Every event is admitted against the live target first,
@@ -662,19 +759,20 @@ impl Input<XtestSink> {
     /// Connect and settle earlier unconfirmed releases before focusing the target, so
     /// a release reaches the window its press did when nothing has changed since.
     pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
-        policy.require_physical(SessionKind::detect())?;
-        let (conn, screen) = connect()?;
-        let root = conn.setup().roots[screen].root;
-        xtest::get_version(&conn, 2, 2)
-            .map_err(xerr)?
-            .reply()
-            .map_err(|e| {
-                err(
-                    format!("XTEST unavailable: {e}"),
-                    ErrorCode::CapabilityDeferred,
-                )
-            })?;
-        let input = Self::with_state(XtestSink { conn, root, target }, InputState::shared());
+        Self::connect_with_state(policy, target, InputState::shared())
+    }
+    /// [`Input::connect`] against `state`. A failure before owed releases are settled
+    /// still names them.
+    pub fn connect_with_state(
+        policy: PhysicalPolicy,
+        target: Window,
+        state: Arc<InputState>,
+    ) -> Result<Self, ProtocolError> {
+        let (conn, root) = policy
+            .require_physical(SessionKind::detect())
+            .and_then(|()| connect_xtest())
+            .map_err(|error| state.with_owed(error))?;
+        let input = Self::with_state(XtestSink { conn, root, target }, state);
         input.settle()?;
         validate_target(&input.sink.conn, root, target)?;
         prepare_focus(&input.sink.conn, root, target, policy)?;
@@ -715,6 +813,9 @@ impl<S: InputSink> Input<S> {
     /// may hold that input now. These posts belong to the earlier action and are not
     /// counted.
     pub fn settle(&self) -> Result<(), ProtocolError> {
+        if let Some(reason) = self.state.blocked() {
+            return Err(err(reason, ErrorCode::InputUnsafe));
+        }
         let owed = std::mem::take(&mut *self.state.debt());
         let mut left = Vec::new();
         for owed in owed.into_iter().rev() {
@@ -856,15 +957,8 @@ impl<S: InputSink> Input<S> {
                 ErrorCode::Cancelled,
             ));
         }
-        let unconfirmed = self.state.unconfirmed_releases();
-        if !unconfirmed.is_empty() {
-            return Err(err(
-                format!(
-                    "Refusing physical input: the release of {} is unconfirmed",
-                    unconfirmed.join(", ")
-                ),
-                ErrorCode::InputUnsafe,
-            ));
+        if let Some(refusal) = self.state.refusal() {
+            return Err(refusal);
         }
         self.sink.admit()
     }
@@ -1254,6 +1348,21 @@ impl Atoms {
             utf8: intern(c, "UTF8_STRING")?,
         })
     }
+}
+/// Connect and negotiate XTEST, returning the connection and its root window.
+fn connect_xtest() -> Result<(RustConnection, Window), ProtocolError> {
+    let (conn, screen) = connect()?;
+    let root = conn.setup().roots[screen].root;
+    xtest::get_version(&conn, 2, 2)
+        .map_err(xerr)?
+        .reply()
+        .map_err(|e| {
+            err(
+                format!("XTEST unavailable: {e}"),
+                ErrorCode::CapabilityDeferred,
+            )
+        })?;
+    Ok((conn, root))
 }
 fn connect() -> Result<(RustConnection, usize), ProtocolError> {
     x11rb::connect(None).map_err(|e| {
@@ -1744,6 +1853,49 @@ mod tests {
         let up = Input::with_state(RecordingSink::default(), Arc::clone(&state));
         up.settle().unwrap();
         assert!(up.sink().events().is_empty());
+    }
+
+    #[test]
+    fn reconnect_failure_names_unconfirmed_releases() {
+        let state = Arc::new(InputState::default());
+        // `ax_only` refuses on every session, so this needs no display.
+        let clean = Input::connect_with_state(PhysicalPolicy::AxOnly, 7, Arc::clone(&state));
+        assert_ne!(clean.err().unwrap().code, ErrorCode::InputUnsafe);
+
+        state.restore(&[RecordedRelease {
+            button: false,
+            detail: 37,
+            ambiguous: false,
+        }]);
+        let error = Input::connect_with_state(PhysicalPolicy::AxOnly, 7, Arc::clone(&state))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+        assert!(error.message.contains("keycode 37"), "{}", error.message);
+        assert!(
+            error.message.contains("could not be settled"),
+            "{}",
+            error.message
+        );
+
+        // An unreadable restart record blocks every input and every settlement.
+        let state = Arc::new(InputState::default());
+        state.block("record unreadable");
+        let input = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        assert_eq!(input.settle().unwrap_err().message, "record unreadable");
+        assert_eq!(
+            input.move_pointer(1, 1).unwrap_err().code,
+            ErrorCode::InputUnsafe
+        );
+        assert!(input.sink().events().is_empty());
+        let error = Input::connect_with_state(PhysicalPolicy::AxOnly, 7, state)
+            .err()
+            .unwrap();
+        assert!(
+            error.message.starts_with("record unreadable"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

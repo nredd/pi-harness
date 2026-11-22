@@ -44,6 +44,7 @@
     "native/linux/bridge-rs/src/lib.rs",
     "native/linux/bridge-rs/src/main.rs",
     "native/linux/bridge-rs/src/protocol.rs",
+    "native/linux/bridge-rs/src/release_debt.rs",
     "native/linux/bridge-rs/src/state.rs",
     "native/linux/bridge-rs/src/testing.rs",
     "native/linux/bridge-rs/src/tests.rs",

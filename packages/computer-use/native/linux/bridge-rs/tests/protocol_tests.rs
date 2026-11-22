@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,12 +20,19 @@ struct Helper {
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
     stderr: Receiver<String>,
+    /// Default runtime directory, removed on drop.
+    runtime: std::path::PathBuf,
 }
 impl Helper {
-    /// Spawn the helper with no display, so physical input can never reach a desktop.
+    /// Spawn the helper with no display, so physical input can never reach a desktop,
+    /// and a private runtime directory for its owed-release record unless `configure`
+    /// sets another.
     fn spawn(configure: impl FnOnce(&mut Command)) -> Self {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let runtime = runtime_dir(&format!("run-{}", NEXT.fetch_add(1, Ordering::SeqCst)));
         let mut command = Command::new(env!("CARGO_BIN_EXE_linux-bridge"));
         command
+            .env("XDG_RUNTIME_DIR", &runtime)
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("XDG_SESSION_TYPE")
@@ -55,6 +63,7 @@ impl Helper {
             stdin,
             lines,
             stderr,
+            runtime,
         }
     }
     fn send(&mut self, request: &Value) {
@@ -105,6 +114,7 @@ impl Drop for Helper {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.runtime);
     }
 }
 
@@ -236,4 +246,88 @@ fn shutdown_with_full_request_queue() {
             assert_eq!(queued["error"]["code"], "cancelled", "{ending}: {queued}");
         }
     }
+}
+
+/// A private runtime directory per test, so the owed-release record is isolated.
+fn runtime_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("linux-bridge-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create runtime dir");
+    dir
+}
+
+fn spawn_in(runtime: &std::path::Path) -> Helper {
+    let runtime = runtime.to_owned();
+    Helper::spawn(move |command| {
+        command.env("XDG_RUNTIME_DIR", runtime);
+    })
+}
+
+#[test]
+fn shutdown_with_release_debt() {
+    use std::os::unix::fs::PermissionsExt;
+    let runtime = runtime_dir("exit-debt");
+    let record = runtime.join("pi-computer-use/linux-input-debt.json");
+    let mut helper = spawn_in(&runtime);
+    // Shift's release is rejected on the normal path and again in cleanup.
+    helper.send(&typing("held", "A", json!({"failPosts": [3, 4]})));
+    let reply = helper.reply();
+    assert_eq!(reply["result"]["outcome"], "unknown", "{reply}");
+    assert_eq!(
+        reply["result"]["evidence"]["unconfirmedReleases"],
+        json!(["keycode 8"])
+    );
+    assert!(record.exists(), "recorded before the reply");
+    helper.close_stdin();
+    let status = helper.wait(DEADLINE);
+    let stderr = helper.stderr();
+    // No display here, so the bounded exit settlement cannot confirm it.
+    assert_eq!(status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("keycode 8"), "{stderr}");
+    assert!(stderr.contains(&record.display().to_string()), "{stderr}");
+    let mode = std::fs::metadata(&record).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
+    assert_eq!(
+        saved["releases"],
+        json!([{"button": false, "detail": 8, "ambiguous": false}])
+    );
+    assert!(saved["savedAt"].as_u64().unwrap() > 0);
+    let _ = std::fs::remove_dir_all(runtime);
+}
+
+#[test]
+fn restart_with_persisted_debt_refuses_until_a_release_is_confirmed() {
+    let runtime = runtime_dir("restart-debt");
+    let record = runtime.join("pi-computer-use/linux-input-debt.json");
+    let mut first = spawn_in(&runtime);
+    first.send(&typing("held", "A", json!({"failPosts": [3, 4]})));
+    assert_eq!(first.reply()["result"]["outcome"], "unknown");
+    first.close_stdin();
+    first.wait(DEADLINE);
+
+    let mut second = spawn_in(&runtime);
+    // Shift is still down and its release is rejected again: nothing else posts.
+    second.send(&typing(
+        "refused",
+        "b",
+        json!({"held": [[false, 8]], "failPosts": [0]}),
+    ));
+    let refused = second.reply();
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(refused["error"]["code"], "input_unsafe");
+    assert!(refused["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("keycode 8"));
+    assert!(record.exists());
+    // A confirmed release settles it; the action runs and the record is gone.
+    second.send(&typing("settled", "b", json!({"held": [[false, 8]]})));
+    let settled = second.reply();
+    assert_eq!(settled["ok"], true, "{settled}");
+    assert_eq!(settled["result"]["evidence"]["held"], json!([]));
+    assert!(!record.exists());
+    second.close_stdin();
+    assert!(second.wait(DEADLINE).success(), "{}", second.stderr());
+    let _ = std::fs::remove_dir_all(runtime);
 }
