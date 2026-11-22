@@ -229,8 +229,11 @@ export interface PlatformWaitForResponse {
 
 export interface ComputerUsePlatformBackend {
 	name: PlatformName;
-	/** Release process-local resources when the Pi session is torn down. */
-	shutdown?(): void | Promise<void>;
+	/**
+	 * Release process-local resources when the Pi session is torn down. May resolve to a warning the user must
+	 * see, e.g. that a helper exited with keys or buttons possibly still held.
+	 */
+	shutdown?(): void | Promise<void> | Promise<string | undefined>;
 	setActivity?(active: boolean): void | Promise<void>;
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
