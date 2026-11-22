@@ -167,6 +167,46 @@ it("validates a reopened row against the creation directory its predecessor jour
 	next.cleanup();
 });
 
+it("ignores a tampered journaled directory on a row that saved no working directory", {
+	timeout: 30_000,
+}, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const child = fixture.physical("kid", "child", [answer("ORIGINAL"), answer("NEVER REOPEN")]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("first run")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	const record = fixture.record(agentId(outcomes(h, "Agent")[0]?.text));
+	await record.promise;
+	await h.session.waitForIdle();
+	const parentFile = parent.getSessionFile();
+	const file = record.sessionFile;
+	if (!parentFile || !file) throw new Error("Missing session path");
+	settle(file);
+	const journaled = parent
+		.getBranch()
+		.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record")
+		.at(-1);
+	// The row keeps its directory but drops the cwd the header would be checked against.
+	const { sessionCwd: _cwd, ...row } = (journaled as { data: object }).data as Record<string, unknown>;
+	parent.appendCustomEntry("subagents:record", row);
+	const moved = join(fixture.root, "moved-sessions");
+	mkdirSync(moved);
+	mkdirSync(join(fixture.cwd, ".pi"), { recursive: true });
+	writeFileSync(join(fixture.cwd, ".pi", "settings.json"), JSON.stringify({ sessionDir: moved }));
+	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+	h.cleanup();
+	const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	next.setResponses([toolCalls(spawn("resume without a cwd", { resume: record.id })), answer("CHECKED")]);
+	await next.session.prompt("resume");
+	expect(outcomes(next, "Agent").at(-1)).toMatchObject({
+		isError: true,
+		text: expect.stringContaining(`child session is outside its configured directory: ${file}`),
+	});
+	expect(child.state.callCount).toBe(1);
+	next.cleanup();
+});
+
 it("never lends a journaled creation directory to an update naming another transcript", {
 	timeout: 30_000,
 }, async () => {

@@ -30,8 +30,14 @@ export interface SavedChildPaths {
 /** Inputs for `checkSavedChild`; `canonical` is shared across the rows of one startup. */
 export interface SavedChildCheckOptions {
 	file: string;
-	/** The directory the child was created in, when journaled, and the one current settings give. */
+	/** The directories current settings give for the child (the configured-directory fallback). */
 	directories: readonly (string | undefined)[];
+	/**
+	 * The directory journaled with the row as the child's creation directory.
+	 * It widens the allowlist only alongside a valid (absolute) `savedCwd`, which
+	 * the header must then match: a row from the parent session file is untrusted.
+	 */
+	journaledDirectory?: string;
 	parentFile: string | undefined;
 	status: AgentRecord["status"];
 	now: number;
@@ -90,14 +96,18 @@ export function canonicalChildPath(file: string): string | undefined {
 }
 
 /**
- * Whether two saved rows name the same transcript: the same spelling, either
- * row's write-time canonical form matching the other's spelling or canonical
- * form, or (legacy rows, file still present) both spellings resolving to one
- * file now. A reopen can journal the canonical spelling of a predecessor's
- * symlinked transcript.
+ * Whether two saved rows name the same transcript. When both rows journaled a
+ * write-time canonical form, those alone decide: one spelling recorded against
+ * two targets (a link retargeted between rows) is two transcripts. Otherwise
+ * the same spelling, the one canonical form matching the other's spelling, or
+ * (legacy rows, file still present) both spellings resolving to one file now.
+ * A reopen can journal the canonical spelling of a predecessor's symlinked transcript.
  */
 export function sameSavedChild(previous: SavedChildPaths, next: SavedChildPaths): boolean {
 	if (!previous.sessionFile || !next.sessionFile) return false;
+	if (previous.canonicalSessionFile && next.canonicalSessionFile) {
+		return previous.canonicalSessionFile === next.canonicalSessionFile;
+	}
 	// Keep exact or write-time canonical links even when the transcript has since disappeared.
 	const forms = [next.sessionFile, next.canonicalSessionFile];
 	if (forms.includes(previous.sessionFile)) return true;
@@ -174,10 +184,15 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 	}
 	try {
 		const canonicalFile = realpathSync(file);
-		let inside = insideDirectory(canonicalFile, options.directories, canonical);
+		// A journaled directory vouches only for a row whose saved cwd the header must match.
+		const directories =
+			savedCwd !== undefined && isAbsolute(savedCwd)
+				? [options.journaledDirectory, ...options.directories]
+				: options.directories;
+		let inside = insideDirectory(canonicalFile, directories, canonical);
 		// A startup resolution can be stale (a link retargeted between rows): ask once more uncached.
 		if (inside !== true && canonical !== realpathSync) {
-			inside = insideDirectory(canonicalFile, options.directories, realpathSync);
+			inside = insideDirectory(canonicalFile, directories, realpathSync);
 		}
 		if (inside === "unresolved") return { refusal: `child session is missing or unreadable: ${file}` };
 		if (!inside) return { refusal: `child session is outside its configured directory: ${file}` };

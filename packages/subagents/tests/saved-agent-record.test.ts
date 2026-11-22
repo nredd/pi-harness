@@ -143,6 +143,29 @@ describe("saved child transcript identity", () => {
 		expect(sameSavedChild(row(spelled, canonical), row(join(root, "other.jsonl")))).toBe(false);
 	});
 
+	it("treats conflicting recorded canonical paths as different transcripts, whatever the spelling", () => {
+		const root = makeTestTempDir("saved-child-", onTestFinished);
+		const first = join(root, "first");
+		const second = join(root, "second");
+		mkdirSync(first);
+		mkdirSync(second);
+		const link = join(root, "link");
+		symlinkSync(first, link, "dir");
+		const spelled = join(link, "child.jsonl");
+		const inFirst = join(realpathSync(first), "child.jsonl");
+		const inSecond = join(realpathSync(second), "child.jsonl");
+		// One spelling, retargeted between rows: the recorded targets decide, not the spelling.
+		expect(sameSavedChild(row(spelled, inFirst), row(spelled, inSecond))).toBe(false);
+		expect(sameSavedChild(row(inFirst, inFirst), row(inFirst, inSecond))).toBe(false);
+		expect(sameSavedChild(row(spelled, inFirst), row(spelled, inFirst))).toBe(true);
+		// Without canonical evidence on a side, the spelling still links.
+		expect(sameSavedChild(row(spelled), row(spelled, inSecond))).toBe(true);
+		expect(sameSavedChild(row(spelled, inFirst), row(spelled))).toBe(true);
+		// Live resolution never overrides conflicting recorded targets either.
+		writeFileSync(inFirst, "");
+		expect(sameSavedChild(row(spelled, inFirst), row(inFirst, inSecond))).toBe(false);
+	});
+
 	it("names the missing parent path, whether it comes from the header or current session", () => {
 		const root = makeTestTempDir("saved-child-", onTestFinished);
 		const file = join(root, "child.jsonl");

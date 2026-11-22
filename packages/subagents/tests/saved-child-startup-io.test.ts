@@ -140,15 +140,17 @@ it("reads only a bounded header of a file a tampered journaled directory admits"
 	fs.mkdirSync(tampered);
 	fs.writeFileSync(parentFile, "");
 	const header = (fields: Record<string, unknown>) => `${JSON.stringify({ type: "session", ...fields })}\n`;
-	const check = (file: string) =>
+	const check = (file: string, overrides: { savedCwd?: string } = {}) =>
 		checkSavedChild({
 			file,
 			// A tampered row can name any directory as its creation directory.
-			directories: [tampered, configured],
+			journaledDirectory: tampered,
+			directories: [configured],
 			parentFile,
 			status: "completed",
 			now: Number.MAX_SAFE_INTEGER,
 			savedCwd: "/work",
+			...overrides,
 		});
 	const huge = join(tampered, "huge.jsonl");
 	fs.writeFileSync(huge, "x".repeat(1024 * 1024));
@@ -164,4 +166,15 @@ it("reads only a bounded header of a file a tampered journaled directory admits"
 	const moved = join(tampered, "moved.jsonl");
 	fs.writeFileSync(moved, header({ parentSession: parentFile, cwd: "/elsewhere" }));
 	expect(check(moved)).toEqual({ refusal: `child session does not match its saved working directory: ${moved}` });
+	// Without a valid saved cwd to check the header against, the journaled directory widens nothing.
+	const owned = join(tampered, "owned.jsonl");
+	fs.writeFileSync(owned, header({ parentSession: parentFile, cwd: "/work" }));
+	expect(check(owned)).toEqual({ file: fs.realpathSync(owned) });
+	const outside = { refusal: `child session is outside its configured directory: ${owned}` };
+	expect(check(owned, { savedCwd: undefined })).toEqual(outside);
+	expect(check(owned, { savedCwd: "work" })).toEqual(outside);
+	// A legacy row (no journaled directory, no cwd) still falls back to the configured one.
+	const legacy = join(configured, "legacy.jsonl");
+	fs.writeFileSync(legacy, header({ parentSession: parentFile, cwd: "/work" }));
+	expect(check(legacy, { savedCwd: undefined })).toEqual({ file: fs.realpathSync(legacy) });
 });

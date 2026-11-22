@@ -1376,8 +1376,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			return checkSavedChild({
 				file,
 				// The journaled creation directory survives settings that changed since
-				// (or differ in a worktree); legacy rows have only the recomputed one.
-				directories: [note.sessionDir, directory],
+				// (or differ in a worktree) when the row saved a cwd; legacy rows have
+				// only the recomputed one.
+				journaledDirectory: note.sessionDir,
+				directories: [directory],
 				parentFile,
 				status: note.status,
 				now: clock.now(),
