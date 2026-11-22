@@ -240,20 +240,35 @@ func normalizedWindowId(_ raw: Int?) -> UInt32? {
 	return UInt32(raw)
 }
 
+/// Commands with a strict window target may omit the id, but must not fall back on a malformed one.
+func checkedWindowId(_ raw: Any?) throws -> UInt32? {
+	guard let raw else { return nil }
+	guard let value = raw as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+		let id = UInt32(exactly: value.doubleValue), id > 0
+	else {
+		throw BridgeFailure(message: "windowId must be a positive 32-bit unsigned integer", code: "invalid_args")
+	}
+	return id
+}
+
 /// Only an unqualified request (no id, no ref) may take the app's first window. A ref that no longer
 /// resolves must fail instead of silently targeting some other window.
 func allowsFirstWindowFallback(windowId: UInt32?, windowRef: String?) -> Bool {
 	windowId == nil && windowRef == nil
 }
 
-/// Points from `start` (exclusive) to `end` (inclusive), no more than `maxStep` apart, capped at 400 steps.
+/// Points along a validated segment, ending at `end`. Aim for `maxStep` spacing, capped at 400 steps.
 func interpolatedDragPoints(from start: CGPoint, to end: CGPoint, maxStep: CGFloat) -> [CGPoint] {
-	let distance = hypot(end.x - start.x, end.y - start.y)
+	let dx = end.x - start.x
+	let dy = end.y - start.y
+	let distance = hypot(dx, dy)
 	guard distance > 0, maxStep > 0 else { return [end] }
-	let steps = min(400, max(1, Int((distance / maxStep).rounded(.up))))
+	let steps = Int(max(1, min(400, (distance / maxStep).rounded(.up))))
 	return (1...steps).map { index in
 		let t = CGFloat(index) / CGFloat(steps)
-		return CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+		// Work from the nearer endpoint to avoid rounding past a very large coordinate.
+		if t <= 0.5 { return CGPoint(x: start.x + dx * t, y: start.y + dy * t) }
+		return CGPoint(x: end.x - dx * (1 - t), y: end.y - dy * (1 - t))
 	}
 }
 
@@ -1807,7 +1822,7 @@ final class Bridge {
 
 	private func setWindowFrame(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["ok": false, "reason": "window_not_found"]
@@ -3789,7 +3804,7 @@ final class Bridge {
 
 	private func focusedElement(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		let app = AXUIElementCreateApplication(pid)
 		guard let focusedValue = copyAttribute(app, attribute: kAXFocusedUIElementAttribute as CFString),
@@ -4798,6 +4813,16 @@ final class Bridge {
 		guard points.count >= 2, let first = points.first, let last = points.last else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
+		// Reject overflow in any segment or in the total before moving or holding the button.
+		var total: CGFloat = 0
+		for (start, end) in zip(points, points.dropFirst()) {
+			total += hypot(end.x - start.x, end.y - start.y)
+		}
+		guard total.isFinite else {
+			throw BridgeFailure(message: "Drag path geometry must be finite", code: "invalid_args")
+		}
+		// Widen the usual 12pt step on long paths to keep the drag stream short.
+		let maxStep = max(12, total / 1000)
 		try inputSink.checkDragCancellation()
 		// Reserve the matching release before sending any input. Unwinding must not allocate it.
 		guard let up = inputSink.mouseEvent(.leftMouseUp, first, .left) else {
@@ -4817,11 +4842,6 @@ final class Bridge {
 		}
 		inputSink.sleep(30_000)
 
-		// Real drags are a stream of positions; apps ignore a single long jump. Step each segment (~12pt),
-		// widening the step so the whole drag stays under ~1000 events (about 8s).
-		var total: CGFloat = 0
-		for pair in zip(points, points.dropFirst()) { total += hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y) }
-		let maxStep = max(12, total / 1000)
 		var previous = first
 		for point in points.dropFirst() {
 			for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {

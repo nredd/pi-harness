@@ -2031,6 +2031,8 @@ Physical mouse and keyboard input in global screen points, like a person at the 
 
 activateApp before typing or keys (input goes to the frontmost app); verify with desktop_screenshot; prefer act_ui for ref-targetable app controls.
 
+On macOS, a drag whose coordinates, segment length, or total length are not finite returns `invalid_args` before any mouse event is sent.
+
 ### parameters
 
 | parameter | type | required | description and constraints |
@@ -2747,7 +2749,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- For root targeting, the helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window. The helper's `setWindowFrame` and `focusedElement` commands return `invalid_args` for a supplied `windowId` that is not a positive unsigned 32-bit integer.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture

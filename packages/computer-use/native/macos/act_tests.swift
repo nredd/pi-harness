@@ -216,6 +216,7 @@ func runActAssertions() throws {
     runAXScrollAssertions()
     try runBatchAssertions()
     try runRootPIDAssertions()
+    try runWindowIDAssertions()
     expect(suppressionTapShouldReenable(.tapDisabledByTimeout) && suppressionTapShouldReenable(.tapDisabledByUserInput), "re-enable the tap on either disable notification")
     expect(!suppressionTapShouldReenable(.keyDown) && !suppressionTapShouldReenable(.mouseMoved), "ordinary user events stay suppressed")
     try runEventAssertions()
@@ -449,6 +450,25 @@ private func runRootPIDAssertions() throws {
     expect(discovered == [nil, nil, nil, 1234], "listRoots discovers unfiltered for null, missing and nonnumeric PIDs, and never discovers for out-of-range PIDs")
 }
 
+private func runWindowIDAssertions() throws {
+    let bridge = Bridge(activityGlow: nil, readSession: { nil })
+    let invalidIds = ["-1", "0", "4294967296", "18446744073709551615", "1.5", "true", #""12""#, "null"]
+    for command in ["setWindowFrame", "focusedElement"] {
+        for id in invalidIds {
+            let json = "{\"cmd\":\"\(command)\",\"pid\":1234,\"windowId\":\(id)}"
+            let request = try JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any]
+            try actionFailure("invalid_args", message: "windowId must be a positive 32-bit unsigned integer") {
+                _ = try bridge.handleRequest(request, clientID: nil)
+                return [:]
+            }
+        }
+    }
+    let omitted = try checkedWindowId(nil)
+    let smallest = try checkedWindowId(NSNumber(value: 1))
+    let largest = try checkedWindowId(NSNumber(value: UInt32.max))
+    expect(omitted == nil && smallest == 1 && largest == UInt32.max, "only omission selects no id; both positive UInt32 boundaries are accepted")
+}
+
 private func runEventAssertions() throws {
     struct Event: Equatable {
         let type: CGEventType
@@ -534,6 +554,19 @@ private func runEventAssertions() throws {
     try world.postMouseDrag([start, end], 1234, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
     events = []; delays = []
+    let huge = CGPoint(x: 1.7e308, y: 0)
+    for path in [
+        [start, CGPoint(x: 1.7e308, y: 1.7e308)],
+        [huge, CGPoint(x: -1.7e308, y: 0)],
+        [start, huge, start],
+        [start, CGPoint(x: CGFloat.nan, y: 0)],
+    ] {
+        try actionFailure("invalid_args", message: "Drag path geometry must be finite") {
+            try world.postMouseDrag(path, 1234, "hid")
+            return [:]
+        }
+        expect(events.isEmpty && delays.isEmpty, "invalid drag geometry never moves or holds the mouse")
+    }
     rejectDragAt = end
     try actionFailure("input_failed", message: "Failed to create mouse drag event") {
         try world.postMouseDrag([start, end], 1234, "pid")

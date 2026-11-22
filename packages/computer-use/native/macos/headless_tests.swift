@@ -170,6 +170,10 @@ func runPureAssertions() {
     check(interpolatedDragPoints(from: CGPoint(x: 5, y: 5), to: CGPoint(x: 5, y: 5), maxStep: 12) == [CGPoint(x: 5, y: 5)], "zero-length drag is the endpoint")
     check(interpolatedDragPoints(from: .zero, to: CGPoint(x: 100000, y: 0), maxStep: 12).count == 400, "steps capped")
 
+    let farEnd = CGPoint(x: 1e25, y: 0)
+    let farSteps = interpolatedDragPoints(from: .zero, to: farEnd, maxStep: 12)
+    check(farSteps.count == 400 && farSteps.last == farEnd, "a step estimate above Int.max is capped before conversion")
+
     // Ref store: element refs live as long as their look; unowned refs are FIFO-capped
     let store = AXRefStore(unownedCapacity: 3)
     let el = AXUIElementCreateApplication(getpid())
