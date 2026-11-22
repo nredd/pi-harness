@@ -508,7 +508,9 @@ test("all registered macOS tools propagate the exact stale refusal without sendi
 
 test("macOS status shows unchecked, then stale with the expected build, then the matching build", async () => {
 	Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
-	const { client, fake } = await rig(older);
+	const { client, fake, executable } = await rig(older);
+	const reportedPath = path.join(path.dirname(executable), "old-bridge");
+	Object.assign(fake.diagnostics, { executablePath: reportedPath });
 	const { default: extension } = await import("../src/index.ts");
 	const pi = createRecordingPi();
 	extension(pi.pi);
@@ -518,11 +520,19 @@ test("macOS status shows unchecked, then stale with the expected build, then the
 		return notify.mock.calls[0][0] as string;
 	};
 	assert.match(await status(), /^helper build: not checked$/m);
-	await assert.rejects(client.ensureProtocol(), { code: "stale_helper" });
+	await assert.rejects(client.ensureProtocol(), { code: "stale_helper", message: staleMessage(reportedPath, older) });
 	const stale = await status();
-	assert.match(stale, /^helper build: stale -- /m);
-	assert.ok(stale.includes(`expected ${current}`));
+	assert.match(
+		stale,
+		new RegExp(
+			`^helper build: stale -- helper build ${older.replace("+", "\\+")}, expected ${current.replace("+", "\\+")}: from the package root, run `,
+			"m",
+		),
+	);
+	assert.ok(!stale.includes(reportedPath), "status never shows the daemon-reported executable path");
+	assert.ok(!stale.includes(executable));
 	fake.diagnostics.buildIdentity = current;
+	fake.diagnostics.executablePath = undefined;
 	await client.ensureProtocol();
 	assert.ok((await status()).split("\n").includes(`helper build: ${current}`));
 });

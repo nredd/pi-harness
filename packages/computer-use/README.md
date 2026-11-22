@@ -1437,7 +1437,7 @@ The normal runtime requires this executable inside the resolved helper app:
 
 Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. Set `PI_COMPUTER_USE_HELPER_APP_PATH` only when an explicit location is needed for development or testing.
 
-A stale or unstamped managed helper is refused before desktop commands run. `/computer-use` shows the reported and expected build after a refusal. The client does not replace or restart a stale helper. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run. A connection whose diagnostics fail is `helper_inconclusive`: setup is not run.
+A stale or unstamped managed helper is refused before desktop commands run. `/computer-use` shows the reported and expected build after a refusal; only the error names the daemon-reported executable path. The client does not replace or restart a stale helper. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run. A connection whose diagnostics fail is `helper_inconclusive`: setup is not run.
 
 From the installed package root, explicitly repair a missing or stale helper with:
 
