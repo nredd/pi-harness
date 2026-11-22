@@ -174,7 +174,11 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 	}
 	try {
 		const canonicalFile = realpathSync(file);
-		const inside = insideDirectory(canonicalFile, options.directories, canonical);
+		let inside = insideDirectory(canonicalFile, options.directories, canonical);
+		// A startup resolution can be stale (a link retargeted between rows): ask once more uncached.
+		if (inside !== true && canonical !== realpathSync) {
+			inside = insideDirectory(canonicalFile, options.directories, realpathSync);
+		}
 		if (inside === "unresolved") return { refusal: `child session is missing or unreadable: ${file}` };
 		if (!inside) return { refusal: `child session is outside its configured directory: ${file}` };
 		// A retargeted link inside the directory must not swap in another (valid) transcript.

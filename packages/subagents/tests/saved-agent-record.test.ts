@@ -249,6 +249,13 @@ describe("saved child validation", () => {
 		expect(checkSavedChild({ ...options, canonical: canonicalPaths() })).toEqual({
 			refusal: `child session is missing or unreadable: ${file}`,
 		});
+		// A link retargeted between rows strands no child: a containment miss asks once more uncached.
+		const moved = join(root, "moved");
+		mkdirSync(moved);
+		const later = join(moved, "later.jsonl");
+		writeFileSync(later, `${JSON.stringify({ type: "session", parentSession: parentFile })}\n`);
+		symlinkSync(moved, link, "dir");
+		expect(checkSavedChild({ ...options, file: later })).toEqual({ file: realpathSync(later) });
 		const missing = join(directory, "missing");
 		expect(() => canonical(missing)).toThrow();
 		mkdirSync(missing);
