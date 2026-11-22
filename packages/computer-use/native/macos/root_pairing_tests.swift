@@ -252,5 +252,43 @@ private func assertRootIdentityAndDelta(_ bridge: Bridge) {
     expect(changes.sorted() == ["appeared:New", "appeared:New focused", "closed:Gone", "focused:Kept", "focused:New focused"], "deltas report appeared, closed and newly focused roots, not roots that stayed focused")
     expect(changes.firstIndex(of: "closed:Gone").map { index in changes[..<index].allSatisfy { $0.hasPrefix("appeared:") } && changes[(index + 1)...].allSatisfy { $0.hasPrefix("focused:") } } == true, "appeared roots come first, then closed, then focused")
     expect(bridge.rootSnapshotDelta(before: complete(after), after: complete(after), pid: 5).isEmpty, "an unchanged snapshot has no delta")
+    assertUnidentifiedRoots(bridge)
+}
+
+/// An unpaired root whose identity fields failed to read, or whose identity another root shares, is never compared
+/// across listings: it neither closes, appears nor gains focus, and it keeps a missing root from proving closure (#1287).
+private func assertUnidentifiedRoots(_ bridge: Bridge) {
+    func root(_ ref: String, title: String, windowId: Int? = nil, focused: Bool = false) -> [String: Any] {
+        var root: [String: Any] = ["rootRef": ref, "kind": "window", "role": "AXWindow", "title": title, "isFocused": focused, "framePoints": ["x": 10, "y": 20, "w": 300, "h": 200]]
+        if let windowId { root["windowId"] = windowId }
+        return root
+    }
+    func snapshot(_ roots: [[String: Any]], complete: Bool = true, unidentified: Set<String> = []) -> RootInventorySnapshot {
+        RootInventorySnapshot(roots: roots, complete: complete, unidentifiedRefs: unidentified, identity: bridge.rootIdentity)
+    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["title"] as? String ?? "?")" }.sorted()
+    }
+    let readable = [root("r1", title: "Doc"), root("r2", title: "Paired", windowId: 7)]
+    let whole = snapshot(readable)
+    expect(whole.complete && Set(whole.roots.keys) == ["meta:window:AXWindow:Doc:10,20,300,200", "window:7"], "read roots keep their identity in a complete snapshot")
+    expect(snapshot(readable, complete: false).complete == false, "an incomplete listing stays incomplete")
+
+    // The same live unpaired window, its title unread on one side: the failed read changes its metadata key.
+    let unreadTitle = [root("r1", title: "", focused: true), root("r2", title: "Paired", windowId: 7)]
+    let unidentified = snapshot(unreadTitle, unidentified: ["r1"])
+    expect(!unidentified.complete && Set(unidentified.roots.keys) == ["window:7"], "an unidentified root is left out and the snapshot is incomplete")
+    expect(changes(whole, unidentified).isEmpty, "a root unidentified after the action is neither closed nor appeared, nor focused")
+    expect(changes(unidentified, whole).isEmpty, "a root unidentified before the action is neither closed nor appeared")
+    let paired = snapshot([root("r2", title: "", windowId: 7)], unidentified: ["r9"])
+    expect(paired.complete && paired.roots["window:7"] != nil, "an unidentified ref names only the roots it lists")
+
+    // Two live roots with one identity, e.g. both reading as untitled at the origin: neither can be told apart.
+    let twins = [root("r3", title: ""), root("r4", title: ""), root("r5", title: ""), root("r2", title: "Paired", windowId: 7)]
+    let ambiguous = snapshot(twins)
+    expect(!ambiguous.complete && Set(ambiguous.roots.keys) == ["window:7"], "roots sharing an identity are all left out and the snapshot is incomplete")
+    expect(changes(whole, ambiguous).isEmpty && changes(ambiguous, whole).isEmpty, "ambiguous roots prove no closure or appearance")
+    let closedBesideUnknown = snapshot([root("r1", title: "")], unidentified: ["r1"])
+    expect(changes(whole, closedBesideUnknown).isEmpty, "a paired root missing next to an unidentified one is not proven closed")
 
 }

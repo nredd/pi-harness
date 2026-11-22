@@ -469,7 +469,10 @@ outcome is otherwise `unknown`, say `Delivery of the action is unknown` and not 
   authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
   an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
-  `focused` only after one. Windows listings carry no completeness information, so an empty listing from
+  `focused` only after one. A root without a CG window id is matched across listings by kind, role,
+  title and frame, so one whose title, role, subrole, position or size read failed, or that shares
+  that identity with another root, is left out of the comparison and makes its listing incomplete:
+  it never shows up as `closed` plus a new `appeared` root (#1287). Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ### Ref lifecycle
@@ -2572,7 +2575,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use t
 
 ## Tree extraction
 
-An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors are marked `truncated` rather than presented as complete.
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
 
 The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
 
@@ -2790,7 +2793,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are i
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
 
 When an image is requested, the helper:
 
@@ -2916,7 +2919,10 @@ Terminal `act_ui` results say the action was delivered, name the timed-out or ot
   authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
   an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
-  `focused` only after one. Windows listings carry no completeness information, so an empty listing from
+  `focused` only after one. A root without a CG window id is matched across listings by kind, role,
+  title and frame, so one whose title, role, subrole, position or size read failed, or that shares
+  that identity with another root, is left out of the comparison and makes its listing incomplete:
+  it never shows up as `closed` plus a new `appeared` root (#1287). Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ## Ref lifecycle

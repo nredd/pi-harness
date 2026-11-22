@@ -288,6 +288,67 @@ func runRefLookAssertions() {
   print("macos ref ownership and look serialization checks passed")
   runAXTraversalAssertions()
   runAbsenceEvidenceAssertions()
+  runLookOutlineAssertions()
+}
+
+/// The production look walk (`LookOutlineWorld.build`) over injected AX reads: a failed children read, the node
+/// budget and the deadline mark the node `truncated`; only an authoritative empty list is a leaf (#1287).
+private func runLookOutlineAssertions() {
+  final class Node {
+    let name: String
+    init(_ name: String) { self.name = name }
+  }
+  func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() {
+      print("FAIL: \(message)")
+      exit(1)
+    }
+  }
+  func node(_ name: String) -> LookNode {
+    LookNode(
+      element: nil, ref: name, role: "AXGroup", subrole: "", identifier: "", title: name, description: "", value: "",
+      actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false,
+      canDecrement: false, isTextInput: false, rect: .zero)
+  }
+  func build(_ root: Node, children: [String: [Node]], unreadable: Set<String> = [], nodeLimit: Int = 2000, expiresAfter: Int = .max) -> LookNode {
+    var checks = 0
+    let world = LookOutlineWorld<Node>(
+      children: { unreadable.contains($0.name) ? nil : children[$0.name] ?? [] },
+      childNodes: { _ in { node($0.name) } },
+      expired: {
+        checks += 1
+        return checks > expiresAfter
+      })
+    return world.build(root: root, rootNode: node(root.name), nodeLimit: nodeLimit)
+  }
+  func find(_ name: String, in tree: LookNode) -> LookNode? {
+    tree.ref == name ? tree : tree.children.lazy.compactMap { find(name, in: $0) }.first
+  }
+  let root = Node("root")
+  let unread = Node("unread")
+  let leaf = Node("leaf")
+  let parent = Node("parent")
+  let grandchild = Node("grandchild")
+  let tree: [String: [Node]] = ["root": [unread, leaf, parent, leaf], "parent": [grandchild]]
+
+  let outline = build(root, children: tree, unreadable: ["unread"])
+  check(outline.children.map(\.ref) == ["unread", "leaf", "parent"], "every child is walked once, a repeated handle is skipped")
+  check(find("unread", in: outline).map { $0.truncated && $0.children.isEmpty } == true, "a failed children read marks the node truncated, never a leaf")
+  check(find("unread", in: outline)?.payload()["truncated"] as? Bool == true, "the unread node's payload carries the marker")
+  check(
+    !outline.truncated && find("leaf", in: outline)?.truncated == false && find("grandchild", in: outline)?.truncated == false,
+    "a readable empty child list is a complete leaf")
+  check(find("parent", in: outline)?.children.map(\.ref) == ["grandchild"], "the walk continues below a sibling of the unread node")
+  let unreadRoot = build(root, children: tree, unreadable: ["root"])
+  check(unreadRoot.truncated && unreadRoot.children.isEmpty, "a failed root children read leaves the whole look truncated")
+
+  let budget = build(root, children: tree, nodeLimit: 3)
+  check(budget.truncated && budget.children.map(\.ref) == ["unread", "leaf"], "the node budget cuts the children and marks the parent")
+  check(find("parent", in: build(root, children: tree, nodeLimit: 4))?.truncated == true, "a parent reached at the budget is truncated")
+  check(build(root, children: tree, expiresAfter: 0).truncated, "an expired deadline marks the node it stops at")
+  let late = build(root, children: tree, expiresAfter: 2)
+  check(late.truncated && late.children.map(\.ref) == ["unread"], "a deadline during the children marks the parent")
+  print("macos look outline evidence checks passed")
 }
 
 /// A failed read, a bounded walk or a partial root listing never proves absence (#1242, #1243).
@@ -460,12 +521,14 @@ private func runWindowInventoryAssertions() {
     var windows: [Window]?
     var fallback: [Window] = []
     var sizes: [String: [AXSizeRead]] = [:]
+    var unreadPositions: Set<String> = []
     var sheets: [String: (sheets: [Window], complete: Bool)] = [:]
     var sizeReads = 0
     init(windows: [Window]?) { self.windows = windows }
     var world: WindowInventoryWorld<Window> {
       WindowInventoryWorld<Window>(
-        windows: { self.windows }, fallbackWindows: { self.fallback }, position: { _ in .zero },
+        windows: { self.windows }, fallbackWindows: { self.fallback },
+        position: { self.unreadPositions.contains($0.name) ? nil : .zero },
         size: { window in
           self.sizeReads += 1
           var queue = self.sizes[window.name] ?? [.size(CGSize(width: 800, height: 600))]
@@ -554,6 +617,17 @@ private func runWindowInventoryAssertions() {
     names(pairedRetriedSelection) == ["main", "unfocused"] && pairedRetriedSelection.complete
       && pairedRetriedSelection.windows[1].effectiveFrame.size == CGSize(width: 800, height: 600),
     "the retry's readable size admits a window its paired bounds would skip")
+  check(
+    wholeSelection.windows.allSatisfy(\.axFrameRead) && retriedSelection.windows.allSatisfy(\.axFrameRead),
+    "a frame read on the first try or the retry is read")
+  check(pairedSelection.windows.map(\.axFrameRead) == [true, false], "a failed size read kept on paired bounds leaves the AX frame unread")
+  let unreadPosition = Script(windows: [main, unfocused])
+  unreadPosition.unreadPositions = ["unfocused"]
+  let unreadPositionSelection = unreadPosition.select()
+  check(
+    names(unreadPositionSelection) == ["main", "unfocused"] && unreadPositionSelection.windows.map(\.axFrameRead) == [true, false]
+      && unreadPositionSelection.windows[1].axFrame.origin == .zero,
+    "a failed position read keeps the window at the origin with its AX frame unread")
   let sizeless = Script(windows: [main, unfocused])
   sizeless.sizes["unfocused"] = [.absent]
   check(sizeless.select().complete, "a window without a size attribute is skipped without doubt")
