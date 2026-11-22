@@ -176,8 +176,9 @@ Merge declarations from [here](examples/providers.json) into an existing config,
 - `evidence` lists unique adapter IDs in order: `read`, `failure` and `observed`.
   `fallbackOnReadError` opts in to continuing after a failed read; `failure` can declare
   `parser`, `minHintSeconds` (non-negative), `repeat` (`count` and `withinMinutes`) and
-  `maxBlockMinutes` (at most 1440). `minHintSeconds` can only raise the 60-second hint floor and
-  `maxBlockMinutes` can only lower the 24-hour and 60-minute caps. `parser` is accepted, but one
+  `maxBlockMinutes` (at most 1440). `minHintSeconds` sets the hint floor: 60 seconds by default, and
+  a lower value lets shorter hints mark. `maxBlockMinutes` only lowers: the 24-hour and 60-minute
+  caps and the billing and unknown-shape backoff. `parser` is accepted, but one
   classifier reads both generic and Google RPC bodies. `observed` is skipped until the request
   ledger lands.
 
@@ -218,7 +219,7 @@ surface-scoped cap is not enforced (fail-open): a 429 against it still falls thr
 retry path. A block lasts until the reset the provider reported. Without one it backs off
 5 minutes, doubling up to 60.
 
-Confirmation needs live data read after the failure: a cached or in-flight read from before the
+The `read` adapter ([confirming evidence](#confirming-evidence)) needs live data read after the failure: a cached or in-flight read from before the
 error's timestamp doesn't count, while simultaneous failures still share one request. A failed or
 backed-off read confirms nothing. If a later failure supersedes an in-flight read, earlier callers
 follow the newer read (or its fresh cached result), rather than treating supersession as failure.
@@ -236,26 +237,40 @@ Decision record: marks need evidence, and a fresh usage read is one of several a
 replaces the old rule that only a fresh read may mark: without it a metered provider, or a
 collected provider used with an API key, never failed over.
 
-Each provider runs its `evidence` chain in order, default `read` then `failure`. An adapter
+Never-mark rules run first, for every provider: an auth (401/403), 5xx, transport, safety or
+per-minute failure (a hint under the provider's floor included) is never confirmed, whatever its
+wording, so not even a collected provider's read can mark one. A status counts in leading (`429: ...`) or core's prefixed
+(`OpenAI API error (503): ...`) position; free-text words such as "blocked" are not negative evidence.
+
+Then each provider runs its `evidence` chain in order, default `read` then `failure`. An adapter
 blocks (mark), clears (authoritative "not blocked", stop) or abstains (ask the next one):
 
 - `read`: the fresh usage read above. An available read blocks or clears, so a collected
   provider keeps read-only confirmation. No collector, or an API-key credential (`sk-ant-api...`
-  on `anthropic`), abstains. A failed, stale or older read clears unless `fallbackOnReadError`
+  on `anthropic`), abstains: only then may the failure infer. Every other read clears unless
+  `fallbackOnReadError`: failed, stale, older than the failure, without a usage credential, or
+  from a collector replaced or retired during the read
 - `failure`: classifies the failure text. A daily window token marks the model on the first
   failure until the next 00:00 `America/Los_Angeles`, at most 24 hours. A retry hint of at least
-  60 seconds marks it until the hint, at most 60 minutes, and a 10-minute spend window until it
-  ends. A 402, billing or credits-depleted failure marks the whole provider with the 5-minute
-  doubling backoff. A bare quota status marks the model with that backoff on its second distinct
-  failure within 10 minutes, with no success between. Per-minute throttles, shorter hints, auth
-  (401/403), 5xx, network and safety failures never mark, and auth errors surface as they are
+  `minHintSeconds` (default 60) marks it until the hint, at most 60 minutes, and a 10-minute spend
+  window until it ends. A 402 or affirmative payment exhaustion (`payment required`,
+  `credits depleted`, `insufficient credits` or `balance`, `billing hard limit`) marks the whole
+  provider with the 5-minute doubling backoff; a bare mention of billing, e.g.
+  `Invalid billing address`, never does. A bare quota status marks the model with that backoff on
+  its second distinct failure within 10 minutes, with no success between. A failure at or before
+  the model's latest success never counts or marks, however late its confirmation finishes. Auth
+  errors surface as they are
 
-One failure counts once: the same model and message timestamp confirmed twice, e.g. by racing
-requests, neither adds a repeat nor grows the backoff. Cancellation during the evidence wait
-writes nothing. Inferred marks carry `evidence: "inferred"` plus `expiry` (`hinted`,
-`window-reset` or `backoff`) and `cause` (`quota` or `billing`); their window names start with
-`inferred:`, so status, admission and `ChainExhaustedError` say so. Read-confirmed marks carry
-none of these fields. A fresh read never clears an inferred mark. `/router reset` clears marks
+A deadline is measured from the failure: a hint or window reset that already passed when
+confirmation finishes writes no mark, and only a decision without a deadline backs off. One
+failure, keyed by model and message timestamp, counts once: confirmed twice, e.g. by racing
+requests, it neither adds a repeat nor grows the backoff, while distinct failures count separately
+even when both precede the first confirmation. Cancellation during the evidence wait writes
+nothing. Inferred marks carry `evidence: "inferred"` plus `expiry` (`hinted`, `window-reset` or
+`backoff`) and `cause` (`quota` or `billing`); their window names start with `inferred:`, so the
+display surfaces (`/router status`, `subscription_usage` and `ChainExhaustedError`) say so.
+Admission only honors the mark: it reports eligibility, the mark's reset and wait advice, not its
+provenance. Read-confirmed marks carry none of these fields. A fresh read never clears an inferred mark. `/router reset` clears marks
 and failure counts. Inferred marks live in memory only for now.
 
 Mid-run recovery: upstream doesn't retry terminal quota errors (`insufficient_quota`, billing,
@@ -266,8 +281,8 @@ Each chain model gets at most one recovery per user prompt. Router quota failove
 messages containing nonempty text/thinking or any tool call: emitted output cannot be retracted
 safely, so retry explicitly instead of switching models. Core's same-model transient retries and
 recoverable length/overflow retries are unchanged, including partial attempts core already omitted.
-A retryable partial quota error is confirmed and marked before refusing failover; terminal partial
-quota errors are refused before confirmation. Prior successful tool turns remain in context and
+A partial quota error, retryable or terminal, is confirmed and marked before refusing failover, so
+the next prompt skips the exhausted scope; the partial message is never omitted or continued. Prior successful tool turns remain in context and
 are not re-executed by router recovery.
 
 Continuous failover requires a routed binding, e.g. a subagent tier `deep: ["router/deep"]`.
