@@ -225,6 +225,11 @@ struct AXWaitPass<Element> {
 /// The most AX windows one root inventory lists.
 let windowListCap = 128
 
+/// A root inventory lists a window only at least this large; smaller ones are helper panels and slivers.
+func inventoryFrameUsable(_ frame: CGRect) -> Bool {
+	frame.width >= 100 && frame.height >= 80
+}
+
 /// A window list is the whole inventory only when it was read and fits under `windowListCap`.
 func windowListComplete(_ count: Int?) -> Bool {
 	count.map { $0 <= windowListCap } ?? false
@@ -282,22 +287,24 @@ extension WindowInventoryWorld {
 		return WindowListing(windows: capped.isEmpty ? fallbackWindows() : capped, complete: windowListComplete(listed?.count))
 	}
 
-	/// Keep the listed windows of a usable size with their sheets. A window skipped as too small only because
-	/// its size stayed unreadable after one retry, or a failed sheet read, leaves the inventory incomplete.
+	/// Keep the listed windows of a usable size with their sheets. A failed size read is retried once, only when
+	/// usable paired CG bounds do not already admit the window. A window skipped as too small only because its
+	/// size stayed unreadable, or a failed sheet read, leaves the inventory incomplete.
 	/// - Parameter pairedBounds: The paired CG window's bounds, `nil` for an unpaired window.
 	func select(_ listing: WindowListing<Element>, pairedBounds: (Element) -> CGRect?) -> WindowInventorySelection<Element> {
 		var complete = listing.complete
 		var kept: [InventoryWindow<Element>] = []
 		for (listIndex, window) in listing.windows.enumerated() {
-			// The filter and the evidence come from the same reply; a retry replaces both.
+			let paired = pairedBounds(window)
+			// The filter and the evidence come from the same reply; a retry replaces both. Paired bounds that admit
+			// the window settle a failed read without a serial retry against the listing budget.
 			var read = size(window)
-			if read == .failed { read = size(window) }
+			if read == .failed && !(paired.map(inventoryFrameUsable) ?? false) { read = size(window) }
 			var axSize = CGSize.zero
 			if case .size(let value) = read { axSize = value }
 			let axFrame = CGRect(origin: position(window), size: axSize)
-			let paired = pairedBounds(window)
 			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (paired ?? axFrame)
-			if effectiveFrame.width < 100 || effectiveFrame.height < 80 {
+			if !inventoryFrameUsable(effectiveFrame) {
 				// Skipped as too small only because its size was unreadable, a live window is unknown.
 				if paired == nil && read == .failed { complete = false }
 				continue

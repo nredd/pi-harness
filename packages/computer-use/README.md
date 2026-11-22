@@ -460,8 +460,8 @@ it (`Action N timed out; whether it was delivered is unknown.`) and say not to r
   empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
   reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
   their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
-  process has exited. A timed-out size read is retried once and the window is filtered on the
-  retry's value. A partial listing still resolves the roots
+  process has exited. A failed size read is retried once unless the window's paired CG bounds already
+  admit it, and the window is filtered on the retry's value. A partial listing still resolves the roots
   it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
   identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
   `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
@@ -2904,8 +2904,8 @@ Terminal `act_ui` results say the action was delivered, say its delivery is unkn
   empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
   reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
   their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
-  process has exited. A timed-out size read is retried once and the window is filtered on the
-  retry's value. A partial listing still resolves the roots
+  process has exited. A failed size read is retried once unless the window's paired CG bounds already
+  admit it, and the window is filtered on the retry's value. A partial listing still resolves the roots
   it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
   identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
   `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and

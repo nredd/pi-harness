@@ -538,6 +538,7 @@ private func runWindowInventoryAssertions() {
     names(pairedSelection) == ["main", "unfocused"] && pairedSelection.complete
       && pairedSelection.windows[1].effectiveFrame == CGRect(x: 5, y: 5, width: 400, height: 300),
     "a paired window falls back to its CG bounds")
+  check(pairedUnreadable.sizeReads == 2, "usable paired bounds admit a window without retrying its failed size read")
   let small = Script(windows: [main, unfocused])
   small.sizes["unfocused"] = [.size(CGSize(width: 50, height: 40))]
   let smallSelection = small.select()
@@ -545,6 +546,14 @@ private func runWindowInventoryAssertions() {
   let pairedSmall = Script(windows: [main, unfocused])
   pairedSmall.sizes["unfocused"] = [.failed]
   check(pairedSmall.select(paired: ["unfocused": CGRect(x: 0, y: 0, width: 50, height: 40)]).complete, "a too-small paired window is skipped on its CG bounds")
+  check(pairedSmall.sizeReads == 3, "paired bounds that do not admit the window leave its failed size read retried")
+  let pairedRetried = Script(windows: [main, unfocused])
+  pairedRetried.sizes["unfocused"] = [.failed, .size(CGSize(width: 800, height: 600))]
+  let pairedRetriedSelection = pairedRetried.select(paired: ["unfocused": CGRect(x: 0, y: 0, width: 50, height: 40)])
+  check(
+    names(pairedRetriedSelection) == ["main", "unfocused"] && pairedRetriedSelection.complete
+      && pairedRetriedSelection.windows[1].effectiveFrame.size == CGSize(width: 800, height: 600),
+    "the retry's readable size admits a window its paired bounds would skip")
   let sizeless = Script(windows: [main, unfocused])
   sizeless.sizes["unfocused"] = [.absent]
   check(sizeless.select().complete, "a window without a size attribute is skipped without doubt")
