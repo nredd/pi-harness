@@ -2034,7 +2034,7 @@ Physical mouse and keyboard input in global screen points, like a person at the 
 
 activateApp before typing or keys (input goes to the frontmost app); verify with desktop_screenshot; prefer act_ui for ref-targetable app controls.
 
-On macOS, a drag whose coordinates, segment length, or total length are not finite returns `invalid_args` before any mouse event is sent.
+On macOS, a drag returns `invalid_args` before any mouse event is sent when a coordinate is not finite or lies outside `[-1000000, 1000000]` global points (a policy cap far beyond any real display arrangement), or when its total length is not finite.
 
 ### parameters
 

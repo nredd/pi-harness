@@ -262,12 +262,15 @@ func allowsFirstWindowFallback(windowId: UInt32?, windowRef: String?) -> Bool {
 	windowId == nil && windowRef == nil
 }
 
-// A generous signed desktop limit; AX hit testing narrows global points to Float.
-private let dragCoordinateLimit: CGFloat = 1_000_000
+/// Policy cap, not a representability boundary. Real macOS display arrangements span tens of thousands of
+/// points, so a vertex past +/-1e6 is a caller bug. At this size every vertex keeps sub-point precision in
+/// the Float AX hit test (24-bit mantissa), and 1024 vertices keep the summed path length far from overflow.
+private let dragCoordinateLimit = 1_000_000
 
 private func validateDragPoint(_ point: CGPoint) throws {
-	guard abs(point.x) <= dragCoordinateLimit, abs(point.y) <= dragCoordinateLimit else {
-		throw BridgeFailure(message: "Drag coordinates must be finite and within +/-1000000", code: "invalid_args")
+	let limit = CGFloat(dragCoordinateLimit)
+	guard abs(point.x) <= limit, abs(point.y) <= limit else {
+		throw BridgeFailure(message: "Drag coordinates must be finite and within +/-\(dragCoordinateLimit)", code: "invalid_args")
 	}
 }
 
