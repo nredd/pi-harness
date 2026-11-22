@@ -349,14 +349,9 @@ impl AtspiClient {
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
             let role_id = self.role_id(&accessible).await;
             incomplete |= role_id.is_none();
-            let is_secure = !permits_text(role_id);
-            let (role, name, description) = if is_secure {
-                (
-                    protected_role_name(role_id).to_owned(),
-                    PROTECTED_LABEL.to_owned(),
-                    String::new(),
-                )
-            } else {
+            let mut confirmed_role = role_id;
+            let mut value = String::new();
+            let (mut role, mut name, mut description) = if permits_text(role_id) {
                 (
                     field_or_default(self.role_name(&accessible).await, &mut incomplete),
                     field_or_default(
@@ -368,12 +363,29 @@ impl AtspiClient {
                         &mut incomplete,
                     ),
                 )
-            };
-            let value = if !is_secure && interfaces.contains(TEXT) {
-                field_or_default(self.read_text(&accessible).await, &mut incomplete)
             } else {
-                String::new()
+                let protected = protected_role_name(role_id).to_owned();
+                (protected, PROTECTED_LABEL.to_owned(), String::new())
             };
+            if let Some(id) = role_id.filter(|&id| id != PASSWORD_TEXT_ROLE) {
+                let result = if interfaces.contains(TEXT) {
+                    self.read_checked_text(&accessible, id).await
+                } else {
+                    self.confirm_role(&accessible, id)
+                        .await
+                        .map(|()| String::new())
+                };
+                match result {
+                    Err(error) if error.code == ErrorCode::SecureTextUnreadable => {
+                        confirmed_role = None;
+                        incomplete = true;
+                        role = protected_role_name(None).to_owned();
+                        name = PROTECTED_LABEL.to_owned();
+                        description.clear();
+                    }
+                    other => value = field_or_default(other, &mut incomplete),
+                }
+            }
             if depth == 0 {
                 root_fields_incomplete = incomplete;
             }
@@ -394,7 +406,7 @@ impl AtspiClient {
                 description,
                 value,
                 interfaces,
-                is_secure,
+                is_secure: !permits_text(confirmed_role),
                 depth,
             });
         }
@@ -410,23 +422,38 @@ impl AtspiClient {
         &self,
         accessible: &AccessibleRef,
     ) -> Result<String, ProtocolError> {
-        if matches!(
-            self.role_id(accessible).await,
-            None | Some(PASSWORD_TEXT_ROLE)
-        ) {
-            return Err(ProtocolError::new(
-                "Cannot confirm that the live accessibility role permits reading text",
-                ErrorCode::SecureTextUnreadable,
-            ));
-        }
-        self.read_text(accessible).await
+        let id = self
+            .role_id(accessible)
+            .await
+            .filter(|&id| id != PASSWORD_TEXT_ROLE)
+            .ok_or_else(unconfirmed_role)?;
+        self.read_checked_text(accessible, id).await
     }
 
-    async fn read_text(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+    /// Discard the reply if the live role no longer matches the authorizing role.
+    async fn read_checked_text(
+        &self,
+        accessible: &AccessibleRef,
+        role: u32,
+    ) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, TEXT).await?;
         let member = "GetText";
-        self.request(member, proxy.call(member, &(0i32, -1i32)))
-            .await
+        let reply = self
+            .request(member, proxy.call(member, &(0i32, -1i32)))
+            .await;
+        self.confirm_role(accessible, role).await?;
+        reply
+    }
+
+    async fn confirm_role(
+        &self,
+        accessible: &AccessibleRef,
+        expected: u32,
+    ) -> Result<(), ProtocolError> {
+        if self.role_id(accessible).await != Some(expected) {
+            return Err(unconfirmed_role());
+        }
+        Ok(())
     }
 
     pub async fn press(&self, node: &NodeSnapshot) -> Result<bool, ProtocolError> {
@@ -684,6 +711,13 @@ fn protected_role_name(role_id: Option<u32>) -> &'static str {
     } else {
         "unknown"
     }
+}
+
+fn unconfirmed_role() -> ProtocolError {
+    ProtocolError::new(
+        "Cannot confirm that the live accessibility role permits reading text",
+        ErrorCode::SecureTextUnreadable,
+    )
 }
 
 /// Retain optional field defaults, but do not use a missing timed-out field to prove absence.

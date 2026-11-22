@@ -8,7 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
-- Validate numeric AT-SPI roles and suppress Linux text, titles and descriptions for protected, unclassified or unavailable roles (#1189).
+- Validate numeric AT-SPI roles and suppress Linux text, titles and descriptions for protected, unclassified or unavailable roles; discard text if the live role changes during a read (#1189).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).
 - On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).
 - Bound Linux AT-SPI2 D-Bus requests, refuse text reads when the role is unknown, and do not confirm absence from incomplete snapshots. A timed-out semantic action has an unknown outcome and is not retried (#1167).

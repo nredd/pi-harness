@@ -1380,12 +1380,27 @@ mod tests {
         }
     }
 
-    struct PeerText(Arc<AtomicUsize>);
+    struct PeerText {
+        reads: Arc<AtomicUsize>,
+        transition: Option<(watch::Sender<Option<u32>>, Option<u32>)>,
+    }
+
+    impl PeerText {
+        fn new(reads: Arc<AtomicUsize>) -> Self {
+            Self {
+                reads,
+                transition: None,
+            }
+        }
+    }
 
     #[zbus::interface(name = "org.a11y.atspi.Text")]
     impl PeerText {
         fn get_text(&self, _start: i32, _end: i32) -> &str {
-            self.0.fetch_add(1, Ordering::SeqCst);
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            if let Some((role, next)) = &self.transition {
+                role.send(*next).unwrap();
+            }
             "private fixture text"
         }
     }
@@ -1417,7 +1432,7 @@ mod tests {
                         text: true,
                     },
                 )?
-                .serve_at("/window", PeerText(Arc::clone(&reads)))
+                .serve_at("/window", PeerText::new(Arc::clone(&reads)))
             },
             async |connection| {
                 let look = peer_request(
@@ -1465,7 +1480,7 @@ mod tests {
                         text: true,
                     },
                 )?
-                .serve_at("/window", PeerText(Arc::clone(&reads)))
+                .serve_at("/window", PeerText::new(Arc::clone(&reads)))
             },
             async |connection| {
                 let look = peer_request(
@@ -1520,7 +1535,7 @@ mod tests {
                         text: true,
                     },
                 )?
-                .serve_at("/window", PeerText(Arc::clone(&reads)))
+                .serve_at("/window", PeerText::new(Arc::clone(&reads)))
             },
             async |connection| {
                 let look_args = json!({"rootRef":root_ref,"includeImage":false});
@@ -1588,7 +1603,7 @@ mod tests {
                         text: true,
                     },
                 )?
-                .serve_at("/window", PeerText(Arc::clone(&reads)))
+                .serve_at("/window", PeerText::new(Arc::clone(&reads)))
             },
             async |connection| {
                 let look_args = json!({"rootRef":root_ref,"includeImage":false});
@@ -1648,7 +1663,7 @@ mod tests {
                         text: true,
                     },
                 )?
-                .serve_at("/window", PeerText(Arc::clone(&reads)))
+                .serve_at("/window", PeerText::new(Arc::clone(&reads)))
             },
             async |connection| {
                 let look = async || {
@@ -1712,6 +1727,79 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn role_transition_during_get_text_drops_reply() {
+        for next in [Some(40), Some(29), None] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (role, current_role) = watch::channel(Some(61));
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    peer.serve_at(
+                        "/window",
+                        PeerNode {
+                            name: "Fixture",
+                            role: current_role,
+                            role_name: "text",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: None,
+                            text: true,
+                        },
+                    )?
+                    .serve_at(
+                        "/window",
+                        PeerText {
+                            reads: Arc::clone(&reads),
+                            transition: Some((role.clone(), next)),
+                        },
+                    )
+                },
+                async |connection| {
+                    let fresh = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({
+                            "rootRef":root_ref,"includeImage":false,
+                        }),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    assert_eq!(fresh["outline"]["value"], "", "post-read role {next:?}");
+                    assert_eq!(fresh["outline"]["title"], "[protected]");
+                    assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+                    // An earlier readable look must still use the live pre/post checks.
+                    let mut target = node();
+                    target.accessible = observed_root().accessible;
+                    target.interfaces.insert(TEXT.into());
+                    let (old_id, nodes) =
+                        lock(&state)
+                            .unwrap()
+                            .insert_look(observed_root(), vec![target], None);
+                    role.send(Some(61)).unwrap();
+                    let read = peer_request(
+                        &state,
+                        &connection,
+                        "atspiReadText",
+                        json!({
+                            "lookId":old_id,"elementRef":nodes[0].reference,
+                        }),
+                    )
+                    .await;
+                    assert_eq!(
+                        read.error.map(|error| error.code),
+                        Some(ErrorCode::SecureTextUnreadable)
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), 2);
+                },
+            )
+            .await;
+        }
     }
 
     struct StalledMutation {
