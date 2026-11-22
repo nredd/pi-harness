@@ -1,4 +1,4 @@
-/** The agent-id resolver: every state, every transition, the lookup order, visibility and the legacy lookups. */
+/** The agent-id resolver: every state and transition (spec 3.3), the lookup order and visibility (3.2), and the legacy lookups. */
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
@@ -80,7 +80,7 @@ function shape(ref: AgentRef) {
 	return { state: ref.state, via: ref.via, requested: ref.requested, latest: ref.latest, id: refRecord(ref)?.id };
 }
 
-it("tracks one agent from launch through grant, settle, resume in place, eviction, reopen and tombstone drop", async () => {
+it("walks every 3.3 transition: launch, grant, stop, settle, resume, eviction, reopen, drop, restart and switch", async () => {
 	const clock = new FakeClock();
 	const manager = newManager(clock);
 	const sources = sourcesOf(manager);
@@ -127,6 +127,20 @@ it("tracks one agent from launch through grant, settle, resume in place, evictio
 	resumed.resolve({ text: "again", aborted: false, steered: false } as Awaited<ReturnType<typeof resumeAgent>>);
 	await resuming;
 
+	// retained -> queued on resume in place while the pool is full, again under a new run id.
+	const finishBlocker = holdRun();
+	const blocker = spawn(manager, "blocker");
+	const runLive = second.runId;
+	await manager.resume(second.id, "later", undefined, { isBackground: true });
+	expect(at(second.id)).toMatchObject({ state: "queued", record: second });
+	expect(second.runId).not.toBe(runLive);
+	expect(shape(at(second.runId!))).toMatchObject({ state: "queued", via: "run", id: second.id });
+	expect(at(runLive!).state).toBe("unknown");
+	finishBlocker();
+	await blocker.promise;
+	await manager.waitForAll();
+	expect(at(second.id).state).toBe("retained");
+
 	// retained -> saved on eviction: reopenable by id and by name.
 	second.sessionFile = "/sessions/second.jsonl";
 	markConsumed(second, clock.now());
@@ -163,14 +177,13 @@ it("tracks one agent from launch through grant, settle, resume in place, evictio
 	reopened.handle = undefined;
 	expect(at(handle).state).toBe("unknown");
 	expect(at(second.id)).toMatchObject({ state: "saved", resume: { mode: "none", why: "no-saved-session" } });
-});
 
-it("reports restart history as saved and a session-switch survivor as live, live beating saved", async () => {
+	// /reload, /new, /resume: a running agent of the old manager stays live as a survivor.
 	const before = newManager();
 	const release = holdAll();
 	const survivor = spawn(before, "survivor");
 
-	// After a restart there are only saved rows, with and without a reopenable session.
+	// Process restart: only saved rows, with and without a reopenable session.
 	const after = newManager();
 	const note = (id: string, extra: Partial<EvictedNote> = {}): EvictedNote => ({
 		id,
@@ -195,37 +208,23 @@ it("reports restart history as saved and a session-switch survivor as live, live
 	after.rememberEvicted(note("taken", { fromSavedSession: undefined, nameTaken: "scout" }));
 	// The survivor's own id also has saved terminal history; the live run wins.
 	after.rememberEvicted(note(survivor.id));
-	const at = (input: string) => resolveAgent(input, SESSION, sourcesOf(after, [survivor]));
+	const later = (input: string) => resolveAgent(input, SESSION, sourcesOf(after, [survivor]));
 
-	expect(at("SCOUT")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "reopenable" } } });
-	expect(at("historical")).toMatchObject({ state: "saved", resume: { mode: "none", why: "historical" } });
-	expect(at("bounded")).toMatchObject({ state: "saved", resume: { mode: "none", why: "tombstone-bound" } });
-	expect(at("taken")).toMatchObject({ state: "saved", resume: { mode: "none", why: "name-taken" } });
-	// A saved id beats another saved conversation's alias spelling it.
-	const tomb = (id: string, handle: string, alias?: string) => ({
-		id,
-		handle,
-		alias,
-		type: "general-purpose",
-		description: id,
-		sessionFile: `/sessions/${id}.jsonl`,
-		completedAt: 0,
-	});
-	after.rememberTombstone(tomb("alpha-id", "alpha"));
-	after.rememberTombstone(tomb("beta-id", "beta", "alpha-id"));
-	expect(at("alpha-id")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "alpha-id" } } });
-	expect(at("beta")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "beta-id" } } });
+	expect(later("SCOUT")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "reopenable" } } });
+	expect(later("historical")).toMatchObject({ state: "saved", resume: { mode: "none", why: "historical" } });
+	expect(later("bounded")).toMatchObject({ state: "saved", resume: { mode: "none", why: "tombstone-bound" } });
+	expect(later("taken")).toMatchObject({ state: "saved", resume: { mode: "none", why: "name-taken" } });
 	for (const input of [survivor.id, survivor.handle!, survivor.runId!])
-		expect(at(input)).toMatchObject({ state: "live", home: "survivor", record: survivor });
+		expect(later(input)).toMatchObject({ state: "live", home: "survivor", record: survivor });
 
 	survivor.status = "queued";
-	expect(at(survivor.id)).toMatchObject({ state: "queued", home: "survivor" });
+	expect(later(survivor.id)).toMatchObject({ state: "queued", home: "survivor" });
 	survivor.status = "running";
 	release();
 	await before.waitForAll();
 });
 
-it("resolves id before run id, workflow run, name, prefix form and saved history", async () => {
+it("resolves in the 3.2 order among what the asker sees: id, run, workflow run, name, prefix, saved", async () => {
 	const manager = newManager();
 	const release = holdAll();
 	const a = spawn(manager, "a");
@@ -260,23 +259,32 @@ it("resolves id before run id, workflow run, name, prefix form and saved history
 	expect(shape(at("agent-scout"))).toMatchObject({ via: "name", id: b.id });
 	b.alias = undefined;
 	expect(shape(at("@agent-scout"))).toMatchObject({ via: "prefix", requested: "agent-scout", id: c.id });
+	// Saved history: an exact saved id beats another saved conversation's alias spelling it.
+	const tomb = (id: string, handle: string, alias?: string) => ({
+		id,
+		handle,
+		alias,
+		type: "general-purpose",
+		description: id,
+		sessionFile: `/sessions/${id}.jsonl`,
+		completedAt: 0,
+	});
+	manager.rememberTombstone(tomb("alpha-id", "alpha"));
+	manager.rememberTombstone(tomb("beta-id", "beta", "alpha-id"));
+	expect(at("alpha-id")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "alpha-id" } } });
+	expect(at("beta")).toMatchObject({ state: "saved", resume: { mode: "reopen", entry: { id: "beta-id" } } });
 
 	// Normalization: one leading `@` and surrounding space go; empty or overlong names nothing.
 	expect(shape(at("  @scout "))).toMatchObject({ via: "name", requested: "scout", id: c.id });
 	for (const input of ["", " @ ", "x".repeat(MAX_AGENT_HANDLE_CHARS + 1)])
 		expect(at(input)).toMatchObject({ state: "unknown", via: "none" });
 	expect(at("x".repeat(MAX_AGENT_HANDLE_CHARS)).state).toBe("unknown");
-	release();
-	await manager.waitForAll();
-});
 
-it("shows a nested child only to its parent and a workflow child as owned", async () => {
-	const manager = newManager();
-	const release = holdAll();
+	// Visibility: a nested child only to its parent, a workflow child as owned.
 	const parent = spawn(manager, "parent");
 	const child = spawn(manager, "child", { parentAgentId: parent.id, depth: 2, isBackground: false });
 	const worker = spawn(manager, "worker", { workflowId: "wf_abc123def456" });
-	const sources = sourcesOf(manager);
+	const sources = sourcesOf(manager, [], tasks);
 	const asParent: Asker = { kind: "agent", parentAgentId: parent.id };
 	const asStranger: Asker = { kind: "agent", parentAgentId: worker.id };
 
