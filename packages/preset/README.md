@@ -265,10 +265,43 @@ the continuing parent runs its independent final critic after exact-HEAD review.
 Parent sessions keep ownership through the single PR's terminal outcome; auto-merge is permitted
 only when applicable protection is readable, effective and not bypassable by the merging caller.
 Otherwise the parent waits for complete exact-HEAD CI and merges explicitly.
-Before creating an issue worktree, after merge, and before any no-PR removal, the parent follows
-the [guarded sweep checks](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep).
-After merge, the PR's recorded head can prove the checked-out commit was pushed even if the remote
-branch is gone. A matching commit does not override any worktree safety check.
+Before creating an issue worktree and after merge, the parent follows the
+[guarded sweep](skills/get-it-merged/SKILL.md#guarded-merged-worktree-sweep). The preset ships
+[`sweep_guard.py`](skills/ship-issue/sweep_guard.py) beside `ship-issue`. It needs Python 3.8+,
+Git 2.36+, `gh` and `lsof`. The guard keeps without reading the candidate if the Git version
+is too old or cannot be parsed. This rollout is keep-only: the shipped CLI never emits `eligible` and
+never authorizes removing a worktree or even one claimed scratch file. Supply known
+ownership and retained directory holds with `--hold`; `lsof` only sees processes visible to the
+caller. The guard requires one hour of quiet on the checkout and Git activity markers. Exit `0`
+means a scan produced verdicts; unreadable inventory or no matching worktree exits `1`.
+Gitlinks and retained submodule
+metadata stay put without running submodule status. Nested `.git` files or directories, incomplete
+walks, malformed inventory or HEAD logs (including non-UTF-8 branch names or log records and
+inventory or log IDs of the wrong width for the repository), unreachable old or new HEAD log IDs, and conversion
+attributes (including `text=auto`), conversion configuration or mismatched index/worktree line
+endings also mean keep. The `git ls-files --eol` probe classifies raw bytes without running
+filters. Effective
+`core.filemode=false` means keep because Git status can hide executable-bit changes.
+Limits:
+- Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
+  Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
+  receives `GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`, `GH_CONFIG_DIR`, `HTTPS_PROXY`, `HTTP_PROXY` and
+  `NO_PROXY`. Its local config and proxy settings can still affect routing and authentication.
+  The guard does not sandbox the interpreter, the binaries or their trusted environment.
+- The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
+  alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
+  candidate has no other hold. Report only the guard's evidence; delete nothing.
+- The guard does not probe upstream transports. If no PR exists, it reports `no PR; upstream not checked`.
+- The guard omits `git status` and does not compare tracked content or staged changes. Attributes
+  or driver configuration could change after an attribute scan and cause `git status` to run a
+  clean filter. Untracked and ignored paths are reported separately. Never run standalone
+  `git status` or `git diff` on a retained worktree to fill that gap.
+- No raw content hash comparison is performed. With effective `core.trustctime=false`, a same-size
+  edit with its original mtime restored can look clean to Git, so the guard keeps the worktree
+  without trying to distinguish it from a clean one.
+- The guard does not check `core.ignorecase` or `core.symlinks`; the CLI authorizes nothing.
+  A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
+  older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
 Critic receipts retain the original SHA-bound
 invocation and tool-routing metadata, accepting its native findings-only output rather than a
 fabricated `Checked:` checklist. A future configurable role is not permission to silently
