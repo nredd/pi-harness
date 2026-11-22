@@ -424,7 +424,10 @@ Measured, not assumed:
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
 - `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
-- `ensureProtocol()` restarts a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
+- The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the Swift sources `build:native` compiles (line endings normalized; any other `.swift` file in the checkout is ignored). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
+- The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched; once a probe timed out, a later absence is not proof either, only a verified reply is. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
+- After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
 
 ### Whole-desktop control
 
@@ -1441,13 +1444,17 @@ The normal runtime requires this executable inside the resolved helper app:
 
 Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. Set `PI_COMPUTER_USE_HELPER_APP_PATH` only when an explicit location is needed for development or testing.
 
-Install the packaged, downloaded, or locally buildable helper with:
+A stale or unstamped managed helper is refused before desktop commands run; the client does not replace, restart or stop it. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run.
+
+From the installed package root, explicitly repair a missing or stale helper with:
 
 ```bash
 node scripts/setup-helper.mjs --runtime
 ```
 
-For source development, rebuild first and then run the same installer:
+Setup stops the old daemon only when it replaces the bundle. If it reports the app already current but the refusal persists, e.g. a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
+
+For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
 ```bash
 npm run build:native
@@ -1462,7 +1469,7 @@ If the macOS helper crashes or drops its socket, or the Windows or Linux helper 
 
 ## Grant macOS permissions
 
-Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again.
+Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again. With an external `PI_CU_SOCKET_PATH` helper, Recheck only checks again: grant access to that helper and have its operator restart it first if needed.
 
 The helper checks Accessibility with `AXIsProcessTrusted` and Screen Recording with Core Graphics preflight plus a ScreenCaptureKit content query ([macOS permissions reference](../reference/platforms/macos/accessibility.mdx#trust-and-permission)). System Settings labels can vary by macOS version, so identify the app by its name and path rather than relying on one pane label.
 

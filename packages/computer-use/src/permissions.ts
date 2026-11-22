@@ -43,8 +43,9 @@ export interface PermissionBridge {
 	registerPermissions(signal?: AbortSignal): Promise<void>;
 	openPermissionPane(kind: PermissionKind, signal?: AbortSignal): Promise<void>;
 	// Platforms may cache permission answers per process, so restart before
-	// recheck lets a new grant become visible to the helper.
-	restartHelper(signal?: AbortSignal): Promise<void>;
+	// recheck lets a new grant become visible to the helper. Absent for an
+	// external helper: its operator restarts it, and Recheck only reads again.
+	restartHelper?(signal?: AbortSignal): Promise<void>;
 	permissionHint?: string;
 }
 
@@ -84,7 +85,10 @@ export async function ensurePermissions(
 
 		const missing = missingKinds(status, bridge.kinds);
 		const options = bridge.kinds.filter(({ kind }) => missing.includes(kind)).map(({ openOption }) => openOption);
-		options.push("Recheck (restarts helper)", "Cancel");
+		options.push(
+			bridge.restartHelper ? "Recheck (restarts helper)" : "Recheck (restart the external helper first if needed)",
+			"Cancel",
+		);
 
 		const choice = await ctx.ui.select(bridge.copy.prompt(status, helperPath, bridge.permissionHint), options, {
 			signal,
@@ -97,7 +101,7 @@ export async function ensurePermissions(
 		if (choice.startsWith("Recheck")) {
 			// Restart first: permission decisions can be cached by a running
 			// helper process and remain stale after the user grants access.
-			await bridge.restartHelper(signal);
+			await bridge.restartHelper?.(signal);
 			status = await bridge.checkPermissions(signal);
 			if (allGranted(status, bridge.kinds)) {
 				ctx.ui.notify(bridge.copy.readyMessage, "info");

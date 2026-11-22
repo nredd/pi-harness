@@ -3116,8 +3116,8 @@ CU_SETUP_SCRIPT = (
     'const helperSourcePaths = ["activity_glow.swift", "agent_cursor.swift", '
     '"agent_cursor_motion.swift", "bridge.swift"]\n\t.map(f);\n'
 )
-CU_BUILD_SCRIPT = (
-    'const macosSourcePaths = [\n\t"activity_glow.swift",\n\t"agent_cursor.swift",\n'
+CU_BUILD_STAMP = (
+    'export const macosHelperSourcePaths = [\n\t"activity_glow.swift",\n\t"agent_cursor.swift",\n'
     '\t"agent_cursor_motion.swift",\n\t"bridge.swift",\n].map(f);\n'
 )
 
@@ -3139,7 +3139,7 @@ def helper_tarball(
         drop (str | None): Arch whose helper is omitted, or `all` for a source-only pack.
         omit_source (str | None): Swift source left out of the tarball.
         setup_script (str | None): Replacement `setup-helper.mjs` text.
-        build_script (str | None): Replacement `build-native.mjs` text.
+        build_script (str | None): Replacement `helper-build.mjs` text.
 
     Returns:
         Path: `path`.
@@ -3147,7 +3147,7 @@ def helper_tarball(
     entries = {arch: (macho(cpu), 0o755) for arch, cpu in CU_CPU.items()} | (overrides or {})
     members = {
         "scripts/setup-helper.mjs": (setup_script or CU_SETUP_SCRIPT).encode(),
-        "scripts/build-native.mjs": (build_script or CU_BUILD_SCRIPT).encode(),
+        "src/platform/macos/helper-build.mjs": (build_script or CU_BUILD_STAMP).encode(),
         **{f"native/macos/{name}": b"// swift\n" for name in CU_SWIFT if name != omit_source},
     }
     with tarfile.open(path, "w:gz") as tar:
@@ -3480,8 +3480,9 @@ def test_audit_files_computer_use_exact_payload() -> None:
     assert len(packed) == 56
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed]) == []
     assert pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/stray.ts"])
-    missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != "src/view.ts"])
-    assert any("src/view.ts" in problem for problem in missing)
+    stamp = "src/platform/macos/helper-build.mjs"
+    missing = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [name for name in packed if name != stamp])
+    assert any(stamp in problem for problem in missing)
     duplicated = pc.audit_files(pc.COMPUTER_USE_CONTRACT, [*packed, "src/view.ts"])
     assert any("listed 2 times" in problem for problem in duplicated)
 
@@ -3544,7 +3545,7 @@ def test_scenario_computer_use_parses_mixed_quote_helper_sources(
 def test_parse_helper_source_list_reads_the_real_shipped_scripts(script: str) -> None:
     """The contract parses the REAL `packages/computer-use` scripts, so a rename or reshape fails here.
 
-    Synthetic fixtures alone hid a `macosSourcePaths` rename until the packed-tarball contract ran.
+    Synthetic fixtures alone hid a source-list rename until the packed-tarball contract ran.
     """
     source = (pc.REPO_ROOT / "packages" / "computer-use" / script).read_text()
     names = pc.parse_helper_source_list(script, source)
@@ -3558,9 +3559,15 @@ def test_parse_helper_source_list_reads_the_real_shipped_scripts(script: str) ->
     [
         ('const helperSourcePaths = ["bridge.swift", extra]\n.map(f);\n', None, "unsupported token"),
         ('const macosSourcePaths = ["bridge.swift"]\n.map(f);\n', None, "helperSourcePaths"),
-        (None, 'const helperSourcePaths = ["bridge.swift"]\n.map(f);\n', "macosSourcePaths"),
+        (None, 'const helperSourcePaths = ["bridge.swift"]\n.map(f);\n', "macosHelperSourcePaths"),
+        (
+            None,
+            'export const macosHelperSourcePaths = ["activity_glow.swift", "agent_cursor.swift", '
+            '"agent_cursor_motion.swift", "bridge.swift", "scratch.swift"]\n.map(f);\n',
+            "packed helper source lists differ",
+        ),
     ],
-    ids=["expression", "setup-wrong-variable", "build-wrong-variable"],
+    ids=["expression", "setup-wrong-variable", "build-wrong-variable", "lists-differ"],
 )
 def test_scenario_computer_use_rejects_unsupported_or_wrong_helper_source_declaration(
     tmp_path: Path,

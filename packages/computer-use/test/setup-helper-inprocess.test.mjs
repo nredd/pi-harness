@@ -1329,6 +1329,7 @@ describe("macOS source build fallback", () => {
 			assert.ok(xcrun.join(" ").includes(`-framework ${framework}`));
 		}
 		assert.ok(xcrun.includes(path.join(host.dirs.root, "native", "macos", "bridge.swift")));
+		assert.equal(path.basename(xcrun.at(-3)), "HelperBuildStamp.swift");
 		assert.equal(
 			await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"),
 			"built binary",
