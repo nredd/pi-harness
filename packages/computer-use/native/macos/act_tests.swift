@@ -343,6 +343,18 @@ private func runKeyboardActionAssertions() throws {
     try actionFailure("invalid_args") { try keys.act("selectText", params: ["start": 0, "length": 3]) }
     let set = try keys.act("setText", policy: "ax_only", params: ["text": "replacement"])
     expect(set["outcome"] as? String == "worked" && keys.value == "replacement", "AX value write verifies readback")
+    // An accepted AXValue write with a stale or failed readback may have landed: unknown, written once (#1290).
+    for policy in ["ax_only", "background", "foreground"] {
+        for (stale, label) in [("before", "stale readback"), (nil, "failed readback")] as [(String?, String)] {
+            let write = ActFixture()
+            write.valueReads = ["before", stale]
+            let result = try write.act("setText", policy: policy, params: ["text": "new"])
+            let evidence = result["evidence"] as? [String: Any]
+            expect(result["outcome"] as? String == "unknown" && evidence?["deliveryUnknown"] as? Bool == true && result["error"] == nil, "\(policy) accepted write with a \(label) is unknown, not refused: \(result)")
+            expect((evidence?["value"] as? String) == stale, "\(policy) \(label) reports only a value it actually read")
+            expect(write.trace.filter { $0 == "set:AXValue" }.count == 1 && !write.trace.contains { $0.hasPrefix("click:") || $0.hasPrefix("type:") || $0.hasPrefix("atomic:") }, "\(policy) \(label) writes AXValue once and posts nothing")
+        }
+    }
     keys.web = true
     try actionFailure("foreground_required") { try keys.act("setText", policy: "ax_only") }
     keys.trace = []

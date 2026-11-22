@@ -3040,14 +3040,19 @@ export async function terminalDesktopActionResult(
 		: `could not be observed afterward: ${message}`;
 	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay.
 	// An indeterminate step names itself; any other unknown outcome, e.g. an unproven absence, says so generically.
-	const deliveryUnknown = unknownIndex >= 0 || execution.outcome === "unknown";
+	// Any other stop names itself on its own line, and the root observation follows without claiming delivery.
+	const stop = stopSummary(execution);
+	const refused = execution.stoppedAt === 0 && execution.outcome === "didnt";
+	const deliveryUnknown = unknownIndex >= 0 || execution.outcome === "unknown" || (stop !== undefined && !refused);
 	const unknownLead =
 		unknownIndex >= 0
 			? `${indeterminateSentence(execution, unknownIndex)} Its`
 			: "Delivery of the action is unknown, and its";
-	const result = deliveryUnknown
-		? `${unknownLead} source root ${root} ${rootFate}`
-		: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
+	const result = stop
+		? `${stop}\nIts source root ${root} ${rootFate}`
+		: deliveryUnknown
+			? `${unknownLead} source root ${root} ${rootFate}`
+			: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
 	const next = deliveryUnknown
 		? `Do not replay the transaction: call find_roots, then observe_ui to check whether ${unknownIndex >= 0 ? `action ${unknownIndex + 1}` : "it"} took effect.`
 		: "Call find_roots, then observe_ui to continue.";
@@ -3055,11 +3060,28 @@ export async function terminalDesktopActionResult(
 		content: [
 			{
 				type: "text",
-				text: `${keyboardStopSummary(execution) ?? result}\nNo successor state was created. ${next}`,
+				text: `${result}\nNo successor state was created. ${next}`,
 			},
 		],
 		details,
 	};
+}
+
+/**
+ * The stop line of a terminal result: the keyboard stop, or for any other defined `stoppedAt` the stopped action and
+ * its refusal, never a delivery claim. An indeterminate step is left to `indeterminateSentence`. Undefined otherwise.
+ */
+function stopSummary(execution: ExecutionTrace): string | undefined {
+	const keyboard = keyboardStopSummary(execution);
+	const index = execution.stoppedAt;
+	if (keyboard || index === undefined || indeterminateStepIndex(execution) >= 0) return keyboard;
+	const refusal = execution.error ? ` (${execution.error.code})` : "";
+	if (index === 0 && execution.outcome === "didnt") return `Stopped at action 1${refusal}: it did not take effect.`;
+	const prefix =
+		index === 0
+			? ""
+			: ` ${index === 1 ? "Action 1" : `Actions 1-${index}`} ran before it and may have delivered input.`;
+	return `Stopped at action ${index + 1}${refusal}; whether the transaction was delivered is unknown.${prefix} Do not replay the transaction.`;
 }
 
 function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
