@@ -571,7 +571,7 @@ describe("inferred marks", () => {
 
 	it("counts an older, shorter confirmation but never shortens the live mark", () => {
 		const { clock, tracker } = tracked();
-		const scope = { block: true, scope: "model", families: [CARBON.id], evidence: "inferred" } as const;
+		const scope = { block: true, scope: "model" as const, families: [CARBON.id], evidence: "inferred" as const };
 		const midnight = nextPacificMidnight(T0);
 		clock.now = T0 + 2000;
 		// The newer daily 429 confirms first; the older 95 s hint confirms while its deadline is live.
@@ -610,6 +610,19 @@ describe("inferred marks", () => {
 			evidenceAt: T0,
 		});
 		expect(hinted?.until).toBe(T0 + 200_000);
+		// Evidence without a failure timestamp cannot dedupe, but it cannot shorten the mark either.
+		const observed = {
+			block: true,
+			scope: "model" as const,
+			families: [NEON.id],
+			window: "observed:rpd",
+			evidence: "observed" as const,
+		};
+		tracker.mark(NEON, { ...observed, resetAt: T0 + 300_000 });
+		expect(tracker.mark(NEON, { ...observed, resetAt: T0 + 250_000 })).toMatchObject({
+			until: T0 + 300_000,
+			confirmations: 3,
+		});
 		expect(
 			tracker.record(NEON, {
 				...scope,
