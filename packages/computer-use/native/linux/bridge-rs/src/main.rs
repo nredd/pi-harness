@@ -7,7 +7,6 @@ use linux_bridge::atspi::{
     Snapshot, TEXT,
 };
 use linux_bridge::protocol::PROTOCOL_VERSION;
-use linux_bridge::release_debt::DebtFile;
 use linux_bridge::state::{fresh_state_id, HelperState};
 use linux_bridge::wayland::{PortalCapabilities, PortalClient, PortalError};
 use linux_bridge::x11::{self, Input, InputSink, InputState, PhysicalPolicy, SessionKind};
@@ -26,10 +25,6 @@ const DEFAULT_MAX_NODES: usize = 512;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
-    // Before the first request: an earlier helper's unconfirmed releases refuse input.
-    if let Some(file) = debt_file() {
-        file.load_into(&InputState::shared(), display().as_deref());
-    }
     let state = Arc::new(Mutex::new(HelperState::default()));
     let (output, mut responses) = mpsc::unbounded_channel::<Response>();
     let writer = tokio::spawn(async move {
@@ -113,62 +108,29 @@ async fn main() {
     std::process::exit(settle_before_exit().await);
 }
 
-/// Try once, bounded, to confirm owed releases on a fresh X11 connection, and keep
-/// the record of any that stay unconfirmed for the next helper. Returns the exit
-/// status: nonzero, with the releases named on stderr, while any stay owed.
+/// Try once, bounded, to confirm owed releases on a fresh X11 connection. Returns the
+/// exit status: nonzero, with the releases named on stderr, while any stay owed. Nothing
+/// records them past this exit, so the client must refuse physical input from then on.
 async fn settle_before_exit() -> i32 {
     let state = InputState::shared();
     let owed = state.unconfirmed_releases();
     if owed.is_empty() {
         return 0;
     }
-    // Every physical action already recorded its debt before replying, so the record
-    // stands if the attempt below does not finish before the client's SIGKILL.
     let attempt = tokio::task::spawn_blocking(|| x11::settle_released(InputState::shared()));
     let left = match tokio::time::timeout(EXIT_SETTLE_LIMIT, attempt).await {
-        Ok(Ok(_)) => {
-            sync_release_debt();
-            state.unconfirmed_releases()
-        }
-        // Still running or panicked: its outcome is unknown, so the record stands.
+        Ok(Ok(_)) => state.unconfirmed_releases(),
+        // Still running or panicked: its outcome is unknown.
         _ => owed,
     };
     if left.is_empty() {
         return 0;
     }
-    let record = match debt_file() {
-        Some(file) => format!(
-            "recorded in {}; the next helper refuses physical input until it confirms the release",
-            file.path().display()
-        ),
-        None => "no runtime, cache or home directory to record it in".to_owned(),
-    };
     eprintln!(
-        "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. {record}",
+        "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",
         left.join(", ")
     );
     EXIT_RELEASE_DEBT
-}
-
-fn debt_file() -> Option<&'static DebtFile> {
-    static FILE: OnceLock<Option<DebtFile>> = OnceLock::new();
-    FILE.get_or_init(DebtFile::locate).as_ref()
-}
-
-fn display() -> Option<String> {
-    std::env::var("DISPLAY").ok()
-}
-
-/// Record the current owed releases for the next helper, or clear the record.
-fn sync_release_debt() {
-    if let Some(file) = debt_file() {
-        if let Err(error) = file.sync(&InputState::shared(), display().as_deref()) {
-            eprintln!(
-                "linux-bridge: cannot record owed releases in {}: {error}",
-                file.path().display()
-            );
-        }
-    }
 }
 
 /// Read stdin lines on their own task, so EOF is seen even while every worker is busy
@@ -801,11 +763,8 @@ fn physical_act(
     point: (i32, i32),
     geometry: ActionGeometry,
 ) -> Result<Value, ProtocolError> {
-    let result = Input::connect(policy, owning_window).and_then(|input| {
-        deliver_physical(&input, action, params, owning_window, point, &geometry)
-    });
-    sync_release_debt();
-    result
+    let input = Input::connect(policy, owning_window)?;
+    deliver_physical(&input, action, params, owning_window, point, &geometry)
 }
 
 /// Drive one physical action through a scripted `RecordingSink` that shares the
@@ -816,15 +775,6 @@ fn testing_act(args: &Value) -> Result<Value, ProtocolError> {
     use linux_bridge::testing::RecordingSink;
     let sink = RecordingSink::scripted(args.get("sink").unwrap_or(&Value::Null));
     let input = Input::with_state(sink, InputState::shared());
-    let result = testing_deliver(&input, args);
-    sync_release_debt();
-    result
-}
-#[cfg(feature = "testing")]
-fn testing_deliver(
-    input: &Input<linux_bridge::testing::RecordingSink>,
-    args: &Value,
-) -> Result<Value, ProtocolError> {
     input.settle()?;
     let action = required_str(args, "action", "testingAct requires action")?;
     let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -838,7 +788,7 @@ fn testing_deliver(
         image_width: 100,
         image_height: 100,
     };
-    let mut result = deliver_physical(input, action, &params, 0, (1, 1), &geometry)?;
+    let mut result = deliver_physical(&input, action, &params, 0, (1, 1), &geometry)?;
     result["evidence"]["held"] = json!(input.sink().held_inputs());
     result["evidence"]["events"] = json!(input.sink().events().len());
     Ok(result)

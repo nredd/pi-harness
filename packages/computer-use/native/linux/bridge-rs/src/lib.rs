@@ -3,7 +3,6 @@
 pub mod atspi;
 pub mod error;
 pub mod protocol;
-pub mod release_debt;
 pub mod state;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
