@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { createWriteStream, rmSync } from "node:fs";
+import { createWriteStream, readFileSync, rmSync, writeFileSync } from "node:fs";
 import realFs from "node:fs/promises";
 import realOs from "node:os";
 import path from "node:path";
@@ -20,6 +20,8 @@ import {
 	defaultDeps,
 	dispatch,
 	isEntrypoint,
+	LIFECYCLE_PROBE_MAX_BUFFER,
+	LIFECYCLE_PROBE_TIMEOUT_MS,
 	main,
 	reapProcessGroup,
 	runCancellable,
@@ -36,6 +38,9 @@ const LOCAL_FPR = "A".repeat(40);
 const DEV_FPR = "B".repeat(40);
 const ZIP_BYTES = Buffer.from("fake zip payload");
 const ZIP_SHA = createHash("sha256").update(ZIP_BYTES).digest("hex");
+const REPAIR = "Quit the helper, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
+const OVERRIDE_REPAIR =
+	"Remove that entry, or correct or unset PI_COMPUTER_USE_HELPER_APP_PATH, then run `node scripts/setup-helper.mjs --runtime` from the package root.";
 
 /**
  * @param {string} file Path to write.
@@ -58,6 +63,39 @@ async function put(file, content) {
 async function makeApp(appPath, exe, plist = "<plist/>") {
 	await put(path.join(appPath, "Contents", "MacOS", "bridge"), exe);
 	await put(path.join(appPath, "Contents", "Info.plist"), plist);
+}
+
+/**
+ * @param {string} [id] `CFBundleIdentifier`.
+ * @param {string} [extra] More plist entries, before the identifier.
+ * @returns {string} A valid XML Info.plist.
+ * @throws {never} Pure.
+ */
+function infoPlist(id = "com.injaneity.pi-computer-use", extra = "") {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>${extra}<key>CFBundleIdentifier</key><string>${id}</string></dict></plist>
+`;
+}
+
+/**
+ * Snapshot a directory tree: every entry's relative path, type and file contents.
+ * @param {string} root Tree root.
+ * @returns {Promise<string[]>} Sorted entries.
+ * @throws {Error} On filesystem failure.
+ */
+async function tree(root) {
+	const entries = await realFs.readdir(root, { recursive: true, withFileTypes: true });
+	const lines = await Promise.all(
+		entries.map(async (entry) => {
+			const full = path.join(entry.parentPath, entry.name);
+			const rel = path.relative(root, full);
+			if (entry.isSymbolicLink()) return `${rel} -> ${await realFs.readlink(full)}`;
+			if (entry.isDirectory()) return `${rel}/`;
+			return `${rel}: ${await realFs.readFile(full, "utf8")}`;
+		}),
+	);
+	return lines.sort();
 }
 
 /**
@@ -138,7 +176,20 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 		accessFail: () => false,
 		renameError: undefined,
 	};
-	const rec = { spawn: [], exec: [], sleep: 0, exit: [], log: [], warn: [], error: [], cargo: [], fetch: [], pgrep: 0 };
+	const rec = {
+		spawn: [],
+		exec: [],
+		sleep: 0,
+		exit: [],
+		log: [],
+		warn: [],
+		error: [],
+		cargo: [],
+		fetch: [],
+		pgrep: 0,
+		/** `execFile` options of every lifecycle probe (`pgrep`, `pkill`, `plutil`). */
+		probeOptions: [],
+	};
 	const fsFake = {
 		...realFs,
 		access: async (target, mode) => {
@@ -185,8 +236,19 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 		else if (command === "/usr/bin/ditto") await realFs.cp(args[0], args[1], { recursive: true });
 		else if (command === "xcrun") await put(args[args.indexOf("-o") + 1], state.xcrunWrites);
 	};
-	const execFile = async (command, args) => {
+	const execFile = async (command, args, options) => {
 		rec.exec.push([command, ...args]);
+		if (["pgrep", "pkill", "plutil"].includes(command)) rec.probeOptions.push([command, options]);
+		if (command === "plutil") {
+			if (state.plutilError !== undefined) throw state.plutilError;
+			// Stands in for `plutil -extract CFBundleIdentifier raw [-expect string] [-n] -o - -- <path>` on an XML
+			// plist: only a string value matches, and the newline is printed unless `-n` is given.
+			const match = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]*)<\/string>/.exec(
+				await realFs.readFile(args.at(-1), "utf8"),
+			);
+			if (!match) throw sysError("Could not extract value", 1);
+			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
+		}
 		if (command === "security" && args[0] === "find-identity") {
 			if (state.securityListFails) throw sysError("security unavailable", "ENOENT");
 			return { stdout: args.includes("-v") ? state.devIdOutput : state.localListing(), stderr: "" };
@@ -212,10 +274,17 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			if (state.codesignInfo instanceof Error) throw state.codesignInfo;
 			return state.codesignInfo;
 		}
+		if (command === "pkill") {
+			state.duringPkill?.();
+			if (state.pkillError !== undefined) throw state.pkillError;
+			// `pkill` exits 1 when nothing matched; a real execFile reports that as a numeric code.
+			throw sysError("no match", 1);
+		}
 		if (command === "pgrep") {
 			rec.pgrep += 1;
+			if (state.pgrepError !== undefined) throw state.pgrepError;
 			if (state.pgrepForever || rec.pgrep <= state.pgrepAlive) return { stdout: "1\n", stderr: "" };
-			throw sysError("no match", "1");
+			throw sysError("no match", 1);
 		}
 		throw sysError(`${command} unavailable`, "ENOENT");
 	};
@@ -677,17 +746,14 @@ describe("macOS sealed app installs", () => {
 		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "Info.plist"), "utf8"), "<plist v2/>");
 	});
 
-	test("a changed executable alone reinstalls, and an exited-0 pgrep that never clears is bounded", async () => {
+	test("a changed executable alone reinstalls", async () => {
 		const host = await makeHost();
 		await makeApp(universal(host), "one");
 		await runMain(host, []);
 		await put(path.join(universal(host), "Contents", "MacOS", "bridge"), "two");
-		host.state.pgrepForever = true;
-		host.rec.pgrep = 0;
 		const rec = await runMain(host, []);
 		assert.equal(rec.log[0].startsWith("[pi-computer-use] installed pre-signed"), true);
-		assert.equal(host.rec.pgrep, 20, "gives up after 20 polls rather than hanging");
-		assert.equal(host.rec.sleep, 20);
+		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "two");
 	});
 
 	test("a bundle that fails strict verification is never installed", async () => {
@@ -722,6 +788,498 @@ describe("macOS sealed app installs", () => {
 		assert.deepEqual(rec.exit, [1]);
 		assert.equal(rec.error[0], "read-only");
 		assert.deepEqual(rec.spawn, []);
+	});
+});
+
+describe("macOS helper lifecycle refusals (#1235)", () => {
+	const universal = (host) => path.join(host.dirs.root, "prebuilt", "macos", "universal", "pi-computer-use.app");
+	const installedExe = (host) => path.join(host.dirs.app, "Contents", "MacOS", "bridge");
+
+	/** A host with `old` installed and a changed universal bundle waiting to replace it. */
+	async function pendingReplacement(options) {
+		const host = await makeHost(options);
+		await makeApp(host.dirs.app, "old", infoPlist());
+		await makeApp(universal(host), "new", infoPlist());
+		return host;
+	}
+
+	test.each([
+		["exit status 2", sysError("pgrep: bad pattern", 2), /pgrep: pgrep: bad pattern/],
+		["a spawn failure", sysError("spawn pgrep ENOENT", "ENOENT"), /pgrep: spawn pgrep ENOENT/],
+		["a non-Error rejection", "boom", /pgrep: boom/],
+	])("a pgrep failure (%s) is no proof the helper stopped: nothing is replaced", async (_name, failure, message) => {
+		const host = await pendingReplacement();
+		host.state.pgrepError = failure;
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^Cannot tell whether the helper at .* is running/);
+		assert.match(rec.error[0], message);
+		assert.ok(rec.error[0].endsWith(`it was not replaced. ${REPAIR}`), rec.error[0]);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test.each([
+		["exit status 3", sysError("pkill: failed", 3), /pkill: pkill: failed/],
+		["a non-Error rejection", "boom", /pkill: boom/],
+	])("a pkill failure (%s) refuses the replacement", async (_name, failure, message) => {
+		const host = await pendingReplacement();
+		host.state.pkillError = failure;
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^Could not stop the helper at /);
+		assert.match(rec.error[0], message);
+		assert.ok(rec.error[0].endsWith(`it was not replaced. ${REPAIR}`), rec.error[0]);
+		assert.equal(rec.pgrep, 0);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("a pkill that matched (exit 0) is followed by pgrep until it reports no match", async () => {
+		const host = await pendingReplacement();
+		host.deps.execFile = (
+			(inner) => async (command, args) =>
+				command === "pkill" ? { stdout: "", stderr: "" } : inner(command, args)
+		)(host.deps.execFile);
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(rec.pgrep, 1);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+	});
+
+	test.each([
+		[
+			"its deadline",
+			Object.assign(new Error("Command failed: pgrep"), { killed: true, code: null, signal: "SIGKILL" }),
+		],
+		["its output cap", sysError("stdout maxBuffer length exceeded", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")],
+	])("a pgrep killed at %s is a failure, not absence", async (_name, failure) => {
+		const host = await pendingReplacement();
+		host.state.pgrepError = failure;
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^Cannot tell whether the helper at .* is running \(pgrep: /);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("every pgrep, pkill and plutil probe runs with a deadline and an output cap", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepAlive = 1;
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.deepEqual(
+			rec.probeOptions.map(([command]) => command),
+			["plutil", "pkill", "pgrep", "pgrep", "plutil"],
+		);
+		for (const [, options] of rec.probeOptions) {
+			assert.deepEqual(options, {
+				encoding: "utf8",
+				timeout: LIFECYCLE_PROBE_TIMEOUT_MS,
+				maxBuffer: LIFECYCLE_PROBE_MAX_BUFFER,
+				killSignal: "SIGKILL",
+			});
+		}
+		assert.equal(LIFECYCLE_PROBE_TIMEOUT_MS, 1_000);
+		assert.equal(LIFECYCLE_PROBE_MAX_BUFFER, 64 * 1024);
+	});
+
+	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
+		const host = await pendingReplacement();
+		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+		let rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		const argv = ["plutil", "-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", plist];
+		assert.deepEqual(
+			rec.exec.filter(([command]) => command === "plutil"),
+			[argv, argv],
+		);
+
+		// Any extra byte, even a trailing newline, is another identifier.
+		const padded = await pendingReplacement();
+		padded.deps.execFile = (
+			(inner) => async (command, args, options) =>
+				command === "plutil" ? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" } : inner(command, args, options)
+		)(padded.deps.execFile);
+		rec = await runMain(padded, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.injaneity\.pi-computer-use\\n"\)/);
+		assert.equal(await realFs.readFile(installedExe(padded), "utf8"), "old");
+	});
+
+	test.skipIf(process.platform === "win32").each([
+		["hangs past the deadline", "exec sleep 30"],
+		["floods its output cap", "exec yes 1 | head -c 200000"],
+	])("a real pgrep that %s refuses the replacement", async (_name, body) => {
+		const host = await pendingReplacement();
+		const bin = path.join(host.dirs.base, "bin");
+		await put(path.join(bin, "pgrep"), `#!/bin/sh\n${body}\n`);
+		await put(path.join(bin, "pkill"), "#!/bin/sh\nexit 1\n");
+		await realFs.chmod(path.join(bin, "pgrep"), 0o755);
+		await realFs.chmod(path.join(bin, "pkill"), 0o755);
+		vi.stubEnv("PATH", `${bin}:/usr/bin:/bin`);
+		onTestFinished(() => vi.unstubAllEnvs());
+		host.deps.execFile = defaultDeps().execFile;
+		const started = performance.now();
+		const rec = await runMain(host, []);
+		assert.ok(performance.now() - started < LIFECYCLE_PROBE_TIMEOUT_MS + 4_000, "bounded by the probe deadline");
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^Cannot tell whether the helper at .* is running \(pgrep: /);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("a refused local install leaves the destination byte-identical", async () => {
+		const host = await makeHost({ env: { PI_COMPUTER_USE_NO_SIGN: "1" } });
+		await makeApp(host.dirs.app, "old", infoPlist());
+		await prebuiltBinary(host, "arm64", "new");
+		host.state.pgrepForever = true;
+		const before = await tree(host.dirs.app);
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, [0]);
+		assert.match(rec.warn[0], /postinstall does not stop it/);
+		assert.deepEqual(await tree(host.dirs.app), before, "no directory is created inside the destination");
+	});
+
+	test.each(["local install", "in-place re-sign"])(
+		"the destination is rechecked right before a %s writes to it",
+		async (kind) => {
+			const host = await makeHost({ env: kind === "local install" ? { PI_COMPUTER_USE_NO_SIGN: "1" } : {} });
+			await prebuiltBinary(host, "arm64", "new");
+			if (kind === "in-place re-sign") {
+				host.state.localListing = () => localListing();
+				host.state.which.codesign = true;
+				await runMain(host, ["--runtime"]);
+				host.state.codesignInfo = { stdout: "", stderr: "Signature=adhoc" };
+			} else {
+				await makeApp(host.dirs.app, "old", infoPlist());
+			}
+			const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+			const swapped = infoPlist("com.example.other");
+			host.state.duringPkill = () => writeFileSync(plist, swapped);
+			const before = await realFs.readFile(installedExe(host), "utf8");
+			const rec = await runMain(host, ["--runtime"]);
+			assert.deepEqual(rec.exit, [1], rec.error.join("\n") || rec.log.join("\n"));
+			assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.example\.other"\)/);
+			assert.equal(await realFs.readFile(installedExe(host), "utf8"), before);
+			assert.equal(
+				rec.spawn.some(([command]) => command === "codesign"),
+				false,
+				"nothing is signed",
+			);
+		},
+	);
+
+	test("a helper that outlives pkill is never replaced", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepForever = true;
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, [1]);
+		assert.equal(
+			rec.error[0],
+			`The helper at ${installedExe(host)} is still running after pkill; it was not replaced. ${REPAIR}`,
+		);
+		assert.equal(host.rec.pgrep, 20, "gives up after 20 polls rather than hanging");
+		assert.equal(host.rec.sleep, 20);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("npm --postinstall never stops a running helper: it warns, exits 0 and replaces nothing", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepForever = true;
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, [0]);
+		assert.match(
+			rec.warn[0],
+			/postinstall helper setup skipped: The helper at .* is running; postinstall does not stop it/,
+		);
+		assert.match(rec.warn[0], /node scripts\/setup-helper\.mjs --runtime/);
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill"),
+			false,
+		);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("npm --postinstall replaces the bundle when pgrep reports no running helper, without pkill", async () => {
+		const host = await pendingReplacement();
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(rec.pgrep, 1);
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill"),
+			false,
+		);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+	});
+
+	test("npm --postinstall refuses when pgrep fails", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepError = sysError("pgrep: killed", 2);
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, [0]);
+		assert.match(rec.warn[0], /Cannot tell whether the helper at .* is running/);
+		assert.ok(rec.warn[0].endsWith(REPAIR), "the postinstall warning names the repair");
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	const unrelated = "not a pi-computer-use helper bundle";
+
+	test.each([
+		[
+			"--runtime",
+			"an existing directory without Info.plist",
+			async (app) => put(path.join(app, "notes.txt"), unrelated),
+		],
+		[
+			"--postinstall",
+			"an Info.plist naming another bundle",
+			async (app) => makeApp(app, unrelated, infoPlist("com.example.other")),
+		],
+		[
+			"--runtime",
+			"a valid foreign plist that names the helper ID in another field and a comment",
+			async (app) =>
+				makeApp(
+					app,
+					unrelated,
+					infoPlist(
+						"com.example.other",
+						"<!-- com.injaneity.pi-computer-use --><key>CFBundleName</key><string>com.injaneity.pi-computer-use</string>",
+					),
+				),
+		],
+		[
+			"--runtime",
+			"a longer identifier containing the helper ID",
+			async (app) => makeApp(app, unrelated, infoPlist("com.injaneity.pi-computer-use.other")),
+		],
+		[
+			"--runtime",
+			"an Info.plist that is a symlink to the real helper's plist",
+			async (app, base) => {
+				const real = path.join(base, "real.app", "Contents", "Info.plist");
+				await put(real, infoPlist());
+				await put(path.join(app, "Contents", "MacOS", "bridge"), unrelated);
+				await realFs.symlink(real, path.join(app, "Contents", "Info.plist"));
+			},
+		],
+		[
+			"--runtime",
+			"a Contents directory that is a symlink to the real helper's",
+			async (app, base) => {
+				await makeApp(path.join(base, "real.app"), "real", infoPlist());
+				await put(path.join(app, "notes.txt"), unrelated);
+				await realFs.symlink(path.join(base, "real.app", "Contents"), path.join(app, "Contents"));
+			},
+		],
+		[
+			"--runtime",
+			"a parent directory that is a symlink to the real helper's",
+			async (app, base) => {
+				await makeApp(path.join(base, "elsewhere", path.basename(app)), unrelated, infoPlist());
+				await realFs.symlink(path.join(base, "elsewhere"), path.dirname(app));
+			},
+		],
+		[
+			"--runtime",
+			"a bundle path that is a symlink to the real helper",
+			async (app, base) => {
+				await makeApp(path.join(base, "real.app"), unrelated, infoPlist());
+				await realFs.mkdir(path.dirname(app), { recursive: true });
+				await realFs.symlink(path.join(base, "real.app"), app);
+			},
+		],
+		[
+			"--runtime",
+			"a Contents/Info.plist that is a directory",
+			async (app) => realFs.mkdir(path.join(app, "Contents", "Info.plist"), { recursive: true }),
+		],
+		["--runtime", "a regular file", async (app) => put(app, unrelated)],
+	])("automatic %s refuses to replace an app-path override at %s", async (flag, name, create) => {
+		const reasons = {
+			"an existing directory without Info.plist": "Contents cannot be inspected: ENOENT",
+			"an Info.plist naming another bundle": 'its CFBundleIdentifier is "com.example.other"',
+			"a valid foreign plist that names the helper ID in another field and a comment":
+				'its CFBundleIdentifier is "com.example.other"',
+			"a longer identifier containing the helper ID": 'its CFBundleIdentifier is "com.injaneity.pi-computer-use.other"',
+			"an Info.plist that is a symlink to the real helper's plist": "Contents/Info.plist is a symbolic link",
+			"a Contents directory that is a symlink to the real helper's": "Contents is a symbolic link",
+			"a bundle path that is a symlink to the real helper": "the bundle is a symbolic link",
+			"a parent directory that is a symlink to the real helper's": "its parent directory is a symbolic link",
+			"a Contents/Info.plist that is a directory": "Contents/Info.plist is not a file",
+			"a regular file": "the bundle is not a directory",
+		};
+		const host = await makeHost();
+		await create(host.dirs.app, host.dirs.base);
+		const before = await tree(host.dirs.base);
+		await makeApp(universal(host), "new");
+		const rec = await runMain(host, [flag]);
+		const message = flag === "--postinstall" ? rec.warn[0] : rec.error[0];
+		assert.ok(
+			message.includes(
+				`PI_COMPUTER_USE_HELPER_APP_PATH points at ${host.dirs.app}, which exists but is not a com.injaneity.pi-computer-use bundle (${reasons[name]}); automatic setup does not replace it.`,
+			),
+			message,
+		);
+		assert.ok(message.endsWith(`automatic setup does not replace it. ${OVERRIDE_REPAIR}`), message);
+		assert.equal(rec.spawn.length, 0, "nothing is verified, stopped or copied");
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill" || command === "pgrep"),
+			false,
+		);
+		assert.deepEqual(
+			(await tree(host.dirs.base)).filter((line) => !line.startsWith("root/")),
+			before.filter((line) => !line.startsWith("root/")),
+			"the destination and everything it links to are byte-identical",
+		);
+	});
+
+	test.runIf(process.platform === "darwin").each([
+		["its own binary plist", infoPlist(), "new"],
+		[
+			"a foreign binary plist whose CFBundleIdentifier is a dictionary keyed by the helper ID",
+			infoPlist("").replace(
+				"<string></string>",
+				"<dict><key>com.injaneity.pi-computer-use</key><string>x</string></dict>",
+			),
+			"old",
+		],
+		[
+			"a foreign binary plist naming the helper in another field",
+			infoPlist("com.example.other", "<key>CFBundleName</key><string>com.injaneity.pi-computer-use</string>"),
+			"old",
+		],
+	])("real plutil reads %s exactly", async (_name, plist, expected) => {
+		const host = await pendingReplacement();
+		const realExecFile = defaultDeps().execFile;
+		const infoPath = path.join(host.dirs.app, "Contents", "Info.plist");
+		await put(infoPath, plist);
+		await realExecFile("plutil", ["-convert", "binary1", "--", infoPath]);
+		assert.equal((await realFs.readFile(infoPath)).subarray(0, 6).toString(), "bplist");
+		// Only `plutil` is real; `pgrep`/`pkill` stay fakes.
+		host.deps.execFile = (
+			(inner) => async (command, args, options) =>
+				command === "plutil" ? realExecFile(command, args, options) : inner(command, args, options)
+		)(host.deps.execFile);
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, expected === "new" ? [] : [1]);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), expected);
+	});
+
+	test("the destination is rechecked right before it is removed", async () => {
+		const host = await pendingReplacement();
+		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+		const swapped = infoPlist("com.example.other");
+		// Another writer swaps the destination while setup stops the helper.
+		host.state.duringPkill = () => writeFileSync(plist, swapped);
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(
+			rec.error[0],
+			/\(its CFBundleIdentifier is "com\.example\.other"\); automatic setup does not replace it/,
+		);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+		assert.equal(await realFs.readFile(plist, "utf8"), swapped);
+	});
+
+	test.each(["local install", "in-place re-sign"])(
+		"a %s resolves the signing identity once, before the final recheck, so no lookup separates it from codesign",
+		async (kind) => {
+			const host = await makeHost();
+			await prebuiltBinary(host, "arm64", "new");
+			host.state.devIdOutput = `  1) ${DEV_FPR} "Developer ID Application: Someone (TEAM123456)"\n`;
+			if (kind === "in-place re-sign") {
+				await runMain(host, ["--runtime"]);
+				host.state.codesignInfo = { stdout: "", stderr: "Signature=adhoc" };
+			} else {
+				await makeApp(host.dirs.app, "old", infoPlist());
+			}
+			const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+			let lookups = 0;
+			// A second Developer ID lookup would run after the recheck: swap the plist there.
+			host.deps.execFile = ((inner) => async (command, args, options) => {
+				if (command === "security" && args.includes("-v")) {
+					lookups += 1;
+					if (lookups === 2) writeFileSync(plist, infoPlist("com.example.other"));
+				}
+				return inner(command, args, options);
+			})(host.deps.execFile);
+			const signedPlists = [];
+			const lookupsAtSign = [];
+			host.deps.spawn = ((inner) => (command, args) => {
+				if (command === "codesign" && args[0] === "--force") {
+					signedPlists.push(readFileSync(plist, "utf8"));
+					lookupsAtSign.push(lookups);
+				}
+				return inner(command, args);
+			})(host.deps.spawn);
+			const rec = await runMain(host, ["--runtime"]);
+			assert.deepEqual(rec.exit, [], rec.error.join("\n"));
+			assert.deepEqual(lookupsAtSign, [1], "the identity resolver ran once before codesign");
+			assert.equal(signedPlists.length, 1);
+			assert.match(
+				signedPlists[0],
+				/<key>CFBundleIdentifier<\/key><string>com\.injaneity\.pi-computer-use<\/string>/,
+				"codesign signs the bundle the recheck saw",
+			);
+			assert.deepEqual(rec.spawn.find(([command]) => command === "codesign").slice(6, 8), ["--sign", DEV_FPR]);
+		},
+	);
+
+	test("automatic setup refuses an app-path override whose Info.plist cannot be read", async () => {
+		const host = await makeHost();
+		await makeApp(host.dirs.app, "old", infoPlist());
+		await prebuiltBinary(host, "arm64", "new");
+		host.state.plutilError = sysError("Command failed: plutil: Permission denied", 1);
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(
+			rec.error[0],
+			/\(plutil cannot read its CFBundleIdentifier: Command failed: plutil: Permission denied\); automatic setup does not replace it/,
+		);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("automatic setup refuses when the override destination cannot be inspected", async () => {
+		const host = await makeHost();
+		await makeApp(universal(host), "new");
+		host.deps.fs = {
+			...host.deps.fs,
+			lstat: async (target, ...rest) => {
+				if (target === host.dirs.app) throw sysError("denied", "EACCES");
+				return realFs.lstat(target, ...rest);
+			},
+		};
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /\(the bundle cannot be inspected: EACCES\); automatic setup does not replace it/);
+	});
+
+	test("automatic setup replaces its own bundle at an override, and installs where nothing exists", async () => {
+		const host = await pendingReplacement();
+		let rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+
+		const fresh = await makeHost();
+		await makeApp(universal(fresh), "new");
+		rec = await runMain(fresh, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(installedExe(fresh), "utf8"), "new");
+	});
+
+	test("an operator run, or automatic setup at the default path, keeps replacing an existing destination", async () => {
+		const host = await makeHost();
+		await put(path.join(host.dirs.app, "notes.txt"), unrelated);
+		await makeApp(universal(host), "new");
+		let rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+
+		const home = await makeHost({ env: { PI_COMPUTER_USE_HELPER_APP_PATH: " " } });
+		const defaultApp = path.join(home.dirs.home, "Applications", "pi-computer-use.app");
+		await put(path.join(defaultApp, "notes.txt"), unrelated);
+		await makeApp(universal(home), "new");
+		rec = await runMain(home, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(path.join(defaultApp, "Contents", "MacOS", "bridge"), "utf8"), "new");
 	});
 });
 
@@ -816,6 +1374,11 @@ describe("macOS local helper install and signing", () => {
 		rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] installed helper app (arm64) at ${host.dirs.app}`);
 		assert.equal(rec.spawn.filter(([command]) => command === "codesign").length, 1, "re-signed in place");
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill"),
+			true,
+			"re-signing rewrites the binary, so the resident helper is stopped first",
+		);
 
 		host.state.codesignInfo = { stdout: "Signature size=9\n", stderr: "" };
 		rec = await runMain(host, []);
@@ -893,14 +1456,14 @@ describe("macOS local helper install and signing", () => {
 		host.state.securityImportFail = new Error("import denied");
 		const rec = await runMain(host, []);
 		assert.equal(rec.spawn.find(([command]) => command === "codesign")[7], "-");
-		// The identity is resolved twice (to pick the install path, then to sign), each failing the same way.
+		// The identity is resolved once: the install path and the signing call share it.
 		const warning = "[pi-computer-use] could not create a valid local signing identity: import denied";
 		assert.deepEqual(
 			rec.warn.filter((line) => line.includes("could not create")),
-			[warning, warning],
+			[warning],
 		);
-		// Per resolution: Developer ID lookup, local lookup, once more before the lock and once inside it.
-		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 8);
+		// Developer ID lookup, local lookup, once more before the lock and once inside it.
+		assert.equal(rec.exec.filter(([command, sub]) => command === "security" && sub === "find-identity").length, 4);
 		assert.deepEqual(host.state.lockSeen, ["pi-computer-use-local-signing-user.lock"]);
 	});
 
@@ -1166,6 +1729,33 @@ describe("macOS release download", () => {
 			second.log[0],
 			/signed helper app from GitHub Release v1\.2\.3 \(pi-computer-use\.app\.zip\) already current/,
 		);
+	});
+
+	test("a lifecycle refusal during the release install is final: no fallback build retries the replacement", async () => {
+		const host = await makeHost();
+		await makeApp(host.dirs.app, "old", infoPlist());
+		serveRelease(host, direct(host));
+		let failed = false;
+		host.deps.execFile = ((inner) => async (command, args, options) => {
+			// Only the first probe fails, so a fallback that retried would get through.
+			if (command === "pgrep" && !failed) {
+				failed = true;
+				throw sysError("pgrep: killed", 2);
+			}
+			return inner(command, args, options);
+		})(host.deps.execFile);
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.ok(rec.error[0].startsWith("Cannot tell whether the helper at "), rec.error[0]);
+		assert.ok(rec.error[0].endsWith(REPAIR));
+		assert.deepEqual(rec.warn, [], "not reported as a download failure");
+		assert.equal(
+			rec.spawn.some(([command]) => command === "xcrun"),
+			false,
+			"no fallback build",
+		);
+		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "old");
+		assert.deepEqual(await leftovers(host), []);
 	});
 
 	test("a nested archive layout is searched, skipping files and empty directories", async () => {
