@@ -4,13 +4,15 @@
  * Eligibility never touches the network: a chain entry is skipped when a
  * confirmed exhaustion mark covers it, or when cached usage already shows its
  * window exhausted. Stale or missing usage fails open. The only network read
- * is `confirm`, a fresh usage read after a quota-looking failure; nothing is
- * marked unless that read shows the block.
+ * is `confirm`, after a quota-looking failure: the host's evidence chain (a
+ * fresh usage read, then the failure itself, see `evidence.ts`) decides whether
+ * anything is marked.
  */
 
 import type { Api, AssistantMessage, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { type ChainEntry, type Exhaustion, type Profile, ROUTER_PROVIDER } from "./config.ts";
+import type { EvidenceDecision } from "./evidence.ts";
 import type { ExhaustionTracker } from "./exhaustion.ts";
 import { type ModelRef, parseRef, refKey, sameModel } from "./model-ref.ts";
 import {
@@ -26,13 +28,13 @@ import { formatScore, type QuotaScore } from "./selection.ts";
 import { COLLECTOR_EVIDENCE, type UsageDecision, type UsageSnapshot } from "./usage.ts";
 
 /**
- * Failure text worth a confirming usage read: rate limits and 429s (which
- * upstream retries) plus the terminal quota, billing and subscription-limit
- * errors upstream's `retry.ts` deliberately does not retry. Only a confirmed
- * read acts on it, so over-matching costs one cached request.
+ * Failure text worth confirming: rate limits and 429s (which upstream retries)
+ * plus the terminal quota, billing, payment and subscription-limit errors
+ * upstream's `retry.ts` deliberately does not retry. Only confirming evidence
+ * acts on it, so over-matching costs one cached request and a classification.
  */
 const QUOTA_ERROR_PATTERN =
-	/\b429\b|quota|rate.?limit|too many requests|usage.?limit|billing|out of budget|extra.?usage|available balance|UsageLimitError|subscription_sharing_usage_limit_exceeded/i;
+	/\b429\b|\b402\b|quota|rate.?limit|too many requests|usage.?limit|billing|out of budget|extra.?usage|available balance|UsageLimitError|subscription_sharing_usage_limit_exceeded|RESOURCE_EXHAUSTED|credits depleted|payment required/i;
 
 /** Whether an assistant error could be subscription quota. */
 export function isQuotaError(message: Pick<AssistantMessage, "stopReason" | "errorMessage">): boolean {
@@ -53,10 +55,16 @@ export interface RouteEnv {
 	/** The physical model for a chain entry, or undefined when unknown or without credentials. */
 	resolve(entry: ChainEntry): Model<Api> | undefined;
 	/**
-	 * Decision for `model` from the exact fresh snapshot started at or after
-	 * `notBefore`. Unavailable reads return undefined; must not reject.
+	 * Confirming evidence for the failure at `notBefore`: a block decision, or undefined when
+	 * nothing confirms it. `failed` is the failed message, for failure-inferred evidence.
+	 * Must not reject.
 	 */
-	refresh(model: ModelRef, signal: AbortSignal | undefined, notBefore: number): Promise<UsageDecision | undefined>;
+	refresh(
+		model: ModelRef,
+		signal: AbortSignal | undefined,
+		notBefore: number,
+		failed?: Pick<AssistantMessage, "errorMessage" | "stopReason" | "timestamp">,
+	): Promise<EvidenceDecision | undefined>;
 }
 
 /** The slice of `UsageService` routing depends on. */
@@ -320,12 +328,18 @@ export class Router {
 	}
 
 	/**
-	 * Usage read for `model`'s provider taken after `failedAt` (the failure's
-	 * timestamp); marks and returns true only when it shows `model` blocked. A
-	 * failed, stale, or cancelled read confirms nothing.
+	 * Evidence for the failure of `model` at `failedAt` (the failure's timestamp);
+	 * marks and returns true only when it shows `model` blocked. A failed, stale,
+	 * or cancelled read confirms nothing, and nothing is marked after cancellation.
 	 */
-	async confirm(model: Model<Api>, env: RouteEnv, signal: AbortSignal | undefined, failedAt: number): Promise<boolean> {
-		const decision = await env.refresh(model, signal, failedAt);
+	async confirm(
+		model: Model<Api>,
+		env: RouteEnv,
+		signal: AbortSignal | undefined,
+		failedAt: number,
+		failed?: Pick<AssistantMessage, "errorMessage" | "stopReason" | "timestamp">,
+	): Promise<boolean> {
+		const decision = await env.refresh(model, signal, failedAt, failed);
 		if (!decision?.block || signal?.aborted || decision[COLLECTOR_EVIDENCE]?.aborted) return false;
 		this.tracker.mark(model, decision);
 		return true;
@@ -352,7 +366,7 @@ export class Router {
 			if (entry) {
 				const confirmed =
 					isQuotaError(failed.message) &&
-					(await this.confirm(failed.model, env, request.signal, failed.message.timestamp));
+					(await this.confirm(failed.model, env, request.signal, failed.message.timestamp, failed.message));
 				request.signal?.throwIfAborted();
 				env.assertCurrent?.();
 				if (!confirmed) {

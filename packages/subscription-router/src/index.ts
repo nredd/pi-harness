@@ -3,8 +3,8 @@
  * included subscription quota.
  *
  * Wiring only; the logic lives in `router.ts` (chain routing), `recovery.ts`
- * (mid-run terminal quota errors), `exhaustion.ts` (confirmed blocks) and
- * `usage.ts` (collectors). Usage and exhaustion state are process-global so
+ * (mid-run terminal quota errors), `evidence.ts` (what confirms a block),
+ * `exhaustion.ts` (confirmed blocks) and `usage.ts` (collectors). Usage and exhaustion state are process-global so
  * every session in the process, including in-process subagent children that
  * load their own copy of this module, sees the same confirmed blocks.
  */
@@ -29,6 +29,7 @@ import {
 	ROUTER_PROVIDER,
 	THINKING_LEVELS,
 } from "./config.ts";
+import { composeEvidence, evidenceChain, FailureHistory, type UsageRead } from "./evidence.ts";
 import { ExhaustionTracker } from "./exhaustion.ts";
 import { refKey } from "./model-ref.ts";
 import { compilePolicy } from "./policy.ts";
@@ -51,6 +52,22 @@ export {
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const DECISIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.decisions");
 const SELECTIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.selections");
+const FAILURES_KEY: unique symbol = Symbol.for("pi-subscription-router.failures");
+
+/**
+ * Failure counts belong to the marks they can create: every router sharing a tracker, including
+ * disk-loaded copies in in-process children, counts one model's failures together.
+ */
+function failureHistory(tracker: ExhaustionTracker): FailureHistory {
+	const host = globalThis as typeof globalThis & { [FAILURES_KEY]?: WeakMap<ExhaustionTracker, FailureHistory> };
+	host[FAILURES_KEY] ??= new WeakMap();
+	let history = host[FAILURES_KEY].get(tracker);
+	if (!history) {
+		history = new FailureHistory();
+		host[FAILURES_KEY].set(tracker, history);
+	}
+	return history;
+}
 
 /** Selection epochs belong to the requester, even when a sibling registered its route. */
 function selectionEpoch(manager: object | undefined): { generation: number } {
@@ -155,18 +172,31 @@ function shared(): Shared {
 	return host[SHARED_KEY];
 }
 
-/** `RouteEnv` backed by the model registry and the shared usage cache. */
-function routeEnv(ctx: RegistryContext, usage: RouterUsage): RouteEnv {
+/** How a failure is confirmed: the shared usage cache and failure counts, per provider declaration. */
+interface Confirmation {
+	declarations: Readonly<Record<string, ProviderConfig>>;
+	history: FailureHistory;
+}
+
+/** `RouteEnv` backed by the model registry, the shared usage cache and each provider's evidence chain. */
+function routeEnv(ctx: RegistryContext, usage: RouterUsage, { declarations, history }: Confirmation): RouteEnv {
+	const read: UsageRead = {
+		get: (provider, options) => usage.get(ctx, provider, options),
+		decisionFor: (model, snapshot) => usage.decisionFor(model, snapshot),
+	};
 	return {
 		resolve: (entry: ChainEntry) => {
 			const model = ctx.modelRegistry.find(entry.provider, entry.id);
 			return model && ctx.modelRegistry.hasConfiguredAuth(model) ? model : undefined;
 		},
-		refresh: async (model, signal, notBefore) => {
-			const snapshot = await usage.get(ctx, model.provider, { fresh: true, notBefore, signal });
-			return snapshot.status === "available" && snapshot.retrievedAt >= notBefore
-				? usage.decisionFor(model, snapshot)
-				: undefined;
+		refresh: (model, signal, notBefore, failed) => {
+			const declared = Object.hasOwn(declarations, model.provider) ? declarations[model.provider] : undefined;
+			return composeEvidence(evidenceChain(read, history, declared))({
+				model,
+				failedAt: notBefore,
+				signal,
+				message: failed,
+			});
 		},
 	};
 }
@@ -267,6 +297,8 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const profiles = config.ok ? config.profiles : [];
 		const declarations = (config.ok ? config.providers : undefined) ?? {};
 		usage.configureCollectors?.(declarations);
+		const history = failureHistory(tracker);
+		const confirmation: Confirmation = { declarations, history };
 		const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
 		/**
 		 * Child sessions share their parent's model runtime and each re-registers `router/*` into it,
@@ -291,7 +323,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 					// `in`, not a read: a stale session's `sessionManager` getter throws. A partial host without one has no owner to key on.
 					if (!session || !appendEntry || !("sessionManager" in session)) {
 						// Registrant context: `ctx` only serves the gap before session_start, when this session cannot have been disposed.
-						return router.route(profile, request, routeEnv(registry ?? ctx, usage));
+						return router.route(profile, request, routeEnv(registry ?? ctx, usage, confirmation));
 					}
 					const requester = { session, appendEntry };
 					const current = request.reason === "retry" ? captureSelection(session, request.signal) : () => true;
@@ -299,8 +331,11 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 						if (!current()) throw new Error("subscription-router: request selection changed or was cancelled");
 					};
 					// Shared confirmation may finish, but only its original requester can commit a route.
-					return router.route(profile, request, { ...routeEnv(registry ?? ctx, usage), assertCurrent }, (decision) =>
-						recordFor(requester, decision),
+					return router.route(
+						profile,
+						request,
+						{ ...routeEnv(registry ?? ctx, usage, confirmation), assertCurrent },
+						(decision) => recordFor(requester, decision),
 					);
 				},
 			});
@@ -330,6 +365,13 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			].join("\n");
 		});
 
+		// A success between two ambiguous quota failures means they were not one exhaustion.
+		pi.on("message_end", (event) => {
+			const { message } = event;
+			if (message.role !== "assistant" || message.stopReason === "error" || message.stopReason === "aborted") return;
+			history.succeeded({ provider: message.provider, id: message.model }, message.timestamp);
+		});
+
 		pi.on("model_select", (_event, ctx) => {
 			selectionEpoch(ctx.sessionManager).generation++;
 		});
@@ -342,7 +384,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			if (!profile) return undefined;
 			const signal = ctx.signal;
 			const current = captureSelection(ctx, signal);
-			const outcome = await recovery.handle(event, profile, routeEnv(ctx, usage), signal, current);
+			const outcome = await recovery.handle(event, profile, routeEnv(ctx, usage, confirmation), signal, current);
 			if (!current()) return undefined;
 			if (outcome.kind === "exhausted") {
 				ctx.ui.notify(outcome.error.message, "error");
@@ -396,7 +438,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 						ctx.ui.notify(`subscription-router: unknown profile '${id}'`, "error");
 						return;
 					}
-					const evaluation = router.explain(profile, routeEnv(ctx, usage));
+					const evaluation = router.explain(profile, routeEnv(ctx, usage, confirmation));
 					const json = JSON.stringify(evaluation, null, 2);
 					ctx.ui.notify(
 						flags.length
@@ -449,6 +491,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				}
 				if (action === "reset") {
 					tracker.clear();
+					history.clear();
 					ctx.ui.notify("subscription-router: cleared LOCAL confirmed blocks only; provider quota unchanged", "info");
 					return;
 				}
@@ -467,7 +510,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 								const snapshot = usage.peek(provider);
 								return snapshot ? [snapshot] : [];
 							});
-				const env = routeEnv(ctx, usage);
+				const env = routeEnv(ctx, usage, confirmation);
 				const lines = snapshots.map((snapshot) => `${snapshot.provider}: ${usage.format(snapshot)}`);
 				for (const profile of profiles) {
 					const picked = router.pick(profile, env);
@@ -494,7 +537,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		handleRpc(pi, RPC_ADMIT, (params) => {
 			const ctx = registry;
 			const ref = typeof params.model === "string" ? params.model : "";
-			return ctx ? router.admit(ref, profileById, routeEnv(ctx, usage)) : { ok: true };
+			return ctx ? router.admit(ref, profileById, routeEnv(ctx, usage, confirmation)) : { ok: true };
 		});
 
 		const rpcProviders = () => [...new Set([...collectedProviders(), ...Object.keys(declarations)])];

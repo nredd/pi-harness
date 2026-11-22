@@ -1,15 +1,18 @@
 /**
  * Confirmed quota exhaustion, per `(provider, family)`.
  *
- * A mark is only ever written after a fresh usage read confirmed the block
- * (see `Router.confirm`), so a transient 429 never removes a model from its
- * chain. A mark with a known reset lasts until that reset. Without one it
- * backs off exponentially, 5 minutes doubling up to 60, keyed on how often the
- * same scope was re-confirmed.
+ * A mark needs evidence (see `evidence.ts` and `Router.confirm`): a fresh usage
+ * read that shows the block, or a failure the provider's thresholds accept. A
+ * read-confirmed mark carries no `evidence` field; a failure-inferred one says
+ * `inferred`, how it expires and why. A transient per-minute 429 never removes a
+ * model from its chain. A mark with a known reset lasts until that reset.
+ * Without one it backs off exponentially, 5 minutes doubling up to 60, keyed on
+ * how often the same scope was re-confirmed.
  */
 
 import { addAbortListener } from "node:events";
-import { COLLECTOR_EVIDENCE, modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "./usage.ts";
+import type { EvidenceDecision } from "./evidence.ts";
+import { COLLECTOR_EVIDENCE, modelMatchesFamily, type UsageSnapshot } from "./usage.ts";
 
 const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_CAP_MS = 60 * 60_000;
@@ -23,6 +26,17 @@ export interface ExhaustionMark {
 	/** Whether `until` came from the provider rather than the backoff. */
 	resetKnown: boolean;
 	confirmations: number;
+	/** Absent on read-confirmed marks, which keep exactly the six fields above. */
+	evidence?: "inferred" | "observed";
+	expiry?: "hinted" | "window-reset" | "backoff";
+	cause?: "quota" | "billing";
+	/** When an evidence-carrying mark was written, for idempotent re-confirmation. */
+	markedAt?: number;
+}
+
+/** Where a mark's evidence came from: a fresh usage read unless it says otherwise. */
+export function markEvidence(mark: ExhaustionMark): "read" | "inferred" | "observed" {
+	return mark.evidence ?? "read";
 }
 
 import type { ModelRef } from "./model-ref.ts";
@@ -39,11 +53,19 @@ export class ExhaustionTracker {
 	constructor(private readonly now: () => number = Date.now) {}
 
 	/** Record a confirmed block for the scope of `decision` and return the mark. */
-	mark(model: ModelRef, decision: UsageDecision): ExhaustionMark {
+	mark(model: ModelRef, decision: EvidenceDecision): ExhaustionMark {
 		const families = decision.scope === "model" ? decision.families : undefined;
 		const key = scopeKey(model.provider, families);
 		const now = this.now();
 		const previous = this.marks.get(key);
+		// One failure counts once: a live mark already written for it is not re-counted.
+		if (
+			decision.evidenceAt !== undefined &&
+			previous?.markedAt !== undefined &&
+			previous.until > now &&
+			previous.markedAt >= decision.evidenceAt
+		)
+			return previous;
 		// A block that lifted more than a full backoff cycle ago is a new episode.
 		const recent = previous !== undefined && now - previous.until < BACKOFF_CAP_MS;
 		const confirmations = (recent ? previous.confirmations : 0) + 1;
@@ -57,6 +79,12 @@ export class ExhaustionTracker {
 			resetKnown,
 			confirmations,
 		};
+		if (decision.evidence) {
+			mark.evidence = decision.evidence;
+			if (decision.expiry) mark.expiry = decision.expiry;
+			if (decision.cause) mark.cause = decision.cause;
+			mark.markedAt = now;
+		}
 		this.detach(key);
 		this.marks.set(key, mark);
 		const signal = decision[COLLECTOR_EVIDENCE];
@@ -84,11 +112,14 @@ export class ExhaustionTracker {
 		return [...this.marks.values()].filter((mark) => mark.until > now);
 	}
 
-	/** Reconcile only an exactly matching window/scope from fresh authoritative non-exhausted evidence. */
+	/**
+	 * Reconcile only an exactly matching window/scope from fresh authoritative non-exhausted
+	 * evidence. A usage read never clears an inferred mark: it did not confirm that block.
+	 */
 	reconcile(snapshot: UsageSnapshot): void {
 		if (snapshot.status !== "available" || snapshot.expiresAt <= this.now()) return;
 		for (const [key, mark] of this.marks) {
-			if (mark.provider !== snapshot.provider) continue;
+			if (mark.provider !== snapshot.provider || mark.evidence) continue;
 			if (
 				snapshot.windows.some(
 					(window) =>

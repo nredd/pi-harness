@@ -559,6 +559,7 @@ CONTRACTS = (
             "src/collector-reading.ts",
             "src/collectors.ts",
             "src/config.ts",
+            "src/evidence.ts",
             "src/exhaustion.ts",
             "src/failure.ts",
             "src/index.ts",

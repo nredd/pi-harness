@@ -4,8 +4,8 @@
  * Upstream retries a plain 429 (the router sees those as `retry` routes) but
  * deliberately not `insufficient_quota`, billing, or ChatGPT's
  * `subscription_sharing_usage_limit_exceeded`: those end the run. At
- * `agent_before_settle` this confirms the block with a fresh usage read, marks
- * the family exhausted, omits the failed assistant message with a
+ * `agent_before_settle` this confirms the block through the evidence chain
+ * (a fresh usage read, then failure-inferred evidence), marks the scope exhausted, omits the failed assistant message with a
  * `context_edit`, and asks for one continuation. The continuation routes as
  * `continuation`, sees the previous model's family marked, and moves down the
  * chain.
@@ -73,7 +73,8 @@ export class SettleRecovery {
 		const key = refKey({ provider, id });
 		if (this.recovered.has(key)) return { kind: "none" };
 		const model: Model<Api> | undefined = env.resolve(entry);
-		if (!model || !(await this.router.confirm(model, env, signal, failed.message.timestamp))) return { kind: "none" };
+		if (!model || !(await this.router.confirm(model, env, signal, failed.message.timestamp, failed.message)))
+			return { kind: "none" };
 		if (!current()) return { kind: "none" };
 		this.recovered.add(key);
 		const next = this.router.pick(profile, env);
