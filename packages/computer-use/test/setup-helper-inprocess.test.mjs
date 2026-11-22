@@ -239,12 +239,13 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 		if (["pgrep", "pkill", "plutil"].includes(command)) rec.probeOptions.push([command, options]);
 		if (command === "plutil") {
 			if (state.plutilError !== undefined) throw state.plutilError;
-			// Stands in for `plutil -extract CFBundleIdentifier raw -o - -- <path>` on an XML plist.
+			// Stands in for `plutil -extract CFBundleIdentifier raw [-expect string] [-n] -o - -- <path>` on an XML
+			// plist: only a string value matches, and the newline is printed unless `-n` is given.
 			const match = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]*)<\/string>/.exec(
 				await realFs.readFile(args.at(-1), "utf8"),
 			);
 			if (!match) throw sysError("Could not extract value", 1);
-			return { stdout: `${match[1]}\n`, stderr: "" };
+			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
 		}
 		if (command === "security" && args[0] === "find-identity") {
 			if (state.securityListFails) throw sysError("security unavailable", "ENOENT");
@@ -878,6 +879,31 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		assert.equal(LIFECYCLE_PROBE_MAX_BUFFER, 64 * 1024);
 	});
 
+	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
+		const host = await pendingReplacement();
+		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+		let rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		const argv = ["plutil", "-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", plist];
+		assert.deepEqual(
+			rec.exec.filter(([command]) => command === "plutil"),
+			[argv, argv],
+		);
+
+		// Any extra byte, even a trailing newline, is another identifier.
+		const padded = await pendingReplacement();
+		padded.deps.execFile = (
+			(inner) => async (command, args, options) =>
+				command === "plutil"
+					? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" }
+					: inner(command, args, options)
+		)(padded.deps.execFile);
+		rec = await runMain(padded, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.injaneity\.pi-computer-use\\n"\)/);
+		assert.equal(await realFs.readFile(installedExe(padded), "utf8"), "old");
+	});
+
 	test.skipIf(process.platform === "win32").each([
 		["hangs past the deadline", "exec sleep 30"],
 		["floods its output cap", "exec yes 1 | head -c 200000"],
@@ -1097,6 +1123,14 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 
 	test.runIf(process.platform === "darwin").each([
 		["its own binary plist", infoPlist(), "new"],
+		[
+			"a foreign binary plist whose CFBundleIdentifier is a dictionary keyed by the helper ID",
+			infoPlist("").replace(
+				"<string></string>",
+				"<dict><key>com.injaneity.pi-computer-use</key><string>x</string></dict>",
+			),
+			"old",
+		],
 		[
 			"a foreign binary plist naming the helper in another field",
 			infoPlist("com.example.other", "<key>CFBundleName</key><string>com.injaneity.pi-computer-use</string>"),

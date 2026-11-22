@@ -901,10 +901,10 @@ function createSetup(argv, deps) {
 		try {
 			const { stdout } = await execFile(
 				"plutil",
-				["-extract", "CFBundleIdentifier", "raw", "-o", "-", "--", infoPlistPath],
+				["-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", infoPlistPath],
 				lifecycleProbeOptions,
 			);
-			identifier = String(stdout).replace(/\n$/, "");
+			identifier = String(stdout);
 		} catch (error) {
 			return `plutil cannot read its CFBundleIdentifier: ${errorText(error)}`;
 		}
