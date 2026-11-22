@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
@@ -272,6 +272,27 @@ test("a socket error after connecting is not proof that the daemon was absent", 
 	fake.script("diagnostics", silent());
 	connect.afterConnect = (socket) => socket.destroy(Object.assign(new Error("write failed"), { code: "ECONNREFUSED" }));
 	await assert.rejects(client.ensureInstalled(), /setup was not run: HelperTransportError: write failed/);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test.each([
+	["not executable", "EACCES", (exe: string) => writeFileSync(exe, "old\n", { mode: 0o644 })],
+	["a directory", "not a regular file", (exe: string) => mkdirSync(exe)],
+	["a dangling symlink", "ENOENT", (exe: string) => symlinkSync(`${exe}-gone`, exe)],
+	["behind an unreadable directory", "EACCES", (exe: string) => chmodSync(path.dirname(exe), 0o000)],
+])("never runs setup over an existing helper executable that is %s", async (_name, reason, make) => {
+	const { client, fake, spawn, lock, executable } = await rig(current, { installed: false });
+	await fake.stop();
+	mkdirSync(path.dirname(executable), { recursive: true });
+	make(executable);
+	try {
+		await assert.rejects(client.ensureInstalled(), {
+			message: `pi-computer-use helper executable at ${executable} exists but is unusable (${reason}); setup was not run. Inspect it, then repair it explicitly with \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
+		});
+	} finally {
+		chmodSync(path.dirname(executable), 0o755);
+	}
+	assert.deepEqual(lock.paths, []);
 	assert.equal(spawn.mock.calls.length, 0);
 });
 

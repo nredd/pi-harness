@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants, realpathSync } from "node:fs";
-import { access, mkdir, realpath, stat } from "node:fs/promises";
+import { access, lstat, mkdir, realpath, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -115,12 +115,24 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	}).finally(() => signal?.throwIfAborted?.());
 }
 
-async function isExecutable(filePath: string): Promise<boolean> {
+/**
+ * Whether automatic setup may install the helper executable: only when nothing at all is at its path.
+ * @returns `ready`, `missing` (`ENOENT`), or why an existing entry is unusable: not a regular file, not
+ * executable, or not inspectable (e.g. `EACCES`, `ENOTDIR`, a dangling symlink).
+ */
+async function helperExecutableState(): Promise<"ready" | "missing" | { unusable: string }> {
 	try {
-		await access(filePath, fsConstants.X_OK);
-		return true;
-	} catch {
-		return false;
+		await lstat(HELPER_APP_EXECUTABLE_PATH);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		return code === "ENOENT" ? "missing" : { unusable: String(code) };
+	}
+	try {
+		if (!(await stat(HELPER_APP_EXECUTABLE_PATH)).isFile()) return { unusable: "not a regular file" };
+		await access(HELPER_APP_EXECUTABLE_PATH, fsConstants.X_OK);
+		return "ready";
+	} catch (error) {
+		return { unusable: String((error as NodeJS.ErrnoException).code) };
 	}
 }
 
@@ -252,8 +264,13 @@ export class MacosHelperClient {
 		// Installation is a deployment/repair operation, not part of every new
 		// agent process's hot path. Protocol compatibility is checked against the
 		// live daemon immediately afterwards.
-		if (await isExecutable(HELPER_APP_EXECUTABLE_PATH)) {
-			return;
+		const state = await helperExecutableState();
+		if (state === "ready") return;
+		if (state !== "missing") {
+			// Setup would replace whatever is there; only an operator may decide that.
+			throw new Error(
+				`pi-computer-use helper executable at ${HELPER_APP_EXECUTABLE_PATH} exists but is unusable (${state.unusable}); setup was not run. Inspect it, then repair it explicitly with \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
+			);
 		}
 
 		// Setup can replace the app, so it runs only on positive absence, rechecked under the lifecycle lock
@@ -274,7 +291,7 @@ export class MacosHelperClient {
 		});
 		if (installed) return;
 
-		if (!(await isExecutable(HELPER_APP_EXECUTABLE_PATH))) {
+		if ((await helperExecutableState()) !== "ready") {
 			throw new Error(`Failed to install pi-computer-use helper app at ${HELPER_APP_PATH}.`);
 		}
 	}
