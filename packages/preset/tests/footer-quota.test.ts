@@ -1176,9 +1176,14 @@ test("preset reads the shared metered and inferred-span v2 fixture", () => {
 	assert.deepEqual(footer.fitQuotaRows(state, 120, plain, opts).length, 1);
 	const inferred = present(fixture.views.find(({ name }) => name === "inferred-span"));
 	const gauge = present(footer.parseUsageReply({ success: true, data: inferred.usage }, inferred.now));
+	// Deliberately changed from a bare `10m`: an inferred span must never read as a reported one.
 	assert.match(
 		footer.formatQuotaRow(gauge, "compact", plain, { now: inferred.now, timeZone: inferred.timeZone }),
-		/faux-subscription 10m \d+%/,
+		/faux-subscription 10m~ 0%/,
+	);
+	assert.match(
+		footer.formatQuotaRow(gauge, "full", plain, { now: inferred.now, timeZone: inferred.timeZone }),
+		/faux-subscription 10m 0% \(span inferred\)/,
 	);
 });
 
@@ -1338,6 +1343,57 @@ test("an oversized family never throws while matching the selected model", () =>
 	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "huge", id: "x" } }), "");
 });
 
+test("inferred and assumed spans are qualified on windows and meters, whatever the basis", () => {
+	const ten = 600_000;
+	const state = (footerData?: unknown) =>
+		projected([
+			view("faux", {
+				display: { full: "Faux", compact: "F", footer: footerData },
+				snapshot: snap("faux", [{ ...span("short", 100, ten, "inferred", CLOCK + hour), basis: "reported" }], {
+					expiresAt: CLOCK + hour,
+				}),
+				meters: [
+					meter("spend", 2, { durationMs: ten, spanSource: "inferred", quantity: { unit: "usd", used: 2 } }),
+					meter("calls", 3, { durationMs: hour, spanSource: "inferred" }),
+					meter("rpd", 4, { kind: "calendar", resetRule: { every: "day" }, spanSource: "assumed" }),
+					meter("odd", 5, { durationMs: hour, spanSource: "guessed" }),
+				],
+			}),
+		]);
+	assert.equal(
+		footer.formatQuotaRow(state(), "compact", plain, fixed),
+		"Left: F 10m~ 0% @13:00 $2.00/10m~ obs 1h~ 3 req obs rpd? 4 req obs odd? 5 req obs",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state(), "full", plain, fixed),
+		"Quota left: Faux 10m 0% (resets 13:00; span inferred) $2.00 last 10m observed (span inferred) 1h 3 requests observed (span inferred) rpd 4 requests observed (window unknown) odd 5 requests observed (window unknown)",
+	);
+	// An inferred span never satisfies a duration selector as if reported; it stays qualified.
+	assert.match(
+		footer.formatQuotaRow(state({ show: [{ durationMs: ten }] }), "compact", plain, fixed),
+		/^Left: F 10m~ 0% @13:00 /,
+	);
+});
+
+test("unrecognized meter basis is skipped and unrecognized mark evidence reads unknown, never promoted", () => {
+	const state = projected([
+		view("odd", {
+			snapshot: fresh("odd"),
+			meters: [
+				meter("bogus", 9, { basis: "guessed" }),
+				meter("null", 1, { basis: null }),
+				meter("absent", 2, { basis: undefined }),
+			],
+			marks: [mark(CLOCK + hour, "guessed"), mark(CLOCK + hour, undefined, ["m"])],
+		}),
+	]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: odd absent 2 req rep | provider blocked->13:00 unk m blocked->13:00 read",
+	);
+	assert.match(footer.formatQuotaRow(state, "full", plain, fixed), /provider blocked until Jan 10 13:00 \(unknown\)/);
+});
+
 test("legacy compatibility applies only to legacy footer selections, not to every view with a legacy id", () => {
 	const windows = [
 		span("five_hour", 25, 5 * hour, "reported", CLOCK + hour),
@@ -1367,9 +1423,13 @@ test("legacy compatibility applies only to legacy footer selections, not to ever
 	const codex = snap("openai-codex", [resetWin("7d", 20, CLOCK + hour)], { expiresAt: CLOCK + hour });
 	const v1 = present(footer.parseUsageReply(reply([codex]), CLOCK));
 	const wrapped = projected([
-		view("openai-codex", { display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }] } }, snapshot: codex }),
+		view("openai-codex", {
+			display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }] } },
+			snapshot: codex,
+		}),
 	]);
-	const codexRow = (state: footer.QuotaState) => footer.formatQuotaRow(state, "compact", plain, fixed).split(" | ").at(-1);
+	const codexRow = (state: footer.QuotaState) =>
+		footer.formatQuotaRow(state, "compact", plain, fixed).split(" | ").at(-1);
 	assert.equal(codexRow(v1), "OAI 7d 80% @Jan 10 13:00");
 	assert.equal(codexRow(wrapped), "Left: OAI 7d 80% @Jan 10 13:00");
 });

@@ -50,10 +50,15 @@ const UNITS = {
 	credits: ["credits", "credits"],
 } as const;
 
+/** A span the provider did not state: `assumed` (or unrecognized) is unknown, `inferred` is estimated. */
+type SpanQualifier = "assumed" | "inferred";
+
 interface WindowLabel {
 	name: string;
 	durationMs: number | undefined;
 	calendar: boolean;
+	/** Absent when the span is reported, or predates span provenance. */
+	span?: SpanQualifier;
 }
 
 interface PercentCell extends WindowLabel {
@@ -77,7 +82,7 @@ type Cell =
 			basis: "reported" | "observed" | "inferred";
 			families: string[];
 	  })
-	| { kind: "mark"; families: string[]; until: number; evidence: "read" | "inferred" | "observed" }
+	| { kind: "mark"; families: string[]; until: number; evidence: "read" | "inferred" | "observed" | "unknown" }
 	| { kind: "pool"; name: string; balance?: number; unlimited: boolean; unit: Unit };
 
 /** Recursively readonly: state is shared between the poller and every render. */
@@ -154,11 +159,19 @@ function readDisplay(raw: unknown, id: string): Display {
 	};
 }
 
+/** Default only an absent span; an unrecognized one is unknown, never promoted to reported. */
+function spanOf(raw: Record<string, unknown>): SpanQualifier | undefined {
+	if (raw.spanSource === undefined || raw.spanSource === "reported") return undefined;
+	return raw.spanSource === "inferred" ? "inferred" : "assumed";
+}
+
 function windowLabel(raw: Record<string, unknown>, name: string): WindowLabel {
+	const span = spanOf(raw);
 	return {
 		name,
 		durationMs: finite(raw.durationMs),
 		calendar: raw.kind === "calendar" && asRecord(raw.resetRule)?.every === "day",
+		...(span && { span }),
 	};
 }
 
@@ -193,7 +206,7 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 		families,
 		remaining: remainingPercent(raw.usedPercent),
 		resetAt: epoch(raw.resetAt),
-		unidentified: raw.spanSource === "assumed",
+		unidentified: label.span === "assumed",
 		placeholder: false,
 	});
 	const show = display.footer?.show;
@@ -207,12 +220,12 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 				: raw.spanSource === undefined && (legacy || raw.durationMs === undefined)
 					? // A snapshot without span provenance predates spans: its `7d` bucket is the weekly one.
 						raw.name === "7d" && (legacy || selector.durationMs === WEEK_MS)
-					: raw.spanSource !== "assumed" && raw.durationMs === selector.durationMs,
+					: !spanOf(raw) && raw.durationMs === selector.durationMs,
 		);
 		if (legacy) matches = "name" in selector ? matches.slice(-1) : matches.slice(0, 1);
 		if (!matches.length && "durationMs" in selector) {
-			// An assumed span cannot satisfy a selector, but the most limiting reading is still useful.
-			const assumed = windows.filter(({ raw }) => raw.spanSource === "assumed");
+			// An assumed or inferred span cannot satisfy a selector, but the most limiting reading is still useful.
+			const assumed = windows.filter(({ label }) => label.span !== undefined);
 			assumed.sort(
 				(a, b) => (remainingPercent(a.raw.usedPercent) ?? 101) - (remainingPercent(b.raw.usedPercent) ?? 101),
 			);
@@ -255,7 +268,9 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 		const amount = used ?? finite(quantity?.remaining);
 		// Zero observed calls do not create a quota row on their own.
 		if (!unit || amount === undefined || used === 0) return [];
-		const basis = raw.basis === "inferred" ? "inferred" : raw.basis === "observed" ? "observed" : "reported";
+		// Absent means reported; an unrecognized basis is skipped rather than promoted.
+		const basis = raw.basis === undefined ? "reported" : raw.basis;
+		if (basis !== "reported" && basis !== "observed" && basis !== "inferred") return [];
 		return [
 			{
 				...label,
@@ -277,7 +292,13 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): Cell[] 
 	});
 	const marks = records(view.marks).flatMap<Cell>((mark) => {
 		const until = epoch(mark.until);
-		const evidence = mark.evidence === "observed" || mark.evidence === "inferred" ? mark.evidence : "read";
+		// Absent means read. An unrecognized value stays visible as unknown: a block is never hidden.
+		const evidence =
+			mark.evidence === undefined
+				? "read"
+				: mark.evidence === "read" || mark.evidence === "observed" || mark.evidence === "inferred"
+					? mark.evidence
+					: "unknown";
 		// Legacy reported rows already summarize collected quota. Do not add legacy read marks to them.
 		return until !== undefined && !(legacy && evidence === "read")
 			? [{ kind: "mark", families: familiesOf(mark.families), until, evidence }]
@@ -330,8 +351,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		// Legacy quirks belong to the legacy footer selection (v1, or a v2 view that keeps it), not to the id.
 		const legacy =
 			Object.hasOwn(LEGACY_DISPLAY, id) &&
-			JSON.stringify(display.footer) ===
-				JSON.stringify(LEGACY_DISPLAY[id as keyof typeof LEGACY_DISPLAY].footer);
+			JSON.stringify(display.footer) === JSON.stringify(LEGACY_DISPLAY[id as keyof typeof LEGACY_DISPLAY].footer);
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
@@ -437,7 +457,7 @@ function windowText(
 	layout: Layout,
 	colorize: Colorize,
 	opts: Required<Pick<FormatOptions, "now">> & FormatOptions,
-	unidentified: boolean,
+	span: SpanQualifier | undefined,
 ): string {
 	const dim = (text: string) => colorize("dim", text);
 	const value = formatValue(remaining, colorize);
@@ -447,12 +467,20 @@ function windowText(
 			? formatResetAt(resetAt, opts.now, opts.timeZone, weekly)
 			: undefined;
 	const full = layout.tier === "full";
-	const name = unidentified && !full ? `${label}?` : label;
-	// An unidentified window states that in the full tier; compact carries it as the `?` on the label.
-	const note = unidentified && full ? "window unknown" : undefined;
+	const name = full ? label : `${label}${qualifierMark(span)}`;
+	// An unstated span says so in the full tier; compact carries it as `?` (unknown) or `~` (inferred).
+	const note = full ? spanNote(span) : undefined;
 	const parts = full ? [when ? `resets ${when}` : undefined, note].filter(Boolean).join("; ") : "";
 	const suffix = full ? (parts ? ` (${parts})` : "") : when ? ` @${when}` : "";
 	return `${dim(`${name} `)}${value}${dim(suffix)}`;
+}
+
+function qualifierMark(span: SpanQualifier | undefined): string {
+	return span === "assumed" ? "?" : span === "inferred" ? "~" : "";
+}
+
+function spanNote(span: SpanQualifier | undefined): string | undefined {
+	return span === "assumed" ? "window unknown" : span === "inferred" ? "span inferred" : undefined;
 }
 
 function labels(cell: WindowLabel): [string, string] {
@@ -498,12 +526,16 @@ function countText(cell: Extract<QuotaCell, { kind: "count" }>, full: boolean): 
 	const basis = full ? cell.basis : { reported: "rep", observed: "obs", inferred: "inf" }[cell.basis];
 	const amount = quantityText(cell.amount, cell.unit);
 	const total = cell.limit === undefined ? amount : `${amount}/${quantityText(cell.limit, cell.unit)}`;
-	const [long, short] = labels(cell);
+	// An unknown span is named, not converted to a duration.
+	const [long, short] = cell.span === "assumed" ? [cell.name, cell.name] : labels(cell);
+	const mark = qualifierMark(cell.span);
+	const note = full && cell.span ? ` (${spanNote(cell.span)})` : "";
 	const tail = cell.left ? " left" : "";
-	if (cell.unit === "usd" && cell.durationMs !== undefined && !cell.calendar) {
-		return full ? `${total}${tail} last ${long} ${basis}` : `${total}${tail}/${short} ${basis}`;
+	if (cell.unit === "usd" && cell.durationMs !== undefined && !cell.calendar && cell.span !== "assumed") {
+		return full ? `${total}${tail} last ${long} ${basis}${note}` : `${total}${tail}/${short}${mark} ${basis}`;
 	}
-	return `${full ? long : short} ${total}${cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`}${tail} ${basis}`;
+	const unit = cell.unit === "usd" ? "" : ` ${UNITS[cell.unit][full ? 1 : 0]}`;
+	return `${full ? long : `${short}${mark}`} ${total}${unit}${tail} ${basis}${note}`;
 }
 
 function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: ResolvedOptions): string {
@@ -519,7 +551,7 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 				layout,
 				colorize,
 				opts,
-				cell.unidentified,
+				cell.span,
 			);
 		}
 		case "count":
@@ -539,7 +571,9 @@ function cellText(cell: QuotaCell, layout: Layout, colorize: Colorize, opts: Res
 			const families = cell.families.map((id) => textOf(id) ?? "model");
 			const scope = (full ? families : families.map((id) => id.replace(/^[a-z]+-\d+-/, ""))).join(",") || "provider";
 			const when = layout.resets ? formatResetAt(cell.until, opts.now, opts.timeZone, full) : undefined;
-			const evidence = full ? `(${cell.evidence})` : { inferred: "inf", observed: "obs", read: "read" }[cell.evidence];
+			const evidence = full
+				? `(${cell.evidence})`
+				: { inferred: "inf", observed: "obs", read: "read", unknown: "unk" }[cell.evidence];
 			return colorize(
 				"warning",
 				`${scope} blocked${when ? (full ? ` until ${when}` : `->${when.split(" ").at(-1)}`) : ""} ${evidence}`,
