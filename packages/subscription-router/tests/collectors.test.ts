@@ -13,7 +13,7 @@ import {
 import { ExhaustionTracker } from "../src/exhaustion.ts";
 import { createSubscriptionRouter } from "../src/index.ts";
 import { Router } from "../src/router.ts";
-import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "../src/usage.ts";
+import { COLLECTED_PROVIDERS, type RegistryContext, UsageService, type UsageSnapshot } from "../src/usage.ts";
 
 const T0 = 1_700_000_000_000;
 const provider = "faux-quota";
@@ -358,6 +358,64 @@ it("copies bounded reading fields without accepting adapter metadata or out-of-r
 	expect(snapshot.windows[0]?.resetAt).toBeUndefined();
 	const router = new Router(usage, new ExhaustionTracker(() => T0), () => T0);
 	expect(router.blockedBy({ provider, id: "faux-one" })).toMatchObject({ reason: "fake exhausted" });
+});
+
+it("validates the copied reading", async () => {
+	const { usage } = harness();
+	const valid = { name: "faux-day", scope: "provider" as const, usedPercent: 100, resetAt: T0 + 60_000 };
+	const map = vi.fn(() => [null]);
+	const windows = Object.assign([valid], { map });
+	const families = Object.assign(["faux-one"], { slice: vi.fn(() => [42]) });
+	let percentReads = 0;
+	const shifting = {
+		name: "faux-week",
+		scope: "model" as const,
+		families,
+		get usedPercent() {
+			percentReads += 1;
+			return percentReads === 1 ? 40 : Number.NaN;
+		},
+		set kind(_kind: unknown) {},
+	};
+	const stringLength = new Proxy([valid], {
+		getOwnPropertyDescriptor: (target, key) =>
+			key === "length" ? { value: "1", writable: true } : Reflect.getOwnPropertyDescriptor(target, key),
+	});
+	const hostile = [
+		{ windows },
+		{ windows: [shifting] },
+		{
+			windows: [],
+			get meters() {
+				throw new Error("private fake payload");
+			},
+		},
+		{ windows: Object.assign([valid], { length: 129 }) },
+		{ windows: Object.assign([], { 1: valid }) },
+		{ windows: stringLength },
+		Object.create({ windows: [valid] }),
+	];
+	const read = vi.fn(async () => hostile[read.mock.calls.length - 1]);
+	install({ ...fake, read } as Collector);
+	const first = await usage.get(ctx, provider, { force: true });
+	expect(first).toMatchObject({ status: "available", windows: [valid] });
+	expect(map).not.toHaveBeenCalled();
+	expect(usage.decisionFor({ provider, id: "faux-one" })).toMatchObject({ block: true, window: "faux-day" });
+	const readings: UsageSnapshot[] = [];
+	for (let index = 1; index < hostile.length; index += 1) {
+		usage.invalidate(provider);
+		readings.push(await usage.get(ctx, provider));
+	}
+	expect(readings[0]).toMatchObject({ status: "available", windows: [{ usedPercent: 40, families: ["faux-one"] }] });
+	expect(percentReads).toBe(1);
+	expect(families.slice).not.toHaveBeenCalled();
+	expect(readings.slice(1).map(({ status, message }) => ({ status, message }))).toEqual([
+		{ status: "error", message: "Usage request failed." },
+		{ status: "error", message: "Usage response had an unsupported shape." },
+		{ status: "error", message: "Usage response had an unsupported shape." },
+		{ status: "error", message: "Usage response had an unsupported shape." },
+		{ status: "error", message: "Usage response had an unsupported shape." },
+	]);
 });
 
 it("sanitizes thrown adapter callbacks independently of reading validation", async () => {
