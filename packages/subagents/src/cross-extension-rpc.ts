@@ -13,7 +13,7 @@
  * completion-notification race, and what protocol version 2 does not promise.
  */
 
-import { isTopLevelAgent } from "./agent-manager.ts";
+import { type AgentRef, refRecord } from "./agent-ref.ts";
 import type { ModelRegistry } from "./model-resolver.ts";
 import { selectModel } from "./model-selection.ts";
 import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.ts";
@@ -38,23 +38,26 @@ export interface SpawnCapable {
 	awaitStartup(id: string): Promise<void>;
 	abort(id: string): boolean;
 	/**
-	 * The record behind an id, for the stop and steer handlers' ownership check
-	 * and the steer handler's Plan check. Narrowed to the fields those read, so
-	 * the RPC layer keeps its deliberately shallow view of the manager.
+	 * What a handle names to the session, as `steer_subagent` reads it, but
+	 * without survivors of a session switch: this RPC acts through this
+	 * manager only. Stop, steer and consume switch on its state.
 	 */
-	getRecord(id: string): Pick<AgentRecord, "parentAgentId" | "workflowId" | "status" | "planGate"> | undefined;
+	resolve(agentId: string): AgentRef;
+	/** Whether this manager holds a record under the exact id, seen by the session or not. */
+	hasRecord(id: string): boolean;
 	/**
 	 * Mark a settled agent's result as read by the caller, suppressing the
-	 * completion notification — what `get_subagent_result` does when it returns
-	 * one. False when there is no such agent, or it has not settled yet.
+	 * completion notification — what `get_subagent_result` does when it returns one.
 	 */
-	consumeResult(id: string): boolean;
+	markRead(record: AgentRecord): void;
 	/**
 	 * Deliver a message to a running or queued agent's conversation — what
 	 * `steer_subagent` does. False when the agent is unknown or has settled.
 	 */
 	steer(id: string, message: string): boolean;
 }
+
+const NOT_RUNNING = "Agent is not running";
 
 export interface RpcDeps {
 	homeDir?: string;
@@ -162,19 +165,24 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 	// a live hole: no RPC hands out agent ids, so a caller has no ordinary way to
 	// name one it does not own — but the guard is cheap and the id may leak some
 	// other way. Same refuse-what-we-should-not-touch stance as `consume` below.
-	const assertOwned = (agentId: string) => {
-		const record = manager.getRecord(agentId);
-		if (!record) throw new Error("Agent not found");
-		if (!isTopLevelAgent(record)) throw new Error("Agent is owned by another agent or workflow");
-		return record;
+	// A nested child is hidden from the session, so it is refused by its exact id
+	// off the record existing at all; saved history, a workflow run and a non-string id name nothing.
+	const assertOwned = (agentId: unknown): Extract<AgentRef, { record: AgentRecord }> => {
+		if (typeof agentId !== "string") throw new Error("Agent not found");
+		const ref = manager.resolve(agentId);
+		if (ref.state === "live" || ref.state === "queued" || ref.state === "retained") return ref;
+		const owned =
+			ref.state === "workflow-owned"
+				? ref.owner.kind === "child"
+				: ref.state === "unknown" && manager.hasRecord(agentId);
+		throw new Error(owned ? "Agent is owned by another agent or workflow" : "Agent not found");
 	};
 
-	const unsubStop = handleRpc<{ requestId: string; agentId: string }>(events, "subagents:rpc:stop", ({ agentId }) => {
-		assertOwned(agentId);
-		// Not "not found" — the lookup above already proved it exists. `abort`
-		// returns false only for a record that is neither running nor queued,
-		// which is an agent that has already finished.
-		if (!manager.abort(agentId)) throw new Error("Agent is not running");
+	const unsubStop = handleRpc<{ requestId: string; agentId: unknown }>(events, "subagents:rpc:stop", ({ agentId }) => {
+		const ref = assertOwned(agentId);
+		// Not "not found": the lookup above already proved it exists. A retained
+		// record has already finished, and `abort` refuses one that settled since.
+		if (ref.state === "retained" || !manager.abort(ref.record.id)) throw new Error(NOT_RUNNING);
 	});
 
 	// A caller that has already shown the model an agent's result — pi-tasks'
@@ -182,11 +190,16 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 	// notification for that same result is not delivered on top of it and does
 	// not cost the parent a turn. Deliberately outside the ping version
 	// handshake: an extension built against protocol v2 simply never calls it.
-	const unsubConsume = handleRpc<{ requestId: string; agentId: string }>(
+	// A settled agent only: a running one's notification is still the caller's only signal that it finished.
+	// A workflow's child is consumed as before #1204 (#1282 decides that policy).
+	const unsubConsume = handleRpc<{ requestId: string; agentId: unknown }>(
 		events,
 		"subagents:rpc:consume",
 		({ agentId }) => {
-			if (!manager.consumeResult(agentId)) throw new Error("Agent not found or still running");
+			const record = typeof agentId === "string" ? refRecord(manager.resolve(agentId)) : undefined;
+			if (!record || record.status === "running" || record.status === "queued")
+				throw new Error("Agent not found or still running");
+			manager.markRead(record);
 		},
 	);
 
@@ -195,16 +208,16 @@ export function registerRpcHandlers(deps: RpcDeps): RpcHandle {
 	// review that landed mid-run — can hand it over instead of spawning a second
 	// agent for the same work or dropping the fact. Outside the ping version
 	// handshake, like consume: additive and best-effort.
-	const unsubSteer = handleRpc<{ requestId: string; agentId: string; message: unknown }>(
+	const unsubSteer = handleRpc<{ requestId: string; agentId: unknown; message: unknown }>(
 		events,
 		"subagents:rpc:steer",
 		({ agentId, message }) => {
 			if (typeof message !== "string" || message.trim().length === 0)
 				throw new Error("Steer message must be a non-empty string");
-			const record = assertOwned(agentId);
+			const ref = assertOwned(agentId);
 			// Same refusal as `steer_subagent`, so another extension cannot steer a pre-Plan agent into edits.
-			if (planSteerBlocked(record, events)) throw new Error(planSteerRefusal(agentId));
-			if (!manager.steer(agentId, message)) throw new Error("Agent is not running");
+			if (planSteerBlocked(ref.record, events)) throw new Error(planSteerRefusal(String(agentId)));
+			if (ref.state === "retained" || !manager.steer(ref.record.id, message)) throw new Error(NOT_RUNNING);
 		},
 	);
 

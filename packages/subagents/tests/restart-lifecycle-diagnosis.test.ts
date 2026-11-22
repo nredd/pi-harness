@@ -973,16 +973,8 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	reopened.setResponses([
 		toolCalls({ name: "stop_subagent", args: { agent_id: id } }),
 		toolCalls({ name: "steer_subagent", args: { agent_id: "synthetic-empty", message: "no transcript to open" } }),
-		toolCalls({
-			name: "Agent",
-			args: {
-				resume: id,
-				subagent_type: "general-purpose",
-				description: "manual recovery",
-				prompt: "continue",
-				run_in_background: true,
-			},
-		}),
+		// Recorded as stopped before the restart: history, not a live stop, so a steer reopens it.
+		toolCalls({ name: "steer_subagent", args: { agent_id: id, message: "continue" } }),
 		answer("CHECKED HISTORICAL CONTROLS"),
 	]);
 	await reopened.session.prompt("historical controls");
@@ -995,7 +987,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 		isError: true,
 		text: expect.stringContaining("only historical metadata is available; reopen the recorded session manually."),
 	});
-	const resume = outcomes(reopened, "Agent")[0];
+	const resume = outcomes(reopened, "steer_subagent")[1];
 	expect(resume?.isError).toBe(false);
 	expect(resume?.text).toContain(`Agent resumed in background, reopening evicted agent ${id}`);
 	const next = agentId(resume?.text);
