@@ -241,10 +241,11 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			if (state.plutilError !== undefined) throw state.plutilError;
 			// Stands in for `plutil -extract CFBundleIdentifier raw [-expect string] [-n] -o - -- <path>` on an XML
 			// plist: only a string value matches, and the newline is printed unless `-n` is given.
+			// plist: only a string value matches, and the newline is printed unless `-n` is given.
 			const match = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]*)<\/string>/.exec(
 				await realFs.readFile(args.at(-1), "utf8"),
 			);
-			if (!match) throw sysError("Could not extract value", 1);
+			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
 			return { stdout: `${match[1]}${args.includes("-n") ? "" : "\n"}`, stderr: "" };
 		}
 		if (command === "security" && args[0] === "find-identity") {
@@ -878,6 +879,31 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 		assert.equal(LIFECYCLE_PROBE_TIMEOUT_MS, 1_000);
 		assert.equal(LIFECYCLE_PROBE_MAX_BUFFER, 64 * 1024);
 	});
+	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
+		const host = await pendingReplacement();
+		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+		let rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		const argv = ["plutil", "-extract", "CFBundleIdentifier", "raw", "-expect", "string", "-n", "-o", "-", "--", plist];
+		assert.deepEqual(
+			rec.exec.filter(([command]) => command === "plutil"),
+			[argv, argv],
+		);
+
+		// Any extra byte, even a trailing newline, is another identifier.
+		const padded = await pendingReplacement();
+		padded.deps.execFile = (
+			(inner) => async (command, args, options) =>
+				command === "plutil"
+					? { stdout: "com.injaneity.pi-computer-use\n", stderr: "" }
+					: inner(command, args, options)
+		)(padded.deps.execFile);
+		rec = await runMain(padded, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /\(its CFBundleIdentifier is "com\.injaneity\.pi-computer-use\\n"\)/);
+		assert.equal(await realFs.readFile(installedExe(padded), "utf8"), "old");
+	});
+
 
 	test("plutil must read CFBundleIdentifier as a string without a newline, and its output is compared verbatim", async () => {
 		const host = await pendingReplacement();
@@ -1043,6 +1069,14 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 						"com.example.other",
 						"<!-- com.injaneity.pi-computer-use --><key>CFBundleName</key><string>com.injaneity.pi-computer-use</string>",
 					),
+		[
+			"--runtime",
+			"a parent directory that is a symlink to the real helper's",
+			async (app, base) => {
+				await makeApp(path.join(base, "elsewhere", path.basename(app)), unrelated, infoPlist());
+				await realFs.symlink(path.join(base, "elsewhere"), path.dirname(app));
+			},
+		],
 				),
 		],
 		[
@@ -1068,6 +1102,7 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 				await put(path.join(app, "notes.txt"), unrelated);
 				await realFs.symlink(path.join(base, "real.app", "Contents"), path.join(app, "Contents"));
 			},
+			"a parent directory that is a symlink to the real helper's": "its parent directory is a symbolic link",
 		],
 		[
 			"--runtime",
@@ -1097,6 +1132,14 @@ describe("macOS helper lifecycle refusals (#1235)", () => {
 			"a Contents/Info.plist that is a directory": "Contents/Info.plist is not a file",
 			"a regular file": "the bundle is not a directory",
 		};
+		[
+			"a foreign binary plist whose CFBundleIdentifier is a dictionary keyed by the helper ID",
+			infoPlist("").replace(
+				"<string></string>",
+				"<dict><key>com.injaneity.pi-computer-use</key><string>x</string></dict>",
+			),
+			"old",
+		],
 		const host = await makeHost();
 		await create(host.dirs.app, host.dirs.base);
 		const before = await tree(host.dirs.base);
