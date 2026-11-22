@@ -9,8 +9,9 @@
  *
  * Syntactic, via the installed `tsgo` parser like `import_audit.ts`: the walk follows object and array
  * literals (and parentheses, `as`, `satisfies`, spreads and both conditional branches) inside each
- * argument, and stops at any other expression. A regex reached through a variable, a helper call or
- * `new RegExp(...)` is not seen.
+ * argument, and stops at any other expression. A regex spread into an object (`{ ...(/x/) }`) adds no
+ * keys, so it is not an expected value. Calls are recognized as `.toMatchObject(...)` or
+ * `["toMatchObject"](...)`. A regex reached through a variable, a helper call or `new RegExp(...)` is not seen.
  *
  * CLI: `node scripts/check-test-matchers.ts` checks every owned JS/TS test source and exits 1 on findings.
  */
@@ -24,6 +25,7 @@ import {
 	isAsExpression,
 	isCallExpression,
 	isConditionalExpression,
+	isElementAccessExpression,
 	isObjectLiteralExpression,
 	isParenthesizedExpression,
 	isPropertyAccessExpression,
@@ -32,6 +34,7 @@ import {
 	isSatisfiesExpression,
 	isSpreadAssignment,
 	isSpreadElement,
+	isStringLiteral,
 } from "typescript/unstable/ast/is";
 import { API } from "typescript/unstable/async";
 import { listOwnedTestSources } from "./check-test-tempdirs.mjs";
@@ -54,8 +57,10 @@ const PARSE_ONLY_OPTIONS = {
 export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 	const problems: string[] = [];
 
-	function expected(node: Expression): void {
+	/** Walk `node`; `stored` is false for an object spread operand, whose own regex contributes no keys. */
+	function expected(node: Expression, stored = true): void {
 		if (isRegularExpressionLiteral(node)) {
+			if (!stored) return;
 			const { line, character } = file.getLineAndCharacterOfPosition(node.getStart(file));
 			problems.push(`${name}:${line + 1}:${character + 1}: bare ${node.text} in ${MATCHER} ${FIX}`);
 		} else if (
@@ -64,26 +69,32 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 			isSatisfiesExpression(node) ||
 			isSpreadElement(node)
 		) {
-			expected(node.expression);
+			expected(node.expression, stored);
 		} else if (isConditionalExpression(node)) {
-			expected(node.whenTrue);
-			expected(node.whenFalse);
+			expected(node.whenTrue, stored);
+			expected(node.whenFalse, stored);
 		} else if (isArrayLiteralExpression(node)) {
 			for (const element of node.elements) expected(element);
 		} else if (isObjectLiteralExpression(node)) {
 			for (const property of node.properties) {
 				if (isPropertyAssignment(property)) expected(property.initializer);
-				else if (isSpreadAssignment(property)) expected(property.expression);
+				else if (isSpreadAssignment(property)) expected(property.expression, false);
 			}
 		}
 	}
 
+	/** Whether `callee` names the matcher as `.toMatchObject` or `["toMatchObject"]`. */
+	function isMatcher(callee: Expression): boolean {
+		if (isPropertyAccessExpression(callee)) return callee.name.text === MATCHER;
+		return (
+			isElementAccessExpression(callee) &&
+			isStringLiteral(callee.argumentExpression) &&
+			callee.argumentExpression.text === MATCHER
+		);
+	}
+
 	function visit(node: Node): void {
-		if (
-			isCallExpression(node) &&
-			isPropertyAccessExpression(node.expression) &&
-			node.expression.name.text === MATCHER
-		) {
+		if (isCallExpression(node) && isMatcher(node.expression)) {
 			for (const argument of node.arguments) expected(argument);
 		}
 		node.forEachChild(visit);
@@ -97,34 +108,38 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
  * Parse `files` (relative to `cwd`) in one `tsgo` session and collect every finding.
  *
  * The parse-only project lives in a private temporary directory, so the checkout is never written.
+ * The directory is removed on every exit, including a failed config write or session close.
  * A file that does not parse is a finding too: matchers in it cannot be trusted to be complete.
  */
 export async function checkFiles(cwd: string, files: readonly string[]): Promise<string[]> {
 	if (files.length === 0) return [];
 	const configDir = mkdtempSync(join(tmpdir(), "pi-test-matchers-"));
-	const configPath = join(configDir, "tsconfig.json");
-	writeFileSync(
-		configPath,
-		JSON.stringify({ compilerOptions: PARSE_ONLY_OPTIONS, files: files.map((file) => join(cwd, file)) }),
-	);
-	const api = new API({ cwd: configDir });
 	try {
-		const project = (await api.updateSnapshot({ openProject: configPath })).getProject(configPath);
-		if (project === undefined) throw new Error(`tsgo did not open the project '${configPath}'`);
-		const problems: string[] = [];
-		for (const name of files) {
-			const path = join(cwd, name);
-			const file = await project.program.getSourceFile(path);
-			if (file === undefined) throw new Error(`tsgo did not load '${name}'`);
-			problems.push(...findVacuousMatchers(file, name));
-			for (const issue of await project.program.getSyntacticDiagnostics(path)) {
-				const { line, character } = file.getLineAndCharacterOfPosition(issue.pos);
-				problems.push(`${name}:${line + 1}:${character + 1}: syntax error: ${issue.text}`);
+		const configPath = join(configDir, "tsconfig.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({ compilerOptions: PARSE_ONLY_OPTIONS, files: files.map((file) => join(cwd, file)) }),
+		);
+		const api = new API({ cwd: configDir });
+		try {
+			const project = (await api.updateSnapshot({ openProject: configPath })).getProject(configPath);
+			if (project === undefined) throw new Error(`tsgo did not open the project '${configPath}'`);
+			const problems: string[] = [];
+			for (const name of files) {
+				const path = join(cwd, name);
+				const file = await project.program.getSourceFile(path);
+				if (file === undefined) throw new Error(`tsgo did not load '${name}'`);
+				problems.push(...findVacuousMatchers(file, name));
+				for (const issue of await project.program.getSyntacticDiagnostics(path)) {
+					const { line, character } = file.getLineAndCharacterOfPosition(issue.pos);
+					problems.push(`${name}:${line + 1}:${character + 1}: syntax error: ${issue.text}`);
+				}
 			}
+			return problems;
+		} finally {
+			await api.close();
 		}
-		return problems;
 	} finally {
-		await api.close();
 		rmSync(configDir, { recursive: true, force: true });
 	}
 }

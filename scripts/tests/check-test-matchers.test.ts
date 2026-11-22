@@ -3,13 +3,42 @@
  * The premise test pins the Vitest behavior the guard exists for, on both engines.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { API } from "typescript/unstable/async";
-import { expect, onTestFinished, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { makeTestTempDir } from "../../tests/lib/src/temp-dir.ts";
 import { checkFiles, checkTestMatchers, dispatch } from "../check-test-matchers.ts";
+
+/** Every parse-only project directory `checkFiles` writes a config into, and an optional failure for that write. */
+const projects = vi.hoisted(() => ({ made: [] as string[], writeError: undefined as Error | undefined }));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return {
+		...fs,
+		writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+			const path = String(args[0]);
+			if (basename(path) === "tsconfig.json" && basename(dirname(path)).startsWith("pi-test-matchers-")) {
+				projects.made.push(dirname(path));
+				if (projects.writeError) throw projects.writeError;
+			}
+			fs.writeFileSync(...args);
+		},
+	};
+});
+
+afterEach(() => {
+	projects.made.length = 0;
+	projects.writeError = undefined;
+	vi.restoreAllMocks();
+});
+
+/** The one parse-only project directory the last `checkFiles` call wrote its config into. */
+function onlyProject(): string {
+	expect(projects.made).toHaveLength(1);
+	return projects.made[0] as string;
+}
 
 /** Write `sources` under a fresh root and return it. */
 function fixture(sources: Record<string, string>): string {
@@ -52,6 +81,7 @@ test("flags a bare regex reached through literals in any toMatchObject argument"
 		"expect(a).toMatchObject({ ...{ f: /f/ }, g: (/g/), h: /h/ as unknown, i: /i/ satisfies RegExp });",
 		"await expect(p).rejects.toMatchObject({ message: /j/i });",
 		"expect(a).toMatchObject(flag ? { k: /k/ } : { l: /l/ });",
+		'expect(a)["toMatchObject"]({ n: /n/ });',
 		"expect(a).toMatchObject(",
 		"\t{",
 		"\t\tmessage: /m/,",
@@ -71,7 +101,8 @@ test("flags a bare regex reached through literals in any toMatchObject argument"
 		"a.test.ts:5:50: bare /j/i in toMatchObject",
 		"a.test.ts:6:37: bare /k/ in toMatchObject",
 		"a.test.ts:6:50: bare /l/ in toMatchObject",
-		"a.test.ts:9:12: bare /m/ in toMatchObject",
+		"a.test.ts:7:33: bare /n/ in toMatchObject",
+		"a.test.ts:10:12: bare /m/ in toMatchObject",
 	]);
 });
 
@@ -85,7 +116,9 @@ test("allows matchers that really check a regex, and regexes outside toMatchObje
 		"expect(a).toStrictEqual({ pattern: /g/ });",
 		"expect(a).toEqual(expect.objectContaining({ pattern: /h/ }));",
 		"expect(a).toMatch(/i/);",
-		'expect(a)["toMatchObject"]({ message: /j/ });',
+		"expect(a)[toMatchObject]({ message: /j/ });",
+		'expect(a)["toEqual"]({ message: /j/ });',
+		"expect(a).toMatchObject({ ...(/n/), ...(flag ? /o/ : /q/), ...(/p/ as object) });",
 		"toMatchObject({ message: /k/ });",
 		"await assert.rejects(run, { code: 'x', message: /l/ });",
 		"const regex = { message: /m/ };",
@@ -104,18 +137,35 @@ test("checks JavaScript sources and reports syntax errors instead of trusting a 
 
 test("an empty file list skips tsgo, and the parse-only project never lands in the checkout", async () => {
 	const session = vi.spyOn(API.prototype, "updateSnapshot");
-	try {
-		expect(await checkFiles("/nonexistent", [])).toEqual([]);
-		expect(session).not.toHaveBeenCalled();
-	} finally {
-		vi.restoreAllMocks();
-	}
+	expect(await checkFiles("/nonexistent", [])).toEqual([]);
+	expect(session).not.toHaveBeenCalled();
+	expect(projects.made).toEqual([]);
 	const root = fixture({ "a.test.ts": "expect(a).toMatchObject({ m: /a/ });" });
 	expect(await checkFiles(root, ["a.test.ts"])).toHaveLength(1);
 	expect(readdirSync(root)).toEqual(["a.test.ts"]);
-	expect(
-		readdirSync(tmpdir()).filter((name) => name.startsWith("pi-test-matchers-") && !name.includes("fixture")),
-	).toEqual([]);
+	const project = onlyProject();
+	expect(session).toHaveBeenCalledWith({ openProject: join(project, "tsconfig.json") });
+	expect(existsSync(project)).toBe(false);
+});
+
+test("a failed config write removes the project directory without starting tsgo", async () => {
+	const root = fixture({ "a.test.ts": "" });
+	const session = vi.spyOn(API.prototype, "updateSnapshot");
+	projects.writeError = new Error("disk full");
+	await expect(checkFiles(root, ["a.test.ts"])).rejects.toThrow(/^disk full$/);
+	expect(session).not.toHaveBeenCalled();
+	expect(existsSync(onlyProject())).toBe(false);
+});
+
+test("a rejected session close still removes the project directory", async () => {
+	const root = fixture({ "a.test.ts": "" });
+	const original = API.prototype.close;
+	vi.spyOn(API.prototype, "close").mockImplementation(async function (this: API) {
+		await original.call(this);
+		throw new Error("close failed");
+	});
+	await expect(checkFiles(root, ["a.test.ts"])).rejects.toThrow(/^close failed$/);
+	expect(existsSync(onlyProject())).toBe(false);
 });
 
 test("a listed file tsgo cannot load fails the check instead of passing it empty", async () => {
@@ -135,12 +185,9 @@ test("a project tsgo did not open fails the check and still closes the session",
 		return snapshot;
 	});
 	const closes = vi.spyOn(API.prototype, "close");
-	try {
-		await expect(checkFiles(root, ["a.test.ts"])).rejects.toThrow(/^tsgo did not open the project '.*tsconfig\.json'$/);
-		expect(closes).toHaveBeenCalledTimes(1);
-	} finally {
-		vi.restoreAllMocks();
-	}
+	await expect(checkFiles(root, ["a.test.ts"])).rejects.toThrow(/^tsgo did not open the project '.*tsconfig\.json'$/);
+	expect(closes).toHaveBeenCalledTimes(1);
+	expect(existsSync(onlyProject())).toBe(false);
 });
 
 test("scans owned tracked and untracked test sources only", async () => {
