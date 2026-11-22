@@ -2,17 +2,34 @@
  * OAuth-backed subscription usage: the Anthropic and ChatGPT Codex collectors,
  * a normalized per-provider cache, and the per-model block decision built on it.
  *
- * Ported from the nredd/pi-subagents fork (`src/subscription-usage.ts`), minus
- * the cross-extension collector registry and provider aliases, which had no user.
+ * The built-in adapters were ported from the nredd/pi-subagents fork
+ * (`src/subscription-usage.ts`). Additional adapters can register in-process.
  *
  * Fetching is deliberately conservative: successful reads are cached for five
  * minutes, `fresh` reads within a minute share one response, and a failed read
  * backs the provider off (1m, 2m, 5m, then 15m) so a throttled endpoint is not
- * hammered. OAuth secrets never leave this module.
+ * hammered. Credentials are passed only to the registered adapter for the provider.
  */
 
+import { addAbortListener } from "node:events";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { normalizeReading } from "./collector-reading.ts";
+import {
+	type CollectorReading,
+	type CollectorRegistration,
+	isBuiltinCollector,
+	isCollectorId,
+	registrationFor,
+	transferredTo,
+} from "./collectors.ts";
+
+import type { ProviderConfig } from "./config.ts";
+
+export { parseAnthropic, parseCodex } from "./builtin-collectors.ts";
+
 import { type ModelRef, refKey } from "./model-ref.ts";
+
+export { COLLECTED_PROVIDERS } from "./collectors.ts";
 
 /** How long a successful read is served from cache to plain `get` calls. */
 const CACHE_TTL_MS = 5 * 60_000;
@@ -21,24 +38,17 @@ const MANUAL_REFRESH_INTERVAL_MS = 60_000;
 /** A `fresh` read reuses a snapshot retrieved this recently, so concurrent confirmations share one read. */
 const FRESH_REUSE_WINDOW_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** Maximum decoded HTTP response bytes retained by a quota read. */
+const MAX_USAGE_RESPONSE_BYTES = 256 * 1024;
 /** Failure backoff steps; the last entry is the cap. Reset on the next success. */
 const FAILURE_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 15 * 60_000] as const;
+/**
+ * Latest reset an external collector may report, from the read's start. A later reset is
+ * implausible evidence and becomes unknown, which blocks only while the reading is fresh.
+ */
+const MAX_EXTERNAL_RESET_MS = 31 * 24 * 60 * 60_000;
 /** Upper bound on a server-supplied `Retry-After`, so a bogus header cannot park a provider for days. */
 const RETRY_AFTER_CEILING_MS = 60 * 60_000;
-/** Numeric reset times below this are Unix seconds, above it milliseconds (1e11 s is the year 5138). */
-const SECONDS_VS_MS_THRESHOLD = 100_000_000_000;
-/** Reported 5h and 7d quota-window spans. */
-const FIVE_HOURS_MS = 5 * 60 * 60_000;
-const WEEK_MS = 7 * 24 * 60 * 60_000;
-/** Beta flag the Anthropic usage endpoint requires for OAuth bearer tokens. */
-const ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
-/** Requests without a claude-code User-Agent land in an aggressively 429'd bucket (anthropics/claude-code#31637). */
-const ANTHROPIC_USER_AGENT = "claude-code/2.1";
-/** Anthropic console API keys have no subscription window to report. */
-const ANTHROPIC_API_KEY_PREFIX = "sk-ant-api";
-/** JWT claim namespace carrying the ChatGPT account id in Codex access tokens. */
-const CODEX_JWT_CLAIM_PATH = "https://api.openai.com/auth";
-
 /** `available`: fresh data. `stale`: old data kept after an expiry or failed refresh. */
 export type UsageStatus = "available" | "stale" | "unavailable" | "error";
 
@@ -121,23 +131,11 @@ export interface UsageTransport {
 	getAccessToken(ctx: RegistryContext, provider: string): Promise<string | undefined>;
 }
 
-interface ParsedUsage {
-	windows: UsageWindow[];
-	credits?: UsageSnapshot["credits"];
-}
-
-/** A usage endpoint for one subscription provider. */
-interface Collector {
-	url: string;
-	headers(token: string): Record<string, string>;
-	/** Normalize a 2xx JSON payload; `undefined` marks an unsupported shape. */
-	parse(payload: unknown): ParsedUsage | undefined;
-	/** False for credentials the endpoint cannot serve (e.g. API keys); no request is made. */
-	acceptsToken?(token: string): boolean;
-}
-
 /** Whether a model must not be dispatched on included quota right now, and why. */
+export const COLLECTOR_EVIDENCE = Symbol.for("pi-subscription-router.collector-evidence");
+
 export interface UsageDecision {
+	[COLLECTOR_EVIDENCE]?: AbortSignal;
 	block: boolean;
 	message?: string;
 	window?: string;
@@ -166,184 +164,9 @@ function staleSnapshot(cached: UsageSnapshot, now: number, message: string | und
 	return { ...cached, status: "stale", expiresAt: now, message };
 }
 
-function finiteNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-/** Epoch ms from Unix seconds, epoch ms, or an RFC 3339 / HTTP-date string. */
-function timestamp(value: unknown): number | undefined {
-	if (typeof value === "string") {
-		const parsed = Date.parse(value);
-		return Number.isNaN(parsed) ? undefined : parsed;
-	}
-	const raw = finiteNumber(value);
-	if (raw === undefined) return undefined;
-	const ms = raw < SECONDS_VS_MS_THRESHOLD ? raw * 1000 : raw;
-	return Number.isNaN(new Date(ms).getTime()) ? undefined : ms;
-}
-
-function percentage(value: unknown): number | undefined {
-	const raw = finiteNumber(value);
-	if (raw === undefined || raw < 0) return undefined;
-	return Math.min(raw, 100);
-}
-
 function isoMinute(epochMs: number): string {
 	return `${new Date(epochMs).toISOString().slice(0, 16)}Z`;
 }
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-/** Parse the Anthropic `/api/oauth/usage` payload. */
-export function parseAnthropic(payload: unknown): ParsedUsage | undefined {
-	const root = asRecord(payload);
-	if (!root) return undefined;
-	const windows: UsageWindow[] = [];
-	const specs = [
-		["five_hour", undefined],
-		["seven_day", undefined],
-		["seven_day_opus", ["opus"]],
-		["seven_day_sonnet", ["sonnet"]],
-	] as const;
-	for (const [key, families] of specs) {
-		const item = asRecord(root[key]);
-		if (!item) continue;
-		const usedPercent = percentage(item.utilization ?? item.used_percentage);
-		if (usedPercent === undefined) continue;
-		windows.push({
-			name: key,
-			usedPercent,
-			resetAt: timestamp(item.resets_at ?? item.reset_at),
-			durationMs: key === "five_hour" ? FIVE_HOURS_MS : WEEK_MS,
-			spanSource: "reported",
-			scope: families ? "model" : "provider",
-			families: families ? [...families] : undefined,
-		});
-	}
-	for (const window of anthropicScopedLimits(root.limits)) {
-		if (!windows.some((existing) => existing.name === window.name)) windows.push(window);
-	}
-	return windows.length === 0 ? undefined : { windows };
-}
-
-/**
- * Model-scoped weekly windows Anthropic reports only in its `limits` list, e.g. Fable's
- * `{ kind: "weekly_scoped", scope: { model: { display_name: "Fable" } } }`. Each becomes a
- * `seven_day_<family>` window gating the lowercased display name; names that are not one
- * family token are skipped rather than guessed. Entries narrowed by a non-null `scope.surface`
- * or `scope.model.id` are skipped too: a cap on one surface or one model id must not block
- * the whole family. That fails open: an id- or surface-scoped cap is not enforced, and a 429
- * against it still falls through the normal retry path.
- */
-function anthropicScopedLimits(limits: unknown): UsageWindow[] {
-	if (!Array.isArray(limits)) return [];
-	const windows: UsageWindow[] = [];
-	for (const entry of limits) {
-		const item = asRecord(entry);
-		if (item?.kind !== "weekly_scoped") continue;
-		const scope = asRecord(item.scope);
-		const model = asRecord(scope?.model);
-		if (scope?.surface != null || model?.id != null) continue;
-		const displayName = model?.display_name;
-		const family = typeof displayName === "string" ? displayName.trim().toLowerCase() : "";
-		if (!/^[a-z0-9]+$/.test(family)) continue;
-		const usedPercent = percentage(item.percent);
-		if (usedPercent === undefined) continue;
-		windows.push({
-			name: `seven_day_${family}`,
-			usedPercent,
-			resetAt: timestamp(item.resets_at),
-			durationMs: WEEK_MS,
-			spanSource: "reported",
-			scope: "model",
-			families: [family],
-		});
-	}
-	return windows;
-}
-
-/** Parse the ChatGPT Codex `wham/usage` payload. */
-export function parseCodex(payload: unknown): ParsedUsage | undefined {
-	const root = asRecord(payload);
-	const limits = asRecord(root?.rate_limit);
-	if (!root || !limits) return undefined;
-	const windows: UsageWindow[] = [];
-	for (const [key, name] of [
-		["primary_window", "5h"],
-		["secondary_window", "7d"],
-	] as const) {
-		const item = asRecord(limits[key]);
-		if (!item) continue;
-		const usedPercent = percentage(item.used_percent);
-		if (usedPercent === undefined) continue;
-		// Plans can expose a weekly primary window with no secondary window.
-		// Prefer the reported duration; positional names are legacy fallbacks only.
-		const duration = finiteNumber(item.limit_window_seconds);
-		const windowName =
-			duration === 604_800 ? "7d" : duration === 18_000 ? "5h" : duration && duration > 0 ? `${duration}s` : name;
-		windows.push({
-			name: windowName,
-			usedPercent,
-			resetAt: timestamp(item.reset_at),
-			scope: "provider",
-			durationMs: duration && duration > 0 ? duration * 1000 : key === "primary_window" ? FIVE_HOURS_MS : WEEK_MS,
-			spanSource: duration && duration > 0 ? "reported" : "assumed",
-		});
-	}
-	if (windows.length === 0) return undefined;
-	const credits = asRecord(root.credits);
-	if (!credits) return { windows };
-	return {
-		windows,
-		credits: {
-			available: credits.has_credits === true,
-			unlimited: credits.unlimited === true,
-			balance: typeof credits.balance === "string" ? credits.balance : undefined,
-		},
-	};
-}
-
-/** `chatgpt_account_id` from a Codex access-token JWT, or undefined when not decodable. */
-function codexAccountId(token: string): string | undefined {
-	const parts = token.split(".");
-	if (parts.length !== 3 || !parts[1]) return undefined;
-	try {
-		const payload = asRecord(JSON.parse(Buffer.from(parts[1], "base64url").toString("utf-8")));
-		const accountId = asRecord(payload?.[CODEX_JWT_CLAIM_PATH])?.chatgpt_account_id;
-		// An empty id comes back as is; the header builder omits it like a missing one.
-		return typeof accountId === "string" ? accountId : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-const COLLECTORS: Readonly<Record<string, Collector>> = {
-	anthropic: {
-		url: "https://api.anthropic.com/api/oauth/usage",
-		headers: (token) => ({
-			Authorization: `Bearer ${token}`,
-			"anthropic-beta": ANTHROPIC_OAUTH_BETA,
-			"User-Agent": ANTHROPIC_USER_AGENT,
-		}),
-		parse: parseAnthropic,
-		acceptsToken: (token) => !token.startsWith(ANTHROPIC_API_KEY_PREFIX),
-	},
-	"openai-codex": {
-		url: "https://chatgpt.com/backend-api/wham/usage",
-		headers: (token): Record<string, string> => {
-			const accountId = codexAccountId(token);
-			return accountId
-				? { Authorization: `Bearer ${token}`, "ChatGPT-Account-Id": accountId }
-				: { Authorization: `Bearer ${token}` };
-		},
-		parse: parseCodex,
-	},
-};
-
-/** Providers with a usage collector. */
-export const COLLECTED_PROVIDERS: readonly string[] = Object.keys(COLLECTORS);
 
 /** `Retry-After` as milliseconds from `now`: delta-seconds or an HTTP-date. */
 function retryAfterMs(header: string | null, now: number): number | undefined {
@@ -384,8 +207,26 @@ interface UsageRead {
 	newer?: UsageRead;
 }
 
+/** Resolve adapter IDs without changing the provider whose credentials are read. */
+export function collectorIdFor(provider: string, providers: Readonly<Record<string, ProviderConfig>>): string {
+	return providers[provider]?.collector?.id ?? provider;
+}
+
+/** One provider's grant to the registration it resolved. `reconfigured` marks a config-driven unbind. */
+interface CollectorBinding {
+	registration: CollectorRegistration;
+	binding: CollectorRegistration;
+	unbind: AbortController;
+	reconfigured: boolean;
+}
+
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
+	private readonly collectors = new Map<string, CollectorBinding>();
+	private providers: Readonly<Record<string, ProviderConfig>> = {};
+	/** Aliased providers whose authorized registration retired. Only `configureCollectors` re-authorizes. */
+	private readonly revoked = new Set<string>();
+	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration | undefined>();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly generations = new Map<string, number>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
@@ -401,6 +242,26 @@ export class UsageService {
 	) {}
 
 	/**
+	 * Apply provider declarations before serving reads for this config. A configured alias is a
+	 * credential grant to the registration that owns its ID at first resolution; each call
+	 * re-authorizes aliases whose granted registration has since retired.
+	 */
+	configureCollectors(providers: Readonly<Record<string, ProviderConfig>> = {}): void {
+		// Swap atomically before any abort callback runs: a retirement those callbacks cause
+		// (e.g. a reentrant replacement) postdates this config and must stay revoked.
+		this.providers = providers;
+		this.revoked.clear();
+		const stale: CollectorBinding[] = [];
+		for (const [provider, entry] of this.collectors) {
+			if (entry.registration === registrationFor(collectorIdFor(provider, providers))) continue;
+			entry.reconfigured = true;
+			this.collectors.delete(provider);
+			stale.push(entry);
+		}
+		for (const { unbind } of stale) unbind.abort();
+	}
+
+	/**
 	 * Current usage for `provider`: cached while younger than five minutes, else a
 	 * network read (see `UsageGetOptions` for `fresh` and `force`). During failure
 	 * backoff nothing touches the network: the last snapshot comes back `stale`,
@@ -409,6 +270,9 @@ export class UsageService {
 	async get(ctx: RegistryContext, provider: string, options: UsageGetOptions = {}): Promise<UsageSnapshot> {
 		const now = this.transport.now();
 		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
+		const collector = this.currentCollector(provider);
+		if (!collector)
+			return errorSnapshot(provider, "unavailable", now, "No subscription usage collector exists for this provider.");
 		const generation = this.generations.get(provider) ?? 0;
 		const cached = this.cache.get(provider);
 		const force = options.force === true;
@@ -428,8 +292,9 @@ export class UsageService {
 			}
 			this.lastManualRefreshAt.set(provider, now);
 		}
-		const refresh = this.refresh(ctx, provider, now, options.notBefore);
-		const snapshot = await waitForCaller(refresh.read, options.signal, () => {
+		const refresh = this.refresh(ctx, provider, collector, now, options.notBefore);
+		const failed = () => errorSnapshot(provider, "error", now, "Usage request failed.");
+		const snapshot = await waitForCaller(refresh.read, options.signal, failed, () => {
 			// The one outer deadline owns fallback selection. Inner waits must not
 			// race it with separate timers or extend it for each newer owner.
 			let fallback: UsageSnapshot | undefined;
@@ -445,6 +310,9 @@ export class UsageService {
 			consider(this.cache.get(provider));
 			return fallback;
 		});
+		if (!options.signal?.aborted && collector.signal.aborted) {
+			return errorSnapshot(provider, "unavailable", now, "Usage collector changed during the read.");
+		}
 		if (generation !== (this.generations.get(provider) ?? 0) && !options.signal?.aborted) {
 			const current = this.peek(provider);
 			return current?.status === "available" && current.retrievedAt >= (options.notBefore ?? 0)
@@ -477,6 +345,7 @@ export class UsageService {
 
 	/** Cached snapshot without any network read; expired data is reported `stale`. */
 	peek(provider: string): UsageSnapshot | undefined {
+		this.currentCollector(provider);
 		const cached = this.cache.get(provider);
 		if (!cached) return undefined;
 		const now = this.transport.now();
@@ -492,7 +361,8 @@ export class UsageService {
 	 */
 	decisionFor(model: ModelRef, snapshot = this.peek(model.provider)): UsageDecision {
 		if (!snapshot || (snapshot.status !== "available" && snapshot.status !== "stale")) return { block: false };
-		if (snapshot.credits?.unlimited === true) return { block: false };
+		const registration = this.evidence.get(snapshot);
+		if (registration?.signal.aborted || snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
 		const exhausted = snapshot.windows.find(
 			(window) =>
@@ -503,7 +373,7 @@ export class UsageService {
 		);
 		if (!exhausted) return { block: false };
 		const reset = exhausted.resetAt ? new Date(exhausted.resetAt).toISOString() : "an unknown time";
-		return {
+		const decision: UsageDecision = {
 			block: true,
 			window: exhausted.name,
 			resetAt: exhausted.resetAt,
@@ -511,6 +381,8 @@ export class UsageService {
 			families: exhausted.families,
 			message: `${refKey(model)}: ${exhausted.name} is exhausted and resets ${reset}.`,
 		};
+		if (registration) Object.defineProperty(decision, COLLECTOR_EVIDENCE, { value: registration.signal });
+		return decision;
 	}
 
 	/** Human-readable one-liner for UI and tool output. */
@@ -554,14 +426,63 @@ export class UsageService {
 	}
 
 	private withStale(cached: UsageSnapshot | undefined, provider: string, now: number, message: string): UsageSnapshot {
-		return cached ? staleSnapshot(cached, now, message) : errorSnapshot(provider, "error", now, message);
+		return cached ? this.stale(cached, now, message) : errorSnapshot(provider, "error", now, message);
 	}
 
-	private refresh(ctx: RegistryContext, provider: string, now: number, notBefore?: number): UsageRead {
+	private stale(cached: UsageSnapshot, now: number, message: string | undefined): UsageSnapshot {
+		const stale = staleSnapshot(cached, now, message);
+		this.evidence.set(stale, this.evidence.get(cached));
+		return stale;
+	}
+
+	private currentCollector(provider: string): CollectorRegistration | undefined {
+		// Checked again here: the provider, not the collector ID, selects the credential.
+		if (!isCollectorId(provider)) return undefined;
+		const current = this.collectors.get(provider);
+		if (current) return current.binding;
+		if (this.revoked.has(provider)) return undefined;
+		const id = collectorIdFor(provider, this.providers);
+		const registration = registrationFor(id);
+		return registration && this.bind(provider, id, registration);
+	}
+
+	/** Grant `provider`'s credential to `registration` until it retires or config changes. */
+	private bind(provider: string, id: string, registration: CollectorRegistration): CollectorRegistration {
+		const unbind = new AbortController();
+		const binding = {
+			collector: registration.collector,
+			signal: AbortSignal.any([registration.signal, unbind.signal]),
+		};
+		const entry: CollectorBinding = { registration, binding, unbind, reconfigured: false };
+		this.collectors.set(provider, entry);
+		addAbortListener(binding.signal, () => {
+			this.invalidate(provider);
+			this.lastManualRefreshAt.delete(provider);
+			if (this.collectors.get(provider) === entry) this.collectors.delete(provider);
+			// The alias granted credentials to this registration, not to a later owner of its ID, unless
+			// the owner replaced it through its handle. A config-driven unbind is not a retirement.
+			if (id === provider || entry.reconfigured) return;
+			const successor = transferredTo(registration);
+			if (successor) this.bind(provider, id, successor);
+			else this.revoked.add(provider);
+		});
+		return binding;
+	}
+
+	private refresh(
+		ctx: RegistryContext,
+		provider: string,
+		registration: CollectorRegistration,
+		now: number,
+		notBefore?: number,
+	): UsageRead {
 		const existing = this.inFlight.get(provider);
 		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing;
-		const refresh = this.fetchSnapshot(ctx, provider, now)
+		const retired = () => errorSnapshot(provider, "unavailable", now, "Usage collector changed during the read.");
+		const refresh = this.fetchSnapshot(ctx, provider, registration, now)
 			.then(async (outcome) => {
+				if (registration.signal.aborted) return retired();
+				this.evidence.set(outcome.snapshot, registration);
 				entry.snapshot = outcome.snapshot;
 				// A post-failure read may supersede a slow warm-up. Only the newest
 				// initiated read owns cache/backoff writes, regardless of completion order.
@@ -592,7 +513,7 @@ export class UsageService {
 				}
 				const cached = this.cache.get(provider);
 				if (outcome.snapshot.status !== "available" && cached) {
-					const stale = staleSnapshot(cached, this.transport.now(), outcome.snapshot.message);
+					const stale = this.stale(cached, this.transport.now(), outcome.snapshot.message);
 					this.cache.set(provider, stale);
 					return stale;
 				}
@@ -615,13 +536,16 @@ export class UsageService {
 		this.backoff.set(provider, { failures, until: this.transport.now() + delay });
 	}
 
-	private async fetchSnapshot(ctx: RegistryContext, provider: string, now: number): Promise<FetchOutcome> {
+	private async fetchSnapshot(
+		ctx: RegistryContext,
+		provider: string,
+		{ collector, signal: lifetime }: CollectorRegistration,
+		now: number,
+	): Promise<FetchOutcome> {
 		const unfetched = (status: "error" | "unavailable", message: string): FetchOutcome => ({
 			snapshot: errorSnapshot(provider, status, now, message),
 			failed: false,
 		});
-		const collector = Object.hasOwn(COLLECTORS, provider) ? COLLECTORS[provider] : undefined;
-		if (!collector) return unfetched("unavailable", "No subscription usage collector exists for this provider.");
 		let token: string | undefined;
 		const lookupTimedOut = Symbol("credential lookup timeout");
 		let lookupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -644,9 +568,6 @@ export class UsageService {
 			clearTimeout(lookupTimer);
 		}
 		if (!token) return unfetched("unavailable", "No OAuth credential is available for this provider.");
-		if (collector.acceptsToken?.(token) === false) {
-			return unfetched("unavailable", "API-key auth has no subscription usage window.");
-		}
 
 		const failure = (message: string, retryAfter?: number): FetchOutcome => ({
 			snapshot: errorSnapshot(provider, "error", now, message),
@@ -654,31 +575,49 @@ export class UsageService {
 			retryAfterMs: retryAfter,
 		});
 		const controller = new AbortController();
+		const signal = AbortSignal.any([controller.signal, lifetime]);
 		let timedOut = false;
 		const timeout = setTimeout(() => {
 			timedOut = true;
 			controller.abort();
 		}, REQUEST_TIMEOUT_MS);
 		try {
-			const response = await this.transport.fetch(collector.url, {
-				headers: collector.headers(token),
-				signal: controller.signal,
-			});
-			if (!response.ok) {
-				return failure(
-					`Usage request failed (${response.status}).`,
-					retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
-				);
+			signal.throwIfAborted();
+			if (collector.acceptsCredential?.(token) === false) {
+				return unfetched("unavailable", "API-key auth has no subscription usage window.");
 			}
-			const parsed = collector.parse(await response.json());
-			if (!parsed) return failure("Usage response had an unsupported shape.");
+			signal.throwIfAborted();
+			let parsed: CollectorReading | undefined;
+			if (collector.kind === "http") {
+				const { url, ...init } = collector.request(token);
+				const response = await this.transport.fetch(url, { ...init, signal });
+				if (!response.ok) {
+					// The byte cap and deadline stop here; never wait for the source to stop.
+					void response.body?.cancel().catch(() => {});
+					return failure(
+						`Usage request failed (${response.status}).`,
+						retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
+					);
+				}
+				// Real fetch rejects on abort. Keep the legacy late-response behavior for
+				// injected transports that resolve despite abort, but still bound the body.
+				const payload = await readUsageJson(response, timedOut ? lifetime : signal);
+				lifetime.throwIfAborted();
+				parsed = collector.parse(payload);
+			} else {
+				// Custom reads get the same deadline even if the adapter ignores abort.
+				const read = collector.read({ token, signal, now: () => this.transport.now() });
+				parsed = await untilAborted(read, signal);
+			}
+			const latestReset = isBuiltinCollector(collector) ? Infinity : now + MAX_EXTERNAL_RESET_MS;
+			const reading = normalizeReading(parsed, latestReset);
+			if (!reading) return failure("Usage response had an unsupported shape.");
 			return {
-				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...parsed },
+				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...reading },
 				failed: false,
 			};
 		} catch (error) {
-			const aborted = error instanceof Error && error.name === "AbortError";
-			if (aborted) return failure(timedOut ? "Usage request timed out." : "Usage request was cancelled.");
+			if (isAbortError(error)) return failure(timedOut ? "Usage request timed out." : "Usage request was cancelled.");
 			return failure("Usage request failed.");
 		} finally {
 			clearTimeout(timeout);
@@ -686,10 +625,57 @@ export class UsageService {
 	}
 }
 
-/** Prefer the completed read; at the total deadline use live evidence, never on abort. */
+async function readUsageJson(response: Response, signal: AbortSignal): Promise<unknown> {
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("Missing usage response body.");
+	const decoder = new TextDecoder();
+	let bytes = 0;
+	let json = "";
+	try {
+		for (;;) {
+			const { done, value } = await untilAborted(reader.read(), signal);
+			if (done) break;
+			bytes += value.byteLength;
+			if (bytes > MAX_USAGE_RESPONSE_BYTES) throw new Error("Usage response exceeded its byte limit.");
+			json += decoder.decode(value, { stream: true });
+		}
+	} catch (error) {
+		// Cancellation can itself hang or reject; never wait for the source to stop.
+		void reader.cancel().catch(() => {});
+		throw error;
+	} finally {
+		reader.releaseLock();
+	}
+	return JSON.parse(json + decoder.decode());
+}
+
+/** Total: a throwable's `name` getter or prototype trap cannot escape sanitization. */
+function isAbortError(error: unknown): boolean {
+	try {
+		return error instanceof Error && error.name === "AbortError";
+	} catch {
+		return false;
+	}
+}
+
+/** Bound awaited work even when an adapter ignores the signal. */
+async function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+	let listener: Disposable | undefined;
+	const cancelled = new Promise<never>((_, reject) => {
+		listener = addAbortListener(signal, () => reject(signal.reason));
+	});
+	try {
+		return await Promise.race([cancelled, work]);
+	} finally {
+		listener?.[Symbol.dispose]();
+	}
+}
+
+/** Prefer the completed read; at the total deadline use live evidence, never on abort. A rejected read fails now. */
 function waitForCaller(
 	refresh: Promise<UsageSnapshot>,
 	signal: AbortSignal | undefined,
+	onRejected: () => UsageSnapshot,
 	onTimeout: () => UsageSnapshot | undefined,
 ): Promise<UsageSnapshot | undefined> {
 	// The credential lookup runs synchronously inside `refresh` and may abort the signal
@@ -709,6 +695,6 @@ function waitForCaller(
 		// the signal: a foreign listener can stop the `abort` event before ours runs.
 		const timer = setTimeout(() => finish(signal?.aborted ? undefined : onTimeout()), 2 * REQUEST_TIMEOUT_MS);
 		signal?.addEventListener("abort", abort, { once: true });
-		void refresh.then(finish);
+		void refresh.then(finish, () => finish(onRejected()));
 	});
 }
