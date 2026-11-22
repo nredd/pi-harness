@@ -3400,11 +3400,15 @@ final class Bridge {
 		let title = root["title"] as? String ?? ""
 		let role = root["role"] as? String ?? ""
 		let frame = root["framePoints"] as? [String: Any] ?? [:]
-		let x = Int((frame["x"] as? NSNumber)?.doubleValue ?? 0)
-		let y = Int((frame["y"] as? NSNumber)?.doubleValue ?? 0)
-		let w = Int((frame["w"] as? NSNumber)?.doubleValue ?? 0)
-		let h = Int((frame["h"] as? NSNumber)?.doubleValue ?? 0)
-		return "meta:\(kind):\(role):\(title):\(x),\(y),\(w),\(h)"
+		let coordinates = ["x", "y", "w", "h"].map { identityCoordinate(frame[$0]) }
+		return "meta:\(kind):\(role):\(title):\(coordinates.map(String.init).joined(separator: ","))"
+	}
+
+	/// Truncate a frame coordinate toward zero without trapping: a missing value, NaN, an infinity or a
+	/// value outside `Int` reads as 0.
+	private func identityCoordinate(_ value: Any?) -> Int {
+		guard let number = (value as? NSNumber)?.doubleValue else { return 0 }
+		return Int(exactly: number.rounded(.towardZero)) ?? 0
 	}
 
 	private func rootMetadataSnapshot(pid: Int32) -> [String: [String: Any]] {

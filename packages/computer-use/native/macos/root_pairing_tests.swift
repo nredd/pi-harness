@@ -227,6 +227,10 @@ private func assertRootIdentityAndDelta(_ bridge: Bridge) {
     expect(bridge.rootIdentity([:]) == "meta:window:::0,0,0,0", "metadata identity defaults every field")
     let sheet: [String: Any] = ["windowId": 0, "kind": "sheet", "role": "AXSheet", "title": "Save", "framePoints": ["x": 10.9, "y": -3.2, "w": NSNumber(value: 300), "h": 200]]
     expect(bridge.rootIdentity(sheet) == "meta:sheet:AXSheet:Save:10,-3,300,200", "an unpaired root is identified by kind, role, title and truncated frame")
+    let unrepresentable: [String: Any] = ["framePoints": ["x": Double.nan, "y": Double.infinity, "w": -Double.infinity, "h": 1e300]]
+    expect(bridge.rootIdentity(unrepresentable) == "meta:window:::0,0,0,0", "NaN, infinite and out-of-range coordinates fall back to 0 instead of trapping")
+    let edges: [String: Any] = ["framePoints": ["x": -0.9, "y": 0.9, "w": -0x1p63, "h": 0x1p63]]
+    expect(bridge.rootIdentity(edges) == "meta:window:::0,0,\(Int.min),0", "fractions truncate toward zero and only coordinates an Int holds survive")
     let minimal = bridge.rootDeltaItem(change: "closed", root: [:], pid: 5)
     expect(minimal.count == 4 && minimal["change"] as? String == "closed" && minimal["kind"] as? String == "window" && minimal["title"] as? String == "" && minimal["pid"] as? Int == 5, "delta items default kind, title and pid")
     let full = bridge.rootDeltaItem(change: "appeared", root: ["kind": "sheet", "title": "T", "pid": 9, "isModal": true, "metadata": ["sheetCount": 1], "rootRef": "ax:1", "windowRef": "w:1"], pid: 5)
