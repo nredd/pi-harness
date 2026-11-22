@@ -1354,22 +1354,25 @@ export async function loadCombined(
 			]),
 		);
 	};
-	for (const machine of remotes)
+	for (const machine of remotes) {
+		// Match wire tie ordering across shard boundaries too, so an event cannot move
+		// within its session merely because a sealed month is compacted.
+		const events = machine.shards.flatMap((s) => s.events).sort((a, b) => a.ms - b.ms || codeUnits(a.id, b.id));
+		for (const e of events)
+			candidates.push({
+				harness: e.harness ?? "pi",
+				session: e.sessionId,
+				entryId: e.entryId ?? undefined,
+				ms: e.ms,
+				provider: e.provider,
+				model: e.model,
+				input: e.input,
+				output: e.output,
+				cacheRead: e.cacheRead,
+				cacheWrite: e.cacheWrite,
+				cost: e.cost,
+			});
 		for (const s of machine.shards) {
-			for (const e of s.events)
-				candidates.push({
-					harness: e.harness ?? "pi",
-					session: e.sessionId,
-					entryId: e.entryId ?? undefined,
-					ms: e.ms,
-					provider: e.provider,
-					model: e.model,
-					input: e.input,
-					output: e.output,
-					cacheRead: e.cacheRead,
-					cacheWrite: e.cacheWrite,
-					cost: e.cost,
-				});
 			quotaCandidates.push(...(s.quota ?? []));
 			for (const session of s.sessions)
 				sessionCandidates.push({
@@ -1379,6 +1382,7 @@ export async function loadCombined(
 					child: session.child,
 				});
 		}
+	}
 	const sessions = mergeSessionMetadata(sessionCandidates);
 	// Every candidate's session is in `sessions`: local calls come with their session, remote events are
 	// validated against their shard's sessions.

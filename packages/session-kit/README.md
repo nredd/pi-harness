@@ -701,6 +701,8 @@ deltas using the normal quota rules at export time. The base is unchanged, but a
 shard may be rewritten at each compaction. No format change is required; readers still accept the
 older, larger manifests. The machine expansion budget still applies.
 
+The viewer orders equal-time imported calls within a session by event ID regardless of shard boundaries.
+
 The manifest switches to the new references before obsolete files are pruned. A failed compaction
 leaves the previous manifest readable, and frozen recovery copies are still protected. Usage data
 stays local; compaction does not enable remote sharing.

@@ -8,11 +8,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
 	decodeShard,
 	encodeShard,
+	eventId,
 	exportStats,
 	importStats,
 	loadCombined,
 	type Manifest,
 	readGlobal,
+	type Shard,
+	type SnapshotQuota,
 } from "../../src/stats/snapshot.ts";
 import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
 import { CANARY, claudeRow, writeLines } from "../fixtures/stats/harness/fixtures.ts";
@@ -574,6 +577,91 @@ it("concurrent exports preserve winning manifest", async () => {
 	await exportStats(agent, out);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
+});
+
+async function sealedFixture(rows: Partial<Shard>[]) {
+	const { snapshotDir } = await exportStats(agent, out);
+	const before = manifest(snapshotDir);
+	for (const row of rows) {
+		const month = row.month ?? "2026-10";
+		const bytes = encodeShard({
+			version: 3,
+			machineId: before.machineId,
+			month,
+			events: [],
+			sessions: [],
+			quota: [],
+			...row,
+		});
+		const sha256 = createHash("sha256").update(bytes).digest("hex");
+		const file = `${month}-${sha256}.json.gz`;
+		writeFileSync(join(snapshotDir, file), bytes);
+		before.shards.push({ month, file, sha256, bytes: bytes.length });
+	}
+	writeFileSync(join(snapshotDir, "manifest.json"), JSON.stringify(before));
+	return { before, snapshotDir };
+}
+
+const quotaRow = (i: number, resetAt = at("2026-10-03"), limitId = "fixture"): SnapshotQuota => ({
+	harness: "pi",
+	provider: "physical",
+	limitId,
+	window: "daily",
+	usedPercent: i,
+	resetAt,
+	durationMs: 86_400_000,
+	observedAt: at("2026-10-01") + i,
+	planType: null,
+	account: "",
+});
+const filler = Array.from({ length: 30 }, (_, i) => ({ quota: [quotaRow(i, undefined, "filler")] }));
+const session = (i: number) => ({
+	id: i.toString(16).padStart(64, "0"),
+	startMs: at("2026-10-01"),
+	endMs: at("2026-10-01"),
+	child: false,
+});
+const event = (i: number, sessionId: string) => {
+	const row = {
+		harness: "pi" as const,
+		entryId: null,
+		sessionId,
+		ms: at("2026-10-01"),
+		provider: "physical",
+		model: "fixture",
+		input: i,
+		output: 2,
+		cacheRead: 3,
+		cacheWrite: 4,
+		cost: i / 8,
+	};
+	return { id: eventId(row), ...row };
+};
+
+it("preserves equal-timestamp call order and totals across compaction", async () => {
+	const meta = session(1);
+	const [a, b] = [event(1, meta.id), event(2, meta.id)].sort((a, b) => b.id.localeCompare(a.id));
+	if (!a || !b) throw new Error("Missing fixture events");
+	await sealedFixture([{ sessions: [meta] }, { events: [a] }, { events: [b] }, ...filler]);
+	const read = async (dir: string) => {
+		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
+		return (await loadCombined(dir)).calls;
+	};
+	const before = await read(viewer);
+	await exportStats(agent, out);
+	const after = await read(join(root, "fresh"));
+	for (const calls of [before, after]) {
+		expect(calls).toHaveLength(2);
+		for (const [key, total] of [
+			["input", 3],
+			["output", 4],
+			["cacheRead", 6],
+			["cacheWrite", 8],
+			["cost", 0.375],
+		] as const)
+			expect(calls.reduce((sum, call) => sum + (call[key] ?? 0), 0)).toBe(total);
+	}
+	expect(after).toEqual(before);
 });
 
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {
