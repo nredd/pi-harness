@@ -1963,6 +1963,21 @@ test("a confirmed model block is visible beside healthy legacy quota, from v1 bl
 	const other = { families: [], until: 100, provider: "google", evidence: "inferred" };
 	const extra = present(footer.parseUsageReply({ success: true, data: { snapshots: [], blocks: [other, opus] } }, 50));
 	assert.match(footer.formatQuotaRow(extra, "compact", plain, opts), /\| google provider blocked->00:00 inf$/);
+	// Malformed providers are skipped; several blocks for one provider all show.
+	const sonnet = { ...opus, families: ["sonnet"] };
+	const many = present(
+		footer.parseUsageReply(
+			{
+				success: true,
+				data: { snapshots: [], blocks: [{ ...opus, provider: 1 }, { ...opus, provider: "" }, opus, sonnet] },
+			},
+			50,
+		),
+	);
+	assert.equal(
+		footer.formatQuotaRow(many, "compact", plain, opts),
+		"Left: Anth (stale) 7d -- | opus blocked->00:00 read sonnet blocked->00:00 read | OAI (stale) 7d --",
+	);
 	// The shared golden reply: its live Opus block is shown beside the pinned percentages.
 	const golden = present(fixture.views.find(({ name }) => name === "legacy-reported"));
 	const at = { now: golden.now, timeZone: golden.timeZone };
