@@ -308,7 +308,8 @@ Trusted extensions can call `registerCollector` from `src/collectors.ts` in the 
 Register before or after the router extension loads. The built-in IDs `anthropic` and
 `openai-codex` are reserved; registering either throws. For external IDs the last registration wins.
 Only the returned unregister function owns that registration; old cleanup cannot remove a replacement
-or restore a previous registration. `collectorFor(id)` returns the frozen adapter.
+or restore a previous registration. Retirement drops cached usage and confirmed blocks, aborts
+reads, and ignores late results. `collectorFor(id)` returns the frozen adapter.
 
 Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
 of `src/collectors.ts` has initialized it, even before the router extension loads. The frozen

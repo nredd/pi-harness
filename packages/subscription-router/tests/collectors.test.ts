@@ -1,3 +1,4 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
@@ -9,7 +10,9 @@ import {
 	collectorFor,
 	registerCollector,
 } from "../src/collectors.ts";
+import { ExhaustionTracker } from "../src/exhaustion.ts";
 import { createSubscriptionRouter } from "../src/index.ts";
+import { Router } from "../src/router.ts";
 import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "../src/usage.ts";
 
 const T0 = 1_700_000_000_000;
@@ -147,9 +150,69 @@ it("does not let old cleanup or an in-flight reading survive replacement", async
 	install(replacement);
 	unregister();
 	expect(collectorFor(provider)).toEqual(replacement);
-	pending.resolve(reading);
 	expect(await old).toMatchObject({ status: "unavailable" });
+	pending.resolve(reading);
 	expect(await usage.get(ctx, provider, { force: true })).toMatchObject({ status: "available", windows: [] });
+});
+
+it("retires cache and pending reads even when the same adapter is reinstalled", async () => {
+	const { usage } = harness();
+	const pending = deferred<CollectorReading>();
+	const started = deferred();
+	const read = vi
+		.fn(fake.read)
+		.mockImplementationOnce(async () => reading)
+		.mockImplementationOnce(() => {
+			started.resolve();
+			return pending.promise;
+		})
+		.mockResolvedValue({ windows: [] });
+	const adapter = { ...fake, read };
+	const remove = install(adapter);
+	const snapshot = await usage.get(ctx, provider);
+	const old = usage.get(ctx, provider, { force: true });
+	await started.promise;
+	remove();
+	install(adapter);
+	expect(usage.peek(provider)).toBeUndefined();
+	expect(usage.decisionFor({ provider, id: "faux-one" }, snapshot)).toEqual({ block: false });
+	expect(await old).toMatchObject({ status: "unavailable" });
+	pending.resolve(reading);
+	expect(await usage.get(ctx, provider, { force: true })).toMatchObject({ status: "available", windows: [] });
+	expect(read).toHaveBeenCalledTimes(3);
+});
+
+it("never passes a late credential to a retired registration", async () => {
+	const { usage, getAccessToken } = harness();
+	const pending = deferred<string>();
+	getAccessToken.mockReturnValueOnce(pending.promise);
+	const read = vi.fn(fake.read);
+	const acceptsCredential = vi.fn(() => true);
+	const remove = install({ ...fake, acceptsCredential, read });
+	const result = usage.get(ctx, provider);
+	expect(getAccessToken).toHaveBeenCalledOnce();
+	remove();
+	pending.resolve("fake-late-token");
+	expect(await result).toMatchObject({ status: "unavailable" });
+	expect(acceptsCredential).not.toHaveBeenCalled();
+	expect(read).not.toHaveBeenCalled();
+});
+
+it("admits a model once the collector that confirmed its block retires", async () => {
+	const { usage } = harness();
+	const tracker = new ExhaustionTracker(() => T0);
+	const router = new Router(usage, tracker, () => T0);
+	const model = { provider, id: "faux-one" } as Model<Api>;
+	const remove = install(fake);
+	const env = { resolve: () => model, refresh: async () => usage.decisionFor(model, await usage.get(ctx, provider)) };
+	const ref = `${provider}/faux-one`;
+	expect(await router.confirm(model, env, undefined, T0)).toBe(true);
+	expect(router.admit(ref, new Map(), env)).toMatchObject({ ok: false });
+	const decision = usage.decisionFor(model);
+	remove();
+	expect(tracker.active()).toEqual([]);
+	expect(router.admit(ref, new Map(), env)).toMatchObject({ ok: true });
+	expect(await router.confirm(model, { ...env, refresh: async () => decision }, undefined, T0)).toBe(false);
 });
 
 it("applies the usage deadline and backoff to a custom reader even if it ignores abort", async () => {

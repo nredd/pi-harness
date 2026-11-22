@@ -11,8 +11,9 @@
  * hammered. Credentials are passed only to the registered adapter for the provider.
  */
 
+import { addAbortListener } from "node:events";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Collector, type CollectorReading, collectorFor } from "./collectors.ts";
+import { type CollectorReading, type CollectorRegistration, registrationFor } from "./collectors.ts";
 
 export { parseAnthropic, parseCodex } from "./builtin-collectors.ts";
 
@@ -114,7 +115,10 @@ export interface UsageTransport {
 }
 
 /** Whether a model must not be dispatched on included quota right now, and why. */
+export const COLLECTOR_EVIDENCE = Symbol.for("pi-subscription-router.collector-evidence");
+
 export interface UsageDecision {
+	[COLLECTOR_EVIDENCE]?: AbortSignal;
 	block: boolean;
 	message?: string;
 	window?: string;
@@ -188,7 +192,8 @@ interface UsageRead {
 
 /** Subscription quota state for OAuth-backed consumer plans. */
 export class UsageService {
-	private readonly collectors = new Map<string, Collector>();
+	private readonly collectors = new Map<string, CollectorRegistration>();
+	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration>();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly generations = new Map<string, number>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
@@ -251,7 +256,7 @@ export class UsageService {
 			consider(this.cache.get(provider));
 			return fallback;
 		});
-		if (!options.signal?.aborted && this.currentCollector(provider) !== collector) {
+		if (!options.signal?.aborted && collector.signal.aborted) {
 			return errorSnapshot(provider, "unavailable", now, "Usage collector changed during the read.");
 		}
 		if (generation !== (this.generations.get(provider) ?? 0) && !options.signal?.aborted) {
@@ -302,7 +307,8 @@ export class UsageService {
 	 */
 	decisionFor(model: ModelRef, snapshot = this.peek(model.provider)): UsageDecision {
 		if (!snapshot || (snapshot.status !== "available" && snapshot.status !== "stale")) return { block: false };
-		if (snapshot.credits?.unlimited === true) return { block: false };
+		const registration = this.evidence.get(snapshot);
+		if (registration?.signal.aborted || snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
 		const exhausted = snapshot.windows.find(
 			(window) =>
@@ -313,7 +319,7 @@ export class UsageService {
 		);
 		if (!exhausted) return { block: false };
 		const reset = exhausted.resetAt ? new Date(exhausted.resetAt).toISOString() : "an unknown time";
-		return {
+		const decision: UsageDecision = {
 			block: true,
 			window: exhausted.name,
 			resetAt: exhausted.resetAt,
@@ -321,6 +327,8 @@ export class UsageService {
 			families: exhausted.families,
 			message: `${refKey(model)}: ${exhausted.name} is exhausted and resets ${reset}.`,
 		};
+		if (registration) Object.defineProperty(decision, COLLECTOR_EVIDENCE, { value: registration.signal });
+		return decision;
 	}
 
 	/** Human-readable one-liner for UI and tool output. */
@@ -364,32 +372,43 @@ export class UsageService {
 	}
 
 	private withStale(cached: UsageSnapshot | undefined, provider: string, now: number, message: string): UsageSnapshot {
-		return cached ? staleSnapshot(cached, now, message) : errorSnapshot(provider, "error", now, message);
+		return cached ? this.stale(cached, now, message) : errorSnapshot(provider, "error", now, message);
 	}
 
-	private currentCollector(provider: string): Collector | undefined {
-		const registered = collectorFor(provider);
-		const previous = this.collectors.get(provider);
-		if (previous && previous !== registered) {
-			this.invalidate(provider);
-			this.lastManualRefreshAt.delete(provider);
-			this.collectors.delete(provider);
+	private stale(cached: UsageSnapshot, now: number, message: string | undefined): UsageSnapshot {
+		const stale = staleSnapshot(cached, now, message);
+		const registration = this.evidence.get(cached);
+		if (registration) this.evidence.set(stale, registration);
+		return stale;
+	}
+
+	private currentCollector(provider: string): CollectorRegistration | undefined {
+		const registered = registrationFor(provider);
+		if (registered && this.collectors.get(provider) !== registered) {
+			this.collectors.set(provider, registered);
+			addAbortListener(registered.signal, () => {
+				this.invalidate(provider);
+				this.lastManualRefreshAt.delete(provider);
+				this.collectors.delete(provider);
+			});
 		}
-		if (registered) this.collectors.set(provider, registered);
 		return registered;
 	}
 
 	private refresh(
 		ctx: RegistryContext,
 		provider: string,
-		collector: Collector,
+		registration: CollectorRegistration,
 		now: number,
 		notBefore?: number,
 	): UsageRead {
 		const existing = this.inFlight.get(provider);
 		if (existing && (notBefore === undefined || existing.startedAt >= notBefore)) return existing;
-		const refresh = this.fetchSnapshot(ctx, provider, collector, now)
+		const retired = () => errorSnapshot(provider, "unavailable", now, "Usage collector changed during the read.");
+		const refresh = this.fetchSnapshot(ctx, provider, registration, now)
 			.then(async (outcome) => {
+				if (registration.signal.aborted) return retired();
+				this.evidence.set(outcome.snapshot, registration);
 				entry.snapshot = outcome.snapshot;
 				// A post-failure read may supersede a slow warm-up. Only the newest
 				// initiated read owns cache/backoff writes, regardless of completion order.
@@ -398,6 +417,7 @@ export class UsageService {
 					// is acyclic. The caller's total wait is bounded across supersessions.
 					const newer = this.inFlight.get(provider);
 					const latest = newer ? await newer.read : this.cache.get(provider);
+					if (registration.signal.aborted) return retired();
 					const freshEnough = (snapshot: UsageSnapshot | undefined): snapshot is UsageSnapshot =>
 						snapshot?.status === "available" && snapshot.retrievedAt >= Math.max(now, notBefore ?? now);
 					if (freshEnough(latest)) return latest;
@@ -420,7 +440,7 @@ export class UsageService {
 				}
 				const cached = this.cache.get(provider);
 				if (outcome.snapshot.status !== "available" && cached) {
-					const stale = staleSnapshot(cached, this.transport.now(), outcome.snapshot.message);
+					const stale = this.stale(cached, this.transport.now(), outcome.snapshot.message);
 					this.cache.set(provider, stale);
 					return stale;
 				}
@@ -446,7 +466,7 @@ export class UsageService {
 	private async fetchSnapshot(
 		ctx: RegistryContext,
 		provider: string,
-		collector: Collector,
+		{ collector, signal: lifetime }: CollectorRegistration,
 		now: number,
 	): Promise<FetchOutcome> {
 		const unfetched = (status: "error" | "unavailable", message: string): FetchOutcome => ({
@@ -482,29 +502,33 @@ export class UsageService {
 			retryAfterMs: retryAfter,
 		});
 		const controller = new AbortController();
+		const signal = AbortSignal.any([controller.signal, lifetime]);
 		let timedOut = false;
 		const timeout = setTimeout(() => {
 			timedOut = true;
 			controller.abort();
 		}, REQUEST_TIMEOUT_MS);
 		try {
+			signal.throwIfAborted();
 			if (collector.acceptsCredential?.(token) === false) {
 				return unfetched("unavailable", "API-key auth has no subscription usage window.");
 			}
+			signal.throwIfAborted();
 			let parsed: CollectorReading | undefined;
 			if (collector.kind === "http") {
 				const { url, ...init } = collector.request(token);
-				const response = await this.transport.fetch(url, { ...init, signal: controller.signal });
+				const response = await this.transport.fetch(url, { ...init, signal });
 				if (!response.ok) {
 					return failure(
 						`Usage request failed (${response.status}).`,
 						retryAfterMs(response.headers.get("retry-after"), this.transport.now()),
 					);
 				}
-				parsed = collector.parse(await response.json());
+				const payload: unknown = await response.json();
+				signal.throwIfAborted();
+				parsed = collector.parse(payload);
 			} else {
 				// Custom reads get the same deadline even if the adapter ignores abort.
-				const { signal } = controller;
 				const deadline = new Promise<never>((_, reject) => {
 					signal.addEventListener("abort", () => reject(new DOMException("Timed out", "AbortError")), { once: true });
 				});

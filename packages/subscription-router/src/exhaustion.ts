@@ -8,7 +8,8 @@
  * same scope was re-confirmed.
  */
 
-import { modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "./usage.ts";
+import { addAbortListener } from "node:events";
+import { COLLECTOR_EVIDENCE, modelMatchesFamily, type UsageDecision, type UsageSnapshot } from "./usage.ts";
 
 const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_CAP_MS = 60 * 60_000;
@@ -33,6 +34,7 @@ function scopeKey(provider: string, families: readonly string[] | undefined): st
 /** Tracks confirmed exhaustion so routing can skip blocked families without a network read. */
 export class ExhaustionTracker {
 	private readonly marks = new Map<string, ExhaustionMark>();
+	private readonly lifetimes = new Map<string, Disposable>();
 
 	constructor(private readonly now: () => number = Date.now) {}
 
@@ -55,7 +57,14 @@ export class ExhaustionTracker {
 			resetKnown,
 			confirmations,
 		};
+		this.remove(key);
 		this.marks.set(key, mark);
+		const signal = decision[COLLECTOR_EVIDENCE];
+		if (signal)
+			this.lifetimes.set(
+				key,
+				addAbortListener(signal, () => this.remove(key)),
+			);
 		return mark;
 	}
 
@@ -90,12 +99,18 @@ export class ExhaustionTracker {
 							scopeKey(mark.provider, mark.families),
 				)
 			)
-				this.marks.delete(key);
+				this.remove(key);
 		}
 	}
 
 	/** Forget every mark, e.g. from `/router reset`. */
 	clear(): void {
-		this.marks.clear();
+		for (const key of this.marks.keys()) this.remove(key);
+	}
+
+	private remove(key: string): void {
+		this.lifetimes.get(key)?.[Symbol.dispose]();
+		this.lifetimes.delete(key);
+		this.marks.delete(key);
 	}
 }
