@@ -353,7 +353,9 @@ Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based
 ### Target contract
 
 - On macOS, `find_roots` rejects PIDs above `2147483647` before app discovery. Root discovery
-  sends only positive integer PID filters in that range to the helper. Native PID arguments
+  sends only positive integer PID filters in that range to the helper. A finite fractional,
+  zero, negative or out-of-range discovery PID is rejected, no longer truncated (`42.8` used to
+  become `42`); an absent, null or non-finite PID still means unfiltered discovery. Native PID arguments
   accept only integers from `1` through `2147483647`, not zero or negative values. `act` validates
   the PID before looking up the look. For `look`, an omitted or null PID is allowed; a supplied PID
   must match the OS-resolved owner before capture. Native `listRoots` retains unfiltered discovery

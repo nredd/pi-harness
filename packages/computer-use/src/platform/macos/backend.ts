@@ -52,6 +52,18 @@ function parseFramePoints(raw: unknown): FramePoints {
 	};
 }
 
+/**
+ * Resolve the `listRoots` PID filter. An absent, null or non-finite PID keeps the documented
+ * unfiltered discovery. A finite PID must be an integer in `1...2147483647`; a fraction or
+ * out-of-range value is rejected so it can never be coerced into a different process's PID.
+ */
+function macosRootPidFilter(pid: unknown): number | undefined {
+	if (typeof pid !== "number" || !Number.isFinite(pid)) return undefined;
+	if (!Number.isInteger(pid) || pid <= 0) throw new Error("pid must be a positive integer when provided.");
+	assertMacosPidUpperBound(pid, "pid");
+	return pid;
+}
+
 function parseRoots(result: unknown): PlatformRoot[] {
 	const array = Array.isArray(result) ? result : (result as any)?.roots;
 	if (!Array.isArray(array)) return [];
@@ -138,11 +150,7 @@ export const macosBackend: Pick<
 	},
 
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
-		const { pid } = query;
-		if (pid !== undefined) {
-			if (!Number.isInteger(pid) || pid <= 0) throw new Error("pid must be a positive integer when provided.");
-			assertMacosPidUpperBound(pid, "pid");
-		}
+		const pid = macosRootPidFilter(query.pid);
 		return parseRoots(
 			await macosHelper.command<unknown>(
 				"listRoots",

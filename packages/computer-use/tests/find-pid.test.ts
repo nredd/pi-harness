@@ -34,13 +34,17 @@ test("macOS root discovery rejects overflow before serializing the helper reques
 	assert.deepEqual(command.mock.calls[0]?.slice(0, 2), ["listRoots", { pid: 2147483647 }]);
 });
 
-test("macOS root discovery rejects invalid supplied PIDs without calling the helper", async () => {
+test("macOS root discovery rejects invalid finite PIDs without calling the helper", async () => {
 	const command = vi.spyOn(macosHelper, "command").mockResolvedValue([]);
 	onTestFinished(() => command.mockRestore());
-	for (const pid of [1234.5, 2147483647.5, NaN, Infinity, "1234" as unknown as number, 0, -1]) {
+	for (const pid of [1234.5, 2147483647.5, 0, -1]) {
 		await assert.rejects(macosBackend.listRoots({ pid }), /pid must be a positive integer/);
 		assert.equal(command.mock.calls.length, 0);
 	}
-	await macosBackend.listRoots({});
-	assert.deepEqual(command.mock.calls[0]?.slice(0, 2), ["listRoots", {}]);
+	// Non-finite and nonnumeric filters keep the documented unfiltered discovery.
+	for (const pid of [NaN, Infinity, "1234" as unknown as number, undefined]) {
+		command.mockClear();
+		await macosBackend.listRoots({ pid });
+		assert.deepEqual(command.mock.calls[0]?.slice(0, 2), ["listRoots", {}]);
+	}
 });
