@@ -2,32 +2,13 @@
 // never on `exit` alone, and frame each child's output separately.
 import assert from "node:assert/strict";
 import { afterEach, describe, test, vi } from "vitest";
-import { createFakeChild, createFakeSpawn, createHelperEngine, effect, ok, silent } from "./support/fake-helper.mjs";
+import { linuxHelperClient as clientFor } from "../tests/fixtures/linux-helper.mjs";
+import { effect, ok, silent } from "./support/fake-helper.mjs";
 
 afterEach(() => {
 	vi.doUnmock("node:child_process");
 	vi.resetModules();
 });
-
-/** `script(child, engine)` returns the handlers; every spawn yields a fresh fake child, collected in `children`. */
-async function clientFor(script) {
-	const children = [];
-	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 6, platform: "Linux" });
-	Object.assign(engine.handlers, script(children));
-	const spawn = createFakeSpawn({
-		"*": () => {
-			const child = createFakeChild({ engine });
-			children.push(child);
-			return child;
-		},
-	});
-	vi.resetModules();
-	vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
-	const helper = await import("../src/platform/linux/helper.ts");
-	const client = new helper.LinuxHelperClient({ helperPath: "/nonexistent/linux-bridge" });
-	vi.spyOn(client, "ensureInstalled").mockResolvedValue(undefined);
-	return { client, children, spawn, helper };
-}
 
 describe("Linux helper client disconnects (#725)", () => {
 	test("a helper that exits mid-command rejects at once, not at the command timeout", async () => {
