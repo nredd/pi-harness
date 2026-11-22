@@ -163,6 +163,8 @@ private func assertPairing(_ bridge: Bridge) {
     let matched = paired.filter { $0.candidate != nil }
     expect(paired.count == 3 && Set(matched.compactMap { $0.candidate?.windowId }) == [1, 2] && matched.map(\.score).sorted() == [0, 10], "each candidate pairs with one window, best score first")
     expect(paired.allSatisfy { $0.confidence == "low" } && paired.filter { $0.candidate == nil }.map(\.score) == [-Double.greatestFiniteMagnitude], "the window left over is unpaired and every frameless pairing is low confidence")
+    let contested = bridge.windowPairings(windows: [windows[0]], candidates: [offscreen, near])[ObjectIdentifier(windows[0])]
+    expect(contested?.candidate?.windowId == 1 && contested?.score == 10, "one window between two candidates takes the higher-scoring one")
     let unpaired = bridge.windowPairings(windows: [windows[0]], candidates: [])[ObjectIdentifier(windows[0])]
     expect(unpaired?.candidate == nil && unpaired?.confidence == "low", "windows without candidates are unpaired")
     expect(bridge.bestCandidate(for: windows[0], candidates: [offscreen, near])?.windowId == 1, "the best candidate is the highest score")
