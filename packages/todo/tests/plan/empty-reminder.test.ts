@@ -297,6 +297,22 @@ it("spends the empty budget on neither a restored marker nor stale-list bookkeep
 	expect(await settle()).toEqual(reminder);
 });
 
+it.each([
+	["a missing version", { nudge: "empty" }],
+	["an unsupported version", { persistenceVersion: 2, nudge: "empty" }],
+	["an unknown kind", { persistenceVersion: 1, nudge: "held" }],
+	["a non-object payload", "empty"],
+	["null data", null],
+])("leaves the budget unspent for bookkeeping with %s", async (_case, data) => {
+	const { tool, settle } = await setup({
+		calls: 1,
+		reason: "resume",
+		branch: [{ ...budget, data, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
+	});
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
 it("isolates and evicts session work", async () => {
 	const { tool, settle, emit } = await setup({ calls: 1 });
 	const another = createTodoCtx({ sessionId: "s2", mode: "tui" });

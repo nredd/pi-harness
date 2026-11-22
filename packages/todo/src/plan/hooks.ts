@@ -65,13 +65,27 @@ export const EMPTY_REMINDER_MARKER = "[rpiv-todo] Autonomous work continued with
 
 type SessionBranch = ReturnType<ExtensionContext["sessionManager"]["getBranch"]>;
 
+/** Each budget kind's transcript marker: the kind alone picks the message type and text. */
+const NUDGE_MARKERS: Readonly<Record<NudgeBudgetEntry["nudge"], { type: string; marker: string }>> = {
+	stale: { type: STALE_REMINDER_MESSAGE_TYPE, marker: STALE_REMINDER_MARKER },
+	empty: { type: EMPTY_REMINDER_MESSAGE_TYPE, marker: EMPTY_REMINDER_MARKER },
+};
+
+/** Narrow persisted entry data to the supported budget version and a known kind. */
+function isNudgeBudgetEntry(value: unknown): value is NudgeBudgetEntry {
+	if (!value || typeof value !== "object") return false;
+	const v = value as Record<string, unknown>;
+	return v.persistenceVersion === 1 && typeof v.nudge === "string" && Object.hasOwn(NUDGE_MARKERS, v.nudge);
+}
+
 /** Whether the branch records a spent `nudge` budget. Transcript markers do not count. */
 function budgetSpent(branch: SessionBranch, nudge: NudgeBudgetEntry["nudge"]): boolean {
 	return branch.some(
 		(entry) =>
 			entry.type === "custom" &&
 			entry.customType === NUDGE_BUDGET_ENTRY_TYPE &&
-			(entry.data as Partial<NudgeBudgetEntry> | undefined)?.nudge === nudge,
+			isNudgeBudgetEntry(entry.data) &&
+			entry.data.nudge === nudge,
 	);
 }
 
@@ -515,9 +529,8 @@ export function registerPlanHooks(
 		id: string,
 		event: AgentBeforeSettleEvent,
 		kind: NudgeBudgetEntry["nudge"],
-		type: string,
-		marker: string,
 	): AgentBeforeSettleEventResult => {
+		const { type, marker } = NUDGE_MARKERS[kind];
 		pendingNudges.set(id, type);
 		const data: NudgeBudgetEntry = { persistenceVersion: 1, nudge: kind };
 		const budget: SessionBoundaryDraft = { type: "custom", customType: NUDGE_BUDGET_ENTRY_TYPE, data };
@@ -535,7 +548,7 @@ export function registerPlanHooks(
 		if (completed && !planning) refreshSurvivors(id);
 		const state = getState(id);
 		if (emptyTrackers.get(id)?.beforeSettle(completed, planning, hasEmptyList(state))) {
-			return nudge(id, event, "empty", EMPTY_REMINDER_MESSAGE_TYPE, EMPTY_REMINDER_MARKER);
+			return nudge(id, event, "empty");
 		}
 		if (!completed || planning) return undefined;
 		if (!remindedSinceLastPrompt(messages)) {
@@ -558,7 +571,7 @@ export function registerPlanHooks(
 		staleAge.set(state, age);
 		if (age < threshold || staleReminded.has(id)) return undefined;
 		staleReminded.add(id);
-		return nudge(id, event, "stale", STALE_REMINDER_MESSAGE_TYPE, STALE_REMINDER_MARKER);
+		return nudge(id, event, "stale");
 	};
 	pi.on("agent_before_settle", onSettle);
 

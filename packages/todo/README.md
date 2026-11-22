@@ -145,8 +145,14 @@ aborted or failed runs do not count toward the cooldown. On resume or `/reload`,
 restored spent budget waits for new human input and starts a fresh cooldown. Both nudges
 expand into instructions only on the immediate follow-up request. Each nudge records
 its spent budget in a `rpiv-todo-nudge-budget` custom entry (`nudge`: `stale` or
-`empty`), which is bookkeeping outside the model context; restore reads only that
-entry, never the transcript marker. A restored marker does not expand again. Core
+`empty`, `persistenceVersion` 1), which is bookkeeping outside the model context,
+written just before the marker. Restore reads only a valid entry of that version, never
+the transcript marker. Only session start (resume or `/reload`) restores the budget:
+moving within `/tree` replays the todo list but keeps the live budget, so a sibling
+branch can keep a spent or unspent budget from the branch you left. If the budget
+entry is written but the marker is not, no nudge runs and a resume still sees a spent
+budget. Sessions from before this entry restore an unspent budget even with an old
+marker, so after upgrading they can nudge once more. A restored marker does not expand again. Core
 still needs a persisted `custom_message` to continue after an assistant reply, so
 these markers remain visible in `/tree` and in the generic `entry_appended` event. JSON, RPC and print sessions do not emit
 either nudge. An earlier extension handler that delays only a `todo`

@@ -724,6 +724,21 @@ describe("settling with nothing armed to wake the parent", () => {
 			expect(await settle()).toMatchObject(nudged);
 		});
 
+		it.each([
+			["a missing version", { nudge: "stale" }],
+			["an unsupported version", { persistenceVersion: 2, nudge: "stale" }],
+			["null data", null],
+		])("leaves the stale budget unspent for bookkeeping with %s", async (_case, data) => {
+			const { handler, ctx } = await start(tasks({ id: 1 }), {
+				reason: "resume",
+				entries: [{ ...budget, data, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
+			});
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject(nudged);
+		});
+
 		it("evicts stale eligibility on a same-session non-TUI rebind", async () => {
 			const { handler, ctx } = await start(tasks({ id: 1 }));
 			armWorker();
