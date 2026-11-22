@@ -280,11 +280,15 @@ it("shows a nested child only to its parent and a workflow child as owned", asyn
 	const asParent: Asker = { kind: "agent", parentAgentId: parent.id };
 	const asStranger: Asker = { kind: "agent", parentAgentId: worker.id };
 
+	// A hidden match answers exactly like a miss: no step and no successor id give it away.
+	const miss = (input: string) => ({ requested: input, latest: input, via: "none", state: "unknown" });
 	for (const input of [child.id, child.runId!]) {
 		expect(resolveAgent(input, asParent, sources)).toMatchObject({ state: "live", record: child });
-		expect(resolveAgent(input, SESSION, sources).state).toBe("unknown");
-		expect(resolveAgent(input, asStranger, sources).state).toBe("unknown");
+		expect(resolveAgent(input, SESSION, sources)).toEqual(miss(input));
+		expect(resolveAgent(input, asStranger, sources)).toEqual(miss(input));
 	}
+	manager.linkSuccessor("was-child", child.id);
+	expect(resolveAgent("was-child", SESSION, sources)).toEqual(miss("was-child"));
 	expect(resolveAgent(worker.id, SESSION, sources)).toMatchObject({
 		state: "workflow-owned",
 		via: "id",
@@ -292,8 +296,8 @@ it("shows a nested child only to its parent and a workflow child as owned", asyn
 	});
 	expect(refRecord(resolveAgent(worker.id, SESSION, sources))).toBe(worker);
 	// An agent reaches none of the session's agents, names or history.
-	for (const input of [parent.id, worker.id, parent.handle!, "wf_abc123def456"])
-		expect(resolveAgent(input, asParent, sources).state).toBe("unknown");
+	for (const input of [parent.id, parent.runId!, worker.id, parent.handle!, "wf_abc123def456"])
+		expect(resolveAgent(input, asParent, sources)).toEqual(miss(input));
 
 	release();
 	await manager.waitForAll();

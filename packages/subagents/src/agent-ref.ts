@@ -102,25 +102,34 @@ function byStatus(record: AgentRecord, home: Home, base: RefBase): AgentRef {
 	};
 }
 
-/** `record` as the asker may see it: a nested child only by its parent, a workflow child as owned. */
-function visible(record: AgentRecord, home: Home, asker: Asker, base: RefBase): AgentRef {
-	if (record.parentAgentId !== undefined) {
-		const owns = asker.kind === "agent" && asker.parentAgentId === record.parentAgentId;
-		return owns ? byStatus(record, home, base) : { ...base, state: "unknown" };
-	}
-	if (asker.kind === "agent") return { ...base, state: "unknown" };
-	if (record.workflowId !== undefined) return { ...base, state: "workflow-owned", owner: { kind: "child", record } };
+/** Whether `asker` may see `record`: a nested child only by its parent, an agent nothing else. */
+function sees(asker: Asker, record: AgentRecord): boolean {
+	if (record.parentAgentId !== undefined) return asker.kind === "agent" && asker.parentAgentId === record.parentAgentId;
+	return asker.kind === "session";
+}
+
+/** A record the asker sees: a top-level workflow child as owned, anything else by status. */
+function classify(record: AgentRecord, home: Home, base: RefBase): AgentRef {
+	if (record.parentAgentId === undefined && record.workflowId !== undefined)
+		return { ...base, state: "workflow-owned", owner: { kind: "child", record } };
 	return byStatus(record, home, base);
 }
 
-/** The first record matching `match`, this manager's before survivors. */
+/** Names nothing. A hidden match answers this too, so no step or successor id gives it away. */
+function miss(requested: string): AgentRef {
+	return { requested, latest: requested, via: "none", state: "unknown" };
+}
+
+/** The first record the asker sees matching `match`, this manager's before survivors. */
 function locate(
 	sources: AgentSources,
 	survivors: readonly AgentRecord[],
+	asker: Asker,
 	match: (record: AgentRecord) => boolean,
 ): { record: AgentRecord; home: Home } | undefined {
-	for (const record of sources.records()) if (match(record)) return { record, home: "manager" };
-	const survivor = survivors.find(match);
+	const found = (record: AgentRecord) => sees(asker, record) && match(record);
+	for (const record of sources.records()) if (found(record)) return { record, home: "manager" };
+	const survivor = survivors.find(found);
 	return survivor && { record: survivor, home: "survivor" };
 }
 
@@ -153,7 +162,7 @@ const EVERY_STEP: ReadonlySet<Step> = new Set(["id", "run", "workflow-run", "nam
  */
 export function resolveAgent(input: string, asker: Asker, sources: AgentSources): AgentRef {
 	const handle = normalizeHandle(input);
-	if (!handle) return { requested: input, latest: input, via: "none", state: "unknown" };
+	if (!handle) return miss(input);
 	return lookup(handle, sources.latestId(handle.raw), asker, sources, EVERY_STEP);
 }
 
@@ -169,15 +178,15 @@ function lookup(
 	const survivors = sources.survivors();
 
 	const own = sources.getRecord(latest);
-	if (own) return visible(own, "manager", asker, base("id"));
-	const survivor = survivors.find((record) => record.id === latest);
-	if (survivor) return visible(survivor, "survivor", asker, base("id"));
+	if (own && sees(asker, own)) return classify(own, "manager", base("id"));
+	const survivor = survivors.find((record) => record.id === latest && sees(asker, record));
+	if (survivor) return classify(survivor, "survivor", base("id"));
 
-	const run = steps.has("run") ? locate(sources, survivors, (record) => record.runId === handle.raw) : undefined;
-	if (run) return visible(run.record, run.home, asker, base("run"));
+	const run = steps.has("run") ? locate(sources, survivors, asker, (record) => record.runId === handle.raw) : undefined;
+	if (run) return classify(run.record, run.home, base("run"));
 
 	// Below here everything is the session's: workflow runs, top-level names and saved history.
-	if (asker.kind === "agent") return { ...base("none"), state: "unknown" };
+	if (asker.kind === "agent") return miss(handle.raw);
 
 	const workflowRun = steps.has("workflow-run") && WORKFLOW_RUN_ID.test(handle.raw);
 	const task = workflowRun ? sources.workflowTasks().get(handle.raw) : undefined;
@@ -187,18 +196,18 @@ function lookup(
 	const names: [AgentRefVia, string][] = steps.has("name") ? [["name", handle.key]] : [];
 	if (prefixed) names.push(["prefix", prefixed]);
 	for (const [via, key] of names) {
-		const named = locate(sources, survivors, (record) => record.handle === key || record.alias === key);
-		if (named) return visible(named.record, named.home, asker, base(via));
+		const named = locate(sources, survivors, asker, (record) => record.handle === key || record.alias === key);
+		if (named) return classify(named.record, named.home, base(via));
 	}
 
-	if (!steps.has("saved")) return { ...base("none"), state: "unknown" };
+	if (!steps.has("saved")) return miss(handle.raw);
 	// Id beats name here too: another conversation's alias must not take a saved id.
 	const tombstone =
 		sources.tombstoneById(latest) ??
 		sources.tombstoneByName(handle.key) ??
 		(prefixed ? sources.tombstoneByName(prefixed) : undefined);
 	const note = sources.getEvictedNote(tombstone?.id ?? latest);
-	if (!tombstone && !note) return { ...base("none"), state: "unknown" };
+	if (!tombstone && !note) return miss(handle.raw);
 	return { ...base("saved"), state: "saved", note, tombstone, resume: savedResume(tombstone, note) };
 }
 
