@@ -402,6 +402,32 @@ mod native {
         );
         let actual_ref =
             label_ref(&look["outline"]).expect("actual helper discovers full owned label");
+        // Protocol 5 owner-bound read and waits while the admitted owner holds. The label
+        // already exists, so the first poll decides each wait without timing luck.
+        let pid = std::process::id();
+        let read_args = json!({"lookId":look["lookId"],"elementRef":actual_ref,"pid":pid,"windowId":fixture.hwnd});
+        let read = helper.success("uiaReadText", read_args.clone());
+        assert!(
+            read["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Unread message complete disposable label")),
+            "owner-bound read returns the owned label: {read}"
+        );
+        let mut foreign_read = read_args.clone();
+        foreign_read["pid"] = json!(pid.wrapping_add(1).max(1));
+        let foreign = helper.request("uiaReadText", foreign_read);
+        assert_eq!(foreign["ok"], false);
+        assert_eq!(foreign["error"]["code"], "stale_look");
+        let wait_args = json!({"pid":pid,"windowId":fixture.hwnd,"text":"Unread message complete disposable label","timeoutMs":1000});
+        assert_eq!(
+            helper.success("uiaWaitFor", wait_args.clone())["found"],
+            true
+        );
+        let mut scoped_wait = wait_args.clone();
+        scoped_wait["lookId"] = look["lookId"].clone();
+        scoped_wait["scopeRef"] = json!(actual_ref);
+        scoped_wait["scopeExact"] = json!(true);
+        assert_eq!(helper.success("uiaWaitFor", scoped_wait)["found"], true);
         let act_args = json!({"lookId":look["lookId"],"action":"click","policy":"foreground","target":{"ref":actual_ref},"params":{}});
         let click = helper.success("act", act_args.clone());
         assert_eq!(
@@ -600,9 +626,33 @@ mod native {
             2,
             "removed target cannot replay the earlier click or drag"
         );
+        // Destroy the disposable root, then prove reads and waits (including `gone`)
+        // report owner loss instead of text, absence or a desktop refusal.
+        unsafe { PostMessageW(HWND(fixture.hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+            .expect("close only the owned fixture root");
+        let close_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while unsafe { IsWindow(HWND(fixture.hwnd as *mut _)) }.as_bool()
+            && std::time::Instant::now() < close_deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !unsafe { IsWindow(HWND(fixture.hwnd as *mut _)) }.as_bool(),
+            "fixture root must actually be destroyed"
+        );
+        let stale_read = helper.request("uiaReadText", read_args);
+        assert_eq!(stale_read["ok"], false);
+        assert_eq!(stale_read["error"]["code"], "root_stale");
+        let mut gone_wait = wait_args.clone();
+        gone_wait["gone"] = json!(true);
+        for args in [wait_args, gone_wait] {
+            let stale_wait = helper.request("uiaWaitFor", args);
+            assert_eq!(stale_wait["ok"], false, "closed root wait: {stale_wait}");
+            assert_eq!(stale_wait["error"]["code"], "root_stale");
+        }
         drop(helper);
 
-        println!("NATIVE_FIXTURE_PASS: scoped assistive-client labels, pattern probe, current layout bounds, actual click, restore, PNG read-back, PID refusals");
+        println!("NATIVE_FIXTURE_PASS: scoped assistive-client labels, pattern probe, current layout bounds, actual click, restore, PNG read-back, PID refusals, owner-bound reads and waits");
         0
     }
 }
