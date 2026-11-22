@@ -247,7 +247,8 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   labelled `reported`, `observed`, or `inferred`. Assumed or inferred spans are labelled separately
   from utilization. Stale readings and quota read errors are labelled in both outputs. Observed
   counts are local only, not provider totals. Credit pool balances are display-only text and never
-  contribute to usage totals or blocks.
+  contribute to usage totals or blocks. Rows with unrecognized evidence or utilization bases are
+  omitted.
   The router view is read locally and never included in portable stats snapshots.
 
 - The chart is an asciichart-style line plot (`╭╮╰╯`), one line per provider under All (one per

@@ -107,6 +107,40 @@ it("ignores expired blocks and counts, and never uses an expired percentage", as
 	]);
 });
 
+it.each(["reported", "read", "bogus", null, undefined])(
+	"distinguishes absent and invalid provenance (%s)",
+	async (source) => {
+		writeFileSync(
+			view,
+			JSON.stringify([
+				{
+					provider: "provider",
+					snapshot: { status: "available", windows: [{ name: "window", usedPercent: 10, basis: source }] },
+					meters: [{ name: "meter", quantity: { unit: "requests", used: 1 }, basis: source }],
+					marks: [{ window: "mark", until: NOW + 60_000, evidence: source }],
+				},
+			]),
+		);
+		const rows = await readRouterQuota(dir, NOW);
+		const expected = {
+			reported: [
+				["provider window", "reported"],
+				["provider meter", "reported"],
+			],
+			read: [["provider mark", "reported"]],
+			absent: [
+				["provider window", "reported"],
+				["provider meter", "reported"],
+				["provider mark", "reported"],
+			],
+		};
+		const key = source === undefined ? "absent" : source;
+		expect(rows.map(({ label, basis }) => [label, basis])).toEqual(
+			key === "absent" || key === "reported" || key === "read" ? expected[key] : [],
+		);
+	},
+);
+
 it("shows unlimited pools and omits invalid or missing balances", async () => {
 	writeFileSync(
 		view,

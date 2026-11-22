@@ -11,8 +11,10 @@ const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const text = (value: unknown): value is string => typeof value === "string";
 const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const timestamp = (value: unknown): value is number => number(value) && Math.abs(value) <= 8.64e15;
-const basis = (value: unknown): QuotaRow["basis"] =>
-	value === "observed" || value === "inferred" ? value : "reported";
+function basis(value: unknown, reported: "reported" | "read" = "reported"): QuotaRow["basis"] {
+	if (value === "observed" || value === "inferred") return value;
+	return value === undefined || value === reported ? "reported" : undefined;
+}
 
 function label(provider: string, families: unknown, window: string): string {
 	const models = list(families).filter(text).join(", ");
@@ -64,14 +66,15 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 		const start = rows.length;
 		if (snapshot.status === "available" || snapshot.status === "stale") {
 			for (const window of list(snapshot.windows).map(asRecordOf)) {
-				if (!text(window.name) || !number(window.usedPercent)) continue;
+				const utilization = basis(window.basis);
+				if (!text(window.name) || !number(window.usedPercent) || utilization === undefined) continue;
 				const expired = timestamp(window.resetAt) && window.resetAt <= now;
 				const source = window.spanSource;
 				const name = source === "assumed" || source === "inferred" ? `${window.name} (${source} span)` : window.name;
 				rows.push({
 					label: label(provider, window.families, old ? `${name} (stale)` : name),
 					head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: window.usedPercent },
-					basis: basis(window.basis),
+					basis: utilization,
 					reset: resetDetail(window, now),
 					expired,
 					old,
@@ -89,11 +92,12 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 		for (const meter of list(view.meters).map(asRecordOf)) {
 			if (!text(meter.name) || (timestamp(meter.resetAt) && meter.resetAt <= now)) continue;
 			const count = meterText(meter.quantity);
-			if (count === undefined) continue;
+			const utilization = basis(meter.basis);
+			if (count === undefined || utilization === undefined) continue;
 			rows.push({
 				label: label(provider, meter.families, meter.name),
 				head: { kind: "text", text: count },
-				basis: basis(meter.basis),
+				basis: utilization,
 				reset: resetDetail(meter, now),
 				expired: false,
 				old,
@@ -112,6 +116,8 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 		}
 		for (const mark of list(view.marks).map(asRecordOf)) {
 			if (!text(mark.window) || !timestamp(mark.until) || mark.until <= now) continue;
+			const evidence = basis(mark.evidence, "read");
+			if (evidence === undefined) continue;
 			const until = new Date(mark.until)
 				.toISOString()
 				.replace("T", " ")
@@ -119,7 +125,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			rows.push({
 				label: label(provider, mark.families, mark.window),
 				head: { kind: "text", text: `blocked until ${until}` },
-				basis: basis(mark.evidence),
+				basis: evidence,
 				expired: false,
 				old: false,
 			});
