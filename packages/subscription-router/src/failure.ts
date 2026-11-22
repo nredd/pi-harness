@@ -196,9 +196,9 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 		http === 402 ||
 		codes.some((code) => BILLING_CODE.test(code)) ||
 		(!validation && BILLING.test([...codes, message.replace(QUOTED, " ")].join(" ")));
-	if (billing) return { class: "billing", scope: "provider", cause: "billing" };
 	const interactionsDaily = codes.includes("quota_exceeded") || message === "quota_exceeded";
 	if (
+		billing ||
 		http === 429 ||
 		VERDICT.test(signal) ||
 		LEGACY_LIMIT.test(signal) ||
@@ -206,8 +206,10 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 		interactionsDaily
 	) {
 		const windows = quotaIds.join(" ");
+		// S7: per-minute never marks, so an explicit per-minute window beats billing and daily wording.
 		// The prose fallback accepts explicit window tokens, not arbitrary mentions of the word daily.
 		if (PER_MINUTE.test(windows) || PER_MINUTE_TOKEN.test(message)) return { class: "per-minute", ...quota };
+		if (billing) return { class: "billing", scope: "provider", cause: "billing" };
 		if (interactionsDaily || DAILY.test(windows) || DAILY_TOKEN.test(message)) {
 			return { class: "daily", resetAt: nextPacificMidnight(now), ...quota };
 		}

@@ -410,3 +410,17 @@ it.each<[string, string, FailureClassification]>([
 ])("matches non-quota types in verdict positions only: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
 });
+
+// S7: per-minute never marks, so explicit per-minute evidence beats billing and daily wording.
+it.each<[string, string, FailureClassification]>([
+	[
+		"billing wording with a PerMinute quotaId",
+		`429: ${JSON.stringify({ error: { code: 429, message: "Insufficient credits", details: [quotaId("RequestsPerMinute")] } })}`,
+		perMinute,
+	],
+	["credits depleted for a per-minute window", "Credits depleted for RequestsPerMinute", perMinute],
+	["402 naming a per-minute window", "402: payment required, PerMinute", perMinute],
+	["daily wording with a per-minute token", "429: Daily quota exceeded (RequestsPerMinute)", perMinute],
+])("lets explicit per-minute evidence win: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
