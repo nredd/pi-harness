@@ -231,51 +231,48 @@ export function refRecord(ref: AgentRef): AgentRecord | undefined {
 }
 
 const SESSION: Asker = { kind: "session" };
-/** The legacy lookups never answered with a workflow run, so they read none. */
+/** The legacy lookup never answered with a workflow run, so it reads none. */
 const NO_WORKFLOWS: ReadonlyMap<string, WorkflowTask> = new Map();
+const ID_ONLY: ReadonlySet<Step> = new Set(["id"]);
 
 /**
- * What the pre-resolver lookups returned for `input`: a record matched by the
- * exact input under only `steps`, with no normalization and no successor
- * followed (callers follow `latestId` themselves). A workflow child is still
- * returned for the caller's own ownership check; a nested child is not.
+ * Which survivors of a session switch (#330) a session lookup reaches: none,
+ * those registered under this session file, or every one in the process. Only
+ * reads go process-wide; a stop or steer acts through this session's survivors.
  */
-function legacyRecord(input: string, sources: AgentSources, steps: ReadonlySet<Step>): AgentRecord | undefined {
-	return refRecord(lookup({ raw: input, key: input.toLowerCase() }, input, SESSION, sources, steps));
-}
+export type SurvivorReach = "none" | "session" | "process";
 
-const ID_ONLY: ReadonlySet<Step> = new Set(["id"]);
-const ID_THEN_NAME: ReadonlySet<Step> = new Set(["id", "name"]);
-
-export function createAgentLookup(manager: AgentManager, getCtx: () => ExtensionContext | undefined) {
-	/** Any live record by exact id, including survivors registered under another session file. */
-	const liveAgentById = (id: string) =>
-		legacyRecord(
-			id,
-			agentSources(manager, () => listAllRunningDetached().map(({ agent }) => agent.record), NO_WORKFLOWS),
-			ID_ONLY,
-		);
+export function createAgentLookup(
+	manager: AgentManager,
+	getCtx: () => ExtensionContext | undefined,
+	getWorkflowTasks: () => ReadonlyMap<string, WorkflowTask>,
+) {
+	const everySurvivor = () => listAllRunningDetached().map(({ agent }) => agent.record);
+	const sessionSurvivors = () => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record);
+	const survivorsFor = { none: () => [], session: sessionSurvivors, process: everySurvivor } as const;
 
 	/**
-	 * Resolve a tool's `agent_id` as an id OR a handle, so the model addresses
-	 * agents by the same names the user types. Ids are tried first. Only live
-	 * records: a tombstone has nothing to steer and no result to read. Callers
-	 * still enforce the workflow-ownership rejection. Survivors of a /reload,
-	 * /new or /resume live in the orphaned manager (#330) and answer by name
-	 * case-insensitively, like this manager's own records.
+	 * Any live record by the exact id, including survivors registered under
+	 * another session file: no normalization and no successor followed (callers
+	 * follow `latestId` themselves). A workflow child is still returned for the
+	 * caller's own ownership check; a nested child is not.
 	 */
-	const resolveAgentRef = (ref: string): AgentRecord | undefined =>
-		legacyRecord(
-			ref,
-			agentSources(
-				manager,
-				() => listRunningDetached(getCtx()?.sessionManager?.getSessionFile?.()).map((d) => d.record),
-				NO_WORKFLOWS,
+	const liveAgentById = (id: string) =>
+		refRecord(
+			lookup(
+				{ raw: id, key: id.toLowerCase() },
+				id,
+				SESSION,
+				agentSources(manager, everySurvivor, NO_WORKFLOWS),
+				ID_ONLY,
 			),
-			ID_THEN_NAME,
 		);
 
-	return { liveAgentById, resolveAgentRef };
+	/** What `input` names to the session, as `resolveAgent` reads it, with workflow runs and `reach`'s survivors. */
+	const resolveSessionRef = (input: string, reach: SurvivorReach): AgentRef =>
+		resolveAgent(input, SESSION, agentSources(manager, survivorsFor[reach], getWorkflowTasks()));
+
+	return { liveAgentById, resolveSessionRef };
 }
 
 /** "Not found", or what became of the agent when its record was evicted. */

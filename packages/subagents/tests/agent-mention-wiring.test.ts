@@ -1278,24 +1278,35 @@ describe("resuming an evicted agent by name", () => {
 		expect(manager.getRecord(resumedId).description).toBe("find flaky tests");
 	});
 
-	it("does not let the tools steer or read an agent that is gone", async () => {
-		// A mention can resurrect it, but there is no live record to interrupt and
-		// no result to return — so the tools must say so rather than resolve to a
-		// tombstone and act on stale data.
+	it("lets the tools reach an agent that is gone by its name, as a mention does", async () => {
+		// One lookup for every handle: the name an evicted agent had answers as its
+		// saved conversation, so a steer reopens it like `@explore` and a read
+		// returns what became of it, never a live record's stale data.
 		const { tools } = boot();
 		finishedRun(fakeSession());
-		await evict(await spawnBackground(tools));
+		const id = await spawnBackground(tools);
+		await evict(id);
 		await flush();
 
-		const steered = await tools
-			.get("steer_subagent")
-			.execute("tc", { agent_id: "explore", message: "hi" }, undefined, undefined, ctx());
 		const read = await tools
 			.get("get_subagent_result")
 			.execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
+		expect(textOf(read)).toContain(`Agent "${id}"`);
+		expect(textOf(read)).toContain("evicted after");
+		expect(read.isError).not.toBe(true);
 
-		expect(textOf(steered)).toContain("Agent not found");
-		expect(textOf(read)).toContain("Agent not found");
+		vi.mocked(runAgent).mockClear();
+		const steered = await tools
+			.get("steer_subagent")
+			.execute("tc", { agent_id: "@explore", message: "hi" }, undefined, undefined, ctx());
+		await flush();
+		expect(textOf(steered)).toContain("Agent resumed in background");
+		expect(vi.mocked(runAgent)).toHaveBeenLastCalledWith(
+			expect.anything(),
+			"Explore",
+			"hi",
+			expect.objectContaining({ resumeSessionFile: sessionPath() }),
+		);
 	});
 
 	it("get_subagent_result still returns the text of an evicted agent's result (#372)", async () => {

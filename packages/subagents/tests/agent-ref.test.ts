@@ -1,4 +1,4 @@
-/** The agent-id resolver: every state and transition (spec 3.3), the lookup order and visibility (3.2), and the legacy lookups. */
+/** The agent-id resolver: every state and transition (spec 3.3), the lookup order and visibility (3.2), and the session lookups. */
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
@@ -13,6 +13,7 @@ import {
 	MAX_AGENT_HANDLE_CHARS,
 	refRecord,
 	resolveAgent,
+	type SurvivorReach,
 } from "../src/agent-ref.ts";
 import { resumeAgent, runAgent } from "../src/agent-runner.ts";
 import { registerRunningDetached, unregisterRunningDetached } from "../src/detached-results.ts";
@@ -307,7 +308,7 @@ it("resolves in the 3.2 order among what the asker sees: id, run, workflow run, 
 	await manager.waitForAll();
 });
 
-it("keeps the legacy lookups' contract, now matching survivor names case-insensitively", async () => {
+it("scopes session lookups by survivor reach and keeps liveAgentById's exact-id contract", async () => {
 	const orphaned = newManager();
 	const release = holdAll();
 	const survivor = spawn(orphaned, "survivor", { name: "auth-audit" });
@@ -319,42 +320,45 @@ it("keeps the legacy lookups' contract, now matching survivor names case-insensi
 	const parent = spawn(manager, "parent");
 	const nested = spawn(manager, "nested", { parentAgentId: parent.id, depth: 2, isBackground: false });
 	const worker = spawn(manager, "worker", { workflowId: "wf_abc123def456" });
-	const elsewhere = spawn(orphaned, "elsewhere");
+	const elsewhere = spawn(orphaned, "elsewhere", { name: "far-audit" });
 	registerRunningDetached(other, { record: elsewhere, abort: () => false, steer: () => false });
 	onTestFinished(() => unregisterRunningDetached(other, elsewhere.id));
+	const task = createWorkflowTask({ id: "wf_abc123def456", script: "" });
 	const sessionCtx = { sessionManager: { getSessionFile: () => own } } as unknown as ExtensionContext;
-	const { liveAgentById, resolveAgentRef } = createAgentLookup(manager, () => sessionCtx);
+	const { liveAgentById, resolveSessionRef } = createAgentLookup(
+		manager,
+		() => sessionCtx,
+		() => new Map([[task.id, task]]),
+	);
+	const at = (input: string, reach: SurvivorReach) => shape(resolveSessionRef(input, reach));
 
-	expect(resolveAgentRef("AUTH-AUDIT")).toBe(survivor);
-	expect(resolveAgentRef(survivor.id)).toBe(survivor);
-	expect(resolveAgentRef(parent.handle!.toUpperCase())).toBe(parent);
-	expect(resolveAgentRef(worker.id)).toBe(worker);
-	// Unchanged: no normalization, no run ids, no nested children, no other session's survivors.
-	for (const input of [
-		`@${parent.handle}`,
-		` ${parent.id}`,
-		parent.runId!,
-		nested.id,
-		elsewhere.id,
-		worker.workflowId!,
-	])
-		expect(resolveAgentRef(input)).toBeUndefined();
-	expect(createAgentLookup(manager, () => undefined).resolveAgentRef("auth-audit")).toBeUndefined();
-	// Only the id and name steps run: an alias spelling another agent's run id still answers.
-	const aliased = spawn(manager, "aliased");
-	aliased.alias = parent.runId;
-	expect(resolveAgentRef(parent.runId!)).toBe(aliased);
-	// Intended (id beats name): a survivor's id now beats this manager's alias spelling it.
-	aliased.alias = survivor.id;
-	expect(resolveAgentRef(survivor.id)).toBe(survivor);
+	// Reach: none sees no survivor, session only this session file's, process every one.
+	expect(at("AUTH-AUDIT", "none")).toMatchObject({ state: "unknown" });
+	expect(at("AUTH-AUDIT", "session")).toMatchObject({ state: "live", via: "name", id: survivor.id });
+	expect(at(elsewhere.id, "session")).toMatchObject({ state: "unknown" });
+	for (const input of [elsewhere.id, "FAR-AUDIT"])
+		expect(resolveSessionRef(input, "process")).toMatchObject({ state: "queued", home: "survivor", record: elsewhere });
+	expect(
+		createAgentLookup(
+			manager,
+			() => undefined,
+			() => new Map(),
+		).resolveSessionRef("auth-audit", "session").state,
+	).toBe("unknown");
+	// The session's own agents, normalized, with workflow runs and their children owned; nested children hidden.
+	expect(at(`@${parent.handle!.toUpperCase()}`, "none")).toMatchObject({ state: "live", id: parent.id });
+	expect(resolveSessionRef(task.id, "none")).toMatchObject({ state: "workflow-owned", owner: { kind: "run", task } });
+	expect(at(worker.id, "none")).toMatchObject({ state: "workflow-owned", id: worker.id });
+	expect(at(nested.id, "process")).toMatchObject({ state: "unknown" });
 
 	expect(liveAgentById(elsewhere.id)).toBe(elsewhere);
 	expect(liveAgentById(parent.id)).toBe(parent);
-	for (const input of [parent.handle!, nested.id, parent.runId!, worker.workflowId!])
+	expect(liveAgentById(worker.id)).toBe(worker);
+	// Unchanged: the exact id only, so no handle, normalization, nested child, run or workflow run id.
+	for (const input of [parent.handle!, `@${parent.id}`, nested.id, parent.runId!, worker.workflowId!])
 		expect(liveAgentById(input)).toBeUndefined();
-	// Neither follows a successor link: callers resolve `latestId` themselves.
+	// It follows no successor link: callers resolve `latestId` themselves.
 	manager.linkSuccessor("gone", parent.id);
-	expect(resolveAgentRef("gone")).toBeUndefined();
 	expect(liveAgentById("gone")).toBeUndefined();
 
 	release();

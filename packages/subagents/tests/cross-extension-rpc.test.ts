@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentRef } from "../src/agent-ref.ts";
 import {
 	type EventBus,
 	PROTOCOL_VERSION,
@@ -11,6 +12,17 @@ import {
 } from "../src/cross-extension-rpc.ts";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "../src/model-scope.ts";
 import { PLAN_MODE_STATE_QUERY, planSteerRefusal } from "../src/plan-mode-children.ts";
+
+/** What the manager's resolver answers for `agent-42`: `state` with a record of `fields`, or a recordless state. */
+function refTo(state: AgentRef["state"], fields: object = {}): AgentRef {
+	const base = { requested: "agent-42", latest: "agent-42", via: "id" as const };
+	const record = { id: "agent-42", ...fields } as any;
+	if (state === "live" || state === "queued") return { ...base, state, record, home: "manager" };
+	if (state === "retained") return { ...base, state, record, resume: { mode: "in-place" } };
+	if (state === "saved") return { ...base, state, resume: { mode: "none", why: "historical" } };
+	if (state === "workflow-owned") return { ...base, state, owner: { kind: "child", record } };
+	return { ...base, via: "none", state };
+}
 
 /** Simple in-process event bus for testing. */
 function createEventBus(): EventBus {
@@ -41,8 +53,9 @@ describe("cross-extension RPC", () => {
 			spawn: vi.fn().mockReturnValue("agent-42"),
 			awaitStartup: vi.fn().mockResolvedValue(undefined),
 			abort: vi.fn().mockReturnValue(true),
-			getRecord: vi.fn().mockReturnValue({}),
-			consumeResult: vi.fn().mockReturnValue(true),
+			resolve: vi.fn().mockReturnValue(refTo("live")),
+			hasRecord: vi.fn().mockReturnValue(false),
+			markRead: vi.fn(),
 			steer: vi.fn().mockReturnValue(true),
 		};
 		ctx = { session: true };
@@ -63,7 +76,7 @@ describe("cross-extension RPC", () => {
 		});
 
 		it("replies with the stringified value when a handler throws a non-Error", async () => {
-			(manager.getRecord as ReturnType<typeof vi.fn>).mockImplementation(() => {
+			(manager.resolve as ReturnType<typeof vi.fn>).mockImplementation(() => {
 				throw "plain failure";
 			});
 			registerRpcHandlers(deps);
@@ -262,75 +275,55 @@ describe("cross-extension RPC", () => {
 	// --- stop ---
 
 	describe("stop RPC", () => {
-		// The default double reports a record with neither owner field, i.e. one of
-		// the session's own agents — the case the ownership guard must let through.
+		/** Stop `agentId` once the resolver answers `ref`; the reply. */
+		const stopAs = async (ref: AgentRef, agentId = "agent-42") => {
+			(manager.resolve as ReturnType<typeof vi.fn>).mockReturnValue(ref);
+			const requestId = `req-st-${(manager.resolve as ReturnType<typeof vi.fn>).mock.calls.length}`;
+			const reply = vi.fn();
+			events.on(`subagents:rpc:stop:reply:${requestId}`, reply);
+			events.emit("subagents:rpc:stop", { requestId, agentId });
+			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+			return reply.mock.calls[0]?.[0];
+		};
+
+		// The default double resolves a live agent of the session's own, the case
+		// the ownership guard must let through. A handle stops the record it names.
 		it("returns success when agent is aborted", async () => {
 			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:stop:reply:req-st1", reply);
-			events.emit("subagents:rpc:stop", { requestId: "req-st1", agentId: "agent-42" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({ success: true });
+			expect(await stopAs(refTo("live"), "@explore")).toEqual({ success: true });
+			expect(manager.resolve).toHaveBeenCalledWith("@explore");
 			expect(manager.abort).toHaveBeenCalledWith("agent-42");
 		});
 
-		// `abort` returning false no longer means "no such agent" — the handler's
-		// own lookup covers that, and the only case left is a record that is neither
-		// running nor queued, i.e. one that has already finished.
+		// "Not running" is a record that exists but has settled: retained, or one
+		// `abort` refuses because it settled after the lookup.
 		it("says so when the agent exists but has already finished", async () => {
-			(manager.abort as ReturnType<typeof vi.fn>).mockReturnValue(false);
 			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:stop:reply:req-st2", reply);
-			events.emit("subagents:rpc:stop", { requestId: "req-st2", agentId: "settled" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent is not running" });
+			expect(await stopAs(refTo("retained"))).toEqual({ success: false, error: "Agent is not running" });
+			expect(manager.abort).not.toHaveBeenCalled();
+			(manager.abort as ReturnType<typeof vi.fn>).mockReturnValue(false);
+			expect(await stopAs(refTo("queued"))).toEqual({ success: false, error: "Agent is not running" });
 		});
 
 		it("returns error when the agent is unknown to the manager", async () => {
-			(manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
 			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:stop:reply:req-st5", reply);
-			events.emit("subagents:rpc:stop", { requestId: "req-st5", agentId: "nonexistent" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent not found" });
+			const runRef = { ...refTo("workflow-owned"), owner: { kind: "run", task: {} } } as AgentRef;
+			for (const ref of [refTo("unknown"), refTo("saved"), runRef])
+				expect(await stopAs(ref)).toEqual({ success: false, error: "Agent not found" });
 			expect(manager.abort).not.toHaveBeenCalled();
 		});
 
 		// A nested child and a workflow's agent both have an owner that is waiting
 		// on them, so an id that leaked to another extension must not let it abort
-		// one out from under that owner.
-		it("refuses to stop another agent's nested child", async () => {
-			(manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ parentAgentId: "agent-1" });
+		// one out from under that owner. The session cannot see a nested child, so
+		// it is refused off the record existing at all.
+		it("refuses to stop another agent's nested child or a workflow's agent", async () => {
 			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:stop:reply:req-st6", reply);
-			events.emit("subagents:rpc:stop", { requestId: "req-st6", agentId: "agent-child" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({
-				success: false,
-				error: "Agent is owned by another agent or workflow",
-			});
-			expect(manager.abort).not.toHaveBeenCalled();
-		});
-
-		it("refuses to stop a workflow's agent", async () => {
-			(manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ workflowId: "wf-1" });
-			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:stop:reply:req-st7", reply);
-			events.emit("subagents:rpc:stop", { requestId: "req-st7", agentId: "agent-wf" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({
-				success: false,
-				error: "Agent is owned by another agent or workflow",
-			});
+			const owned = { success: false, error: "Agent is owned by another agent or workflow" };
+			expect(await stopAs(refTo("workflow-owned"))).toEqual(owned);
+			(manager.hasRecord as ReturnType<typeof vi.fn>).mockReturnValue(true);
+			expect(await stopAs(refTo("unknown"), "agent-child")).toEqual(owned);
+			expect(manager.hasRecord).toHaveBeenCalledWith("agent-child");
 			expect(manager.abort).not.toHaveBeenCalled();
 		});
 
@@ -362,26 +355,31 @@ describe("cross-extension RPC", () => {
 	// --- consume ---
 
 	describe("consume RPC", () => {
+		/** Consume once the resolver answers `ref`; the reply. */
+		const consumeAs = async (ref: AgentRef) => {
+			(manager.resolve as ReturnType<typeof vi.fn>).mockReturnValue(ref);
+			const requestId = `req-c-${(manager.resolve as ReturnType<typeof vi.fn>).mock.calls.length}`;
+			const reply = vi.fn();
+			events.on(`subagents:rpc:consume:reply:${requestId}`, reply);
+			events.emit("subagents:rpc:consume", { requestId, agentId: "agent-42" });
+			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+			return reply.mock.calls[0]?.[0];
+		};
+
 		it("returns success when the result is consumed", async () => {
 			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:consume:reply:req-c1", reply);
-			events.emit("subagents:rpc:consume", { requestId: "req-c1", agentId: "agent-42" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({ success: true });
-			expect(manager.consumeResult).toHaveBeenCalledWith("agent-42");
+			const ref = refTo("retained", { status: "completed" });
+			expect(await consumeAs(ref)).toEqual({ success: true });
+			expect(manager.resolve).toHaveBeenCalledWith("agent-42");
+			expect(manager.markRead).toHaveBeenCalledExactlyOnceWith((ref as { record: object }).record);
 		});
 
-		it("returns an error when the agent is unknown or still running", async () => {
-			(manager.consumeResult as ReturnType<typeof vi.fn>).mockReturnValue(false);
+		// Same guard as get_subagent_result: a workflow's child is its run's, not the caller's to read.
+		it("returns an error when the agent is unknown, still running, or a workflow's", async () => {
 			registerRpcHandlers(deps);
-			const reply = vi.fn();
-			events.on("subagents:rpc:consume:reply:req-c2", reply);
-			events.emit("subagents:rpc:consume", { requestId: "req-c2", agentId: "agent-42" });
-
-			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
-			expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent not found or still running" });
+			for (const state of ["unknown", "live", "queued", "saved", "workflow-owned"] as const)
+				expect(await consumeAs(refTo(state))).toEqual({ success: false, error: "Agent not found or still running" });
+			expect(manager.markRead).not.toHaveBeenCalled();
 		});
 
 		it("unsub stops responding to consume requests", async () => {
@@ -394,7 +392,7 @@ describe("cross-extension RPC", () => {
 
 			await new Promise((r) => setTimeout(r, 20));
 			expect(reply).not.toHaveBeenCalled();
-			expect(manager.consumeResult).not.toHaveBeenCalled();
+			expect(manager.resolve).not.toHaveBeenCalled();
 		});
 	});
 
@@ -417,7 +415,7 @@ describe("cross-extension RPC", () => {
 		});
 
 		it("returns error when the agent is unknown to the manager", async () => {
-			(manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+			(manager.resolve as ReturnType<typeof vi.fn>).mockReturnValue(refTo("unknown"));
 			registerRpcHandlers(deps);
 			const reply = vi.fn();
 			events.on("subagents:rpc:steer:reply:req-m2", reply);
@@ -431,7 +429,7 @@ describe("cross-extension RPC", () => {
 		// Same ownership stance as stop: an agent another agent or a workflow is
 		// waiting on is not this RPC's to redirect.
 		it("refuses to steer another agent's nested child or a workflow's agent", async () => {
-			(manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue({ workflowId: "wf-1" });
+			(manager.resolve as ReturnType<typeof vi.fn>).mockReturnValue(refTo("workflow-owned"));
 			registerRpcHandlers(deps);
 			const reply = vi.fn();
 			events.on("subagents:rpc:steer:reply:req-m3", reply);
@@ -442,6 +440,7 @@ describe("cross-extension RPC", () => {
 			expect(manager.steer).not.toHaveBeenCalled();
 		});
 
+		// A retained record, or one that settled after the lookup so `steer` refuses it.
 		it("says so when the agent has already finished", async () => {
 			(manager.steer as ReturnType<typeof vi.fn>).mockReturnValue(false);
 			registerRpcHandlers(deps);
@@ -451,6 +450,7 @@ describe("cross-extension RPC", () => {
 
 			await vi.waitFor(() => expect(reply).toHaveBeenCalled());
 			expect(reply).toHaveBeenCalledWith({ success: false, error: "Agent is not running" });
+			expect(manager.steer).toHaveBeenCalledWith("agent-42", "x");
 		});
 
 		it("rejects a whitespace-only message before touching the manager", async () => {
@@ -477,7 +477,10 @@ describe("cross-extension RPC", () => {
 
 		describe("while Plan mode answers on the bus", () => {
 			/** The record the manager reports for `agent-42`. */
-			const withRecord = (record: object) => (manager.getRecord as ReturnType<typeof vi.fn>).mockReturnValue(record);
+			const withRecord = (record: { status: string; planGate?: object }) =>
+				(manager.resolve as ReturnType<typeof vi.fn>).mockReturnValue(
+					refTo(record.status === "queued" ? "queued" : record.status === "running" ? "live" : "retained", record),
+				);
 			/** Answer Plan's state query like pi-plan-mode, active with a policy that refuses `write`. */
 			const planning = (active: boolean) =>
 				events.on(PLAN_MODE_STATE_QUERY, (data) => {
@@ -532,6 +535,7 @@ describe("cross-extension RPC", () => {
 				(manager.steer as ReturnType<typeof vi.fn>).mockReturnValue(false);
 				planning(true);
 				expect(await steer("req-p-done")).toEqual({ success: false, error: "Agent is not running" });
+				expect(manager.steer).not.toHaveBeenCalled();
 			});
 		});
 
