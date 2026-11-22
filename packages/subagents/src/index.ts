@@ -1368,6 +1368,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				status: note.status,
 				now: clock.now(),
 				savedCwd: note.sessionCwd,
+				boundFile: note.canonicalSessionFile,
 				canonical,
 			});
 		};

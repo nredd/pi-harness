@@ -36,6 +36,11 @@ export interface SavedChildCheckOptions {
 	status: AgentRecord["status"];
 	now: number;
 	savedCwd?: string;
+	/**
+	 * The canonical transcript this row must still resolve to: the one journaled
+	 * at write time, or the one startup bound when a dispatch rechecks it.
+	 */
+	boundFile?: string;
 	/** Resolves directories and the parent file; pass one `canonicalPaths()` per batch of checks. */
 	canonical?: (path: string) => string;
 }
@@ -166,6 +171,10 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 		const canonicalFile = realpathSync(file);
 		if (!insideDirectory(canonicalFile, options.directories, canonical)) {
 			return { refusal: `child session is outside its configured directory: ${file}` };
+		}
+		// A retargeted link inside the directory must not swap in another (valid) transcript.
+		if (options.boundFile !== undefined && canonicalFile !== options.boundFile) {
+			return { refusal: `child session no longer resolves to its recorded transcript: ${file}` };
 		}
 		const stats = statSync(canonicalFile);
 		if (!stats.isFile()) return { refusal: `child session is not a regular file: ${file}` };

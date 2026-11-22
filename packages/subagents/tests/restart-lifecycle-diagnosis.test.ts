@@ -599,6 +599,7 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 	const file = record.sessionFile;
 	if (!parentFile || !file) throw new Error("Missing transcript");
 	settle(file);
+	const original = readFileSync(file, "utf8");
 	const outside = join(fixture.root, "empty.jsonl");
 	const link = join(dirname(file), "foreign.jsonl");
 	const directory = join(dirname(file), "directory");
@@ -611,6 +612,12 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 	writeFileSync(invalid, "not json\n");
 	writeFileSync(unowned, '{"type":"session"}\n');
 	symlinkSync(outside, link);
+	// A valid same-parent copy, reached by a link that a row's write-time canonical form does not name.
+	const copy = join(dirname(file), "copy.jsonl");
+	const retargeted = join(dirname(file), "retargeted.jsonl");
+	writeFileSync(copy, original);
+	settle(copy);
+	symlinkSync(copy, retargeted);
 	const entries = [
 		["missing", join(dirname(file), "missing.jsonl"), "missing or unreadable"],
 		["forged", outside, "outside its configured directory"],
@@ -622,6 +629,7 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 		["malformed", invalid, "missing or unreadable"],
 		["unowned", unowned, "does not belong to this parent"],
 		["forged-cwd", file, "does not match its saved working directory"],
+		["retargeted", retargeted, "no longer resolves to its recorded transcript"],
 	] as const;
 	for (const [id, sessionFile] of entries)
 		parent.appendCustomEntry("subagents:record", {
@@ -630,10 +638,19 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 			// The default directory is unchanged by a duplicate separator, but the
 			// journal must not override the working directory in a real child header.
 			...(id === "forged-cwd" ? { sessionCwd: `${fixture.cwd}/.` } : {}),
+			...(id === "retargeted" ? { canonicalSessionFile: realpathSync(file) } : {}),
 			type: record.type,
 			description: id,
 			status: "completed",
 		});
+	// The completed child's newest row is legacy (no write-time canonical form),
+	// so only the transcript startup bound can catch a swap at dispatch.
+	const written = parent
+		.getBranch()
+		.filter((entry) => entry.type === "custom" && entry.customType === "subagents:record")
+		.findLast((entry) => (entry as { data: { id: string } }).data.id === record.id);
+	const { canonicalSessionFile: _canonical, ...legacy } = (written as { data: object }).data as Record<string, unknown>;
+	parent.appendCustomEntry("subagents:record", legacy);
 	await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 	h.cleanup();
 	const next = await fixture.start({
@@ -699,7 +716,18 @@ it("never opens forged child paths from saved history", { timeout: 30_000 }, asy
 		isError: true,
 		text: expect.stringContaining(`child session is outside its configured directory: ${file}`),
 	});
+	// Nor one swapped for a valid copy in the same directory: the dispatch
+	// target must be the transcript startup bound.
+	unlinkSync(file);
+	symlinkSync(copy, file);
+	next.setResponses([toolCalls(spawn("resume copied file", { resume: record.id })), answer("CHECKED")]);
+	await next.session.prompt("refuse copied transcript");
+	expect(outcomes(next, "Agent").at(-1)).toMatchObject({
+		isError: true,
+		text: expect.stringContaining(`child session no longer resolves to its recorded transcript: ${file}`),
+	});
 	expect(readFileSync(outside, "utf8")).toBe("");
+	expect(readFileSync(copy, "utf8")).toBe(original);
 	expect(child.state.callCount).toBe(1);
 });
 
