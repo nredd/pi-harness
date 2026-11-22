@@ -242,6 +242,43 @@ describe("failure-inferred evidence", () => {
 		expect(await decide(adapter, failure(BARE, T0 + 2000))).toMatchObject({ kind: "block" });
 	});
 
+	it("never counts a failure at or before the model's last success, however late it is recorded", () => {
+		const history = new FailureHistory();
+		history.succeeded(CARBON, T0 + 2 * MINUTE);
+		// An older success never lowers the watermark.
+		history.succeeded(CARBON, T0);
+		expect(history.record(CARBON, T0 + MINUTE, 10 * MINUTE)).toBe(0);
+		expect(history.record(CARBON, T0 + 2 * MINUTE, 10 * MINUTE)).toBe(0);
+		expect(history.record(CARBON, T0 + 3 * MINUTE, 10 * MINUTE)).toBe(1);
+		history.clear();
+		expect(history.record(CARBON, T0 + MINUTE, 10 * MINUTE)).toBe(1);
+	});
+
+	it("lets a success erase a failure whose confirmation was still pending", async () => {
+		const history = new FailureHistory();
+		let release: () => void = () => {};
+		const usage: UsageRead = {
+			get: (provider) =>
+				new Promise((resolve) => {
+					const read = { provider, status: "unavailable" as const, windows: [], retrievedAt: T0, expiresAt: T0 };
+					release = () => resolve(Object.defineProperty(read, NO_USAGE_SOURCE, { value: true }));
+				}),
+			decisionFor: () => ({ block: false }),
+		};
+		const confirm = confirmEvidence(usage, history, undefined);
+		const late = confirm(failure(BARE, T0));
+		history.succeeded(CARBON, T0 + MINUTE);
+		release();
+		expect(await late).toBeUndefined();
+		const next = confirm(failure(BARE, T0 + 2 * MINUTE));
+		release();
+		expect(await next).toBeUndefined();
+		// A first-failure class confirmed after a later success is superseded too.
+		const daily = confirm(failure(DAILY, T0));
+		release();
+		expect(await daily).toBeUndefined();
+	});
+
 	it("keeps failures later than a success and counts out-of-order timestamps up to the failure", () => {
 		const history = new FailureHistory();
 		expect(history.record(CARBON, T0 + 2 * MINUTE, 10 * MINUTE)).toBe(1);

@@ -121,12 +121,24 @@ export function readEvidence(usage: UsageRead, fallbackOnReadError = false): Con
  * Distinct failures per model since its last success, for the repeat threshold. Shared like
  * the exhaustion tracker, so in-process sessions count one model's failures together. One
  * failure (same model and message timestamp) counts once however many paths confirm it.
+ * Each model keeps a success watermark, so a confirmation that finishes after a later success
+ * cannot resurrect the failure that success erased.
  */
 export class FailureHistory {
 	private readonly failures = new Map<string, number[]>();
+	private readonly successes = new Map<string, number>();
 
-	/** Record a failure and return how many distinct failures fall within `windowMs` of it. */
+	/** Whether a success at or after `failedAt` already superseded this failure. */
+	superseded(model: ModelRef, failedAt: number): boolean {
+		return failedAt <= (this.successes.get(refKey(model)) ?? -Infinity);
+	}
+
+	/**
+	 * Record a failure and return how many distinct failures fall within `windowMs` of it.
+	 * A superseded failure is not recorded and counts zero.
+	 */
 	record(model: ModelRef, failedAt: number, windowMs: number): number {
+		if (this.superseded(model, failedAt)) return 0;
 		const key = refKey(model);
 		const kept = (this.failures.get(key) ?? []).filter((at) => at > failedAt - windowMs);
 		if (!kept.includes(failedAt)) kept.push(failedAt);
@@ -137,6 +149,7 @@ export class FailureHistory {
 	/** A successful response resets the count for failures at or before it. */
 	succeeded(model: ModelRef, at: number): void {
 		const key = refKey(model);
+		this.successes.set(key, Math.max(at, this.successes.get(key) ?? -Infinity));
 		const kept = this.failures.get(key)?.filter((failedAt) => failedAt > at);
 		if (kept?.length) this.failures.set(key, kept);
 		else this.failures.delete(key);
@@ -145,6 +158,7 @@ export class FailureHistory {
 	/** Forget every count, e.g. from `/router reset`. */
 	clear(): void {
 		this.failures.clear();
+		this.successes.clear();
 	}
 }
 
@@ -167,6 +181,8 @@ export function failureEvidence(
 		name: "failure",
 		async decide({ model, failedAt, message }) {
 			if (message?.stopReason !== "error") return ABSTAIN;
+			// A later success of this model already disproved the failure.
+			if (history.superseded(model, failedAt)) return CLEAR;
 			const found = classify(message.errorMessage, failedAt, floor);
 			const base = { block: true, evidence: "inferred", evidenceAt: failedAt } as const;
 			const modelScope = { scope: "model" as const, families: [model.id], cause: "quota" as const };
