@@ -96,6 +96,51 @@ it("rejects built-in IDs before usage loads and after another router copy loads"
 	}
 });
 
+it("rejects non-string collector IDs", async () => {
+	vi.useFakeTimers();
+	const credentials: Record<string, string> = { anthropic: "fake-anthropic-credential", [provider]: "fake-token" };
+	// Pi's `getAuth` resolves a non-string argument as a model and reads its `provider`.
+	const getApiKeyForProvider = vi.fn(async (id: unknown) =>
+		typeof id === "string" ? credentials[id] : credentials[(id as { provider: string }).provider],
+	);
+	const registryCtx = { modelRegistry: { getApiKeyForProvider } } as unknown as ExtensionContext;
+	const usage = new UsageService({
+		fetch: vi.fn(),
+		now: () => T0,
+		getAccessToken: (ctx, id) => ctx.modelRegistry.getApiKeyForProvider(id),
+	});
+	const { pi, handlers } = createRecordingPi();
+	const listeners = new Map<string, (data: unknown) => unknown>();
+	const emit = vi.fn();
+	const on = (event: string, fn: (data: unknown) => unknown) => {
+		listeners.set(event, fn);
+		return () => listeners.delete(event);
+	};
+	await createSubscriptionRouter({ usage, config: { ok: true, profiles: [] }, now: () => T0 })({
+		...pi,
+		events: { on, emit },
+	});
+	await handlers.get("session_start")?.[0]?.({}, { ...registryCtx, scopedModels: [] } as unknown as ExtensionContext);
+	const read = vi.fn(fake.read);
+	const modelShaped = { provider: "anthropic", toString: () => "faux-model" };
+	for (const id of [modelShaped, new String(provider), 7, "", "faux id", "faux/id", "x".repeat(257)]) {
+		const adapter = { kind: "custom", read, provider: id } as unknown as Collector;
+		expect(() => registry.register(adapter)).toThrow(/non-blank string ID/);
+	}
+	expect(collectorFor(modelShaped as unknown as string)).toBeUndefined();
+	install({ ...fake, provider: "x".repeat(256) });
+	install({ ...fake, read });
+	// A coerced key must not select a collector for a model-shaped credential argument.
+	usage.configureCollectors({ "faux-model": { collector: { id: provider } } });
+	expect(await usage.get(registryCtx, modelShaped as unknown as string)).toMatchObject({ status: "unavailable" });
+	expect(usage.peek(modelShaped as unknown as string)).toBeUndefined();
+	usage.configureCollectors();
+	await listeners.get("router:rpc:usage")?.({ requestId: "read", refresh: true });
+	expect(read).toHaveBeenCalledOnce();
+	expect(read).toHaveBeenCalledWith(expect.objectContaining({ token: "fake-token" }));
+	expect(getApiKeyForProvider.mock.calls.every(([id]) => typeof id === "string")).toBe(true);
+});
+
 it.each([undefined, 2])("rejects an existing registry with version %s without replacing it", async (version) => {
 	const incompatible = Object.freeze({ ...registry, version });
 	Object.assign(host, { [key]: incompatible });

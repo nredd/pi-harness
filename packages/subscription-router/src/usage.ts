@@ -14,7 +14,7 @@
 import { addAbortListener } from "node:events";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { normalizeReading } from "./collector-reading.ts";
-import { type CollectorReading, type CollectorRegistration, registrationFor } from "./collectors.ts";
+import { type CollectorReading, type CollectorRegistration, isCollectorId, registrationFor } from "./collectors.ts";
 
 import type { ProviderConfig } from "./config.ts";
 
@@ -404,6 +404,8 @@ export class UsageService {
 	}
 
 	private currentCollector(provider: string): CollectorRegistration | undefined {
+		// Checked again here: the provider, not the collector ID, selects the credential.
+		if (!isCollectorId(provider)) return undefined;
 		const registration = registrationFor(collectorIdFor(provider, this.providers));
 		const current = this.collectors.get(provider);
 		if (current) return current.binding;

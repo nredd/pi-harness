@@ -306,7 +306,10 @@ in usage errors. These bounds do not prove live OAuth refresh or revocation beha
 
 Trusted extensions can call `registerCollector` from `src/collectors.ts` in the installed package.
 Register before or after the router extension loads. The built-in IDs `anthropic` and
-`openai-codex` are reserved; registering either throws. For external IDs the last registration wins.
+`openai-codex` are reserved; registering either throws. A collector ID must be a primitive string
+Pi provider ID: non-blank, at most 256 characters, no whitespace or slashes. Other values throw and
+are never coerced, because Pi resolves a non-string credential argument as a model and reads its
+`provider`. For external IDs the last registration wins.
 Only the returned unregister function owns that registration; old cleanup cannot remove a replacement
 or restore a previous registration. Retirement drops cached usage and confirmed blocks, aborts
 reads, and ignores late results. `collectorFor(id)` returns the frozen adapter.

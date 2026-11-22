@@ -27,6 +27,16 @@ export type Collector = {
 );
 
 const COLLECTORS_KEY = Symbol.for("pi-subscription-router.collectors");
+/** Pi provider IDs (`PROVIDER_ID` in `config.ts`), capped at 256 characters. */
+const COLLECTOR_ID = /^[^\s/]{1,256}$/;
+
+/**
+ * True only for a primitive string ID. Never coerces: Pi resolves a non-string credential
+ * argument as a model and reads its `provider`, which would bypass built-in reservation.
+ */
+export function isCollectorId(id: unknown): id is string {
+	return typeof id === "string" && COLLECTOR_ID.test(id);
+}
 
 /** Identity and lifetime of one installation, not of the supplied adapter. */
 export interface CollectorRegistration {
@@ -56,6 +66,11 @@ function createRegistry(): CollectorRegistry {
 		version: 1 as const,
 		register(collector: Collector) {
 			const { provider } = collector;
+			if (!isCollectorId(provider)) {
+				throw new TypeError(
+					"Collector provider must be a non-blank string ID without whitespace or slashes (at most 256 characters).",
+				);
+			}
 			if (builtins.has(provider))
 				throw new Error(`Cannot register collector "${provider}": ID is reserved for a built-in.`);
 			const old = entries.get(provider);
@@ -89,6 +104,7 @@ export function registerCollector(collector: Collector): () => void {
 }
 
 export function registrationFor(id: string): CollectorRegistration | undefined {
+	if (!isCollectorId(id)) return undefined;
 	return builtins.get(id) ?? registry.registrationFor(id);
 }
 
@@ -97,7 +113,8 @@ export function collectorFor(id: string): Readonly<Collector> | undefined {
 }
 
 export function collectedProviders(): string[] {
-	return [...new Set([...builtins.keys(), ...registry.collectedProviders()])];
+	// Another router copy's registry may predate string-only IDs.
+	return [...new Set([...builtins.keys(), ...registry.collectedProviders().filter(isCollectorId)])];
 }
 
 /** @deprecated Use collectedProviders() for an ordinary array snapshot. */
