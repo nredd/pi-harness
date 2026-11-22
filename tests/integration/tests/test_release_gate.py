@@ -332,15 +332,15 @@ def test_fork_check_step_mirrors_the_selected_core_script() -> None:
     fork = yaml.safe_load((ROOT / ".github/workflows/forks.yml").read_text())
     step = next(
         item for item in fork["jobs"]["core"]["steps"] if item.get("name") == "Check without rewriting"
-    )["run"]
+    )
+    assert fork["jobs"]["core"]["defaults"]["run"]["working-directory"] == "forks/pi"
+    assert "working-directory" not in step
+    assert step["run"] == "python3 ../../scripts/ci_fork_check.py"
+    for event in ("pull_request", "push"):
+        assert "scripts/ci_fork_check.py" in fork[True][event]["paths"]  # PyYAML's YAML 1.1 `on` key
     declared = json.loads((ROOT / "forks/pi/package.json").read_text())["scripts"]["check"]
-    expected = next(line for line in step.splitlines() if line.startswith("expected='"))
-    assert expected == f"expected='{declared}'"
-    commands = step.split("fi\n", maxsplit=1)[1].strip().splitlines()
-    mirrored = declared.replace("node scripts/biome-check.mjs --write", "node scripts/biome-check.mjs")
-    assert commands == [
-        "npx tsc --noEmit" if command == "tsc --noEmit" else command for command in mirrored.split(" && ")
-    ]
+    check: dict[str, Any] = runpy.run_path(str(ROOT / "scripts/ci_fork_check.py"))
+    assert check["EXPECTED_CHECK"] == declared
 
 
 def test_stack_cells_are_exactly_the_executing_matrix() -> None:

@@ -157,11 +157,12 @@ def evaluate(expression: str, context: dict[str, str]) -> Any:
     body = expression.strip().removeprefix("${{").removesuffix("}}")
     body = re.sub(r"!(?!=)", " not ", body)
     body = re.sub(
-        r"(?<!['\w])[a-z]+(?:\.[a-z_][a-z_0-9-]*)+", lambda match: repr(context.get(match[0], "")), body
+        r"(?<!['\w])[a-z]+(?:\.[a-zA-Z_][a-zA-Z_0-9-]*)+", lambda match: repr(context.get(match[0], "")), body
     )
     body = re.sub(r"\]\.(\w+)", r"]['\1']", body)  # `fromJSON(...)[key].property`
     functions = {
         "fromJSON": lambda text: json.loads(text, object_hook=Absent),
+        "toJSON": lambda value: json.dumps(None if isinstance(value, Absent) and not value else value),
         "format": github_format,
         "contains": lambda haystack, needle: needle in haystack,
         "cancelled": lambda: context.get("cancelled") == "true",
@@ -323,7 +324,14 @@ def executed_steps(name: str, check: str, tmp_path: Path, trigger: Trigger = PUL
         "github.event_name": trigger.event,
         "runner.os": RUNNER_OS[runner_for(name, cell, trigger)],
     }
-    return walk_steps(jobs()[cell_job(name, cell)]["steps"], context)
+    job = jobs()[cell_job(name, cell)]
+    context |= {
+        f"env.{key}": render(value, context | classify_context(trigger))
+        for key, value in job.get("env", {}).items()
+    }
+    if name == "owned":
+        context["env.WINDOWS_RESULT"] = "success"
+    return walk_steps(job["steps"], context)
 
 
 def walk_steps(steps: list[dict[str, Any]], context: dict[str, Any]) -> set[str]:
@@ -1284,7 +1292,6 @@ def test_owned_fan_ins_share_one_definition_and_wait_only_for_their_own_shards()
         assert fan_in["env"]["SHARDS_RESULT"] == f"${{{{ needs.{shards}.result }}}}"
         if ubuntu:
             assert fan_in["env"]["WINDOWS_RESULT"] == "${{ needs.computer-use-windows.result }}"
-            assert "packages/computer-use" in fan_in["env"]["WINDOWS_REQUIRED"]
         else:
             assert fan_in["env"] == {
                 "SHARDS_RESULT": f"${{{{ needs.{shards}.result }}}}",
@@ -1537,7 +1544,12 @@ def test_fan_in_downloads_exactly_its_own_shard_uploads() -> None:
     shard_paths = shard_upload["with"]["path"].splitlines()
     fan_in_paths = fan_in_upload["with"]["path"].splitlines()
     assert shard_paths[0] == "coverage/provenance-${{ matrix.shard }}.json"
-    assert fan_in_paths == [*shard_paths[1:], "coverage/summary.json", "coverage/provenance.json"]
+    assert fan_in_paths == [
+        *shard_paths[1:],
+        "coverage/summary.json",
+        "coverage/windows-x64-summary.json",
+        "coverage/provenance.json",
+    ]
 
 
 @pytest.mark.parametrize(("os_name", "coverage_os"), [("ubuntu-24.04", "linux"), ("macos-14", "darwin")])
@@ -1617,6 +1629,33 @@ def test_running_fan_in_accounts_for_the_merged_reports(tmp_path: Path, check: s
         "./.github/actions/setup-ci-tools",
     } <= steps
     assert not any(step.startswith("Owned gate ") for step in steps)
+    for step in ("Download Windows x64 coverage", "Account for Windows x64 coverage separately"):
+        assert (step in steps) is (check == "owned (ubuntu-24.04)")
+
+
+def test_running_ubuntu_fan_in_without_computer_use_skips_windows() -> None:
+    """Keep Ubuntu accounting active without requiring a Windows report for an unselected workspace."""
+    check = "owned (ubuntu-24.04)"
+    job = jobs()["owned-ubuntu"]
+    plan = {
+        check: {
+            "run": True,
+            "windows_native_required": False,
+            "shards": [{"workspaces": ["packages/dev-tools"]}],
+        }
+    }
+    context = {
+        "needs.classify.outputs.plan": json.dumps(plan),
+        "steps.plan.outputs.run": "true",
+    }
+    required = render(job["env"]["WINDOWS_REQUIRED"], context)
+    assert required == "false"
+    steps = walk_steps(
+        job["steps"], context | {"env.WINDOWS_REQUIRED": required, "env.WINDOWS_RESULT": "success"}
+    )
+    assert "Coverage accounting (existing reports, including test failures)" in steps
+    assert "Download Windows x64 coverage" not in steps
+    assert "Account for Windows x64 coverage separately" not in steps
 
 
 def test_all_original_cases_and_new_applicable_gates_share_the_boundary() -> None:

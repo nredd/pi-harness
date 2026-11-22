@@ -26,11 +26,13 @@ class SeededStats(TypedDict):
     favorite: str
 
 
+GOOGLE_MODEL = "gemini-4-carbon"
 STATS_MODELS = [
     ("anthropic", "claude-opus-5-5", 9),
     ("anthropic", "claude-sonnet-5-5", 4),
     ("openai-codex", "gpt-6.1-sol", 6),
     ("openai-codex", "gpt-5.6-terra", 2),
+    ("google", GOOGLE_MODEL, 1),
 ]
 
 
@@ -79,6 +81,9 @@ def assistant(moment: datetime, provider: str, model: str, tokens: int) -> str:
         "totalTokens": tokens * 26,
         "cost": {"total": tokens / 100_000},
     }
+    if provider == "google":
+        # Thinking is already in output; Google reports implicit cache reads, not writes.
+        usage |= {"reasoning": tokens // 2, "cacheWrite": 0, "totalTokens": tokens * 23}
     message = {"role": "assistant", "content": [], "provider": provider, "model": model, "usage": usage}
     return compact(
         {"type": "message", "id": f"{ms:x}", "timestamp": iso(moment), "message": message | {"timestamp": ms}}
@@ -86,7 +91,7 @@ def assistant(moment: datetime, provider: str, model: str, tokens: int) -> str:
 
 
 def seed_stats_sessions(agent_dir: Path) -> SeededStats:
-    """Seed `/stats` history: 45 days, two providers, four models, plus rows it must ignore.
+    """Seed `/stats` history: 45 days, three providers, five models, plus rows it must ignore.
 
     Ignored rows: a `faux` call, a zero-usage `router/default` stub, a `steer_subagent` tool result
     carrying `usage`, and a forked copy of the newest call.

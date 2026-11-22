@@ -2,7 +2,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
-import { currentPlatformBackend } from "../src/platform/index.ts";
 import {
 	cdpClickForContext,
 	cdpKeypressForContext,
@@ -11,8 +10,9 @@ import {
 	listCdpPageContexts,
 } from "../src/cdp.ts";
 import { parseLookResponse } from "../src/outline.ts";
-import { desktopRoot, installFakeDesktop, lookPayload, wireButton, wireNode } from "./support/fake-desktop.mjs";
+import { currentPlatformBackend } from "../src/platform/index.ts";
 import { browserSnapshot } from "./support/fake-browser.mjs";
+import { desktopRoot, installFakeDesktop, lookPayload, wireButton, wireNode } from "./support/fake-desktop.mjs";
 
 vi.mock("../src/cdp.ts", async (importOriginal) => ({
 	...(await importOriginal()),
@@ -48,7 +48,7 @@ const withPlatform = async (platform, fn) => {
 };
 
 beforeEach(async ({ onTestFinished }) => {
-	fake = await installFakeDesktop(onTestFinished, { roots: [desktopRoot({ pid: 1 })] });
+	fake = await installFakeDesktop(onTestFinished, { platform: "macos", roots: [desktopRoot({ pid: 1 })] });
 	fake.tree = [
 		wireButton("go", "Go", { actions: ["AXPress", "AXShowMenu"] }),
 		textField("name"),

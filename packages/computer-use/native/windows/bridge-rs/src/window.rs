@@ -91,7 +91,9 @@ use std::{thread, time::Duration};
 #[cfg(windows)]
 use windows::core::PWSTR;
 #[cfg(windows)]
-use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Foundation::{
+    CloseHandle, BOOL, ERROR_INSUFFICIENT_BUFFER, HWND, LPARAM, RECT, TRUE,
+};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -318,6 +320,29 @@ unsafe fn get_window_class(hwnd: HWND) -> String {
     }
 }
 
+#[cfg(any(windows, test))]
+enum QueryError {
+    InsufficientBuffer,
+    Unavailable,
+}
+
+/// Read the UTF-16 image path with at most one bounded retry. Length excludes the NUL.
+#[cfg(any(windows, test))]
+fn query_process_path(
+    mut query: impl FnMut(&mut [u16]) -> Result<usize, QueryError>,
+) -> Option<String> {
+    let mut initial = [0u16; 260];
+    match query(&mut initial) {
+        Ok(len) => initial.get(..len).map(String::from_utf16_lossy),
+        Err(QueryError::InsufficientBuffer) => {
+            let mut extended = vec![0u16; 32_767];
+            let len = query(&mut extended).ok()?;
+            extended.get(..len).map(String::from_utf16_lossy)
+        }
+        Err(QueryError::Unavailable) => None,
+    }
+}
+
 #[cfg(windows)]
 unsafe fn get_process_name_by_pid(pid: u32) -> String {
     let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
@@ -325,22 +350,32 @@ unsafe fn get_process_name_by_pid(pid: u32) -> String {
         Err(_) => return String::new(),
     };
 
-    let mut buf = [0u16; 260];
-    let mut size = buf.len() as u32;
-    let ok = QueryFullProcessImageNameW(
-        handle,
-        Default::default(),
-        PWSTR(buf.as_mut_ptr()),
-        &mut size,
-    )
-    .is_ok();
+    let path = query_process_path(|buf| {
+        let mut size = buf.len() as u32;
+        // SAFETY: the handle stays open and buf is writable for size UTF-16 units.
+        // On success the API returns the length excluding the NUL; the caller checks it.
+        let result = unsafe {
+            QueryFullProcessImageNameW(
+                handle,
+                Default::default(),
+                PWSTR(buf.as_mut_ptr()),
+                &mut size,
+            )
+        };
+        match result {
+            Ok(()) => Ok(size as usize),
+            Err(err)
+                if err.code()
+                    == windows::core::HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) =>
+            {
+                Err(QueryError::InsufficientBuffer)
+            }
+            Err(_) => Err(QueryError::Unavailable),
+        }
+    });
     let _ = CloseHandle(handle);
 
-    if !ok || size == 0 {
-        return String::new();
-    }
-
-    let full_path = String::from_utf16_lossy(&buf[..size as usize]);
+    let full_path = path.unwrap_or_default();
     std::path::Path::new(&full_path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -656,6 +691,72 @@ pub fn ensure_point_owned(_hwnd: isize, _point: &Value) -> Result<(), ProtocolEr
 
 #[cfg(test)]
 mod unit_tests {
+    #[test]
+    fn image_path_retries_once_with_larger_buffer() {
+        let mut capacities = Vec::new();
+        let path = query_process_path(|buf| {
+            capacities.push(buf.len());
+            if buf.len() == 260 {
+                return Err(QueryError::InsufficientBuffer);
+            }
+            buf[..261].fill(u16::from(b'x'));
+            Ok(261)
+        });
+        assert_eq!(path, Some("x".repeat(261)));
+        assert_eq!(capacities, [260, 32_767]);
+    }
+
+    #[test]
+    fn image_path_succeeds_without_retry() {
+        let mut calls = 0;
+        let path = query_process_path(|buf| {
+            calls += 1;
+            buf[0] = u16::from(b'x');
+            Ok(1)
+        });
+        assert_eq!(path.as_deref(), Some("x"));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn image_path_does_not_retry_access_denied() {
+        let mut calls = 0;
+        assert_eq!(
+            query_process_path(|_| {
+                calls += 1;
+                Err(QueryError::Unavailable)
+            }),
+            None
+        );
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn image_path_refuses_invalid_reported_length() {
+        assert_eq!(query_process_path(|buf| Ok(buf.len() + 1)), None);
+        assert_eq!(
+            query_process_path(|buf| if buf.len() == 260 {
+                Err(QueryError::InsufficientBuffer)
+            } else {
+                Ok(buf.len() + 1)
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn image_path_stops_at_maximum_capacity() {
+        let mut capacities = Vec::new();
+        assert_eq!(
+            query_process_path(|buf| {
+                capacities.push(buf.len());
+                Err(QueryError::InsufficientBuffer)
+            }),
+            None
+        );
+        assert_eq!(capacities, [260, 32_767]);
+    }
+
     use super::*;
     #[cfg(not(windows))]
     use crate::error::ErrorCode;

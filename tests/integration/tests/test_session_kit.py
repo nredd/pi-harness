@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from harness.session_kit import STATS_DAYS, STATS_MODELS, seed_stats_sessions
@@ -29,24 +29,24 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def test_seeded_history_counts_four_models_over_the_window(tmp_path: Path) -> None:
+def test_seeded_history_counts_five_models_over_the_window(tmp_path: Path) -> None:
     """The favorite is the real token leader, and every counted call sits inside the window.
 
     Parameters:
         tmp_path (Path): private agent directory.
     """
-    before = datetime.now(UTC)
     assert seed_stats_sessions(tmp_path) == {"favorite": "anthropic/claude-opus-5-5"}
     root = tmp_path / "sessions" / "--seed--"
     assert sorted(path.name for path in root.iterdir()) == ["fork.jsonl", "main.jsonl"]
     header, *entries = read_jsonl(root / "main.jsonl")
     assert header["type"] == "session"
     assert (header["id"], header["version"], header["cwd"]) == ("seed", 3, "/seed")
+    start = datetime.fromisoformat(header["timestamp"])
     counted = [
         entry
         for entry in entries
         if entry["message"]["role"] == "assistant"
-        and entry["message"]["provider"] in {"anthropic", "openai-codex"}
+        and entry["message"]["provider"] in {"anthropic", "openai-codex", "google"}
         and entry["message"]["usage"]["totalTokens"] > 0
     ]
     assert len(entries) - len(counted) == 3
@@ -55,9 +55,10 @@ def test_seeded_history_counts_four_models_over_the_window(tmp_path: Path) -> No
         message = entry["message"]
         totals[f"{message['provider']}/{message['model']}"] += message["usage"]["totalTokens"]
         stamp = datetime.fromisoformat(entry["timestamp"])
-        assert before - timedelta(days=STATS_DAYS) <= stamp <= before
+        assert start < stamp <= start + timedelta(days=STATS_DAYS)
         assert message["timestamp"] // 1000 == int(stamp.timestamp())
     assert set(totals) == {f"{provider}/{model}" for provider, model, _ in STATS_MODELS}
+    assert "google/gemini-4-carbon" in totals
     assert totals.most_common(1)[0][0] == "anthropic/claude-opus-5-5"
 
 

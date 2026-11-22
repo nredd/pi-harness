@@ -422,7 +422,7 @@
       "status": "pending",
       "goal": "excluded",
       "goal_reason": "Owner explicitly excludes computer-use from coverage maintenance; existing platform/native checks remain unchanged. Inventory remains visible, with no coverage claim.",
-      "note": "Full inventory: Swift and native Linux Rust are measured separately by computer-use-swift and computer-use-linux-native; Windows Rust and the documentation site remain unmeasured. JS/TS runtime source is separately measured by computer-use-vitest (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
+      "note": "Full inventory: Swift and native Linux and Windows Rust are measured separately by computer-use-swift, computer-use-linux-native and computer-use-windows-native. JS/TS runtime source is separately measured by computer-use-vitest (#347, #645). Shipped setup-helper.mjs, build-native.mjs and src/ JavaScript remain inventoried production source, never verification helpers.",
       "signals": {}
     },
     "computer-use-linux-native": {
@@ -432,17 +432,35 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): shared peer tests and AT-SPI root discovery reduced uncovered L/F/regions from 967/129/1793 to 930/125/1730. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. Windows remains unmeasured by this signal.",
+      "note": "Pinned Linux ARM64 measurement (#696): shared peer tests and AT-SPI root discovery reduced uncovered L/F/regions from 967/129/1793 to 930/125/1730. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 930, "functions": 125 } },
+          "max_uncovered": { "linux": { "lines": 834, "functions": 108 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
           "skip_os": ["darwin"],
           "gate": "check-ts"
+        }
+      }
+    },
+    "computer-use-windows-native": {
+      "root": "packages/computer-use",
+      "owned": ["native/windows/bridge-rs/src/**/*.rs"],
+      "exclusions": [],
+      "status": "measured",
+      "goal": "excluded",
+      "goal_reason": "Headless x64 tests do not prove live desktop behavior or Windows ARM64 coverage (#696).",
+      "note": "Hosted runs 44914453077 and 44876056492 agree on 3000/324/4868 uncovered lines/functions/regions. Source tests inside src count; regions are not branches.",
+      "signals": {
+        "primary": {
+          "report": "coverage/native-windows/lcov.info",
+          "producer": "llvm-lcov",
+          "platforms": ["win32"],
+          "max_uncovered": { "win32": { "lines": 3000, "functions": 324 } },
+          "reporters": ["text", "lcov", "json"]
         }
       }
     },

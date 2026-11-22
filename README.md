@@ -82,6 +82,8 @@ make help                    # every target
   Plan Mode build fixtures use the real package root only for its builder output path checks or
   workspace module resolution. Standalone validation and self-contained builders use OS temp.
   A killed run can leave in-package fixtures behind: they are outside the launcher's temp sandbox.
+  The dev-tools and computer-use suites remove per-test scratch at test completion and shared
+  scratch at suite teardown. Keep any fixture symlinks and config reset paths inside managed roots.
   `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
   (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
   the merge base is allowed for its initial introduction only.
@@ -163,7 +165,7 @@ make help                    # every target
 - Shared tool and cache setup: [setup-ci-tools](.github/actions/setup-ci-tools/action.yml).
 - Other workflow policy: [installer](.github/workflows/installer.yml), [core forks](.github/workflows/forks.yml),
   [publishing](.github/workflows/publish.yml), [runner rescue](.github/workflows/runner-rescue.yml). Review policy stays [here](#review-and-merge-evidence); flakes follow the comments in `ci.yml`
-- [Publish coverage](.github/workflows/coverage-publish.yml) updates one comment per PR, including forks. It checks the Ubuntu artifact's sidecar for run and SHA consistency, not whether the PR-reported numbers are correct. Missing or mismatched provenance is `unavailable`; macOS is not run on PRs and WSL2 is no longer scheduled. Required checks, not the comment, gate merges.
+- [Publish coverage](.github/workflows/coverage-publish.yml) updates one comment per PR, including forks. It checks producer provenance but does not verify the PR-reported numbers. macOS is not run on PRs; WSL2 is no longer scheduled. The comment and step summary link only validated baseline SHAs and CI attempts from successful `main` pushes. They omit the baseline section if the PR artifact was not fetched or the tested SHA is unavailable. Cancelled macOS cells can use an older successful run (up to 10 runs inspected). Missing, invalid or expired artifacts (90-day retention) are `unavailable`. Baselines are producer-reported, selected by run recency, not the PR merge base. Deltas require matching instrumentation and counters. Required checks, not the comment, gate merges. See [coverage](docs/coverage.md).
 - Owned packages publish through `publish.yml` from a signed tag; core ships through
   `nredd/tap/pi-coding-agent`. Procedure: [releases](docs/releases.md)
 - `promote-stack.yml` attests a gated `main` commit as `stack/<sha>`:
@@ -185,7 +187,7 @@ Docs-only PRs still report the four Ubuntu checks without running their gates. m
 
 GitHub does not order job admission by push age: a delayed or re-run older push can cancel a newer push’s macOS cell. A tip check cannot make admission atomic with `main` moving. These are not required checks; the cancelled cell is visible, and the next push or an eligible dispatch re-measures it.
 
-For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. Ubuntu requires a successful Windows native producer when the plan includes `packages/computer-use`; macOS explicitly does not require that producer.
+For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. The planner sets `windows_native_required` when an executing Ubuntu cell selects the `packages/computer-use` workspace. The Windows job and Ubuntu fan-in both read that boolean and fail on a missing or malformed decision for an executing cell. macOS does not require the Windows producer.
 
 ### Review and merge evidence
 
@@ -280,8 +282,10 @@ See [releases](docs/releases.md) for the artifact and provenance details.
   missing, and owns its private HOME/auth/tmp and offline environment through `harness.sandbox`.
   `make check-probes` still lints the whole probe directory and type-checks the other probes against
   the released host. The fork gate's non-rewriting
-  check mirrors the entire selected core script, including worktree readiness and the binary-release
-  and fork-audit type checks; only Biome's `--write` is removed
+  check runs through measured `scripts/ci_fork_check.py`. It refuses drift from the selected core
+  check list before running any checks, drops Biome's `--write`, and invokes `tsc` through `npx`.
+  It resolves the `setup-node` toolchain once and relies on the job deadline. Unlike Bash command
+  substitution, it rejects NUL bytes rather than stripping them with a version-dependent warning.
 - The Forks system dependency step always installs the upstream packages. It tries the Ubuntu mirrors in
   turn: Azure first, then the Ubuntu archive if the index or package download
   fails. Each apt command has its own deadline inside the five-minute step and prints its captured
@@ -531,7 +535,7 @@ All register repo-scoped with single-use JIT configs: a runner takes one job and
 - `sha_pinning_required: true` (every `uses:` is already a full SHA)
 - Fork PR approval: `all_external_contributors`, i.e. EVERY fork PR run waits for the owner. Never use "first-time contributors". Do NOT approve a fork PR run without reading its workflow diff: a fork can rewrite `runs-on` to a self-hosted label
 - Workflow token default `read`, `can_approve_pull_request_reviews: false`
-- No collaborators, no repo or org secrets (environments `npm`, `stack-promotion` are branch-gated), no `pull_request_target`, `workflow_run` or `issue_comment` workflows. Adding any of these with a self-hosted `runs-on` is a blocking change
+- No collaborators, no repo or org secrets (environments `npm`, `stack-promotion` are branch-gated), no `pull_request_target` or `issue_comment` workflows. The `workflow_run` exception is the hosted coverage publisher: it runs reviewed default-branch code and reads artifacts as data, never executing them. The publisher only writes the PR comment. Adding any of these triggers with a self-hosted `runs-on` is a blocking change.
 - Ruleset `main required checks` requires the same names the hosted cells report
 
 ### Threat model

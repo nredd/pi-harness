@@ -5,9 +5,9 @@ import {
 	executeAct,
 	executeEvaluateBrowser,
 	executeExpandUi,
+	executeFind,
 	executeInspectUi,
 	executeLaunchBrowser,
-	executeFind,
 	executeNavigateBrowser,
 	executeObserve,
 	executeReadText,
@@ -17,8 +17,8 @@ import {
 	setComputerUseActivity,
 	shutdownComputerUseSession,
 } from "./bridge.ts";
+import { getComputerUseConfig, getLoadedComputerUseConfig, hostPlatform, loadComputerUseConfig } from "./config.ts";
 import { executeDesktopInput, executeDesktopScreenshot } from "./desktop.ts";
-import { getComputerUseConfig, getLoadedComputerUseConfig, loadComputerUseConfig } from "./config.ts";
 
 const stateId = Type.String({ description: "Required state id owning every @e ref used by this operation" });
 const point = { x: Type.Number(), y: Type.Number() };
@@ -276,6 +276,11 @@ const COMPUTER_USE_TOOL_NAMES = new Set(COMPUTER_USE_TOOLS.map((tool) => tool.na
 
 function formatConfigStatus(): string {
 	const loaded = getLoadedComputerUseConfig();
+	const entries = `blocked_apps: ${loaded.config.blocked_apps.join(", ") || "(none)"}`;
+	const blocklistStatus =
+		hostPlatform() === "linux"
+			? [entries, "blocklist: configured entries are listed but INACTIVE on Linux until #1180 (identity)"]
+			: [`${entries} (system authentication agents are always blocked)`];
 	return [
 		"pi-computer-use configuration",
 		`browser_use: ${loaded.config.browser_use ? "enabled" : "disabled"}`,
@@ -283,7 +288,7 @@ function formatConfigStatus(): string {
 		`headless: ${loaded.config.headless ? "enabled" : "disabled"}`,
 		`cursor_overlay: ${loaded.config.cursor_overlay ? "enabled" : "disabled"}`,
 		`activity_glow: ${loaded.config.activity_glow ? "enabled" : "disabled"}`,
-		`blocked_apps: ${loaded.config.blocked_apps.length ? loaded.config.blocked_apps.join(", ") : "(none)"} (system authentication agents are always blocked)`,
+		...blocklistStatus,
 		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),
 		"",
 		"Sources:",

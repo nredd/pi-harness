@@ -7,13 +7,13 @@ References:
 from __future__ import annotations
 
 import json
-import lzma
 import struct
 import sys
 import zipfile
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
+from typing import IO
 
 import pytest
 
@@ -529,7 +529,54 @@ def test_truncated_deflate_stream_is_a_clean_refusal(tmp_path: Path, monkeypatch
         report.read_summary(path)
 
 
-@pytest.mark.parametrize("damage", ["corrupt", "spliced", "lzma"])
+@pytest.mark.parametrize("compression", [zipfile.ZIP_LZMA, zipfile.ZIP_BZIP2])
+@pytest.mark.parametrize("member", ["summary", "provenance"])
+def test_rejects_unsupported_compression_before_open(
+    compression: int, member: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refuse a valid ZIP's disallowed member without opening its compressed stream.
+
+    Parameters:
+        compression (int): Disallowed ZIP compression method.
+        member (str): Producer member to compress.
+        tmp_path (Path): Isolated archive directory.
+        monkeypatch (pytest.MonkeyPatch): Scoped ZIP reader spy.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The reader attempted to open the disallowed member.
+    """
+    path = tmp_path / "coverage-ubuntu-24.04.zip"
+    record = PROVENANCE.record("owned-ubuntu", "coverage-ubuntu-24.04")
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data in {"summary": summary_document(), "provenance": record}.items():
+            archive.writestr(
+                f"coverage/{name}.json",
+                json.dumps(data),
+                compress_type=compression if name == member else zipfile.ZIP_DEFLATED,
+            )
+    original = zipfile.ZipFile.open
+
+    def guarded_open(self: zipfile.ZipFile, name: zipfile.ZipInfo) -> IO[bytes]:
+        """Fail if the reader opens the member whose compression is disallowed.
+
+        Parameters:
+            name (zipfile.ZipInfo): Member about to be read.
+
+        Returns:
+            IO[bytes]: Open stream for an allowed member.
+        Raises:
+            AssertionError: The disallowed member was opened.
+        """
+        assert name.filename != f"coverage/{member}.json"
+        return original(self, name)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", guarded_open)
+    with pytest.raises(ValueError, match=f"Unsupported coverage {member} compression"):
+        report.read_summary(path, record)
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "spliced"])
 def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> None:
     """One damaged host archive leaves it unavailable while healthy hosts still render.
 
@@ -552,25 +599,13 @@ def test_damaged_archive_degrades_only_its_host(tmp_path: Path, damage: str) -> 
         json.dumps(PROVENANCE.record("owned-ubuntu", "coverage-ubuntu-24.04"))
     )
     bad = tmp_path / "coverage-macos-14.zip"
-    if damage == "lzma":
-        with zipfile.ZipFile(bad, "w", compression=zipfile.ZIP_LZMA) as archive:
-            archive.writestr("coverage/summary.json", json.dumps(summary_document()))
-        data = bytearray(bad.read_bytes())
-        name_length, extra_length = struct.unpack_from("<HH", data, 26)
-        offset = 30 + name_length + extra_length
-        # ZIP LZMA carries a four-byte prefix, then five filter-property bytes.
-        data[offset + 4 : offset + 9] = b"\xff" * 5
-        bad.write_bytes(data)
-        with zipfile.ZipFile(bad) as archive, pytest.raises(lzma.LZMAError):
-            archive.read("coverage/summary.json")
+    offset, size = deflated_zip(bad)
+    data = bytearray(bad.read_bytes())
+    if damage == "corrupt":
+        data[offset : offset + size] = b"\xff" * size
     else:
-        offset, size = deflated_zip(bad)
-        data = bytearray(bad.read_bytes())
-        if damage == "corrupt":
-            data[offset : offset + size] = b"\xff" * size
-        else:
-            data[offset + size // 2 : offset + size] = b""
-        bad.write_bytes(data)
+        data[offset + size // 2 : offset + size] = b""
+    bad.write_bytes(data)
     output = tmp_path / "report.md"
     assert (
         report.main(

@@ -14,7 +14,8 @@ import realFs from "node:fs/promises";
 import realOs from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { afterEach, describe, test, vi } from "vitest";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { afterEach, describe, onTestFinished, test, vi } from "vitest";
 import {
 	defaultDeps,
 	dispatch,
@@ -35,14 +36,6 @@ const LOCAL_FPR = "A".repeat(40);
 const DEV_FPR = "B".repeat(40);
 const ZIP_BYTES = Buffer.from("fake zip payload");
 const ZIP_SHA = createHash("sha256").update(ZIP_BYTES).digest("hex");
-
-/** @type {string[]} */
-let scratchDirs = [];
-
-afterEach(async () => {
-	await Promise.all(scratchDirs.map((dir) => realFs.rm(dir, { force: true, recursive: true })));
-	scratchDirs = [];
-});
 
 /**
  * @param {string} file Path to write.
@@ -100,8 +93,7 @@ function sysError(message, code) {
  * @throws {Error} On filesystem failure.
  */
 async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sources = true } = {}) {
-	const base = await realFs.mkdtemp(path.join(realOs.tmpdir(), "cu-setup-inproc-"));
-	scratchDirs.push(base);
+	const base = makeTestTempDir("cu-setup-inproc-", onTestFinished);
 	const dirs = {
 		base,
 		root: path.join(base, "root"),
@@ -652,7 +644,7 @@ describe("macOS sealed app installs", () => {
 		assert.deepEqual(rec.exit, []);
 		assert.equal(rec.log[0], `[pi-computer-use] installed pre-signed helper app (arm64) at ${host.dirs.app}`);
 		const names = rec.spawn.map(([command, ...args]) => `${command} ${args[0]}`);
-		assert.deepEqual(names, ["codesign --verify", "/usr/bin/ditto " + universal(host), `${LSREGISTER} -f`]);
+		assert.deepEqual(names, ["codesign --verify", `/usr/bin/ditto ${universal(host)}`, `${LSREGISTER} -f`]);
 		assert.deepEqual(rec.spawn[0], ["codesign", "--verify", "--strict", universal(host)]);
 		// Regex metacharacters, spaces and parens in the bundle path match literally under `pkill -f`.
 		const escaped = `${path.join(host.dirs.app, "Contents", "MacOS", "bridge").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
@@ -877,7 +869,7 @@ describe("macOS local helper install and signing", () => {
 		assert.deepEqual(rec.warn, []);
 		assert.equal(rec.log.length, 1);
 		assert.equal(
-			rec.exec.some(([command, ...args]) => command === "which"),
+			rec.exec.some(([command, ..._args]) => command === "which"),
 			false,
 			"no local lookup when a Developer ID exists",
 		);
@@ -1152,7 +1144,7 @@ describe("macOS release download", () => {
 		);
 		host.state.archive = layout;
 	}
-	const direct = (host) => async (dir) => makeApp(path.join(dir, "pi-computer-use.app"), "release exe");
+	const direct = (_host) => async (dir) => makeApp(path.join(dir, "pi-computer-use.app"), "release exe");
 	const leftovers = async (host) =>
 		(await realFs.readdir(host.dirs.tmp)).filter((name) => name.startsWith("pi-computer-use-release-helper-"));
 
@@ -1567,7 +1559,7 @@ describe("runCancellable in process", () => {
 		const handlers = captureHandlers();
 		const calls = [];
 		const child = fakeChild();
-		const run = start(child, (pid, signal) => {
+		const run = start(child, (_pid, signal) => {
 			calls.push(signal);
 			throw sysError("boom", "EIO");
 		});
@@ -1584,7 +1576,7 @@ describe("runCancellable in process", () => {
 		const child = fakeChild();
 		const run = start(
 			child,
-			(pid, signal) => {
+			(_pid, signal) => {
 				calls.push(signal);
 				if (signal === 0) throw sysError("eperm", "EPERM");
 				return true;
@@ -1616,7 +1608,7 @@ describe("runCancellable in process", () => {
 		let dead = false;
 		await reapProcessGroup(
 			4_000_002,
-			(pid, signal) => {
+			(_pid, signal) => {
 				sent.push(signal);
 				if (dead) gone();
 				if (signal === "SIGKILL") dead = true;
@@ -1635,7 +1627,7 @@ describe("runCancellable in process", () => {
 		const sent = [];
 		await reapProcessGroup(
 			4_000_002,
-			(pid, signal) => {
+			(_pid, signal) => {
 				sent.push(signal);
 				if (signal === "SIGKILL") gone();
 				return true;
@@ -1653,7 +1645,7 @@ describe("runCancellable in process", () => {
 		fastForwardClock();
 		const sent = [];
 		const child = fakeChild();
-		const run = start(child, (pid, signal) => {
+		const run = start(child, (_pid, signal) => {
 			sent.push(signal);
 			return true;
 		});
@@ -1702,9 +1694,7 @@ describe("withDirectoryLock", () => {
 
 	/** @returns {Promise<string>} Fresh scratch directory. @throws {Error} On filesystem failure. */
 	async function scratch() {
-		const dir = await realFs.mkdtemp(path.join(realOs.tmpdir(), "cu-lock-"));
-		scratchDirs.push(dir);
-		return dir;
+		return makeTestTempDir("cu-lock-", onTestFinished);
 	}
 
 	test("runs the callback under the lock and releases it, even when the callback throws", async () => {

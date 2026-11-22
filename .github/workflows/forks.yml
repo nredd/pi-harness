@@ -7,6 +7,7 @@ on:
       - forks/**
       - .gitmodules
       - .github/workflows/forks.yml
+      - scripts/ci_fork_check.py
       - scripts/forks_apt.sh
       - scripts/ubuntu_apt.sh
       - Makefile
@@ -30,6 +31,7 @@ on:
       - forks/**
       - .gitmodules
       - .github/workflows/forks.yml
+      - scripts/ci_fork_check.py
       - scripts/forks_apt.sh
       - scripts/ubuntu_apt.sh
       - Makefile
@@ -114,26 +116,7 @@ jobs:
       - name: Build
         run: npm run build:offline
       - name: Check without rewriting
-        run: |
-          # The fork's `check` runs Biome with --write; CI runs the same steps with Biome check-only.
-          # Fail loudly if the fork changes its check list instead of silently drifting from it.
-          expected='node scripts/worktree.mjs check && node scripts/biome-check.mjs --write && npm run check:binary-release && npm run check:fork-audit && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke'
-          actual=$(node -p 'require("./package.json").scripts.check')
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::forks/pi changed its check script; update this step: $actual"
-            exit 1
-          fi
-          node scripts/worktree.mjs check
-          node scripts/biome-check.mjs
-          npm run check:binary-release
-          npm run check:fork-audit
-          npm run check:pinned-deps
-          npm run check:runtime-deps
-          npm run check:ts-imports
-          npm run check:entry-graphs
-          npm run check:install-lock:coding-agent
-          npx tsc --noEmit
-          npm run check:browser-smoke
+        run: python3 ../../scripts/ci_fork_check.py
       - name: Build the pi-env daemon
         run: npm run build:daemon --workspace packages/env
       - name: Test (isolated HOME, no credentials)

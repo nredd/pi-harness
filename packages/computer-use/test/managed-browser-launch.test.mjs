@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { loadComputerUseConfig } from "../src/config.ts";
@@ -29,8 +30,8 @@ describe("managed browser executable discovery", () => {
 	const { managedBrowserExecutableCandidates: candidates } = testing;
 	let bin;
 
-	beforeEach(() => {
-		bin = path.join(os.tmpdir(), "pi-cu-bin");
+	beforeEach(({ onTestFinished }) => {
+		bin = path.join(makeTestTempDir("pi-cu-discovery-", onTestFinished), "pi-cu-bin");
 		for (const name of ENV) vi.stubEnv(name, "");
 		vi.stubEnv("PATH", "");
 	});
@@ -112,8 +113,8 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 	let scratch;
 	let tmp;
 
-	beforeEach(() => {
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cu-launch-"));
+	beforeEach(({ onTestFinished }) => {
+		scratch = makeTestTempDir("pi-cu-launch-", onTestFinished);
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		for (const name of ENV) vi.stubEnv(name, "");
@@ -125,7 +126,6 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 		vi.restoreAllMocks();
 		loadComputerUseConfig(scratch);
 		await shutdownComputerUseSession();
-		fs.rmSync(scratch, { recursive: true, force: true });
 	});
 
 	/** Select the managed browser the way the environment override does, then reload the config. */
@@ -200,9 +200,11 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 		// Otherwise a loaded host can time out and kill it before launch.json ever exists.
 		let skew = 0;
 		const realNow = Date.now.bind(Date);
-		vi.spyOn(Date, "now").mockImplementation(
-			() => realNow() + (fs.existsSync(path.join(scratch, "launch.json")) ? (skew += 6_000) : 0),
-		);
+		vi.spyOn(Date, "now").mockImplementation(() => {
+			if (!fs.existsSync(path.join(scratch, "launch.json"))) return realNow();
+			skew += 6_000;
+			return realNow() + skew;
+		});
 		Date.now();
 		assert.equal(skew, 0, "timeout fixture clock must not advance before child startup acknowledgement");
 		await assert.rejects(
@@ -219,8 +221,8 @@ describe.skipIf(process.platform === "win32")("managed browser launch edge cases
 	let scratch;
 	let tmp;
 
-	beforeEach(() => {
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cu-launch-edge-"));
+	beforeEach(({ onTestFinished }) => {
+		scratch = makeTestTempDir("pi-cu-launch-edge-", onTestFinished);
 		tmp = path.join(scratch, "tmp");
 		fs.mkdirSync(tmp);
 		for (const name of ENV) vi.stubEnv(name, "");
@@ -233,7 +235,6 @@ describe.skipIf(process.platform === "win32")("managed browser launch edge cases
 		vi.restoreAllMocks();
 		await shutdownComputerUseSession();
 		fs.chmodSync(tmp, 0o755);
-		fs.rmSync(scratch, { recursive: true, force: true });
 	});
 
 	test("a non-ok discovery answer is retried until the browser is ready", async () => {

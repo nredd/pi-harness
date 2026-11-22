@@ -1,0 +1,15 @@
+{
+	"providers": {
+		"google-subscription": { "label": { "full": "Google sub", "compact": "GSub" } }
+	},
+	"profiles": {
+		"deep": {
+			"strategy": "balanced",
+			"chain": [
+				{ "model": "anthropic/claude-sonnet-5-5" },
+				{ "model": "google-subscription/gemini-4-neon" },
+				{ "model": "google/gemini-4-neon" }
+			]
+		}
+	}
+}

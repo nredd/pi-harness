@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { PlatformApp, PlatformName } from "./platform/types.ts";
 
 export interface ComputerUseConfig {
 	browser_use: boolean;
@@ -12,7 +13,7 @@ export interface ComputerUseConfig {
 	managed_browser: "helium" | "chrome";
 	/** Dedicated credential-bearing profile. Only the user-global file may opt in. */
 	managed_browser_profile: string | null;
-	/** Bundle ids `act_ui`, `desktop_input` and `observe_ui` refuse (`app_blocked`), on top of `ALWAYS_BLOCKED_BUNDLE_IDS`. */
+	/** Opaque host app ids refused with `app_blocked`, in addition to the host’s always-blocked list. */
 	blocked_apps: string[];
 }
 
@@ -46,6 +47,48 @@ export const ALWAYS_BLOCKED_BUNDLE_IDS: readonly string[] = [
 	"com.apple.ScreenSaver.Engine",
 ];
 
+const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string[]; always: readonly string[] }> = {
+	macos: { defaults: DEFAULT_BLOCKED_APPS, always: ALWAYS_BLOCKED_BUNDLE_IDS },
+	windows: {
+		defaults: [
+			"WindowsTerminal.exe",
+			"conhost.exe",
+			"OpenConsole.exe",
+			"wt.exe",
+			"wsl.exe",
+			"cmd.exe",
+			"powershell.exe",
+			"pwsh.exe",
+			"1Password.exe",
+			"Bitwarden.exe",
+			"KeePass.exe",
+			"KeePassXC.exe",
+			"CredentialUIBroker.exe",
+		],
+		always: ["consent.exe", "LogonUI.exe", "LockApp.exe"],
+	},
+	linux: {
+		defaults: ["gnome-terminal-server", "konsole", "xterm", "alacritty", "kitty", "keepassxc", "bitwarden"],
+		always: [
+			"pinentry",
+			"pinentry-gtk-2",
+			"pinentry-gnome3",
+			"pinentry-qt",
+			"pinentry-curses",
+			"polkit-gnome-authentication-agent-1",
+			"polkit-kde-authentication-agent-1",
+		],
+	},
+};
+
+export function hostPlatform(): PlatformName {
+	return process.platform === "darwin" ? "macos" : process.platform === "win32" ? "windows" : "linux";
+}
+
+export function defaultBlockedApps(platform: PlatformName = hostPlatform()): readonly string[] {
+	return BLOCKED_APPS_BY_PLATFORM[platform].defaults;
+}
+
 export interface ComputerUseConfigSource {
 	path: string;
 	exists: boolean;
@@ -71,7 +114,7 @@ const DEFAULT_CONFIG: ComputerUseConfig = {
 	activity_glow: false,
 	managed_browser: "chrome",
 	managed_browser_profile: null,
-	blocked_apps: [...DEFAULT_BLOCKED_APPS],
+	blocked_apps: [...defaultBlockedApps()],
 };
 
 let activeConfig: ComputerUseConfig = { ...DEFAULT_CONFIG };
@@ -87,21 +130,21 @@ function parseBoolean(value: unknown): boolean | undefined {
 	return undefined;
 }
 
-type BundleIds = { ids: string[] } | { error: string };
+type AppIds = { ids: string[] } | { error: string };
 
-/** A JSON array of non-blank bundle id strings. Any other shape or entry is rejected whole, never filtered. */
-function parseBundleIdArray(value: unknown): BundleIds {
-	if (!Array.isArray(value)) return { error: "blocked_apps must be an array of bundle id strings" };
+/** Reject invalid arrays whole rather than silently dropping invalid entries. */
+function parseAppIdArray(value: unknown, platform: PlatformName): AppIds {
+	if (!Array.isArray(value)) return { error: "blocked_apps must be an array of app id strings" };
 	const bad = value.filter((item) => typeof item !== "string" || !item.trim());
 	if (bad.length)
 		return {
 			error: `blocked_apps has ${bad.length} invalid entr${bad.length === 1 ? "y" : "ies"} (each must be a non-blank string)`,
 		};
-	return { ids: [...new Set((value as string[]).map((item) => item.trim()))] };
+	return { ids: [...new Set((value as string[]).map((item) => (platform === "windows" ? item : item.trim())))] };
 }
 
 /** `PI_COMPUTER_USE_BLOCKED_APPS`: a comma list of ids to ADD to the blocklist; blank is unset. The env can never remove an id (a repo's `.envrc` can set it). */
-function parseBundleIdEnv(value: string | undefined): string[] {
+function parseAppIdEnv(value: string | undefined): string[] {
 	return [
 		...new Set(
 			(value ?? "")
@@ -143,6 +186,7 @@ function rawBlockedApps(raw: unknown): unknown {
 function readConfigFile(
 	filePath: string,
 	scope: "user" | "project",
+	platform: PlatformName,
 ): ComputerUseConfigSource & { blockedAppsError?: string } {
 	if (!existsSync(filePath)) return { path: filePath, exists: false };
 	try {
@@ -158,7 +202,7 @@ function readConfigFile(
 			out.values = { ...out.values, managed_browser_profile: profile.trim() };
 		const rawList = rawBlockedApps(parsed);
 		if (rawList !== undefined) {
-			const result = parseBundleIdArray(rawList);
+			const result = parseAppIdArray(rawList, platform);
 			if ("error" in result) out.blockedAppsError = `${filePath}: ${result.error}; keeping the current list`;
 			// Only the user-global file may replace (or empty) the list; a project file, which a repo or an agent can write, only adds.
 			else if (scope === "user") out.values = { ...out.values, blocked_apps: result.ids };
@@ -187,15 +231,15 @@ function readEnv(): Partial<ComputerUseConfig> {
 	return out;
 }
 
-export function loadComputerUseConfig(cwd: string): LoadedComputerUseConfig {
+export function loadComputerUseConfig(cwd: string, platform: PlatformName = hostPlatform()): LoadedComputerUseConfig {
 	const read = [
-		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json"), "user"),
-		readConfigFile(path.join(cwd, ".pi", "computer-use.json"), "project"),
+		readConfigFile(path.join(getAgentDir(), "extensions", "pi-computer-use.json"), "user", platform),
+		readConfigFile(path.join(cwd, ".pi", "computer-use.json"), "project", platform),
 	];
 	const blockedAppsErrors = read.flatMap((source) => (source.blockedAppsError ? [source.blockedAppsError] : []));
 	const sources: ComputerUseConfigSource[] = read.map(({ blockedAppsError: _ignored, ...source }) => source);
 	const env = readEnv();
-	const config = { ...DEFAULT_CONFIG, blocked_apps: [...DEFAULT_BLOCKED_APPS] };
+	const config = { ...DEFAULT_CONFIG, blocked_apps: [...defaultBlockedApps(platform)] };
 	for (const source of sources) {
 		if (source.values) Object.assign(config, source.values);
 	}
@@ -205,7 +249,7 @@ export function loadComputerUseConfig(cwd: string): LoadedComputerUseConfig {
 		...new Set([
 			...config.blocked_apps,
 			...sources.flatMap((source) => source.blockedAppsAdd ?? []),
-			...parseBundleIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS),
+			...parseAppIdEnv(process.env.PI_COMPUTER_USE_BLOCKED_APPS),
 		]),
 	];
 	activeConfig = config;
@@ -230,11 +274,20 @@ export function effectiveBlockedBundleIds(): string[] {
 	return [...new Set([...ALWAYS_BLOCKED_BUNDLE_IDS, ...activeConfig.blocked_apps])];
 }
 
-/** True when `bundleId` (case-insensitive) is blocked; an app without a bundle id can never match. */
+/** Compare only the host's policy identity, never the presentation name. */
+export function blockedAppId(platform: PlatformName, app: Pick<PlatformApp, "appId" | "bundleId">): string | undefined {
+	// #1180: Linux processName is an app-supplied accessible Name, not an executable identity.
+	if (platform === "linux") return undefined;
+	const id = app.appId ?? (platform === "macos" ? app.bundleId : undefined);
+	if (!id) return undefined;
+	const wanted = id.toLowerCase();
+	const { always } = BLOCKED_APPS_BY_PLATFORM[platform];
+	return [...always, ...activeConfig.blocked_apps].some((blocked) => blocked.toLowerCase() === wanted) ? id : undefined;
+}
+
+/** macOS bundle-id policy alias. */
 export function isBlockedBundleId(bundleId: string | undefined): boolean {
-	if (!bundleId) return false;
-	const wanted = bundleId.toLowerCase();
-	return effectiveBlockedBundleIds().some((blocked) => blocked.toLowerCase() === wanted);
+	return blockedAppId("macos", { bundleId }) !== undefined;
 }
 
 export function isBrowserUseEnabled(): boolean {
@@ -338,13 +391,15 @@ The activity glow appears in user screen recordings. Single-window `observe_ui` 
 
 ### `blocked_apps`
 
-Default: the list below. System authentication agents are blocked in addition, always.
+Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename and X11 `WM_CLASS` once #1180 lands. Never use a display name, path, glob or regex. An unidentified root cannot match.
 
-A list of macOS bundle ids that Pi refuses to observe or control. The default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
+Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux presets cover common terminals, password managers, pinentry executables and polkit agents, but **Linux blocklist matching is disabled** until #1180 supplies a trusted identity. The helper's current `processName` is an app-controlled AT-SPI accessible name.
+
+The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 
 The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
 
-A blocked target fails with the coded error `app_blocked`. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
+On macOS and Windows, `find_roots` marks matching roots `blocked`, and a known blocked root fails with `app_blocked` before helper calls. The helper-side checks below are macOS-only:
 
 - `observe_ui`, `act_ui` and every tool that resolves a root (e.g. `read_text`, `wait_for`) refuse a root owned by a blocked app. `act_ui` re-checks on every call, so adding an app to the list stops a state observed earlier.
 - `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost or holds key focus, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or any drag path vertex) lands on a blocked app's window. The helper checks immediately before it delivers the input, but a key sequence that itself switches apps (e.g. `cmd+tab`) or a focus change in the middle of delivery is not re-checked, so this is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
@@ -353,7 +408,7 @@ A blocked target fails with the coded error `app_blocked`. `act_ui` coordinate i
 
 Only the user-global file can replace the list. A project `.pi/computer-use.json` is writable by the repository and by the agent itself, so its `blocked_apps` is only unioned into the effective list: it can add ids, never remove one, and `[]` there changes nothing. The environment is treated the same way, because a repository can set it too (`.envrc`, direnv, a launch script). The user-global list replaces the default, it does not extend it, so the explicit opt-out is a literal `"blocked_apps": []` in `~/.pi/agent/extensions/pi-computer-use.json`; copy the defaults and append to extend them.
 
-A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list of ids that are added to the effective list; it never removes one, a blank value (empty, whitespace, only commas) is treated as unset, and there is no environment opt-out (`none` is just an id that matches nothing). Trust model: the environment and project config are additive only; the user-global file is the only place that can opt out, and `PI_CODING_AGENT_DIR` selects which file that is, so it must be controlled by the operator, not by a repository.
+A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list of ids that are added to the effective list; it never removes one, a blank value (empty, whitespace, only commas) is treated as unset, and there is no environment opt-out (`none` is just an id that matches nothing). Trust model: the environment and project config are additive only; the user-global file is the only place that can opt out, and `PI_CODING_AGENT_DIR` selects which file that is, so it must be controlled by the operator, not by a repository.
 
 Known limits. This is a guard against mistakes, not a sandbox:
 

@@ -65,6 +65,7 @@ export const desktopRoot = (fields = {}) => {
 };
 
 const BACKEND_KEYS = [
+	"name",
 	"ensureReady",
 	"listApps",
 	"listRoots",
@@ -117,7 +118,7 @@ export const lookPayload = ({ lookId = "look1", children, image = true, window =
  * the backend. Every look, wait and act request is recorded. `apps` and `frontmost` override the listing
  * derived from `roots` and `frontmostPid`; `browserApps`/`chromeApps` name the browser-family apps.
  * @param {(fn: () => void | Promise<void>) => void} onTestFinished Vitest cleanup registrar.
- * @param {object} [options] `roots` seeds the listing (the first root's pid is not auto-selected; set `frontmostPid`).
+ * @param {object} [options] `platform` pins the host policy; `roots` seeds the listing without selecting the frontmost pid.
  * @returns {Promise<object>} Fake controls: `roots`, `tree`, `looks`, `waits`, `call`, `text`, `observe`, `bridge` and the hooks above.
  * @throws {Error} When the backend module cannot be imported.
  */
@@ -208,6 +209,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		};
 	};
 	Object.assign(currentPlatformBackend, {
+		name: options.platform ?? currentPlatformBackend.name,
 		ensureReady: async () => {
 			fake.readyCalls++;
 			return {

@@ -7,7 +7,7 @@ import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
-import { DEFAULT_BLOCKED_APPS } from "../src/config.ts";
+import { defaultBlockedApps } from "../src/config.ts";
 import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../src/index.ts";
 
 vi.mock("../src/bridge.ts", async (importOriginal) => ({
@@ -118,7 +118,24 @@ describe("/computer-use", () => {
 		return ctx.notes[0].message;
 	};
 
-	test("defaults: everything enabled but the glow, default blocklist, no sources", async () => {
+	test.each([
+		[
+			"darwin",
+			[`blocked_apps: ${defaultBlockedApps("macos").join(", ")} (system authentication agents are always blocked)`],
+		],
+		[
+			"win32",
+			[`blocked_apps: ${defaultBlockedApps("windows").join(", ")} (system authentication agents are always blocked)`],
+		],
+		[
+			"linux",
+			[
+				`blocked_apps: ${defaultBlockedApps("linux").join(", ")}`,
+				"blocklist: configured entries are listed but INACTIVE on Linux until #1180 (identity)",
+			],
+		],
+	])("%s: default status reports the host's blocklist enforcement", async (platform, blocklistStatus) => {
+		setPlatform(platform);
 		const text = await run();
 		assert.equal(
 			text,
@@ -129,7 +146,7 @@ describe("/computer-use", () => {
 				"headless: disabled",
 				"cursor_overlay: enabled",
 				"activity_glow: disabled",
-				`blocked_apps: ${DEFAULT_BLOCKED_APPS.join(", ")} (system authentication agents are always blocked)`,
+				...blocklistStatus,
 				"",
 				"Sources:",
 				`- ${path.join(root, "agent", "extensions", "pi-computer-use.json")}: not found`,
@@ -140,6 +157,7 @@ describe("/computer-use", () => {
 	});
 
 	test("user file flips every flag, empties the blocklist and the env override is listed", async () => {
+		setPlatform("darwin");
 		writeUserConfig({
 			computer_use: {
 				browser_use: "off",
@@ -173,12 +191,12 @@ describe("/computer-use", () => {
 		const text = await run();
 		assert.match(
 			text,
-			/^blocked_apps error: .*pi-computer-use\.json: blocked_apps must be an array of bundle id strings; keeping the current list$/m,
+			/^blocked_apps error: .*pi-computer-use\.json: blocked_apps must be an array of app id strings; keeping the current list$/m,
 		);
 		assert.match(text, /computer-use\.json: error: .+$/m);
 		assert.match(
 			text,
-			new RegExp(`^blocked_apps: ${DEFAULT_BLOCKED_APPS[0].replaceAll(".", "\\.")}`, "m"),
+			new RegExp(`^blocked_apps: ${defaultBlockedApps()[0].replaceAll(".", "\\.")}`, "m"),
 			"defaults stay in force",
 		);
 	});

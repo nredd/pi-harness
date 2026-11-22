@@ -19,11 +19,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
-from harness.session_kit import assistant, compact, iso
+from harness.session_kit import GOOGLE_MODEL, assistant, compact, iso
 
 PORTABLE_ARTIFACT = Path(".local/lib/pi-stats-export.mjs")
 PRIVATE_SENTINEL = "STATS-PRIVATE-TEXT-DO-NOT-EXPORT"
-# Output tokens; assistant() adds input/cache counters for a total of 26 * output.
+# Output tokens; Google has no cache writes.
 HOURLY_CALLS = [
     (1, "anthropic", "claude-opus-5-5", 1),
     (4, "openai-codex", "gpt-6.1-sol", 2),
@@ -31,6 +31,7 @@ HOURLY_CALLS = [
     (23, "openai-codex", "gpt-6.1-sol", 4),
     (25, "anthropic", "claude-opus-5-5", 5),
     (45 * 24, "openai-codex", "gpt-6.1-sol", 6),
+    (2, "google", GOOGLE_MODEL, 8),
 ]
 
 
@@ -85,7 +86,7 @@ def hourly_entries(now: datetime) -> list[str]:
         now (datetime): aware reference instant shared by all producers.
 
     Returns:
-        list[str]: six countable calls, followed by exclusions.
+        list[str]: seven countable calls, followed by exclusions.
 
     Raises:
         ValueError: reference instant is timezone-naive.
@@ -192,8 +193,8 @@ def import_machines(artifact: Path, home: Path, agent_dir: Path, input_dir: Path
 def seed_shared_stats(artifact: Path, root: Path, agent_dir: Path) -> tuple[ExportedMachine, ...]:
     """Seed local history and two independent machines, deduping their copied events.
 
-    Local has 546 tokens; remote unique calls add 78. Combined All/5h/24h
-    totals are 624/156/338. Both remote files copy the local calls, so a
+    Local has 730 tokens; remote unique calls add 78. Combined All/5h/24h
+    totals are 808/340/522. Both remote files copy the local calls, so a
     broken cross-machine fingerprint would inflate all three totals. Each new
     remote call has the same timestamp/model/counters as a local call but a
     distinct entry ID, so tuple-only dedup would incorrectly erase it.

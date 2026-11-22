@@ -1,6 +1,15 @@
 /** Scripted model turns and observations of the real host that executes them. */
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall, type Harness } from "./harness.ts";
+import { fauxAssistantMessage, fauxToolCall, type Harness, registerFauxProvider } from "./harness.ts";
+
+/** Use the physical provider id so `/stats` counts these synthetic Gemini turns. */
+export function registerGoogleFauxProvider() {
+	return registerFauxProvider({
+		api: "fixture-google",
+		provider: "google",
+		models: [{ id: "gemini-4-carbon", reasoning: true }],
+	});
+}
 
 /** One scripted tool request. */
 export interface ToolCallSpec {

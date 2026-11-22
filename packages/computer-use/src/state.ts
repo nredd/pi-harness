@@ -3,11 +3,11 @@ import type { CdpPageSnapshot } from "./cdp.ts";
 import type { ImageMode } from "./contract.ts";
 import type { WindowNote } from "./note.ts";
 import {
-	restoreOutline,
-	serializeOutline,
 	type LookResponse,
 	type Outline,
+	restoreOutline,
 	type SerializedOutline,
+	serializeOutline,
 } from "./outline.ts";
 import { StateStore, type StoredState } from "./runtime.ts";
 
@@ -19,6 +19,8 @@ interface StateTargetSnapshot {
 
 export interface CurrentTarget {
 	appName: string;
+	appId?: string;
+	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
 	windowTitle: string;

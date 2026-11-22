@@ -229,6 +229,8 @@ class CellPlan:
         guest (str): A running `owned` cell's CI host class (`coverage_accounting.py --host`), else empty.
         coverage_os (str): A running `owned` cell's coverage platform (`coverage_accounting.py --os`), else
             empty.
+        windows_native_required (bool): Whether the Ubuntu owned shards select `packages/computer-use`
+            and the fan-in needs a successful native Windows producer.
         skipped_gates (tuple[str, ...]): Planned `gates` this run skips (`coverage_accounting.py
             --skipped-gates`).
         runner (str): The self-hosted pool label a `contracts` or `stack` cell runs on, empty to keep the
@@ -243,6 +245,7 @@ class CellPlan:
     shards: tuple[ShardPlan, ...] = ()
     guest: str = ""
     coverage_os: str = ""
+    windows_native_required: bool = False
     skipped_gates: tuple[str, ...] = ()
     runner: str = ""
 
@@ -251,7 +254,7 @@ class CellPlan:
 
         Returns:
             dict[str, object]: Booleans, the space-joined gates, the reason, the block flag, the shard
-                matrix entries and the fan-in's accounting `guest`, `coverage_os` and `skipped_gates`.
+                matrix entries, native Windows producer decision and fan-in accounting inputs.
         """
         output: dict[str, object] = {
             "run": self.run,
@@ -262,6 +265,7 @@ class CellPlan:
             "shards": [shard.to_output() for shard in self.shards],
             "guest": self.guest,
             "coverage_os": self.coverage_os,
+            "windows_native_required": self.windows_native_required,
             "skipped_gates": " ".join(self.skipped_gates),
         }
         # Only a pool-routed cell carries a runner, so the runner-less plan is unchanged while no pool is up.
@@ -642,14 +646,17 @@ def native_plan(
     if job != "owned":
         return CellPlan(run=True, scenarios=True, gates=(), reason="")
     path_gated = skipped_gates(result, event)
+    shards = shard_plans(os_name, workspaces, path_gated)
     return CellPlan(
         run=True,
         scenarios=True,
         gates=OWNED_GATES[os_name],
         reason="",
-        shards=shard_plans(os_name, workspaces, path_gated),
+        shards=shards,
         guest=RUNNERS[os_name][1],
         coverage_os=COVERAGE_OS[os_name],
+        windows_native_required=os_name == "ubuntu-24.04"
+        and any("packages/computer-use" in shard.workspaces for shard in shards),
         skipped_gates=tuple(gate for gate in OWNED_GATES[os_name] if gate in path_gated),
     )
 

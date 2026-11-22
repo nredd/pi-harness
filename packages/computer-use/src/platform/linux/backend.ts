@@ -1,4 +1,4 @@
-import { parseLookResponse, type LookResponse } from "../../outline.ts";
+import { type LookResponse, parseLookResponse } from "../../outline.ts";
 import { assertPlatformArchitecture } from "../architecture.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
@@ -81,7 +81,8 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
 			pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
 			appName: toOptionalString(raw?.appName ?? raw?.processName),
-			bundleId: toOptionalString(raw?.bundleId ?? raw?.desktopId),
+			// The helper currently copies the AT-SPI accessible Name into processName (#1180).
+			appId: toOptionalString(raw?.processName),
 			title: toOptionalString(raw?.title) ?? "",
 			role: toOptionalString(raw?.role),
 			subrole: toOptionalString(raw?.subrole),
@@ -106,7 +107,7 @@ function appsFromRoots(roots: PlatformRoot[]): PlatformApp[] {
 		return [
 			{
 				appName: root.appName ?? "Unknown",
-				bundleId: root.bundleId,
+				appId: root.appId,
 				pid: root.pid,
 				isFrontmost: root.isFocused,
 			},
@@ -171,7 +172,7 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 			);
 		return {
 			appName: focused.appName ?? "Unknown",
-			bundleId: focused.bundleId,
+			appId: focused.appId,
 			pid: focused.pid,
 			windowTitle: focused.title,
 			windowId: focused.windowId,

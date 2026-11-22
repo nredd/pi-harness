@@ -1,9 +1,8 @@
 // `launch_browser` after the browser is up: no page to observe, or a page that cannot be observed (nredd/pi-harness#712, Refs #645).
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 
 vi.mock("../src/cdp.ts", async (importOriginal) => {
@@ -22,8 +21,8 @@ const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import
 describe.skipIf(process.platform === "win32")("launch_browser observation after start", () => {
 	let scratch;
 
-	beforeEach(() => {
-		scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cu-observe-"));
+	beforeEach(({ onTestFinished }) => {
+		scratch = makeTestTempDir("pi-cu-observe-", onTestFinished);
 		vi.stubEnv("TMPDIR", scratch);
 		vi.stubEnv("FAKE_BROWSER_LOG", path.join(scratch, "launch.json"));
 		vi.stubEnv("PI_COMPUTER_USE_CHROME_EXECUTABLE", FAKE_BROWSER);
@@ -32,7 +31,6 @@ describe.skipIf(process.platform === "win32")("launch_browser observation after 
 	afterEach(async () => {
 		vi.unstubAllEnvs();
 		await shutdownComputerUseSession();
-		fs.rmSync(scratch, { recursive: true, force: true });
 	});
 
 	test("a browser that lists no page is an error", async () => {

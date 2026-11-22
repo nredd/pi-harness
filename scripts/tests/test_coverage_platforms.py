@@ -281,7 +281,7 @@ def test_measure_artifacts_prints_reviewable_diff_without_writing_policy(
 
 
 def test_unmeasured_platforms_are_not_invented(tmp_path: Path) -> None:
-    """Keep Windows and unsupported platform names outside the measured schema.
+    """Keep unsupported platform names outside the measured schema.
 
     Parameters:
         tmp_path (Path): Disposable real LCOV/source root.
@@ -293,8 +293,11 @@ def test_unmeasured_platforms_are_not_invented(tmp_path: Path) -> None:
     setup_report(tmp_path)
     cfg = policy()
     data = cfg.model_dump()
-    data["packages"]["example"]["signals"]["primary"]["max_uncovered"]["win32"] = {"lines": 0, "functions": 0}
+    data["packages"]["example"]["signals"]["primary"]["max_uncovered"]["freebsd"] = {
+        "lines": 0,
+        "functions": 0,
+    }
     with pytest.raises(ValidationError):
         Policy.model_validate(data)
     with pytest.raises(ValueError, match="not measured on OS"):
-        account(tmp_path, cfg, "win32")
+        account(tmp_path, cfg, "freebsd")

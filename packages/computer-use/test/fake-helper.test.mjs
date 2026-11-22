@@ -210,7 +210,7 @@ describe("wire fidelity", () => {
 	});
 
 	test("socket request rejects if the helper closes before replying", async () => {
-		const { socketPath, dispose } = shortSocketPath();
+		const socketPath = shortSocketPath();
 		const fake = await startFakeHelper({ socketPath });
 		try {
 			fake.script("diagnostics", drop());
@@ -224,12 +224,11 @@ describe("wire fidelity", () => {
 			assert.equal(result, "closed", "a closed socket must settle the waiting request");
 		} finally {
 			await fake.stop();
-			dispose();
 		}
 	});
 
 	test("a shut-down socket helper stops listening and can be relaunched explicitly", async () => {
-		const { socketPath, dispose } = shortSocketPath();
+		const socketPath = shortSocketPath();
 		const fake = await startFakeHelper({ socketPath });
 		try {
 			const ask = (cmd) => askSocket(socketPath, cmd);
@@ -245,7 +244,6 @@ describe("wire fidelity", () => {
 			});
 		} finally {
 			await fake.stop();
-			dispose();
 		}
 	});
 });
@@ -273,7 +271,7 @@ function serveForTest(engine, input, order) {
 
 describe("socket server", () => {
 	test("disconnectAll drops live clients but keeps listening, and the envelope reply is framed per profile", async () => {
-		const { socketPath, dispose } = shortSocketPath();
+		const socketPath = shortSocketPath();
 		const fake = await startFakeHelper({
 			socketPath,
 			profile: "envelope",
@@ -301,7 +299,6 @@ describe("socket server", () => {
 			assert.equal(fake.connections, 2);
 		} finally {
 			await fake.stop();
-			dispose();
 		}
 	});
 });
