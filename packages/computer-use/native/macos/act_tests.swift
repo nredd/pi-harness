@@ -634,7 +634,12 @@ private func runEventAssertions() throws {
     var onInputSleep: () -> Void = {}
     var onHIDPrepare: () -> Bool = { false }
     var onHIDPost: (CGEventType) -> Void = { _ in }
+    // Fake monotonic clock shared by allocation and post, so a stale creation stamp sorts before later events.
+    var clockTicks: CGEventTimestamp = 0
+    func tick() -> CGEventTimestamp { clockTicks += 1; return clockTicks }
+    var stamps: [CGEventTimestamp] = []
     func record(_ event: CGEvent, pid: Int32, delivery: String) {
+        stamps.append(event.timestamp)
         var entry = Event(type: event.type, pid: pid, delivery: delivery)
         switch event.type {
         case .keyDown, .keyUp:
@@ -662,7 +667,9 @@ private func runEventAssertions() throws {
                 return nil
             }
             guard type != .leftMouseDragged || point != rejectDragAt else { return nil }
-            return NativeInputSink.createMouseEvent(type, point, button)
+            let event = NativeInputSink.createMouseEvent(type, point, button)
+            event?.timestamp = tick()
+            return event
         },
         wheelEvent: { vertical, horizontal in
             rejectWheel ? nil : NativeInputSink.createWheelEvent(vertical, horizontal)
@@ -681,7 +688,8 @@ private func runEventAssertions() throws {
         },
         checkCancellation: {
             if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
-        }
+        },
+        eventTimestamp: tick
     )
     let world = Bridge(activityGlow: nil, inputSink: sink, physicalInputLock: inputLock).actionWorld()
     let start = CGPoint(x: 100, y: 200)
@@ -692,9 +700,10 @@ private func runEventAssertions() throws {
     }
     try world.postMouseClick(start, 1234, .right, 2, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.rightMouseDown, start, 1), mouse(.rightMouseUp, start, 1), mouse(.rightMouseDown, start, 2), mouse(.rightMouseUp, start, 2)] && delays == [12_000, 70_000, 12_000], "PID double click emits ordered pairs with click-state increments and delays")
-    events = []; delays = []
+    events = []; delays = []; stamps = []
     try world.postMouseDrag([start, end], 1234, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
+    expect(stamps.count == 5 && zip(stamps, stamps.dropFirst()).allSatisfy { $0 < $1 }, "preallocated release is restamped at post, after the down and every drag step: \(stamps)")
     events = []; delays = []
     let dragFixture = ActFixture()
     dragFixture.postDrag = world.postMouseDrag
@@ -781,6 +790,20 @@ private func runEventAssertions() throws {
         return [:]
     }
     expect(rejectNextMouseType == nil && events.isEmpty && delays.isEmpty, "failed mouse-up reservation posts no mouse-down or other input")
+    events = []; delays = []
+    rejectNextMouseType = .mouseMoved
+    try actionFailure("input_failed", message: "Failed to create mouse move event") {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        return [:]
+    }
+    expect(rejectNextMouseType == nil && events.isEmpty && delays.isEmpty, "failed initial move posts no release or other input: \(events)")
+    events = []; delays = []
+    rejectNextMouseType = .leftMouseDown
+    try actionFailure("input_failed", message: "Failed to create mouse down event") {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        return [:]
+    }
+    expect(rejectNextMouseType == nil && events == [mouse(.mouseMoved, start)] && delays.isEmpty, "failed mouse-down posts only the initial move, no unmatched release: \(events)")
     events = []; delays = []
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
