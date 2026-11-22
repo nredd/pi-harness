@@ -943,21 +943,25 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	}
 
 	/**
+	 * Each record's transcript resolved once: its spelling never changes, so
+	 * neither does its identity. An unresolvable one stays unjournaled, which
+	 * only leaves startup to bind the file it validates (and link by resolution).
+	 */
+	const canonicalSessionFiles = new WeakMap<AgentRecord, { sessionFile: string; canonical?: string }>();
+	function canonicalSessionFile(record: AgentRecord, sessionFile: string): string | undefined {
+		const known = canonicalSessionFiles.get(record);
+		if (known?.sessionFile === sessionFile) return known.canonical;
+		const canonical = canonicalChildPath(sessionFile);
+		canonicalSessionFiles.set(record, { sessionFile, canonical });
+		return canonical;
+	}
+
+	/**
 	 * Where a child session lives, for restart recovery. The directory is the one
 	 * it was created in (a worktree child uses the worktree's settings); a reopened
 	 * file outside its manager's directory journals none and inherits its
 	 * predecessor's at startup.
 	 */
-	/** Each record's transcript resolved once: its spelling never changes, so neither does its identity. */
-	const canonicalSessionFiles = new WeakMap<AgentRecord, { sessionFile: string; canonical: string }>();
-	function canonicalSessionFile(record: AgentRecord, sessionFile: string): string | undefined {
-		const known = canonicalSessionFiles.get(record);
-		if (known?.sessionFile === sessionFile) return known.canonical;
-		const canonical = canonicalChildPath(sessionFile);
-		if (canonical) canonicalSessionFiles.set(record, { sessionFile, canonical });
-		return canonical;
-	}
-
 	function savedSessionFields(record: AgentRecord): Record<string, unknown> {
 		const sessionFile = record.sessionFile;
 		if (!sessionFile) return {};
