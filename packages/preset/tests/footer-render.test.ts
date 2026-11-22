@@ -178,6 +178,31 @@ it("a narrow final viewport keeps a quota mark's scope and evidence together", a
 	}
 });
 
+it("the final viewport keeps the hidden blocked count however narrow", async () => {
+	const f = await mount();
+	try {
+		f.component.render(240);
+		f.clock.advance(1);
+		const until = f.clock.now() + 3_600_000;
+		const views = ["A", "B", "C", "D", "E", "F"].map((provider) => ({
+			provider,
+			marks: [{ until, evidence: "observed" }],
+		}));
+		f.reply()?.({ success: true, data: { version: 2, snapshots: [], blocks: [], views } });
+		for (const [width, pointer] of [
+			[19, "+2 more (2 blocked)"],
+			[18, "+2!"],
+			[2, "!"],
+		] as const) {
+			const lines = f.component.render(width);
+			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			expect(lines[6]).toBe(pointer);
+		}
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
 it("totals include every live usage entry type, not custom messages", async () => {
 	const f = await mount();
 	try {

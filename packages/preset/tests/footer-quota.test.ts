@@ -1703,3 +1703,28 @@ test("display labels are bounded at normalization while matching keeps the full 
 	);
 	assert.ok(row.length < 1_000);
 });
+
+test("the capped fallback fits every width it is given and keeps the hidden blocked count", () => {
+	const marked = (id: string) => view(id, { marks: [mark(CLOCK + hour, "observed")] });
+	const blockedState = projected(["A", "B", "C", "D", "E", "F"].map(marked));
+	const healthyState = projected(["A", "B", "C", "D", "E", "F"].map((id) => healthyView(id, 50)));
+	const pointer = (state: footer.QuotaState, width: number) => footer.fitQuotaRows(state, width, plain, fixed).at(-1);
+	// The ladder: full pointer, the count, `+K!` (K blocked hidden), `!`, then nothing at width 0.
+	assert.equal(pointer(blockedState, 40), "+2 more (2 blocked): /router status");
+	assert.equal(pointer(blockedState, 19), "+2 more (2 blocked)");
+	assert.equal(pointer(blockedState, 18), "+2!");
+	assert.equal(pointer(blockedState, 2), "!");
+	assert.equal(pointer(blockedState, 0), "");
+	assert.equal(pointer(healthyState, 7), "+2 more");
+	assert.equal(pointer(healthyState, 6), "+2");
+	assert.equal(pointer(healthyState, 1), "+");
+	for (let width = 0; width <= 60; width++) {
+		for (const state of [blockedState, healthyState]) {
+			const rows = footer.fitQuotaRows(state, width, plain, fixed);
+			for (const row of rows) assert.ok(row.length <= width, `width ${width}: ${JSON.stringify(row)}`);
+		}
+		if (width > 0) assert.match(present(pointer(blockedState, width)), /!|\(2 blocked\)/);
+	}
+	// Below the lead, the label-only row still fits rather than forcing a character past the width.
+	assert.deepEqual(footer.fitQuotaRows(projected([marked("A")]), 4, plain, fixed), ["Left"]);
+});

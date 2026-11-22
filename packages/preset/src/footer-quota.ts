@@ -703,9 +703,18 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 		.sort((a, b) => Number(b.blocked) - Number(a.blocked) || a.lowest - b.lowest)
 		.map(({ row }) => row);
 	const hidden = ranked.slice(cap.rows).filter(blocked).length;
-	const more = `+${ranked.length - cap.rows} more${hidden ? ` (${hidden} blocked)` : ""}`;
-	const pointer = `${more}: /router status`;
-	return [...draw(ranked.slice(0, cap.rows)), dim(pointer.length <= cap.width ? pointer : more)];
+	return [...draw(ranked.slice(0, cap.rows)), dim(overflowPointer(ranked.length - cap.rows, hidden, cap.width))];
+}
+
+/**
+ * The `+N more` pointer, always within `width`. The hidden blocked count outranks everything else:
+ * `+N more (K blocked): /router status`, `+N more (K blocked)`, `+K!`, `!`; without hidden blocks
+ * `+N more: /router status`, `+N more`, `+N`, `+`; nothing when even one character does not fit.
+ */
+export function overflowPointer(more: number, blocked: number, width: number): string {
+	const count = `+${more} more${blocked ? ` (${blocked} blocked)` : ""}`;
+	const ladder = [`${count}: /router status`, count, ...(blocked ? [`+${blocked}!`, "!"] : [`+${more}`, "+"])];
+	return ladder.find((text) => text.length <= width) ?? "";
 }
 
 const PLAIN: Colorize = (_color, text) => text;
@@ -759,8 +768,9 @@ function budgetRow(
 		while (dropped && chosen.length > 1 && used + MORE.length > width) used -= size(chosen.pop() as Piece);
 		return draw(label, chosen, dropped && used + MORE.length <= width);
 	}
-	// Nothing fits beside even a one-character label: show the provider, assert nothing.
-	return draw(shorten(name, Math.max(1, width - lead.length)), [], false);
+	// Nothing fits beside even a one-character label: show what fits of the provider, assert nothing.
+	const label = shorten(name, Math.max(0, width - lead.length));
+	return dim(`${lead}${label}`.slice(0, Math.max(0, width)));
 }
 
 function segmentsOf(state: QuotaState, opts: ResolvedOptions): Segment[] {
