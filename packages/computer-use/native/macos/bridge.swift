@@ -3416,8 +3416,19 @@ final class Bridge {
 		return Dictionary(uniqueKeysWithValues: roots.map { (rootIdentity($0), $0) })
 	}
 
-	func rootDelta(before: [String: [String: Any]], beforeFrontmostPid: pid_t?, pid: Int32) -> [[String: Any]] {
-		let after = rootMetadataSnapshot(pid: pid)
+	private func rootDelta(before: [String: [String: Any]], beforeFrontmostPid: pid_t?, pid: Int32) -> [[String: Any]] {
+		var delta = rootSnapshotDelta(before: before, after: rootMetadataSnapshot(pid: pid), pid: pid)
+		if let beforeFrontmostPid, beforeFrontmostPid != NSWorkspace.shared.frontmostApplication?.processIdentifier {
+			if let frontmost = NSWorkspace.shared.frontmostApplication {
+				delta.append(["change": "focused", "kind": "app", "title": frontmost.localizedName ?? processName(pid: frontmost.processIdentifier) ?? "Unknown App", "pid": Int(frontmost.processIdentifier)])
+			}
+		}
+		return delta
+	}
+
+	/// Compare two root snapshots keyed by `rootIdentity`: appeared roots, then closed roots, then
+	/// roots that gained focus.
+	func rootSnapshotDelta(before: [String: [String: Any]], after: [String: [String: Any]], pid: Int32) -> [[String: Any]] {
 		var delta: [[String: Any]] = []
 		for (key, root) in after where before[key] == nil {
 			delta.append(rootDeltaItem(change: "appeared", root: root, pid: pid))
@@ -3428,11 +3439,6 @@ final class Bridge {
 		for (key, root) in after {
 			if (root["isFocused"] as? Bool) == true && (before[key]?["isFocused"] as? Bool) != true {
 				delta.append(rootDeltaItem(change: "focused", root: root, pid: pid))
-			}
-		}
-		if let beforeFrontmostPid, beforeFrontmostPid != NSWorkspace.shared.frontmostApplication?.processIdentifier {
-			if let frontmost = NSWorkspace.shared.frontmostApplication {
-				delta.append(["change": "focused", "kind": "app", "title": frontmost.localizedName ?? processName(pid: frontmost.processIdentifier) ?? "Unknown App", "pid": Int(frontmost.processIdentifier)])
 			}
 		}
 		return delta

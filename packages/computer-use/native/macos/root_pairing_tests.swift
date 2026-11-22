@@ -37,9 +37,9 @@ private let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
 private let usable = boundsDictionary(CGRect(x: 1, y: 2, width: 300, height: 200))
 
 /// Drive the pure root, CG window-list, AX/CG pairing, look geometry and OCR placement policy in
-/// `Bridge` with synthetic window lists and detached look trees. The only live reads are AX queries
-/// on application handles above the macOS pid range, which no process answers, and the read-only CG
-/// window list that `rootDelta` enumerates for that absent pid. Input goes to the fail-fast sink.
+/// `Bridge` with synthetic window lists, detached look trees and fabricated root snapshots. The only
+/// live reads are AX title and frame queries on application handles above the macOS pid range, which
+/// no process answers. Input goes to the fail-fast sink.
 func runRootPairingAssertions() {
     let bridge = Bridge(activityGlow: nil, readSession: { nil }, inputSink: forbiddenInputSink)
     assertRootRanking(bridge)
@@ -236,7 +236,18 @@ private func assertRootIdentityAndDelta(_ bridge: Bridge) {
     let full = bridge.rootDeltaItem(change: "appeared", root: ["kind": "sheet", "title": "T", "pid": 9, "isModal": true, "metadata": ["sheetCount": 1], "rootRef": "ax:1", "windowRef": "w:1"], pid: 5)
     expect(full.count == 7 && full["pid"] as? Int == 9 && full["isModal"] as? Bool == true && (full["metadata"] as? [String: Any])?["sheetCount"] as? Int == 1 && full["ref"] as? String == "ax:1", "delta items carry modality, metadata and the root ref first")
     expect(bridge.rootDeltaItem(change: "focused", root: ["windowRef": "w:2"], pid: 5)["ref"] as? String == "w:2", "delta items fall back to the window ref")
-    let delta = bridge.rootDelta(before: ["window:7": ["title": "Gone"], "meta:sheet:AXSheet:Save:10,-3,300,200": sheet], beforeFrontmostPid: nil, pid: absentPid)
-    expect(delta.count == 2 && delta.allSatisfy { $0["change"] as? String == "closed" && $0["pid"] as? Int == Int(absentPid) } && Set(delta.compactMap { $0["title"] as? String }) == ["Gone", "Save"], "roots of an absent pid all close")
+    let closedOnly = bridge.rootSnapshotDelta(before: ["window:7": ["title": "Gone"], "meta:sheet:AXSheet:Save:10,-3,300,200": sheet], after: [:], pid: 5)
+    expect(closedOnly.count == 2 && closedOnly.allSatisfy { $0["change"] as? String == "closed" && $0["pid"] as? Int == 5 } && Set(closedOnly.compactMap { $0["title"] as? String }) == ["Gone", "Save"], "every root missing after the action closes")
+    let before: [String: [String: Any]] = [
+        "window:7": ["title": "Gone"], "window:8": ["title": "Kept", "isFocused": false], "window:9": ["title": "Still focused", "isFocused": true],
+    ]
+    let after: [String: [String: Any]] = [
+        "window:8": ["title": "Kept", "isFocused": true], "window:9": ["title": "Still focused", "isFocused": true],
+        "window:10": ["title": "New", "kind": "sheet"], "window:11": ["title": "New focused", "isFocused": true],
+    ]
+    let changes = bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["title"] as? String ?? "?")" }
+    expect(changes.sorted() == ["appeared:New", "appeared:New focused", "closed:Gone", "focused:Kept", "focused:New focused"], "deltas report appeared, closed and newly focused roots, not roots that stayed focused")
+    expect(changes.firstIndex(of: "closed:Gone").map { index in changes[..<index].allSatisfy { $0.hasPrefix("appeared:") } && changes[(index + 1)...].allSatisfy { $0.hasPrefix("focused:") } } == true, "appeared roots come first, then closed, then focused")
+    expect(bridge.rootSnapshotDelta(before: after, after: after, pid: 5).isEmpty, "an unchanged snapshot has no delta")
 
 }
