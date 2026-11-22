@@ -1,6 +1,7 @@
 import type { MouseButtonName, UiAction } from "./contract.ts";
 import { INCIDENTAL_ACTIONS, type OutlineNode } from "./outline.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
+import type { HelperActResult } from "./platform/types.ts";
 
 export type ActionTarget = { ref: string } | { x: number; y: number } | { focus: { x: number; y: number } };
 
@@ -345,7 +346,7 @@ export function unsupportedActionRejection(action: UiAction, platform: string): 
  */
 export function canRetryInForeground(
 	action: PreparedAction,
-	attempt: { outcome: "worked" | "didnt" | "unknown"; evidence?: Record<string, unknown> },
+	attempt: Pick<HelperActResult, "outcome" | "evidence">,
 	headless: boolean,
 ): boolean {
 	return (
