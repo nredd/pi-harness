@@ -67,6 +67,37 @@ test.for([
 	},
 );
 
+test.for([
+	{ units: 1, posted: "1 input event posted." },
+	{ units: 3, posted: "3 input events posted." },
+])(
+	"a step stopped after posting part of its input ends the transaction as unknown ($units)",
+	async ({ units, posted }, { onTestFinished }) => {
+		const { fake, act } = await observed(onTestFinished);
+		const error = { code: "foreground_required", message: "Refusing XTEST delivery" };
+		const results = [
+			{ outcome: "worked", performed: { delivery: "hid" } },
+			{ outcome: "unknown", performed: { delivery: "hid" }, error, evidence: { deliveredUnits: units } },
+		];
+		currentPlatformBackend.act = async (request) => {
+			fake.actCalls.push(request);
+			return results.shift() ?? { outcome: "worked", performed: { delivery: "hid" } };
+		};
+		const result = await act([press, { action: "typeText", ref: "@e2", text: "abc" }, press]);
+		const { execution } = result.details;
+		assert.equal(fake.actCalls.length, 2, "the next action is not dispatched after a partial delivery");
+		assert.equal(execution.outcome, "unknown");
+		assert.equal(execution.stoppedAt, 1);
+		assert.deepEqual(execution.error, error);
+		assert.deepEqual(execution.evidence, { deliveredUnits: units });
+		assert.ok(
+			fake
+				.text(result)
+				.startsWith(`Stopped at action 2 (foreground_required). ${posted} Do not replay the transaction.`),
+		);
+	},
+);
+
 test("an unknown step makes the transaction unknown, and all-worked steps make it worked", async ({
 	onTestFinished,
 }) => {

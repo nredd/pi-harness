@@ -8,6 +8,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 
 ### Fixed
 
+- On Linux X11, release every held key and button on refusal, failure or unwind, reject unsupported characters before typing starts, and report a stop after posted input as `unknown` with `evidence.deliveredUnits` instead of `didnt`; `act_ui` stops there. XTEST sequencing now runs headless against a recording sink (#1181, #1182, #1183).
 - Reject invalid macOS PIDs before discovery, look lookup or capture, and refuse observations whose supplied PID disagrees with the native root owner (#1209).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).
 - On macOS, admit HID keys after activation, check the frontmost app on every unit, bound AX focus probes, and stop posting at the request deadline without dropping key-up events. Report posted key pairs and keep completed transaction steps when delivery is interrupted (#1173).

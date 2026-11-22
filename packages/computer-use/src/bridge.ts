@@ -2491,6 +2491,14 @@ async function dispatchUiTransaction(
 			const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 			steps.push(step);
 			if (step.outcome === "didnt") break;
+			// A helper that stopped after posting part of the action reports the count; never run the next action.
+			if (step.error && typeof step.evidence?.deliveredUnits === "number")
+				return {
+					...aggregateExecutions(steps),
+					error: step.error,
+					evidence: step.evidence,
+					stoppedAt: steps.length - 1,
+				};
 		} catch (error) {
 			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
 			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
@@ -2735,9 +2743,16 @@ export async function terminalDesktopActionResult(
 
 function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	const code = execution.error?.code;
-	if (code !== "app_blocked" && code !== "input_deadline_expired") return undefined;
+	const delivered = execution.evidence?.deliveredUnits;
+	const partial = code !== undefined && typeof delivered === "number";
+	if (code !== "app_blocked" && code !== "input_deadline_expired" && !partial) return undefined;
 	const units = execution.evidence?.postedUnits;
-	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
+	const posted =
+		typeof units === "number"
+			? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.`
+			: partial
+				? ` ${delivered} input ${delivered === 1 ? "event" : "events"} posted.`
+				: "";
 	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
 	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
 }

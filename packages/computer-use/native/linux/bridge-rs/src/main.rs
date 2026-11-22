@@ -9,7 +9,7 @@ use linux_bridge::atspi::{
 use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::state::{fresh_state_id, HelperState};
 use linux_bridge::wayland::{PortalCapabilities, PortalClient, PortalError};
-use linux_bridge::x11::{self, PhysicalPolicy, SessionKind};
+use linux_bridge::x11::{self, Input, InputSink, PhysicalPolicy, SessionKind};
 use linux_bridge::{ErrorCode, ProtocolError, Request, Response};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -644,8 +644,46 @@ fn physical_act(
     point: (i32, i32),
     geometry: ActionGeometry,
 ) -> Result<Value, ProtocolError> {
+    let input = Input::connect(policy, owning_window)?;
+    deliver_physical(&input, action, params, owning_window, point, &geometry)
+}
+
+/// Drive one physical action through `input`. A stop after any posted event is
+/// `unknown` with `evidence.deliveredUnits` and the refusal code: some input already
+/// reached the desktop, so it must never become an error a batch records as `didnt`.
+fn deliver_physical<S: InputSink>(
+    input: &Input<S>,
+    action: &str,
+    params: &Value,
+    owning_window: u32,
+    point: (i32, i32),
+    geometry: &ActionGeometry,
+) -> Result<Value, ProtocolError> {
+    let result = drive_physical(input, action, params, point, geometry);
+    let mut response = json!({
+        "outcome":"unknown",
+        "performed":{"grounding":"coordinates","delivery":"hid","mechanism":"xtest","deltaSource":"snapshot","windowId":owning_window},
+        "evidence":{"mechanism":"xtest","windowId":owning_window}
+    });
+    match result {
+        Ok(()) => Ok(response),
+        Err(error) if input.delivered_units() == 0 => Err(error),
+        Err(error) => {
+            response["evidence"]["deliveredUnits"] = json!(input.delivered_units());
+            response["error"] = json!({"code":error.code.to_string(),"message":error.message});
+            Ok(response)
+        }
+    }
+}
+
+fn drive_physical<S: InputSink>(
+    input: &Input<S>,
+    action: &str,
+    params: &Value,
+    point: (i32, i32),
+    geometry: &ActionGeometry,
+) -> Result<(), ProtocolError> {
     let (x, y) = point;
-    let input = x11::Input::connect(policy, owning_window)?;
     let button = params
         .get("button")
         .and_then(Value::as_str)
@@ -713,9 +751,7 @@ fn physical_act(
             ))
         }
     }
-    Ok(
-        json!({"outcome":"unknown","performed":{"grounding":"coordinates","delivery":"hid","mechanism":"xtest","deltaSource":"snapshot","windowId":owning_window},"evidence":{"mechanism":"xtest","windowId":owning_window}}),
-    )
+    Ok(())
 }
 
 /// Validate the entire batch before executing any step, then stop at the first failure.
@@ -746,7 +782,9 @@ where
     for (index, action) in actions.iter().enumerate() {
         match perform(action).await {
             Ok(step) => {
-                let stopped = step.get("outcome").and_then(Value::as_str) == Some("didnt");
+                // A step that reports an error stopped partway: nothing after it may run.
+                let stopped = step.get("outcome").and_then(Value::as_str) == Some("didnt")
+                    || step.get("error").is_some();
                 steps.push(step);
                 if stopped {
                     stopped_at = Some(index);
@@ -778,8 +816,13 @@ where
     Ok(response)
 }
 
+/// A stop is `didnt` only when its last step checked that nothing happened; a step
+/// that stopped after posting input keeps the batch `unknown`.
 fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
-    if stopped {
+    let last_didnt = steps
+        .last()
+        .is_some_and(|step| step.get("outcome").and_then(Value::as_str) == Some("didnt"));
+    if stopped && last_didnt {
         "didnt"
     } else if steps
         .iter()
@@ -1743,6 +1786,120 @@ mod tests {
         );
     }
 
+    fn deliver(
+        sink: x11::RecordingSink,
+        action: &str,
+        params: Value,
+    ) -> Result<Value, ProtocolError> {
+        let geometry = ActionGeometry {
+            frame: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            image_width: 100,
+            image_height: 100,
+        };
+        deliver_physical(
+            &Input::with_sink(sink),
+            action,
+            &params,
+            7,
+            (5, 5),
+            &geometry,
+        )
+    }
+
+    #[test]
+    fn physical_stop_after_posting_is_unknown_with_delivered_units() {
+        // `abc`: the first two characters (four events) post, then the target loses focus.
+        let result = deliver(
+            x11::RecordingSink::default().refuse_admission_after(4),
+            "typeText",
+            json!({"text":"abc"}),
+        )
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["evidence"]["deliveredUnits"], 4);
+        assert_eq!(result["evidence"]["windowId"], 7);
+        assert_eq!(result["error"]["code"], "foreground_required");
+        // setText: the click posts, then `a` of the select-all chord is refused and the
+        // held control releases: motion, button down/up, control down/up.
+        let result = deliver(
+            x11::RecordingSink::default().refuse_admission_after(5),
+            "setText",
+            json!({"text":"x"}),
+        )
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["evidence"]["deliveredUnits"], 5);
+        // A drag point outside the look fails before anything posts.
+        let error = deliver(
+            x11::RecordingSink::default(),
+            "drag",
+            json!({"path":[{"x":1,"y":1},{"x":500,"y":1}]}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn physical_refusal_before_any_post_stays_an_error() {
+        for (action, params) in [
+            ("press", json!({})),
+            ("moveMouse", json!({})),
+            ("scroll", json!({"scrollY":1})),
+            ("drag", json!({"path":[{"x":1,"y":1},{"x":2,"y":2}]})),
+            ("typeText", json!({"text":"a"})),
+            ("setText", json!({"text":"a"})),
+            ("keypress", json!({"keys":["enter"]})),
+        ] {
+            let refused = x11::RecordingSink::default().refuse_admission_after(0);
+            let error = deliver(refused, action, params.clone()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{action}");
+            let result = deliver(x11::RecordingSink::default(), action, params).unwrap();
+            assert_eq!(result["outcome"], "unknown", "{action}");
+            assert!(result.get("error").is_none(), "{action}");
+            assert!(
+                result["evidence"].get("deliveredUnits").is_none(),
+                "{action}"
+            );
+        }
+        for (action, params) in [
+            ("keypress", json!({})),
+            ("drag", json!({})),
+            ("drag", json!({"path":[{"y":1}]})),
+            ("drag", json!({"path":[{"x":1}]})),
+        ] {
+            let error = deliver(x11::RecordingSink::default(), action, params).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidRequest, "{action}");
+        }
+        let error = deliver(x11::RecordingSink::default(), "wiggle", json!({})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedCommand);
+    }
+
+    #[tokio::test]
+    async fn a_partially_delivered_step_stops_the_batch_as_unknown() {
+        let batch = json!({"actions":[{"lookId":"one","value":0},{"lookId":"one","value":1},{"lookId":"one","value":2}]});
+        let result = act_batch_with(&batch, |action| {
+            std::future::ready(match action["value"].as_u64().unwrap() {
+                0 => Ok(json!({"outcome":"worked"})),
+                1 => Ok(json!({
+                    "outcome":"unknown",
+                    "evidence":{"deliveredUnits":3},
+                    "error":{"code":"foreground_required","message":"focus moved"}
+                })),
+                _ => panic!("ran an action after a partial delivery"),
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["stoppedAt"], 1);
+        assert_eq!(result["steps"][1]["evidence"]["deliveredUnits"], 3);
+    }
+
     #[test]
     fn batch_outcome_preserves_unknown_physical_results() {
         assert_eq!(
@@ -1758,6 +1915,13 @@ mod tests {
         );
         assert_eq!(
             batch_outcome(&[json!({"outcome":"unknown"})], true),
+            "unknown"
+        );
+        assert_eq!(
+            batch_outcome(
+                &[json!({"outcome":"unknown"}), json!({"outcome":"didnt"})],
+                true
+            ),
             "didnt"
         );
     }
