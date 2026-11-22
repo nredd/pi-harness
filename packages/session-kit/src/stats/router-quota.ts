@@ -21,6 +21,12 @@ function label(provider: string, families: unknown, window: string): string {
 	return `${provider}${models ? `/${models}` : ""} ${window}`;
 }
 
+/** Span provenance is separate from the quantity basis: a reported count over an inferred span says so. */
+function spanName(bucket: Fields): string {
+	const source = bucket.spanSource;
+	return source === "assumed" || source === "inferred" ? `${bucket.name} (${source} span)` : String(bucket.name);
+}
+
 /** Stale rows say so in their label, so dimming is never the only signal and print output carries it too. */
 const staleName = (name: string, old: boolean): string => (old ? `${name} (stale)` : name);
 
@@ -73,10 +79,8 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 				const utilization = basis(window.basis);
 				if (!text(window.name) || !number(window.usedPercent) || utilization === undefined) continue;
 				const expired = timestamp(window.resetAt) && window.resetAt <= now;
-				const source = window.spanSource;
-				const name = source === "assumed" || source === "inferred" ? `${window.name} (${source} span)` : window.name;
 				rows.push({
-					label: label(provider, window.families, staleName(name, old)),
+					label: label(provider, window.families, staleName(spanName(window), old)),
 					head: expired ? { kind: "text", text: "" } : { kind: "gauge", percent: window.usedPercent },
 					basis: utilization,
 					reset: resetDetail(window, now),
@@ -100,7 +104,7 @@ function projectViews(value: unknown, now: number): QuotaRow[] {
 			const utilization = basis(meter.basis);
 			if (count === undefined || utilization === undefined) continue;
 			rows.push({
-				label: label(provider, meter.families, staleName(meter.name, old)),
+				label: label(provider, meter.families, staleName(spanName(meter), old)),
 				head: { kind: "text", text: count },
 				basis: utilization,
 				reset: resetDetail(meter, now),

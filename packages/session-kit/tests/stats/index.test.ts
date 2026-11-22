@@ -158,6 +158,26 @@ describe("/stats command", () => {
 		expect(String(out.mock.calls[0]?.[0])).toContain(print);
 	});
 
+	it("labels inferred and assumed meter spans apart from the reported quantity in the overlay and print", async () => {
+		const opts = seedRouterView("metered");
+		const file = join(dir, "router-state", "v1", "view.json");
+		const views = JSON.parse(readFileSync(file, "utf8")) as { meters: { spanSource?: string; basis?: string }[] }[];
+		const [rpd, spend] = views[0]?.meters ?? [];
+		Object.assign(rpd ?? {}, { spanSource: "inferred", basis: "reported" });
+		Object.assign(spend ?? {}, { spanSource: "assumed", basis: "reported" });
+		writeFileSync(file, JSON.stringify(views));
+		const { run, rendered } = setup("tui", opts);
+		await run("");
+		const overlay = rendered[0]?.join("\n");
+		expect(overlay).toMatch(/Google\/faux-fast rpd \(inferred span\) +37\/250 requests +reported/);
+		expect(overlay).toMatch(/Google spend-10m \(assumed span\) +\$1\.24 +reported/);
+		const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		await setup("print", opts).run("");
+		const printed = String(out.mock.calls[0]?.[0]);
+		expect(printed).toContain("Google/faux-fast rpd (inferred span): 37/250 requests · reported");
+		expect(printed).toContain("Google spend-10m (assumed span): $1.24 · reported");
+	});
+
 	it("labels every row of a meters-only snapshot past its expiry as stale in the overlay and print", async () => {
 		const opts = seedRouterView("metered");
 		const expired = { ...opts, clock: { ...realClock, now: () => 1768478700000 } };

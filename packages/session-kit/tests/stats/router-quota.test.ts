@@ -200,3 +200,16 @@ it("dims an available snapshot past its expiry or age limit", async () => {
 		["aged window (stale)", true],
 	]);
 });
+
+it.each([
+	["assumed", "provider day (assumed span)"],
+	["inferred", "provider day (inferred span)"],
+	["reported", "provider day"],
+	[undefined, "provider day"],
+])("labels a meter's %s span separately from its reported quantity", async (spanSource, label) => {
+	const meter = { name: "day", spanSource, quantity: { unit: "requests", used: 3 } };
+	writeFileSync(view, JSON.stringify([{ provider: "provider", meters: [meter] }]));
+	expect(await readRouterQuota(dir, NOW)).toEqual([
+		{ label, head: { kind: "text", text: "3 requests" }, basis: "reported", expired: false, old: false },
+	]);
+});

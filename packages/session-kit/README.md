@@ -244,8 +244,8 @@ harness lacks the model), `j/k` or arrows scroll, `q` or Escape closes.
   account-wide (no harness, model or range filter applies), and are never fetched. Claude without
   a valid capture says `no local reading`. If present, `<agentDir>/router-state/v1/view.json` adds
   router rows to Overview and print output: window gauges, count or spend meters, and active blocks,
-  labelled `reported`, `observed`, or `inferred`. Assumed or inferred spans are labelled separately
-  from utilization. Stale readings and quota read errors are labelled in both outputs. Observed
+  labelled `reported`, `observed`, or `inferred`. Assumed or inferred window and meter spans are labelled separately
+  from the utilization or quantity basis. Stale readings and quota read errors are labelled in both outputs. Observed
   counts are local only, not provider totals. Credit pool balances are display-only text and never
   contribute to usage totals or blocks. Rows with unrecognized evidence or utilization bases are
   omitted. Narrow overlays wrap quota labels separately when they would hide the reading.
