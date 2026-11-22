@@ -108,6 +108,11 @@ export function registrationFor(id: string): CollectorRegistration | undefined {
 	return builtins.get(id) ?? registry.registrationFor(id);
 }
 
+/** True only for a shipped adapter object, which the router does not bound like external evidence. */
+export function isBuiltinCollector(collector: Readonly<Collector>): boolean {
+	return builtins.get(collector.provider)?.collector === collector;
+}
+
 export function collectorFor(id: string): Readonly<Collector> | undefined {
 	return registrationFor(id)?.collector;
 }

@@ -14,7 +14,13 @@
 import { addAbortListener } from "node:events";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { normalizeReading } from "./collector-reading.ts";
-import { type CollectorReading, type CollectorRegistration, isCollectorId, registrationFor } from "./collectors.ts";
+import {
+	type CollectorReading,
+	type CollectorRegistration,
+	isBuiltinCollector,
+	isCollectorId,
+	registrationFor,
+} from "./collectors.ts";
 
 import type { ProviderConfig } from "./config.ts";
 
@@ -35,6 +41,11 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_USAGE_RESPONSE_BYTES = 256 * 1024;
 /** Failure backoff steps; the last entry is the cap. Reset on the next success. */
 const FAILURE_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 15 * 60_000] as const;
+/**
+ * Latest reset an external collector may report, from the read's start. A later reset is
+ * implausible evidence and becomes unknown, which blocks only while the reading is fresh.
+ */
+const MAX_EXTERNAL_RESET_MS = 31 * 24 * 60 * 60_000;
 /** Upper bound on a server-supplied `Retry-After`, so a bogus header cannot park a provider for days. */
 const RETRY_AFTER_CEILING_MS = 60 * 60_000;
 /** `available`: fresh data. `stale`: old data kept after an expiry or failed refresh. */
@@ -574,7 +585,8 @@ export class UsageService {
 				const read = collector.read({ token, signal, now: () => this.transport.now() });
 				parsed = await untilAborted(read, signal);
 			}
-			const reading = normalizeReading(parsed);
+			const latestReset = isBuiltinCollector(collector) ? Infinity : now + MAX_EXTERNAL_RESET_MS;
+			const reading = normalizeReading(parsed, latestReset);
 			if (!reading) return failure("Usage response had an unsupported shape.");
 			return {
 				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...reading },

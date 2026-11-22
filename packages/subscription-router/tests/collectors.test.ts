@@ -418,6 +418,32 @@ it("validates the copied reading", async () => {
 	]);
 });
 
+it("bounds external reset evidence", async () => {
+	vi.useFakeTimers();
+	let now = T0;
+	const usage = new UsageService({ fetch: vi.fn(), now: () => now, getAccessToken: async () => "fake-token" });
+	const horizon = 31 * 24 * 60 * 60_000;
+	const millennia = T0 + 1_000 * 365 * 24 * 60 * 60_000;
+	install({
+		...fake,
+		read: async () => ({
+			windows: [
+				{ name: "faux-far", scope: "model", families: ["faux-one"], usedPercent: 100, resetAt: T0 + horizon + 1 },
+				{ name: "faux-edge", scope: "model", families: ["faux-two"], usedPercent: 100, resetAt: T0 + horizon },
+			],
+			meters: [{ name: "faux-meter", scope: "provider", resetAt: millennia, quantity: { unit: "requests" } }],
+		}),
+	});
+	const snapshot = await usage.get(ctx, provider);
+	expect(snapshot.windows.map(({ resetAt }) => resetAt)).toEqual([undefined, T0 + horizon]);
+	expect(snapshot.meters?.[0]?.resetAt).toBeUndefined();
+	expect(usage.decisionFor({ provider, id: "faux-one" })).toMatchObject({ block: true, resetAt: undefined });
+	// An unknown reset blocks only while the reading is fresh; a bounded known reset outlives the TTL.
+	now = T0 + 5 * 60_000 + 1;
+	expect(usage.decisionFor({ provider, id: "faux-one" })).toEqual({ block: false });
+	expect(usage.decisionFor({ provider, id: "faux-two" })).toMatchObject({ block: true, resetAt: T0 + horizon });
+});
+
 it("sanitizes thrown adapter callbacks independently of reading validation", async () => {
 	const { usage } = harness();
 	install({

@@ -337,7 +337,9 @@ unregistered, the alias returns `unavailable` without a credential lookup until 
 
 The router reads each declared own reading field once into plain records and dense arrays (at most
 128 items) without calling adapter methods such as `map`, then validates and uses only that copy. A
-throwing getter is an adapter error. Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
+throwing getter is an adapter error. An external reset later than `MAX_EXTERNAL_RESET_MS` (31 days)
+after the read started is implausible and becomes unknown, so it blocks only while the reading is
+fresh instead of for its stated lifetime. Built-in collector resets are not bounded. Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
 reported basis; extensions cannot set snapshot metadata.
 
 No Google subscription collector or OAuth client is bundled. A user-supplied Google subscription

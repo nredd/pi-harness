@@ -123,17 +123,21 @@ const READING_FIELDS: Readonly<Record<string, Copier>> = {
 	credits: (value) => record(value, ["available", "unlimited", "balance"]),
 };
 
-function copyBucket({
-	resetAt,
-	durationMs,
-	spanSource,
-	scope,
-	families,
-	kind,
-	resetRule,
-}: CollectorReading["windows"][number] | NonNullable<CollectorReading["meters"]>[number]) {
+/** Out-of-range or later-than-`latestReset` resets become unknown. */
+function copyBucket(
+	{
+		resetAt,
+		durationMs,
+		spanSource,
+		scope,
+		families,
+		kind,
+		resetRule,
+	}: CollectorReading["windows"][number] | NonNullable<CollectorReading["meters"]>[number],
+	latestReset: number,
+) {
 	return {
-		resetAt: Math.abs(resetAt ?? Infinity) <= 8.64e15 ? resetAt : undefined,
+		resetAt: resetAt !== undefined && Math.abs(resetAt) <= 8.64e15 && resetAt <= latestReset ? resetAt : undefined,
 		durationMs,
 		spanSource: spanSource as "reported" | "assumed" | undefined,
 		scope,
@@ -145,10 +149,11 @@ function copyBucket({
 
 /**
  * Copy only declared fields. A successful collector read has reported basis (the wire default).
+ * Resets after `latestReset` (epoch ms) become unknown.
  * Validation and every later step see one router-owned copy, so adapter getters and array
  * methods cannot change a value after it was checked. A throwing getter throws.
  */
-export function normalizeReading(reading: unknown): CollectorReading | undefined {
+export function normalizeReading(reading: unknown, latestReset: number): CollectorReading | undefined {
 	const copy = record(reading, Object.keys(READING_FIELDS), READING_FIELDS);
 	if (!Check(schema, copy)) return undefined;
 	const { windows, meters, pools, credits } = copy;
@@ -158,7 +163,7 @@ export function normalizeReading(reading: unknown): CollectorReading | undefined
 			return {
 				name: window.name,
 				usedPercent,
-				...copyBucket(window),
+				...copyBucket(window, latestReset),
 				quantity: quantity && {
 					unit: quantity.unit,
 					used: quantity.used,
@@ -169,7 +174,7 @@ export function normalizeReading(reading: unknown): CollectorReading | undefined
 		}),
 		meters: meters?.map((meter) => {
 			const { unit, used, limit, remaining } = meter.quantity;
-			return { name: meter.name, ...copyBucket(meter), quantity: { unit, used, limit, remaining } };
+			return { name: meter.name, ...copyBucket(meter, latestReset), quantity: { unit, used, limit, remaining } };
 		}),
 		pools: pools?.map(({ name, unit, role, balance, unlimited, appliesAfter }) => ({
 			name,
