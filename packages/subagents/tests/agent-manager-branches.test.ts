@@ -238,7 +238,7 @@ describe("AgentManager run journal observer", () => {
 			undefined,
 			undefined,
 			undefined,
-			undefined,
+			new FakeClock(),
 			undefined,
 			undefined,
 			undefined,
@@ -248,7 +248,7 @@ describe("AgentManager run journal observer", () => {
 			answering("spawned", "/tmp/child.jsonl");
 			const record = await settledSpawn(manager, {});
 			expect(record).toMatchObject({ status: "completed", result: "spawned" });
-			vi.mocked(resumeAgent).mockResolvedValueOnce({ text: "resumed", aborted: false, steered: false } as any);
+			vi.mocked(resumeAgent).mockResolvedValueOnce({ text: "resumed", aborted: false, steered: false });
 			const resumed = await manager.resume(record.id, "again");
 			expect(resumed).toMatchObject({ status: "completed", result: "resumed" });
 			// Session creation, the resume start, and the foreground resume settle.
