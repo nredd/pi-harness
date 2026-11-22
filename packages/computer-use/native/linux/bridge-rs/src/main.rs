@@ -1008,6 +1008,7 @@ mod tests {
             bounds: None,
             is_secure: false,
             depth: 0,
+            unread: false,
         }
     }
 
@@ -1573,6 +1574,12 @@ mod tests {
                         .result
                         .unwrap();
                         assert_eq!(look["outline"]["title"], "Window");
+                        // The stalled parent is unread, not a leaf: the outline must say so.
+                        assert_eq!(look["outline"]["truncated"], false);
+                        let parent = &look["outline"]["children"][0];
+                        assert_eq!(parent["title"], "Parent");
+                        assert_eq!(parent["truncated"], true);
+                        assert_eq!(parent["children"], json!([]));
                     } else {
                         let reply = peer_request(
                             &state,
@@ -1590,6 +1597,18 @@ mod tests {
                         )
                         .await;
                         assert_eq!(gone.result.unwrap()["gone"], true);
+                        let look = peer_request(
+                            &state,
+                            &connection,
+                            "look",
+                            json!({"rootRef":root_ref,"includeImage":false}),
+                        )
+                        .await
+                        .result
+                        .unwrap();
+                        let parent = &look["outline"]["children"][0];
+                        assert_eq!(parent["truncated"], false);
+                        assert_eq!(parent["children"][0]["title"], "Matching child");
                     }
                 },
             )
