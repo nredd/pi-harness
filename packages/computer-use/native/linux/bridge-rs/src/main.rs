@@ -1585,6 +1585,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_for_never_matches_protected_metadata() {
+        const SECRET: &str = "private fixture label";
+        let (role, current_role) = watch::channel(Some(61));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: SECRET,
+                        role: current_role,
+                        role_name: "fixture role",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: None,
+                        text: false,
+                    },
+                )
+            },
+            async |connection| {
+                let look = peer_request(
+                    &state,
+                    &connection,
+                    "look",
+                    json!({"rootRef":root_ref,"includeImage":false}),
+                )
+                .await
+                .result
+                .unwrap();
+                let wait = async |scoped: bool| {
+                    let mut args = json!({"rootRef":root_ref,"text":SECRET,"timeoutMs":100});
+                    if scoped {
+                        args["lookId"] = look["lookId"].clone();
+                        args["scopeRef"] = look["outline"]["ref"].clone();
+                    }
+                    peer_request(&state, &connection, "atspiWaitFor", args)
+                        .await
+                        .result
+                        .unwrap()
+                };
+                for scoped in [false, true] {
+                    assert_eq!(
+                        wait(scoped).await["found"],
+                        true,
+                        "readable, scoped {scoped}"
+                    );
+                }
+                for id in [40, 67] {
+                    role.send(Some(id)).unwrap();
+                    for scoped in [false, true] {
+                        let reply = wait(scoped).await;
+                        assert_eq!(reply["found"], false, "role ID {id}, scoped {scoped}");
+                        assert_eq!(reply["timedOut"], true, "role ID {id}, scoped {scoped}");
+                    }
+                }
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn rejects_unclassified_atspi_roles() {
         let reads = Arc::new(AtomicUsize::new(0));
         let (role, current_role) = watch::channel(Some(61));

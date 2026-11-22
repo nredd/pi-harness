@@ -951,6 +951,33 @@ describe("outline node helpers through inspect, act and expand", () => {
 		assert.ok(!JSON.stringify(inspected).includes(secret));
 		const secretMatch = await call(executeSearchUi, { stateId, text: secret });
 		assert.equal(secretMatch.details.totalMatches, 0);
+		for (const result of [protectedMatch, secretMatch]) {
+			assert.ok(!textOf(result).includes(secret));
+			assert.ok(!JSON.stringify(result.details).includes(secret));
+		}
+	});
+
+	test("expanding a node that turned protected replaces its stale metadata", async () => {
+		const secret = "private fixture label";
+		const readable = { title: secret, label: secret, description: secret, truncated: true, children: [] };
+		const redacted = { role: "password text", title: "[protected]", label: "[protected]", description: "" };
+		let live = readable;
+		fake.lookPayload = (request) =>
+			request.scopeRef === "c"
+				? { ...lookPayload({ image: false }), outline: makeNode("c", live) }
+				: lookPayload({ children: [makeNode("c", live)] });
+		const stateId = stateOf(await call(executeObserve, { mode: "semantic" }));
+		assert.equal((await call(executeSearchUi, { stateId, text: secret })).details.totalMatches, 1);
+		live = redacted;
+		const expanded = await call(executeExpandUi, { stateId, ref: "@e2" });
+		assert.match(textOf(expanded), /\[protected\]/);
+		assert.ok(!textOf(expanded).includes(secret));
+		// The root note keeps region labels from the earlier readable look; the render, target and matches do not.
+		assert.ok(!JSON.stringify(expanded.details.target).includes(secret));
+		assert.ok(!expanded.details.renderedOutline.includes(secret));
+		const after = await call(executeSearchUi, { stateId, text: secret });
+		assert.equal(after.details.totalMatches, 0);
+		assert.ok(!JSON.stringify(after.details.matches).includes(secret));
 	});
 
 	test("inspect_ui labels every capability and an unlabeled picture", async () => {
