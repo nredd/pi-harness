@@ -2048,9 +2048,9 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_bind_guarded_helper_capability_without_dto_version_change() {
+    fn diagnostics_bind_guarded_helper_capability_to_protocol_5() {
         let value = diagnostics();
-        assert_eq!(value["protocolVersion"], 4);
+        assert_eq!(value["protocolVersion"], 5);
         assert_eq!(value["architectureVersion"], 1);
         assert_eq!(value["capabilities"], json!(["fail-closed-live-target-v1"]));
     }
@@ -2109,6 +2109,21 @@ mod tests {
         assert_eq!(error.code, ErrorCode::CoordinateBlocked);
         #[cfg(not(windows))]
         assert_eq!(error.code, ErrorCode::UnsupportedPlatform);
+    }
+
+    #[test]
+    fn helper_refuses_protocol_4_clients_without_owner_bound_reads() {
+        assert_eq!(PROTOCOL_VERSION, 5);
+        let response = handle_request(&Request {
+            protocol_version: 4,
+            id: "old".to_owned(),
+            cmd: "uiaReadText".to_owned(),
+            args: json!({"lookId": "look_1", "elementRef": "same-ref"}),
+        });
+        assert!(!response.ok);
+        let error = response.error.unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(error.message.contains("protocol 4; expected 5"));
     }
 
     #[test]

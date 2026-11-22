@@ -72,7 +72,7 @@ mod native {
             writeln!(
                 self.stdin,
                 "{}",
-                json!({"protocolVersion":4,"id":id,"cmd":cmd,"args":args})
+                json!({"protocolVersion":5,"id":id,"cmd":cmd,"args":args})
             )
             .expect("write native request");
             self.stdin.flush().expect("flush native request");
@@ -81,7 +81,7 @@ mod native {
                 .recv_timeout(Duration::from_secs(5))
                 .expect("actual helper must return within the fixture deadline");
             assert_eq!(frame["id"], id);
-            assert_eq!(frame["protocolVersion"], 4);
+            assert_eq!(frame["protocolVersion"], 5);
             frame
         }
 

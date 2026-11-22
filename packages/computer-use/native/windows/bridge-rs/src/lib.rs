@@ -21,7 +21,7 @@ pub use protocol::{Request, Response};
 /*
 PI_DOCS_REFERENCE_BEGIN reference/platforms/windows
 
-`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **4**.
+`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **5**.
 
 ## Backend contract
 
@@ -56,7 +56,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. RuntimeId is a
 
 Discovery uses a selected-subtree UIA event registration and a bounded raw-view walk, never provider-side `FindAll(Subtree)` or a global screen-reader setting change. UIA connections/transactions have 500-ms limits. Coordinate fallback requires successful live snapshot, valid current bounds within the owning window and successful hit testing. Errors refuse before input; cached screenshot bounds are never used.
 
-Window/session/desktop and mandatory-integrity checks precede mutation. Every single action delivery, including semantic UIA admission, takes a session-local named Win32 mutex, as do complete foreground batches. A five-second wait or abandoned owner refuses without replay. This kernel lease is not the WSL transport's persistent uncertain-delivery fence. Diagnostics advertise `fail-closed-live-target-v1`; protocol and architecture remain `4` and `1`.
+Window/session/desktop and mandatory-integrity checks precede mutation. Every single action delivery, including semantic UIA admission, takes a session-local named Win32 mutex, as do complete foreground batches. A five-second wait or abandoned owner refuses without replay. This kernel lease is not the WSL transport's persistent uncertain-delivery fence. Diagnostics advertise `fail-closed-live-target-v1`; protocol `5` (owner-bound `uiaReadText`/`uiaWaitFor`) and architecture `1`.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 
@@ -65,13 +65,13 @@ Root deltas are baselined at act time. The helper polls a cheap top-level HWND s
 Request envelope:
 
 ```json
-{ "protocolVersion": 4, "id": "req_1", "cmd": "listRoots", "args": {} }
+{ "protocolVersion": 5, "id": "req_1", "cmd": "listRoots", "args": {} }
 ```
 
 Response envelope:
 
 ```json
-{ "protocolVersion": 4, "id": "req_1", "ok": true, "result": { } }
+{ "protocolVersion": 5, "id": "req_1", "ok": true, "result": { } }
 ```
 
 Diagnostics (`cmd: "diagnostics"`) returns the protocol version and helper process metadata. The TypeScript backend rejects a mismatched version with a “Restart Pi …” error.

@@ -149,7 +149,7 @@ jobs:
             "source=$env:HELPER_SOURCE_SHA"
             'target=x86_64-pc-windows-msvc'
             "rust_requested=$env:RUSTUP_TOOLCHAIN"
-            'protocol=4'
+            'protocol=5'
             'capability=fail-closed-live-target-v1'
             'executable=NOT_BUILT'
             'fixture=NOT_REACHED'
