@@ -233,6 +233,33 @@ it("rolls back scratch and wake when creating the fixture tmp directory fails", 
 	}
 });
 
+it("reports both errors when the fixture rollback cannot stop the wake helper", async ({ onTestFinished }) => {
+	const temp = makeTestTempDir("pi-stack-rollback-", onTestFinished);
+	const previous = process.env.TMPDIR;
+	const stuck = new Error("kill EPERM");
+	const wake = new FakeWake([]);
+	wake.kill = () => {
+		throw stuck;
+	};
+	try {
+		process.env.TMPDIR = temp;
+		const attempt = isolateStackHome(() => {
+			const [scratch] = readdirSync(temp);
+			if (!scratch) throw new Error("Expected a stack scratch directory before wake setup");
+			writeFileSync(join(temp, scratch, "tmp"), "blocked");
+			queueMicrotask(() => wake.emit("spawn"));
+			return wake;
+		});
+		await expect(attempt).rejects.toThrow("Could not set up or roll back the stack fixture");
+		const { errors } = (await attempt.catch((error: unknown) => error)) as AggregateError;
+		expect(errors).toEqual([expect.objectContaining({ code: "EEXIST" }), stuck]);
+		expect(readdirSync(temp)).toEqual([]);
+	} finally {
+		if (previous === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = previous;
+	}
+});
+
 it("holds no wake helper off macOS", () => {
 	for (const platform of ["linux", "win32", "freebsd"] as const) expect(holdWake(platform)).toBeUndefined();
 });
