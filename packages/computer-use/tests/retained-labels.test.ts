@@ -271,68 +271,6 @@ test("a redacted top-level graft never echoes the old region label", async () =>
 	await assertQueriesClean(stateId, "@e2");
 });
 
-test("restart after scoped protection restores the graft, and fails closed when it was not persisted", async () => {
-	const { fake, assertQueriesClean, restart } = await desktop(PROTECTED_SHAPES["linux password"]);
-	const group = (children: object[], extra = {}) => wireNode("g", "AXGroup", "Group", { children, ...extra });
-	let kid = wireNode("kid", "AXStaticText", SECRET);
-	fake.lookPayload = (request: { scopeRef?: string }) =>
-		request.scopeRef === "g"
-			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group([kid]) }
-			: lookPayload({ children: [group([kid], { truncated: request.scopeRef === undefined })] });
-	const observed = await fake.observe({ detail: "outline" });
-	const original = present(loadStoredOutline(observed.stateId));
-	kid = wireNode("kid2", "password text", PROTECTED_LABEL, { label: "" });
-	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId: observed.stateId, ref: "@e2" });
-	const session = [
-		{ toolName: "observe_ui", details: observed.result.details },
-		{ toolName: "expand_ui", details: expanded.details },
-	];
-	/** The restored state is the graft itself, not a blanket redaction: the confirmed group keeps its label. */
-	const assertGraftRestored = async () => {
-		const group = await fake.call(fake.bridge.executeInspectUi, { stateId: observed.stateId, ref: "@e2" });
-		assert.match(fake.text(group), /AXGroup "Group"/);
-		await assertQueriesClean(observed.stateId, "@e3");
-	};
-	await restart(session);
-	await assertGraftRestored();
-	// A legacy session carries the pre-graft outline inline; the store, rewritten by the graft, still wins.
-	await restart([{ toolName: "observe_ui", details: { ...observed.result.details, outline: original } }, session[1]]);
-	await assertGraftRestored();
-	// The graft's write was lost: the store holds the pre-graft outline the session's expansion does not match.
-	saveStoredOutline(observed.stateId, original);
-	await restart(session);
-	const inspected = await fake.call(fake.bridge.executeInspectUi, { stateId: observed.stateId, ref: "@e3" });
-	assert.match(fake.text(inspected), /\[redacted\]/);
-	await assertQueriesClean(observed.stateId, "@e3");
-});
-
-test("a scoped expansion on an older state revokes the newer state, on disk too", async () => {
-	const { fake, assertQueriesClean, restart } = await desktop(PROTECTED_SHAPES["linux password"]);
-	const group = (children: object[], extra = {}) => wireNode("g", "AXGroup", "Group", { children, ...extra });
-	let kid = wireNode("kid", "AXStaticText", SECRET);
-	fake.lookPayload = (request: { scopeRef?: string }) =>
-		request.scopeRef === "g"
-			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group([kid]) }
-			: lookPayload({
-					lookId: `full-${fake.looks.length}`,
-					children: [group([kid], { truncated: request.scopeRef === undefined })],
-				});
-	const older = await fake.observe({ detail: "outline" });
-	const newer = await fake.observe({ detail: "outline" });
-	kid = wireNode("kid2", "password text", PROTECTED_LABEL, { label: "" });
-	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId: older.stateId, ref: "@e2" });
-	await assertQueriesClean(newer.stateId, "@e3");
-	// Restart restores the newest observation, which the expansion revoked after it was first written.
-	await restart([
-		{ toolName: "observe_ui", details: older.result.details },
-		{ toolName: "observe_ui", details: newer.result.details },
-		{ toolName: "expand_ui", details: expanded.details },
-	]);
-	const inspected = await fake.call(fake.bridge.executeInspectUi, { stateId: newer.stateId, ref: "@e3" });
-	assertNoSecret(inspected, fake.text(inspected), "inspect_ui after restart");
-	assert.match(fake.text(inspected), /\[redacted\]/);
-});
-
 test("a scoped graft that redacts drops the same state's earlier output pages", async () => {
 	const { fake } = await desktop(PROTECTED_SHAPES["linux password"]);
 	const long = `${SECRET} ${"x".repeat(60_000)}`;

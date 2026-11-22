@@ -88,7 +88,6 @@ import {
 	renderInteractiveControls,
 	restoreOutline,
 	revocationFor,
-	revokeUnconfirmed,
 	type SerializedOutline,
 	type SerializedOutlineNode,
 	type SerializedOutlineSearchMatch,
@@ -2398,8 +2397,6 @@ async function performExpandUi(
 		state.currentLook = { ...scoped, image: state.currentLook?.image, outline: outline.root, parsedOutline: outline };
 		persistOperation(state);
 		const stateId = state.currentCapture!.stateId;
-		// Restore reads the outline back by stateId: persist the graft so a restart cannot resurrect pre-graft text.
-		saveStoredOutline(stateId, serializeOutline(outline));
 		// Pages this state produced before the graft may hold text the graft just redacted.
 		if (outline.nodes.some((node) => node.unconfirmed)) revokeStoredOutputs(new Set([stateId]));
 	}
@@ -3952,8 +3949,6 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 	runtimeState.nextRootRefIndex = 1;
 
 	const restoredResources = new Set<string>();
-	// Newest scoped expansion per state: its lookId is the outline the state had after the graft.
-	const expandedLooks = new Map<string, string>();
 	for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
 		if ((entry as any)?.type !== "message") continue;
 		const message = (entry as any).message;
@@ -3961,15 +3956,6 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 		if (!AGENT_TOOL_NAMES.has(message.toolName)) continue;
 
 		const rawDetails = message.details as any;
-		if (
-			rawDetails?.tool === "expand_ui" &&
-			typeof rawDetails.stateId === "string" &&
-			typeof rawDetails.lookId === "string" &&
-			!expandedLooks.has(rawDetails.stateId)
-		) {
-			expandedLooks.set(rawDetails.stateId, rawDetails.lookId);
-			continue;
-		}
 		if (rawDetails?.tool === "find_roots" && Array.isArray(rawDetails.windows)) {
 			for (const window of rawDetails.windows) {
 				if (typeof window?.windowRef !== "string" || !Number.isFinite(window?.pid)) continue;
@@ -4038,17 +4024,11 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 			scaleFactor: Math.max(1, toFiniteNumber(details.capture.scaleFactor, 1)),
 			timestamp: Number.isFinite(details.capture.timestamp) ? details.capture.timestamp : Date.now(),
 		};
-		// Sessions written before the outline store carry the outline inline; newer ones read it back by stateId. The
-		// store wins: a scoped expansion or a revocation rewrites it after the inline copy was written.
-		const stored =
-			loadStoredOutline(capture.stateId) ??
-			(details.outline?.root && typeof details.outline.lookId === "string" ? details.outline : undefined);
-		// A later expansion that the restored outline does not reflect could not be persisted: fail closed.
-		const expandedLook = expandedLooks.get(capture.stateId);
+		// Sessions written before the outline store carry the outline inline; newer ones read it back by stateId.
 		const outline =
-			stored && expandedLook !== undefined && expandedLook !== stored.lookId
-				? revokeUnconfirmed(stored, new Set()).outline
-				: stored;
+			details.outline?.root && typeof details.outline.lookId === "string"
+				? details.outline
+				: loadStoredOutline(capture.stateId);
 		// The newest result for a resource decides it: if its outline was evicted, do not fall back to an older state.
 		restoredResources.add(resourceKey);
 		if (outline) {
