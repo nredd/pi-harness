@@ -460,14 +460,25 @@ package-relative source, the file's SHA-256 and its mapped `lines` / `functions`
 [here](https://github.com/nredd/pi-harness/actions/runs/45009970545) measured 5181 / 619; its
 producer `metadata.json` hashes match the recorded ones). An enforced `llvm-lcov` signal must record
 them for every OS it accounts. Accounting then fails when a source whose hash still matches its
-record maps fewer lines or functions than recorded, or leaves the signal's records. A changed or
-deleted source makes its record stale: it is logged `STALE mapped totals` and not compared until a
-refresh. Growth is allowed. Every run writes the current records to the summary's
-`measured_mapped_totals`, and `--measure` proposes them in its review diff. Records are separate from
-the uncovered caps and never loosen them.
+record maps fewer lines or functions than recorded, or leaves the signal's records. Record keys are
+canonical package-relative POSIX paths on every host: no drive, backslash, leading `/`, empty, `.` or
+`..` segment. Growth is allowed. Every run writes the current records, hashed from the checkout, to the
+summary's `measured_mapped_totals`, and `--measure` proposes them in its review diff. Records are
+separate from the uncovered caps and never loosen them.
 
-The base ratchet treats lowering, dropping or rehashing a record whose source still matches the
-base record as a remeasurement. It needs a new, exact `remeasurements` entry, like
+A file is stale when no current record guards its denominator: it is measured but has no record or
+its record hashes other source (a new or edited file), or it is recorded, not measured and its source
+changed or was deleted. Stale files are not compared. Every run lists them in the summary's
+`stale_mapped_totals` and logs one `STALE mapped totals, not compared (#1270)` warning per signal
+naming them. This is a WARNING, not a failure: a source edit leaves that file's mapped denominator
+unguarded until a reviewed `--measure` refresh lands. Whether the fan-in should fail on stale files is
+the open policy choice in #1270.
+
+The base ratchet checks every record against the checkout. A record the policy adds or edits must
+hash the checkout's source, so a mistyped hash cannot turn a remeasurement into a permanent stale
+opt-out; it fails with `Mapped totals must hash the checkout source`, even with a ledger entry.
+Lowering a record whose source still matches the base record, or dropping the record of any source
+that still exists, is a remeasurement. It needs a new, exact `remeasurements` entry, like
 `enforcement_changes`:
 
 ```json
@@ -479,9 +490,11 @@ base record as a remeasurement. It needs a new, exact `remeasurements` entry, li
 }
 ```
 
-Missing, blank, duplicate, stale or recycled base entries fail. Refreshing the record of a changed
-source needs no entry. Refresh stale records from a hosted artifact with the replay below, `--measure`
-in place of `--base HEAD`, and review the `mapped_totals` hunk.
+Missing, blank, duplicated (a repeated base entry included), stale or recycled base entries fail.
+Needing no entry: an initial record, growth, a refresh of an edited source to its new hash, and
+removing a deleted source's record. To create or refresh records, run the replay below with
+`--measure` in place of `--base HEAD` against an artifact built from the same sources, and review the
+`mapped_totals` hunk.
 
 To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
 `coverage.json` and `metadata.json` from its single `windows-*` directory into

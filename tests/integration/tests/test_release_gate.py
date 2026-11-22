@@ -69,8 +69,8 @@ def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any
             "head_sha": SHA,
             "status": "completed",
             "conclusion": "success",
-            "started_at": "2026-11-03T10:00:00Z",
-            "completed_at": "2026-11-03T11:00:00Z",
+            "started_at": JOB_WINDOWS.get(name, JOB_WINDOW)[0],
+            "completed_at": JOB_WINDOWS.get(name, JOB_WINDOW)[1],
             "steps": [{"name": step, "status": "completed", "conclusion": "success"} for step in steps],
         }
         for name, steps in gate.expected_jobs().items()
@@ -81,11 +81,21 @@ def evidence() -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any
             "expired": False,
             "size_in_bytes": 1,
             "workflow_run": {"id": 42, "head_sha": SHA},
-            "created_at": "2026-11-03T10:30:00Z",
+            "created_at": UPLOADS.get(name, "2026-11-03T10:30:00Z"),
         }
         for name in gate.expected_artifacts()
     ]
     return run, jobs, artifacts
+
+
+JOB_WINDOW = ("2026-11-03T10:00:00Z", "2026-11-03T11:00:00Z")
+# The Windows producer and the Ubuntu fan-in that downloads its upload run in disjoint windows, so
+# binding the Windows artifact to the wrong job cannot pass.
+JOB_WINDOWS = {
+    gate.WINDOWS_JOB: ("2026-11-03T10:00:00Z", "2026-11-03T10:20:00Z"),
+    "owned (ubuntu-24.04)": ("2026-11-03T10:40:00Z", "2026-11-03T11:00:00Z"),
+}
+UPLOADS = {gate.WINDOWS_ARTIFACT: "2026-11-03T10:10:00Z", "coverage-ubuntu-24.04": "2026-11-03T10:50:00Z"}
 
 
 def test_exact_frozen_candidate() -> None:
@@ -315,6 +325,35 @@ def test_windows_artifact_is_the_producers_attempt_numbered_upload(name: str, ad
     run, jobs, artifacts = evidence()
     windows = next(item for item in artifacts if item["name"].startswith("computer-use-rust-windows-x64-"))
     windows["name"] = name
+    if admitted:
+        assert gate.validate_execution(SHA, run, jobs, artifacts) == 42
+    else:
+        with pytest.raises(ValueError, match=r"\['computer-use-rust-windows-x64-<attempt>'\]"):
+            gate.validate_execution(SHA, run, jobs, artifacts)
+
+
+@pytest.mark.parametrize(
+    ("created_at", "admitted"),
+    [
+        ("2026-11-03T10:10:00Z", True),
+        ("2026-11-03T10:50:00Z", False),
+        ("2026-11-03T10:30:00Z", False),
+    ],
+)
+def test_windows_artifact_is_bound_to_the_producer_window(created_at: str, admitted: bool) -> None:
+    """A correctly named upload from the Ubuntu fan-in's window, or neither window, is not the producer's.
+
+    Parameters:
+        created_at (str): Upload time of `computer-use-rust-windows-x64-1`.
+        admitted (bool): Whether it falls in the Windows producer's own job window.
+
+    Returns:
+        None: Only an upload inside the producer's window is admitted.
+    """
+    run, jobs, artifacts = evidence()
+    next(item for item in artifacts if item["name"] == "computer-use-rust-windows-x64-1")["created_at"] = (
+        created_at
+    )
     if admitted:
         assert gate.validate_execution(SHA, run, jobs, artifacts) == 42
     else:
@@ -639,19 +678,19 @@ def test_artifact_must_fall_inside_its_producing_job(created_at: str, admitted: 
     """Both bounds are inclusive and offsets compare as instants.
 
     Parameters:
-        created_at (str): Upload timestamp for `coverage-ubuntu-24.04`, whose job ran 10:00-11:00Z.
+        created_at (str): Upload timestamp for `coverage-macos-14`, whose job ran 10:00-11:00Z.
         admitted (bool): Whether the upload is evidence.
 
     Returns:
         None: Boundary and offset timestamps are judged as instants.
     """
     run, jobs, artifacts = evidence()
-    next(item for item in artifacts if item["name"] == "coverage-ubuntu-24.04")["created_at"] = created_at
+    next(item for item in artifacts if item["name"] == "coverage-macos-14")["created_at"] = created_at
     if admitted:
         assert gate.validate_execution(SHA, run, jobs, artifacts) == 42
     else:
         with pytest.raises(
-            ValueError, match=r"Missing retained full verification artifacts: \['coverage-ubuntu"
+            ValueError, match=r"Missing retained full verification artifacts: \['coverage-macos"
         ):
             gate.validate_execution(SHA, run, jobs, artifacts)
 

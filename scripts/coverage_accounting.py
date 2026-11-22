@@ -169,6 +169,22 @@ class VerificationHelper(StrictModel):
         return self
 
 
+def canonical_key(path: str) -> bool:
+    """Accept only a canonical package-relative POSIX path, whatever the host OS.
+
+    Parameters:
+        path (str): Recorded `mapped_totals` key.
+    Returns:
+        bool: Whether the key is nonempty and relative, with `/` separators, no drive or backslash, and
+        no empty, `.` or `..` segment.
+    Raises:
+        None.
+    """
+    return (
+        "\\" not in path and ":" not in path and all(part not in {"", ".", ".."} for part in path.split("/"))
+    )
+
+
 class MappedFile(StrictModel):
     sha256: str = Field(
         pattern=r"^[0-9a-f]{64}$", description="SHA-256 of the package-relative source when it was measured."
@@ -243,8 +259,7 @@ class Signal(StrictModel):
         if self.files is not None and (not self.files or len(set(self.files)) != len(self.files)):
             raise ValueError("Duplicate signal files")
         if any(
-            not records or any(Path(path).is_absolute() or ".." in Path(path).parts for path in records)
-            for records in self.mapped_totals.values()
+            not records or not all(map(canonical_key, records)) for records in self.mapped_totals.values()
         ) or set(self.mapped_totals) - set(self.platforms):
             raise ValueError("Mapped totals need package-relative files on a measured platform")
         return self
@@ -1203,11 +1218,17 @@ def check_ledger(
     Returns:
         None: Every change has exactly one new entry, and every new entry a change.
     Raises:
-        ValueError: A change lacks a new entry, or an entry is duplicate or stale.
+        ValueError: A change lacks a new entry, or an entry is duplicate (historical copies included)
+            or stale.
     """
     declared: set[tuple[str, ...]] = set()
+    seen: set[str] = set()
     for key, entry in entries:
-        if entry.model_dump_json() in historical:
+        serialized = entry.model_dump_json()
+        if serialized in seen:
+            raise ValueError(f"Duplicate or stale `{ledger}` entry: '{key}'")
+        seen.add(serialized)
+        if serialized in historical:
             continue
         if key not in required or key in declared:
             raise ValueError(f"Duplicate or stale `{ledger}` entry: '{key}'")
@@ -1232,12 +1253,44 @@ def source_sha256(path: Path) -> str | None:
         return None
 
 
+def misrecorded_mapped_totals(current: Policy, base: Policy, root: Path) -> list[str]:
+    """Find new or modified records whose hash is not the checkout source's.
+
+    A wrong hash would make accounting treat the record as stale and skip its totals for good,
+    so every record this policy adds or edits must describe the checkout it ships with.
+
+    Parameters:
+        current (Policy): Current policy and its mapped totals.
+        base (Policy): Base policy; records identical to its own are left to accounting.
+        root (Path): Checkout to hash.
+    Returns:
+        list[str]: Sorted `package/signal/os 'path'` labels of misrecorded records.
+    Raises:
+        OSError: A recorded source exists but cannot be read.
+    """
+    misrecorded = []
+    for name, package in current.packages.items():
+        previous = base.packages.get(name)
+        for signal_name, signal in package.signals.items():
+            old = previous.signals.get(signal_name) if previous is not None else None
+            for runner_os, records in signal.mapped_totals.items():
+                kept = old.mapped_totals.get(runner_os, {}) if old is not None else {}
+                for path, record in records.items():
+                    if (
+                        record != kept.get(path)
+                        and source_sha256(root / package.root / path) != record.sha256
+                    ):
+                        misrecorded.append(f"{name}/{signal_name}/{runner_os} '{path}'")
+    return sorted(misrecorded)
+
+
 def weakened_mapped_totals(current: Policy, base: Policy, root: Path | None) -> set[tuple[str, ...]]:
     """Find signals whose recorded denominators drop for source the base already measured.
 
-    A base record still describes the checkout when its hash matches the file. Dropping it,
-    rehashing it or lowering a total then needs a reviewed remeasurement; a changed or deleted
-    source may be refreshed freely.
+    A base record still describes the checkout when its hash matches the file. Lowering a total
+    then needs a reviewed remeasurement, and so does dropping the record of any source that still
+    exists. A changed source may be refreshed, and a deleted source's record removed, freely.
+    Without a checkout, every recorded source counts as unchanged and a rehash is a shrink.
 
     Parameters:
         current (Policy): Current policy and its mapped totals.
@@ -1260,12 +1313,16 @@ def weakened_mapped_totals(current: Policy, base: Policy, root: Path | None) -> 
                 kept = new.mapped_totals.get(runner_os, {})
                 for path, before in recorded.items():
                     after = kept.get(path)
-                    unchanged = root is None or source_sha256(root / package.root / path) == before.sha256
-                    if unchanged and (
-                        after is None
-                        or after.sha256 != before.sha256
-                        or after.lines < before.lines
-                        or after.functions < before.functions
+                    checkout = before.sha256 if root is None else source_sha256(root / package.root / path)
+                    unchanged = checkout == before.sha256
+                    if (after is None and checkout is not None) or (
+                        unchanged
+                        and after is not None
+                        and (
+                            after.sha256 != before.sha256
+                            or after.lines < before.lines
+                            or after.functions < before.functions
+                        )
                     ):
                         weakened.add((name, signal_name, runner_os))
     return weakened
@@ -1279,14 +1336,22 @@ def check_remeasurements(current: Policy, base: Policy, root: Path | None) -> No
         base (Policy): Base mapped totals and historical ledger entries.
         root (Path | None): Checkout to hash, or null to treat every recorded source as unchanged.
     Returns:
-        None: Every weakened record has one new, exact `remeasurements` entry.
+        None: Every new or edited record hashes the checkout, and every weakened record has one new,
+        exact `remeasurements` entry.
     Raises:
-        ValueError: A shrink lacks a new entry, or an entry is duplicate or stale.
+        ValueError: A record is misrecorded, a shrink lacks a new entry, or an entry is duplicate or
+            stale.
         OSError: A recorded source exists but cannot be read.
     """
+    misrecorded = misrecorded_mapped_totals(current, base, root) if root is not None else []
+    if misrecorded:
+        raise ValueError(
+            "Mapped totals must hash the checkout source; replay a matching artifact with `--measure` "
+            f"and record its proposed `mapped_totals`: {', '.join(misrecorded)}"
+        )
     check_ledger(
         "remeasurements",
-        "Shrinking mapped totals of unchanged source",
+        "Lowering or dropping mapped totals of live source",
         weakened_mapped_totals(current, base, root),
         (((entry.package, entry.signal, entry.os), entry) for entry in current.remeasurements),
         {entry.model_dump_json() for entry in base.remeasurements},
@@ -1907,7 +1972,7 @@ def check_mapped_totals(
 
     Paired exports can agree on a smaller map after a build or instrumentation change, so the
     uncovered count falls without any new test. Recorded totals of changed or deleted sources are
-    stale: they are reported for a refresh and not compared.
+    stale: `stale_mapped_totals` lists them for a refresh, and they are not compared.
 
     Parameters:
         root (Path): Source checkout.
@@ -1918,7 +1983,8 @@ def check_mapped_totals(
     Returns:
         None: No unchanged source lost mapped lines or functions, or the signal is report-only.
     Raises:
-        ValueError: An unchanged source has fewer mapped lines or functions than recorded.
+        ValueError: An enforced `llvm-lcov` signal records no totals for the OS, or an unchanged source
+            has fewer mapped lines or functions than recorded.
         OSError: A recorded source exists but cannot be read.
     """
     if signal.enforcement != "enforced":
@@ -1926,11 +1992,14 @@ def check_mapped_totals(
     if signal.producer == "llvm-lcov" and runner_os not in signal.mapped_totals:
         # Paired exports can agree on a smaller denominator; only recorded totals expose that.
         # Checked per run, not in the schema, so a ratchet base from before `mapped_totals` parses.
-        raise ValueError(f"Missing mapped totals: an enforced `llvm-lcov` signal needs '{runner_os}'")
+        raise ValueError(
+            f"Missing mapped totals: an enforced `llvm-lcov` signal needs '{runner_os}'; replay a "
+            "matching artifact with `--measure` and record its proposed `mapped_totals` (an initial "
+            "record needs no `remeasurements` entry)"
+        )
     shrunk = []
     for path, recorded in sorted(signal.mapped_totals.get(runner_os, {}).items()):
         if source_sha256(root / package.root / path) != recorded.sha256:
-            LOGGER.warning(f"STALE mapped totals, the source changed: '{path}'; refresh them with --measure")
             continue
         counters = records.get(path, FileCoverage(0, 0, 0, 0, 0, 0))
         if counters.lines < recorded.lines or counters.functions < recorded.functions:
@@ -1940,14 +2009,15 @@ def check_mapped_totals(
             )
     if shrunk:
         raise ValueError(
-            "Mapped totals shrank without a source change; remeasure, then record the reviewed "
-            f"`mapped_totals` with a `remeasurements` entry: {'; '.join(shrunk)}"
+            "Mapped totals shrank without a source change; if the smaller map is reviewed, replay a "
+            "matching artifact with `--measure`, record its proposed `mapped_totals` and add a new "
+            f"`remeasurements` entry: {'; '.join(shrunk)}"
         )
 
 
 def measured_mapped_totals(
     root: Path, policy: Policy, results: list[dict[str, object]], runner_os: str
-) -> dict[str, dict[str, dict[str, dict[str, object]]]]:
+) -> dict[str, dict[str, dict[str, MappedFile]]]:
     """Propose current mapped totals for every signal that tracks them.
 
     Parameters:
@@ -1956,11 +2026,12 @@ def measured_mapped_totals(
         results (list[dict[str, object]]): Per-file accounting rows.
         runner_os (str): Measured OS.
     Returns:
-        dict[str, dict[str, dict[str, dict[str, object]]]]: `MappedFile` records by signal, OS and file.
+        dict[str, dict[str, dict[str, MappedFile]]]: Records by signal, OS and file, hashing the checkout.
     Raises:
         OSError: A measured source cannot be read.
+        ValueError: A row's counters are not a valid record.
     """
-    proposed: dict[str, dict[str, dict[str, dict[str, object]]]] = {}
+    proposed: dict[str, dict[str, dict[str, MappedFile]]] = {}
     for row in results:
         package = policy.packages[str(row["package"])]
         signal = package.signals[str(row["signal"])]
@@ -1968,12 +2039,80 @@ def measured_mapped_totals(
             continue
         path = str(row["file"])
         label = f"{row['package']}/{row['signal']}"
-        proposed.setdefault(label, {}).setdefault(runner_os, {})[path] = {
-            "sha256": sha256((root / package.root / path).read_bytes()).hexdigest(),
-            "lines": row["lines"],
-            "functions": row["functions"],
-        }
+        proposed.setdefault(label, {}).setdefault(runner_os, {})[path] = MappedFile.model_validate(
+            {
+                "sha256": sha256((root / package.root / path).read_bytes()).hexdigest(),
+                "lines": row["lines"],
+                "functions": row["functions"],
+            }
+        )
     return proposed
+
+
+def stale_mapped_totals(
+    root: Path, policy: Policy, mapped: dict[str, dict[str, dict[str, MappedFile]]], runner_os: str
+) -> dict[str, dict[str, list[str]]]:
+    """List the files whose mapped denominator no current record guards, and warn loudly.
+
+    A measured file is stale when it has no record or its record hashes other source, e.g. a new
+    or edited file. A recorded file this run did not measure is stale when its source changed or
+    was deleted. Accounting does not compare stale files; this stays a warning until #1270 decides
+    whether the gate should fail on them.
+
+    Parameters:
+        root (Path): Source checkout.
+        policy (Policy): Policy holding the recorded totals.
+        mapped (dict[str, dict[str, dict[str, MappedFile]]]): This run's `measured_mapped_totals`.
+        runner_os (str): Measured OS.
+    Returns:
+        dict[str, dict[str, list[str]]]: Sorted stale files by signal and OS; signals with none are
+        omitted.
+    Raises:
+        OSError: A recorded source exists but cannot be read.
+    """
+    stale: dict[str, dict[str, list[str]]] = {}
+    for label, platforms in mapped.items():
+        name, signal_name = label.split("/")
+        package = policy.packages[name]
+        recorded = package.signals[signal_name].mapped_totals.get(cast(CoverageOS, runner_os), {})
+        measured = platforms[runner_os]
+        paths = {
+            path
+            for path, record in measured.items()
+            if path not in recorded or recorded[path].sha256 != record.sha256
+        } | {
+            path
+            for path, record in recorded.items()
+            if path not in measured and source_sha256(root / package.root / path) != record.sha256
+        }
+        if paths:
+            stale[label] = {runner_os: sorted(paths)}
+            LOGGER.warning(
+                f"STALE mapped totals, not compared (#1270): '{label}/{runner_os}' needs a reviewed "
+                f"refresh; replay a matching artifact with `--measure`: {sorted(paths)}"
+            )
+    return stale
+
+
+def serialized_mapped_totals(
+    mapped: dict[str, dict[str, dict[str, MappedFile]]],
+) -> dict[str, dict[str, dict[str, dict[str, object]]]]:
+    """Serialize measured mapped totals for the JSON summary, the only untyped boundary.
+
+    Parameters:
+        mapped (dict[str, dict[str, dict[str, MappedFile]]]): Records by signal, OS and file.
+    Returns:
+        dict[str, dict[str, dict[str, dict[str, object]]]]: The same records as plain JSON objects.
+    Raises:
+        None.
+    """
+    return {
+        label: {
+            runner_os: {path: record.model_dump() for path, record in records.items()}
+            for runner_os, records in platforms.items()
+        }
+        for label, platforms in mapped.items()
+    }
 
 
 def describe(lines: int, functions: int, branches: int | None, statements: int | None = None) -> str:
@@ -2176,7 +2315,7 @@ def log_measured_diff(
     policy: Policy,
     floors: dict[str, dict[str, dict[str, int]]],
     runner_os: str,
-    mapped: dict[str, dict[str, dict[str, dict[str, object]]]],
+    mapped: dict[str, dict[str, dict[str, MappedFile]]],
 ) -> None:
     """Print a reviewable policy proposal without editing any checkout files.
 
@@ -2184,7 +2323,7 @@ def log_measured_diff(
         policy (Policy): Original validated coverage policy.
         floors (dict[str, dict[str, dict[str, int]]]): Validated measured counts by signal and OS.
         runner_os (str): Explicit measured artifact platform.
-        mapped (dict[str, dict[str, dict[str, dict[str, object]]]]): Measured mapped totals by signal.
+        mapped (dict[str, dict[str, dict[str, MappedFile]]]): Measured mapped totals by signal.
     Returns:
         None: A unified policy diff is logged for manual review, never applied.
     Raises:
@@ -2198,9 +2337,9 @@ def log_measured_diff(
         )
     for label, platforms in mapped.items():
         name, signal = label.split("/")
-        proposed.packages[name].signals[signal].mapped_totals[cast(CoverageOS, runner_os)] = {
-            path: MappedFile.model_validate(record) for path, record in platforms[runner_os].items()
-        }
+        proposed.packages[name].signals[signal].mapped_totals[cast(CoverageOS, runner_os)] = dict(
+            platforms[runner_os]
+        )
     LOGGER.info("MEASUREMENT ONLY; review this diff, no policy files are changed")
     LOGGER.info(
         "".join(
@@ -2263,7 +2402,8 @@ def main() -> int:
     errors: list[str] = []
     results: list[dict[str, object]] = []
     pending: dict[str, str] = {}
-    mapped: dict[str, dict[str, dict[str, dict[str, object]]]] = {}
+    mapped: dict[str, dict[str, dict[str, MappedFile]]] = {}
+    stale: dict[str, dict[str, list[str]]] = {}
     policy: Policy | None = None
     try:
         if args.compare_ref is not None:
@@ -2302,7 +2442,9 @@ def main() -> int:
             host=args.host,
             skipped_gates=frozenset(args.skipped_gates.split()),
         )
-        mapped = measured_mapped_totals(root, policy, results, args.os)
+        stale = stale_mapped_totals(
+            root, policy, mapped := measured_mapped_totals(root, policy, results, args.os), args.os
+        )
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")
     except (OSError, ValueError, KeyError, TypeError) as error:
@@ -2336,7 +2478,8 @@ def main() -> int:
                 "os": args.os,
                 "measurement_only": args.measure,
                 "measured_floors": floors,
-                "measured_mapped_totals": mapped,
+                "measured_mapped_totals": serialized_mapped_totals(mapped),
+                "stale_mapped_totals": stale,
                 "packages": totals,
                 "signals": signal_comparisons(policy, totals, args.os) if policy is not None else {},
                 "files": results,

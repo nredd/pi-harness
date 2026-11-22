@@ -368,8 +368,10 @@ change (e.g. the #660 macOS split) therefore verifies under its own commit's gat
 The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
-uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
-`stack-*` and `standalone-*` to their `stack (<os>, <stack>)` cell). That job must be in the
+uploads it (`coverage-<os>` to `owned (<os>)`, `computer-use-rust-windows-x64-<attempt>` to
+`computer-use Rust (windows-x64)`, never the `owned (ubuntu-24.04)` fan-in that downloads it,
+`contract-reports-<os>` to `contracts (<os>)`, `stack-*` and `standalone-*` to their
+`stack (<os>, <stack>)` cell). That job must be in the
 current attempt's job list and successful, and exactly one upload of that name must have a
 `created_at` inside the job's `started_at`..`completed_at`, both bounds inclusive, compared as
 offset-aware instants. A naive timestamp refuses. Two uploads inside one window refuse, the newest
