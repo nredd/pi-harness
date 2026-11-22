@@ -8,7 +8,7 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, onTestFinished, test, vi } from "vitest";
 import * as bridge from "../src/bridge.ts";
 import { defaultBlockedApps } from "../src/config.ts";
-import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS } from "../src/index.ts";
+import extension, { COMPUTER_USE_TOOLS, DESKTOP_TOOLS, shutdownWarner } from "../src/index.ts";
 
 vi.mock("../src/bridge.ts", async (importOriginal) => ({
 	...(await importOriginal()),
@@ -302,17 +302,40 @@ describe("activity glow lifecycle", () => {
 		assert.deepEqual(glowCalls(), [true, false], "shutdown reset the active flag");
 	});
 
-	test("session_shutdown surfaces a shutdown warning as a UI warning", async () => {
+	test("session_shutdown surfaces a shutdown warning in the UI, and on stderr for /quit", async () => {
 		const pi = createRecordingPi();
 		extension(pi.pi);
 		const notes = [];
-		await pi.handlers.get("session_shutdown")[0](
-			{},
-			{ ui: { notify: (message, level) => notes.push({ message, level }) } },
-		);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		onTestFinished(() => stderr.mockRestore());
+		const ui = { notify: (message, level) => notes.push({ message, level }) };
+		await pi.handlers.get("session_shutdown")[0]({ reason: "new" }, { hasUI: true, ui });
 		const [warn] = bridge.shutdownComputerUseSession.mock.calls[0];
 		warn("keycode 50 may still be held");
 		assert.deepEqual(notes, [{ message: "keycode 50 may still be held", level: "warning" }]);
+		assert.equal(stderr.mock.calls.length, 0, "a live session reset keeps the UI only");
+		// `/quit` stops the TUI before shutdown: the warning also goes to stderr.
+		await pi.handlers.get("session_shutdown")[0]({ reason: "quit" }, { hasUI: true, ui });
+		bridge.shutdownComputerUseSession.mock.calls[1][0]("keycode 50 may still be held");
+		assert.deepEqual(stderr.mock.calls, [["pi-computer-use: keycode 50 may still be held\n"]]);
+	});
+
+	test("shutdownWarner writes stderr on quit or without a UI, and always notifies", () => {
+		for (const [reason, hasUI, written] of [
+			["new", true, []],
+			["reload", true, []],
+			["quit", true, ["pi-computer-use: held\n"]],
+			["resume", false, ["pi-computer-use: held\n"]],
+			[undefined, false, ["pi-computer-use: held\n"]],
+		]) {
+			const out = [];
+			const notes = [];
+			shutdownWarner(reason, { hasUI, ui: { notify: (message, level) => notes.push([message, level]) } }, (text) =>
+				out.push(text),
+			)("held");
+			assert.deepEqual(out, written, `${reason} hasUI=${hasUI}`);
+			assert.deepEqual(notes, [["held", "warning"]]);
+		}
 	});
 
 	test("session_shutdown still releases the session when the glow call fails", async () => {
