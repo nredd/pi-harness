@@ -364,6 +364,13 @@ trees and fabricated root snapshots to root ranking, CG candidate and owner filt
 look rect scaling, OCR placement, root identities and the root snapshot delta. Its only live calls
 are AX title and frame reads on handles for PIDs above the macOS range, so pairing there sees empty
 titles and frames; geometry and title pairing are checked on the scoring functions directly.
+`native/macos/ax_element_tests.swift` runs the AX element accessors, element payload and
+`CGSize`/element decoding on application handles for PIDs above the macOS range. Those reads fail
+at once, so it pins failure handling: a failed read stays failed and a sheet inventory incomplete,
+never an authoritative absence. `native/macos/root_event_tests.swift` records events into hand-installed,
+unregistered observer states to check the root event log's cap, cursor, routing and change wait
+without sleeping; `native/macos/image_encoding_tests.swift` downscales and JPEG-encodes in-memory bitmaps.
+Successful AX reads, observer registration and real captures stay live-only.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 

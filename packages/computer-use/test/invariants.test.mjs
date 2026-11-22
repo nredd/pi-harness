@@ -222,7 +222,7 @@ test("explicit root is not replaced by a modal window behind it", () => {
 test("macOS ScreenCaptureKit config sizes window screenshots", () => {
 	const captureFunction = swift.slice(
 		swift.indexOf("private func captureWindow"),
-		swift.indexOf("private func jpegData"),
+		swift.indexOf("\tfunc jpegData("),
 	);
 	assert(/config\.width\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.width");
 	assert(/config\.height\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.height");

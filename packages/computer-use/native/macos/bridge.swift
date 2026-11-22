@@ -1184,14 +1184,14 @@ struct NativeInputSink {
 	static let live = production(activate: activateIfInactive, sleep: { _ = usleep($0) }, post: { $0.post(tap: .cghidEventTap) })
 }
 
-private struct RootAXEvent {
+struct RootAXEvent {
 	let sequence: UInt64
 	let timestamp: TimeInterval
 	let notification: String
 	let element: AXUIElement?
 }
 
-private final class RootAXObserverState {
+final class RootAXObserverState {
 	let pid: Int32
 	let observer: AXObserver
 	let change = NSCondition()
@@ -1491,7 +1491,7 @@ final class Bridge {
 	private var lookRecordOrder: [String] = []
 	private let lookRecordLock = NSLock()
 	private let rootObserverLock = NSLock()
-	private var rootObservers: [Int32: RootAXObserverState] = [:]
+	var rootObservers: [Int32: RootAXObserverState] = [:]
 	private let maxRootObservers = 4
 	private let permissionCacheLock = NSLock()
 	private var grantedPermissionStatus: [String: Any]?
@@ -2960,7 +2960,7 @@ final class Bridge {
 		return true
 	}
 
-	private func recordRootAXEvent(observer: AXObserver, notification: String, element: AXUIElement) {
+	func recordRootAXEvent(observer: AXObserver, notification: String, element: AXUIElement) {
 		rootObserverLock.lock()
 		let state = rootObservers.values.first { CFEqual($0.observer, observer) }
 		if let state {
@@ -2977,7 +2977,7 @@ final class Bridge {
 		}
 	}
 
-	private func rootChangeGeneration(pid: Int32) -> UInt64 {
+	func rootChangeGeneration(pid: Int32) -> UInt64 {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
@@ -2987,7 +2987,7 @@ final class Bridge {
 		return state.changeGeneration
 	}
 
-	private func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date) {
+	func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date) {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
@@ -3002,13 +3002,13 @@ final class Bridge {
 		state.change.unlock()
 	}
 
-	private func rootEventCursor(pid: Int32) -> UInt64 {
+	func rootEventCursor(pid: Int32) -> UInt64 {
 		rootObserverLock.lock()
 		defer { rootObserverLock.unlock() }
 		return rootObservers[pid]?.nextSequence ?? 1
 	}
 
-	private func rootEvents(pid: Int32, since cursor: UInt64) -> [RootAXEvent] {
+	func rootEvents(pid: Int32, since cursor: UInt64) -> [RootAXEvent] {
 		rootObserverLock.lock()
 		defer { rootObserverLock.unlock() }
 		guard let events = rootObservers[pid]?.events else { return [] }
@@ -3791,7 +3791,7 @@ final class Bridge {
 		return output
 	}
 
-	private func focusedWindowSummary(pid: Int32) -> String {
+	func focusedWindowSummary(pid: Int32) -> String {
 		let app = AXUIElementCreateApplication(pid)
 		guard let element = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement) else { return "none" }
 		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
@@ -3799,7 +3799,7 @@ final class Bridge {
 		return "\(role):\(title)"
 	}
 
-	private func scrollPositionSignature(_ element: AXUIElement) -> String {
+	func scrollPositionSignature(_ element: AXUIElement) -> String {
 		let names: [CFString] = ["AXVerticalScrollBar" as CFString, "AXHorizontalScrollBar" as CFString, kAXValueAttribute as CFString]
 		return names.map { String(describing: copyAttribute(element, attribute: $0) ?? "" as CFTypeRef) }.joined(separator: "|")
 	}
@@ -3916,7 +3916,7 @@ final class Bridge {
 		return actions
 	}
 
-	private func supportsAnyScrollAction(_ element: AXUIElement) -> Bool {
+	func supportsAnyScrollAction(_ element: AXUIElement) -> Bool {
 		let actions = Set(actionNames(element))
 		return actions.contains(axScrollDownAction as String) || actions.contains(axScrollUpAction as String) || actions.contains(axScrollLeftAction as String) || actions.contains(axScrollRightAction as String)
 	}
@@ -4086,7 +4086,7 @@ final class Bridge {
 		return ["chrome", "chromium", "brave", "edge", "vivaldi", "opera", "firefox", "helium"].contains { name.contains($0) }
 	}
 
-	private func collectDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXUIElement] {
+	func collectDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXUIElement] {
 		collectDescendantsWithContext(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes).map(\.element)
 	}
 
@@ -4121,14 +4121,14 @@ final class Bridge {
 		return "desktop_ax"
 	}
 
-	private func frameForElement(_ element: AXUIElement) -> CGRect? {
+	func frameForElement(_ element: AXUIElement) -> CGRect? {
 		let origin = pointAttribute(element, attribute: kAXPositionAttribute as CFString)
 		let size = sizeAttribute(element, attribute: kAXSizeAttribute as CFString)
 		guard let origin, let size, size.width > 0, size.height > 0 else { return nil }
 		return CGRect(origin: origin, size: size)
 	}
 
-	private func elementPayload(element: AXUIElement, key: String, score: Double? = nil, source: String? = nil, axVisible: Bool = true) -> [String: Any] {
+	func elementPayload(element: AXUIElement, key: String, score: Double? = nil, source: String? = nil, axVisible: Bool = true) -> [String: Any] {
 		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
 		let subrole = stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
 		let title = stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? ""
@@ -4184,25 +4184,25 @@ final class Bridge {
 		return payload
 	}
 
-	private func pidForElement(_ element: AXUIElement) -> Int32? {
+	func pidForElement(_ element: AXUIElement) -> Int32? {
 		var pid: pid_t = 0
 		let status = AXUIElementGetPid(element, &pid)
 		guard status == .success else { return nil }
 		return Int32(pid)
 	}
 
-	private func parentElement(_ element: AXUIElement) -> AXUIElement? {
+	func parentElement(_ element: AXUIElement) -> AXUIElement? {
 		guard let value = copyAttribute(element, attribute: kAXParentAttribute as CFString) else {
 			return nil
 		}
 		return asAXElement(value)
 	}
 
-	private func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+	func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
 		CFEqual(lhs as CFTypeRef, rhs as CFTypeRef)
 	}
 
-	private func isElement(_ element: AXUIElement, descendantOf ancestor: AXUIElement) -> Bool {
+	func isElement(_ element: AXUIElement, descendantOf ancestor: AXUIElement) -> Bool {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 20 {
@@ -4215,7 +4215,7 @@ final class Bridge {
 		return false
 	}
 
-	private func hasAncestorRole(_ element: AXUIElement, role: String) -> Bool {
+	func hasAncestorRole(_ element: AXUIElement, role: String) -> Bool {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 30 {
@@ -4226,7 +4226,7 @@ final class Bridge {
 		return false
 	}
 
-	private func actionNames(_ element: AXUIElement) -> [String] {
+	func actionNames(_ element: AXUIElement) -> [String] {
 		var actionsValue: CFArray?
 		let status = AXUIElementCopyActionNames(element, &actionsValue)
 		guard status == .success else { return [] }
@@ -4234,7 +4234,7 @@ final class Bridge {
 		return actionsArray.compactMap { $0 as? String }
 	}
 
-	private func supportsAction(_ element: AXUIElement, action: CFString) -> Bool {
+	func supportsAction(_ element: AXUIElement, action: CFString) -> Bool {
 		actionNames(element).contains(action as String)
 	}
 
@@ -4619,7 +4619,7 @@ final class Bridge {
 		return value
 	}
 
-	private func boolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
+	func boolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
 		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
 		if let boolValue = value as? Bool {
 			return boolValue
@@ -4636,11 +4636,11 @@ final class Bridge {
 
 	// Secure fields can expose plaintext through AX value in non-native apps,
 	// and serialized values flow into the model conversation. Never emit them.
-	private func isSecureTextElement(role: String, subrole: String) -> Bool {
+	func isSecureTextElement(role: String, subrole: String) -> Bool {
 		role == "AXSecureTextField" || subrole == "AXSecureTextField"
 	}
 
-	private func displayValue(_ element: AXUIElement, role: String, subrole: String) -> String {
+	func displayValue(_ element: AXUIElement, role: String, subrole: String) -> String {
 		if isSecureTextElement(role: role, subrole: subrole) { return "" }
 		return stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
 	}
@@ -4648,12 +4648,12 @@ final class Bridge {
 	// kAXSheetsAttribute is unsupported (-25205) on recent macOS; sheets are
 	// exposed only as AXSheet-role children. Merge both sources so sheet
 	// discovery works across versions.
-	private func sheetElements(of window: AXUIElement) -> [AXUIElement] {
+	func sheetElements(of window: AXUIElement) -> [AXUIElement] {
 		sheetInventory(of: window).sheets
 	}
 
 	/// Not `complete` when either sheet source or a child's role could not be read: a sheet may be missing.
-	private func sheetInventory(of window: AXUIElement) -> (sheets: [AXUIElement], complete: Bool) {
+	func sheetInventory(of window: AXUIElement) -> (sheets: [AXUIElement], complete: Bool) {
 		let listed = axElementArrayEvidence(window, attribute: "AXSheets" as CFString)
 		let children = axElementArrayEvidence(window, attribute: kAXChildrenAttribute as CFString)
 		var complete = listed != nil && children != nil
@@ -4672,7 +4672,7 @@ final class Bridge {
 	}
 
 	/// `kAXSizeAttribute` with its evidence, decoded from one reply.
-	private func sizeRead(_ element: AXUIElement) -> AXSizeRead {
+	func sizeRead(_ element: AXUIElement) -> AXSizeRead {
 		var value: CFTypeRef?
 		switch axReadEvidence(AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)) {
 		case .failed: return .failed
@@ -4681,7 +4681,7 @@ final class Bridge {
 		}
 	}
 
-	private func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
+	func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
 		var value: CFTypeRef?
 		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
 		case .failed: return .failed
@@ -4691,7 +4691,7 @@ final class Bridge {
 	}
 
 	/// `nil` for a failed read; an unsupported or valueless attribute is an authoritative `[]`.
-	private func axElementArrayEvidence(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+	func axElementArrayEvidence(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
 		var value: CFTypeRef?
 		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
 		case .failed: return nil
@@ -4702,7 +4702,7 @@ final class Bridge {
 		}
 	}
 
-	private func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
+	func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
 		guard let value = copyAttribute(element, attribute: attribute) else { return [] }
 		if let array = value as? [AXUIElement] {
 			return array
@@ -4713,7 +4713,7 @@ final class Bridge {
 		return []
 	}
 
-	private func axElementArrayIfPresent(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+	func axElementArrayIfPresent(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
 		var value: CFTypeRef?
 		let status = AXUIElementCopyAttributeValue(element, attribute, &value)
 		guard status == .success, let value else { return nil }
@@ -4726,13 +4726,13 @@ final class Bridge {
 		return []
 	}
 
-	private func asAXElement(_ value: AnyObject) -> AXUIElement? {
+	func asAXElement(_ value: AnyObject) -> AXUIElement? {
 		let cfValue = value as CFTypeRef
 		guard CFGetTypeID(cfValue) == AXUIElementGetTypeID() else { return nil }
 		return unsafeBitCast(cfValue, to: AXUIElement.self)
 	}
 
-	private func pointAttribute(_ element: AXUIElement, attribute: CFString) -> CGPoint? {
+	func pointAttribute(_ element: AXUIElement, attribute: CFString) -> CGPoint? {
 		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
 		let cfValue = value as CFTypeRef
 		guard CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
@@ -4743,12 +4743,12 @@ final class Bridge {
 		return point
 	}
 
-	private func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
+	func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
 		decodeAXSize(copyAttribute(element, attribute: attribute))
 	}
 
 	/// A `CGSize` AX value, or `nil` for any other value.
-	private func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
+	func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
 		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgSize else { return nil }
@@ -5070,7 +5070,7 @@ final class Bridge {
 		throw BridgeFailure(message: "Capture failed", code: "capture_failed")
 	}
 
-	private func jpegData(image: CGImage, quality: Double) -> Data? {
+	func jpegData(image: CGImage, quality: Double) -> Data? {
 		let data = NSMutableData()
 		guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
 		CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
@@ -5078,7 +5078,7 @@ final class Bridge {
 		return data as Data
 	}
 
-	private func downscaledImage(_ image: CGImage, maxDimension: Int?) -> CGImage? {
+	func downscaledImage(_ image: CGImage, maxDimension: Int?) -> CGImage? {
 		guard let maxDimension, max(image.width, image.height) > maxDimension else { return nil }
 		let scale = Double(maxDimension) / Double(max(image.width, image.height))
 		let width = max(1, Int(Double(image.width) * scale))
