@@ -390,5 +390,127 @@ private func runAbsenceEvidenceAssertions() {
       RootInventorySnapshot(roots: ["w": ["title": "Main", "isFocused": true]], complete: true)) == ["focused:Main"],
     "a root seen in both listings gained focus")
   check(changes(both, both).isEmpty, "unchanged listings report nothing")
+  runWindowInventoryAssertions()
   print("macos absence evidence checks passed")
+}
+
+/// Production inventory assembly (`WindowInventoryWorld.listing` and `select`) over injected AX reads (#1242).
+private func runWindowInventoryAssertions() {
+  func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() {
+      print("FAIL: \(message)")
+      exit(1)
+    }
+  }
+  func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> Set<String> {
+    Set(rootInventoryChanges(before: before, after: after).map { "\($0.change):\($0.root["title"] as? String ?? "")" })
+  }
+  final class Window {
+    let name: String
+    init(_ name: String) { self.name = name }
+  }
+  /// Scripted AX replies: each `size` read consumes the window's next reply, then repeats the last one.
+  final class Script {
+    var windows: [Window]?
+    var fallback: [Window] = []
+    var sizes: [String: [AXSizeRead]] = [:]
+    var sheets: [String: (sheets: [Window], complete: Bool)] = [:]
+    var sizeReads = 0
+    init(windows: [Window]?) { self.windows = windows }
+    var world: WindowInventoryWorld<Window> {
+      WindowInventoryWorld<Window>(
+        windows: { self.windows }, fallbackWindows: { self.fallback }, position: { _ in .zero },
+        size: { window in
+          self.sizeReads += 1
+          var queue = self.sizes[window.name] ?? [.size(CGSize(width: 800, height: 600))]
+          let reply = queue.removeFirst()
+          self.sizes[window.name] = queue.isEmpty ? [reply] : queue
+          return reply
+        },
+        sheets: { self.sheets[$0.name] ?? ([], true) })
+    }
+    func select(paired: [String: CGRect] = [:]) -> WindowInventorySelection<Window> {
+      world.select(world.listing()) { paired[$0.name] }
+    }
+  }
+  func snapshot(_ selection: WindowInventorySelection<Window>) -> RootInventorySnapshot {
+    var roots: [String: [String: Any]] = [:]
+    for kept in selection.windows {
+      roots[kept.element.name] = ["title": kept.element.name, "isFocused": false]
+      for sheet in kept.sheets { roots[sheet.name] = ["title": sheet.name, "isFocused": false] }
+    }
+    return RootInventorySnapshot(roots: roots, complete: selection.complete)
+  }
+  func names(_ selection: WindowInventorySelection<Window>) -> [String] { selection.windows.map { $0.element.name } }
+  let main = Window("main")
+  let unfocused = Window("unfocused")
+  let sheet = Window("sheet")
+  // The complete earlier listing: the focused main window, an unfocused window and its sheet.
+  let before = RootInventorySnapshot(
+    roots: Dictionary(uniqueKeysWithValues: ["main", "unfocused", "sheet"].map { ($0, ["title": $0, "isFocused": false] as [String: Any]) }),
+    complete: true)
+
+  let whole = Script(windows: [main, unfocused])
+  whole.sheets["unfocused"] = ([sheet], true)
+  let wholeSelection = whole.select()
+  check(names(wholeSelection) == ["main", "unfocused"] && wholeSelection.complete, "every read succeeded: a complete inventory")
+  check(wholeSelection.windows[1].sheets.map(\.name) == ["sheet"], "a listed window carries its sheet")
+  check(changes(before, snapshot(wholeSelection)).isEmpty, "a complete unchanged inventory reports nothing")
+  let closed = Script(windows: [main])
+  check(changes(before, snapshot(closed.select())) == ["closed:unfocused", "closed:sheet"], "a complete inventory proves closure")
+
+  // An `AXWindows` timeout falls back to the main/focused window: the unfocused window and its sheet are unknown.
+  let timedOut = Script(windows: nil)
+  timedOut.fallback = [main]
+  let timedOutSelection = timedOut.select()
+  check(names(timedOutSelection) == ["main"] && !timedOutSelection.complete, "a failed AXWindows read leaves the inventory incomplete")
+  check(changes(before, snapshot(timedOutSelection)).isEmpty, "a timed-out window list closes neither the unfocused window nor its sheet")
+
+  // A failed sheet read on a live unfocused window: the window stays listed, its sheet is unknown.
+  let sheetTimeout = Script(windows: [main, unfocused])
+  sheetTimeout.sheets["unfocused"] = ([], false)
+  let sheetSelection = sheetTimeout.select()
+  check(names(sheetSelection) == ["main", "unfocused"] && !sheetSelection.complete, "a failed sheet read leaves the inventory incomplete")
+  check(changes(before, snapshot(sheetSelection)).isEmpty, "a sheet missing after a failed sheet read is not closed")
+
+  // The skip filter and its evidence come from one reply; a retry replaces both.
+  let retried = Script(windows: [main, unfocused])
+  retried.sizes["unfocused"] = [.failed, .size(CGSize(width: 800, height: 600))]
+  let retriedSelection = retried.select()
+  check(names(retriedSelection) == ["main", "unfocused"], "a size read that succeeds on retry keeps the window")
+  check(retriedSelection.complete && retriedSelection.windows[1].axFrame.size == CGSize(width: 800, height: 600), "the retry's size frames the window")
+  check(retried.sizeReads == 3, "only a failed size read is retried, once")
+  let unreadable = Script(windows: [main, unfocused])
+  unreadable.sizes["unfocused"] = [.failed]
+  let unreadableSelection = unreadable.select()
+  check(names(unreadableSelection) == ["main"] && !unreadableSelection.complete, "an unpaired window whose size stays unreadable is unknown")
+  check(changes(before, snapshot(unreadableSelection)).isEmpty, "an unreadable window is not closed")
+  let pairedUnreadable = Script(windows: [main, unfocused])
+  pairedUnreadable.sizes["unfocused"] = [.failed]
+  let pairedSelection = pairedUnreadable.select(paired: ["unfocused": CGRect(x: 5, y: 5, width: 400, height: 300)])
+  check(
+    names(pairedSelection) == ["main", "unfocused"] && pairedSelection.complete
+      && pairedSelection.windows[1].effectiveFrame == CGRect(x: 5, y: 5, width: 400, height: 300),
+    "a paired window falls back to its CG bounds")
+  let small = Script(windows: [main, unfocused])
+  small.sizes["unfocused"] = [.size(CGSize(width: 50, height: 40))]
+  let smallSelection = small.select()
+  check(names(smallSelection) == ["main"] && smallSelection.complete, "a window read as too small is skipped without doubt")
+  let pairedSmall = Script(windows: [main, unfocused])
+  pairedSmall.sizes["unfocused"] = [.failed]
+  check(pairedSmall.select(paired: ["unfocused": CGRect(x: 0, y: 0, width: 50, height: 40)]).complete, "a too-small paired window is skipped on its CG bounds")
+  let sizeless = Script(windows: [main, unfocused])
+  sizeless.sizes["unfocused"] = [.absent]
+  check(sizeless.select().complete, "a window without a size attribute is skipped without doubt")
+
+  // Over the cap the listed windows still resolve, but a window past the cap is unknown, never closed.
+  let many = (0...windowListCap).map { Window("w\($0)") }
+  let overCap = Script(windows: many)
+  let overCapSelection = overCap.select()
+  check(overCapSelection.windows.count == windowListCap && !overCapSelection.complete, "an over-cap list is capped and incomplete")
+  check(names(overCapSelection).contains("w5"), "an existing target still resolves from an over-cap list")
+  let beforeMany = RootInventorySnapshot(
+    roots: Dictionary(uniqueKeysWithValues: many.map { ($0.name, ["title": $0.name, "isFocused": false] as [String: Any]) }),
+    complete: true)
+  check(changes(beforeMany, snapshot(overCapSelection)).isEmpty, "a window past the cap is unknown, not closed")
 }

@@ -192,6 +192,86 @@ func windowListComplete(_ count: Int?) -> Bool {
 	count.map { $0 <= windowListCap } ?? false
 }
 
+/// One AX size read: the value and its evidence decoded from the same reply.
+enum AXSizeRead: Equatable {
+	case size(CGSize)
+	case absent
+	case failed
+}
+
+/// The AX reads one pid's window inventory needs, injectable so headless tests drive production assembly.
+struct WindowInventoryWorld<Element: AnyObject> {
+	/// `AXWindows`; `nil` when the read failed.
+	let windows: () -> [Element]?
+	/// The main and focused windows, deduplicated: the fallback when `AXWindows` lists none.
+	let fallbackWindows: () -> [Element]
+	let position: (Element) -> CGPoint
+	let size: (Element) -> AXSizeRead
+	/// Not `complete` when a sheet source or a child's role could not be read.
+	let sheets: (Element) -> (sheets: [Element], complete: Bool)
+}
+
+/// The windows `AXWindows` (or its main/focused fallback) named, capped at `windowListCap`.
+struct WindowListing<Element> {
+	let windows: [Element]
+	/// The list was read and fit under the cap.
+	let complete: Bool
+}
+
+/// A window kept by the inventory, with the frames and sheets its root entry reports.
+struct InventoryWindow<Element> {
+	let element: Element
+	/// Its index in the listing, the z-order of an unpaired window.
+	let listIndex: Int
+	let axFrame: CGRect
+	let effectiveFrame: CGRect
+	let sheets: [Element]
+}
+
+/// One pid's kept windows. Every kept window is a validated positive match even when the inventory is not
+/// `complete`; only a `complete` inventory proves that a missing root closed.
+struct WindowInventorySelection<Element> {
+	let windows: [InventoryWindow<Element>]
+	let complete: Bool
+}
+
+extension WindowInventoryWorld {
+	/// Read `AXWindows` once. A failed or over-cap list still names its first `windowListCap` windows.
+	func listing() -> WindowListing<Element> {
+		let listed = windows()
+		let capped = Array((listed ?? []).prefix(windowListCap))
+		// The main/focused fallback recovers at most those two windows, never an unfocused one or its sheet.
+		return WindowListing(windows: capped.isEmpty ? fallbackWindows() : capped, complete: windowListComplete(listed?.count))
+	}
+
+	/// Keep the listed windows of a usable size with their sheets. A window skipped as too small only because
+	/// its size stayed unreadable after one retry, or a failed sheet read, leaves the inventory incomplete.
+	/// - Parameter pairedBounds: The paired CG window's bounds, `nil` for an unpaired window.
+	func select(_ listing: WindowListing<Element>, pairedBounds: (Element) -> CGRect?) -> WindowInventorySelection<Element> {
+		var complete = listing.complete
+		var kept: [InventoryWindow<Element>] = []
+		for (listIndex, window) in listing.windows.enumerated() {
+			// The filter and the evidence come from the same reply; a retry replaces both.
+			var read = size(window)
+			if read == .failed { read = size(window) }
+			var axSize = CGSize.zero
+			if case .size(let value) = read { axSize = value }
+			let axFrame = CGRect(origin: position(window), size: axSize)
+			let paired = pairedBounds(window)
+			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (paired ?? axFrame)
+			if effectiveFrame.width < 100 || effectiveFrame.height < 80 {
+				// Skipped as too small only because its size was unreadable, a live window is unknown.
+				if paired == nil && read == .failed { complete = false }
+				continue
+			}
+			let sheetInventory = sheets(window)
+			if !sheetInventory.complete { complete = false }
+			kept.append(InventoryWindow(element: window, listIndex: listIndex, axFrame: axFrame, effectiveFrame: effectiveFrame, sheets: sheetInventory.sheets))
+		}
+		return WindowInventorySelection(windows: kept, complete: complete)
+	}
+}
+
 /// One pid's roots keyed by identity, and whether the listing was the whole inventory.
 struct RootInventorySnapshot {
 	let roots: [String: [String: Any]]
@@ -2247,49 +2327,50 @@ final class Bridge {
 		windowInventory(pid: pid, cgEntries: cgEntries, messagingTimeout: messagingTimeout).roots
 	}
 
-	/// The pid's windows and sheets. Not `complete` when the window list, a sheet source or a skipped
-	/// window's size could not be read, or the list exceeds the 128-window cap: an omitted root is unknown.
+	/// The pid's windows and sheets (see `WindowInventoryWorld.select`). Not `complete` when the window list,
+	/// a sheet source or a skipped window's size could not be read, or the list exceeds `windowListCap`: an
+	/// omitted root is then unknown, while every listed root stays a valid positive match.
 	private func windowInventory(pid: Int32, cgEntries: [[String: Any]]?, messagingTimeout: Float) -> (roots: [[String: Any]], complete: Bool) {
 		ensureEnhancedAccessibility(pid: pid)
 		let appElement = AXUIElementCreateApplication(pid)
 		AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-		let listed = axElementArrayEvidence(appElement, attribute: kAXWindowsAttribute as CFString)
-		var complete = windowListComplete(listed?.count)
-		var windows = Array((listed ?? []).prefix(windowListCap))
-		// The main/focused fallback recovers at most those two windows, never an unfocused one or its sheet.
-		if windows.isEmpty {
-			for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
-				guard let window = copyAttribute(appElement, attribute: attribute as CFString).flatMap(asAXElement), !windows.contains(where: { sameElement($0, window) }) else { continue }
-				windows.append(window)
-			}
-		}
+		let world = WindowInventoryWorld<AXUIElement>(
+			windows: { self.axElementArrayEvidence(appElement, attribute: kAXWindowsAttribute as CFString) },
+			fallbackWindows: {
+				var windows: [AXUIElement] = []
+				for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+					guard let window = self.copyAttribute(appElement, attribute: attribute as CFString).flatMap(self.asAXElement), !windows.contains(where: { self.sameElement($0, window) }) else { continue }
+					windows.append(window)
+				}
+				return windows
+			},
+			position: { self.pointAttribute($0, attribute: kAXPositionAttribute as CFString) ?? .zero },
+			size: { self.sizeRead($0) },
+			sheets: { self.sheetInventory(of: $0) }
+		)
+		let listing = world.listing()
 		let candidates = cgWindowCandidates(pid: pid, entries: cgEntries)
-		let pairings = windowPairings(windows: windows, candidates: candidates)
+		let pairings = windowPairings(windows: listing.windows, candidates: candidates)
+		let selection = world.select(listing) { pairings[ObjectIdentifier($0)]?.candidate?.bounds }
 
 		var output: [[String: Any]] = []
-		for (zIndex, window) in windows.enumerated() {
+		for kept in selection.windows {
+			let window = kept.element
+			let zIndex = kept.listIndex
 			let axTitle = stringAttribute(window, attribute: kAXTitleAttribute as CFString) ?? ""
 			let axRole = stringAttribute(window, attribute: kAXRoleAttribute as CFString) ?? ""
 			let axSubrole = stringAttribute(window, attribute: kAXSubroleAttribute as CFString) ?? ""
-			let axFrame = frameForWindow(window)
+			let axFrame = kept.axFrame
 			let pairing = pairings[ObjectIdentifier(window)] ?? WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
 			let candidate = pairing.candidate
-
-			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (candidate?.bounds ?? axFrame)
-			if effectiveFrame.width < 100 || effectiveFrame.height < 80 {
-				// Skipped as too small only because its size was unreadable, a live window is unknown.
-				if candidate == nil && axAttributeEvidence(window, attribute: kAXSizeAttribute as CFString) == .failed { complete = false }
-				continue
-			}
+			let effectiveFrame = kept.effectiveFrame
 			let hasUsableAXFrame = axFrame.width > 1 && axFrame.height > 1
 			let title = hasUsableAXFrame && !axTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? axTitle : (candidate?.title.isEmpty == false ? candidate!.title : axTitle)
 			let windowRef = refStore.storeWindow(window)
 			let isMinimized = boolAttribute(window, attribute: kAXMinimizedAttribute as CFString) ?? false
 			let isMain = boolAttribute(window, attribute: kAXMainAttribute as CFString) ?? false
 			let isFocused = boolAttribute(window, attribute: kAXFocusedAttribute as CFString) ?? false
-			let sheets = sheetInventory(of: window)
-			if !sheets.complete { complete = false }
-			let sheetCount = sheets.sheets.count
+			let sheetCount = kept.sheets.count
 			let isModal = isModalRoot(window, role: axRole, subrole: axSubrole, sheetCount: sheetCount)
 			let scale = displayScaleFactor(for: effectiveFrame)
 
@@ -2320,7 +2401,7 @@ final class Bridge {
 			}
 			output.append(item)
 
-			for sheet in sheets.sheets {
+			for sheet in kept.sheets {
 				let sheetRef = refStore.storeWindow(sheet)
 				let sheetFrame = frameForWindow(sheet)
 				let sheetCandidate = bestCandidate(for: sheet, candidates: candidates)
@@ -2345,7 +2426,7 @@ final class Bridge {
 				output.append(sheetItem)
 			}
 		}
-		return (output, complete)
+		return (output, selection.complete)
 	}
 
 	private func look(
@@ -4566,9 +4647,14 @@ final class Bridge {
 		return (sheets, complete)
 	}
 
-	private func axAttributeEvidence(_ element: AXUIElement, attribute: CFString) -> AXReadEvidence {
+	/// `kAXSizeAttribute` with its evidence, decoded from one reply.
+	private func sizeRead(_ element: AXUIElement) -> AXSizeRead {
 		var value: CFTypeRef?
-		return axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value))
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)) {
+		case .failed: return .failed
+		case .absent: return .absent
+		case .present: return decodeAXSize(value).map(AXSizeRead.size) ?? .absent
+		}
 	}
 
 	private func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
@@ -4634,9 +4720,12 @@ final class Bridge {
 	}
 
 	private func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
-		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
-		let cfValue = value as CFTypeRef
-		guard CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
+		decodeAXSize(copyAttribute(element, attribute: attribute))
+	}
+
+	/// A `CGSize` AX value, or `nil` for any other value.
+	private func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
+		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgSize else { return nil }
 		var size = CGSize.zero
