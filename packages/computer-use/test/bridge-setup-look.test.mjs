@@ -57,6 +57,16 @@ afterEach(async () => {
 });
 
 describe("setup", () => {
+	test("session shutdown hands a platform shutdown warning to the caller", async () => {
+		const warnings = [];
+		currentPlatformBackend.shutdown = async () => "Refusing physical input: keycode 50 may still be held.";
+		await bridge.shutdownComputerUseSession((message) => warnings.push(message));
+		assert.deepEqual(warnings, ["Refusing physical input: keycode 50 may still be held."]);
+		currentPlatformBackend.shutdown = async () => undefined;
+		await bridge.shutdownComputerUseSession((message) => warnings.push(message));
+		assert.equal(warnings.length, 1, "nothing to surface after a clean shutdown");
+	});
+
 	test("activity toggles reach the backend and tolerate a backend without one", async () => {
 		await bridge.setComputerUseActivity(true);
 		await bridge.setComputerUseActivity(false);
@@ -972,12 +982,14 @@ describe("outline node helpers through inspect, act and expand", () => {
 		const expanded = await call(executeExpandUi, { stateId, ref: "@e2" });
 		assert.match(textOf(expanded), /\[protected\]/);
 		assert.ok(!textOf(expanded).includes(secret));
-		// The root note keeps region labels from the earlier readable look; the render, target and matches do not.
+		// The root note consults the grafted classification too (#1234).
+		assert.ok(!JSON.stringify(expanded.details).includes(secret));
 		assert.ok(!JSON.stringify(expanded.details.target).includes(secret));
 		assert.ok(!expanded.details.renderedOutline.includes(secret));
 		const after = await call(executeSearchUi, { stateId, text: secret });
 		assert.equal(after.details.totalMatches, 0);
-		assert.ok(!JSON.stringify(after.details.matches).includes(secret));
+		assert.ok(!JSON.stringify(after.details).includes(secret));
+		assert.ok(!textOf(after).includes(secret));
 	});
 
 	test("inspect_ui labels every capability and an unlabeled picture", async () => {

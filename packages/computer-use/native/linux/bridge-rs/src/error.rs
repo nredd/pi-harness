@@ -31,6 +31,12 @@ pub enum ErrorCode {
     ForegroundRequired,
     #[serde(rename = "secure_text_unreadable")]
     SecureTextUnreadable,
+    #[serde(rename = "occluded_target")]
+    OccludedTarget,
+    #[serde(rename = "input_unsafe")]
+    InputUnsafe,
+    #[serde(rename = "cancelled")]
+    Cancelled,
 }
 
 impl fmt::Display for ErrorCode {
