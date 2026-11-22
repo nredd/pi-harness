@@ -55,14 +55,35 @@ pub struct Rect {
     pub height: i32,
 }
 
+/// A root's policy identity: the executable of the process owning its bus connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Executable {
+    /// The reported identity: the `exe` link basename without one kernel ` (deleted)` suffix.
+    pub name: String,
+    /// The literal `exe` link basename. It differs from `name` only when the link ends in
+    /// ` (deleted)`: a replaced binary or a file literally named so. Both names can block.
+    pub link_name: String,
+}
+
+impl Executable {
+    /// Names that may only add a block, never admit: the literal link name when it differs.
+    pub fn block_aliases(&self) -> Vec<&str> {
+        if self.link_name == self.name {
+            Vec::new()
+        } else {
+            vec![self.link_name.as_str()]
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RootSnapshot {
     pub accessible: AccessibleRef,
     pub pid: u64,
     pub name: String,
     pub app_name: String,
-    /// The policy identity: the executable basename of `pid`, `None` when unattributable.
-    pub executable: Option<String>,
+    /// The policy identity: the executable of the root's own bus owner, `None` when unattributable.
+    pub executable: Option<Executable>,
     /// X11 `WM_CLASS` (instance, class) of the paired window. App-supplied metadata, not identity.
     pub wm_class: Option<(String, String)>,
     pub role: String,
@@ -306,6 +327,23 @@ impl AtspiClient {
         Ok(u64::from(connection_pid))
     }
 
+    /// The connection PID of `accessible`'s bus owner and that process's executable. Only a
+    /// unique connection name (`:1.42`) is attributed: a well-known name can change owner between
+    /// requests, so it stays unidentified.
+    async fn bus_owner(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<(u64, Option<Executable>), ProtocolError> {
+        let pid = self.application_pid(accessible).await?;
+        let unique = accessible.destination.starts_with(':');
+        Ok((
+            pid,
+            unique
+                .then(|| process_executable(&self.proc_root, pid))
+                .flatten(),
+        ))
+    }
+
     pub async fn list_roots(
         &self,
         filter_pid: Option<u64>,
@@ -318,7 +356,8 @@ impl AtspiClient {
         let mut roots = Vec::new();
         for app in applications {
             // A PID-scoped inventory proves absence, so an app it could not read must fail it.
-            let pid = scoped_inventory(filter_pid, self.application_pid(&app).await, 0)?;
+            let (pid, executable) =
+                scoped_inventory(filter_pid, self.bus_owner(&app).await, (0, None))?;
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
@@ -328,9 +367,13 @@ impl AtspiClient {
                 })
                 .await
                 .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
-            let executable = process_executable(&self.proc_root, pid);
             let windows = scoped_inventory(filter_pid, self.children(&app).await, Vec::new())?;
             for window in windows {
+                // A window on another connection belongs to a process this entry's owner does
+                // not vouch for: it never inherits that identity, so it is unidentified.
+                let executable = executable
+                    .clone()
+                    .filter(|_| window.destination == app.destination);
                 let (role, name) = self
                     .checked_metadata(&window, async || {
                         (
@@ -357,7 +400,7 @@ impl AtspiClient {
                         name
                     },
                     app_name: app_name.clone(),
-                    executable: executable.clone(),
+                    executable,
                     wm_class: None,
                     role,
                     x11_window: None,
@@ -477,6 +520,12 @@ impl AtspiClient {
                 unread = true;
                 Vec::new()
             });
+            // A child on another bus connection belongs to another process, which this root's
+            // identity never admitted: leave it unread rather than observe it.
+            let (children, foreign): (Vec<_>, Vec<_>) = children
+                .into_iter()
+                .partition(|child| child.destination == start.destination);
+            unread |= !foreign.is_empty();
             incomplete |= unread;
             for child in children {
                 queue.push_back((child, Some(accessible.clone()), depth + 1));
@@ -626,8 +675,10 @@ pub fn root_json(reference: &str, root: &RootSnapshot, z_order: usize) -> Value 
         "pid": root.pid,
         "appName": root.app_name,
         // The accessible app name is presentation only; policy uses the executable (#1180).
-        "appId": root.executable,
-        "processName": root.executable,
+        "appId": root.executable.as_ref().map(|executable| &executable.name),
+        "processName": root.executable.as_ref().map(|executable| &executable.name),
+        // Block-only names: they can refuse a root, never admit one.
+        "blockAliases": root.executable.as_ref().map(Executable::block_aliases).unwrap_or_default(),
         "role": root.role,
         "subrole": "",
         "zOrder": root.z_order.unwrap_or(z_order),
@@ -858,18 +909,21 @@ fn contradicts_readable_role(role_name: &str) -> bool {
     PROTECTED_ROLE_NAMES.contains(&normalized.as_str())
 }
 
-/// The executable basename of `pid` under `proc_root`, or `None` when it cannot be attributed:
-/// PID 0, an unreadable or non-UTF-8 `exe` link, a relative target, or a shared bus proxy.
-/// A replaced executable keeps the name it was started from (the kernel's ` (deleted)` suffix).
-pub fn process_executable(proc_root: &Path, pid: u64) -> Option<String> {
+/// The executable of `pid` under `proc_root`, or `None` when it cannot be attributed: PID 0,
+/// an unreadable or non-UTF-8 `exe` link, a relative target, or a shared bus proxy.
+/// A ` (deleted)` link suffix is ambiguous (a replaced binary, or a file literally named so),
+/// so the identity drops it and the literal basename stays a block-only alias.
+pub fn process_executable(proc_root: &Path, pid: u64) -> Option<Executable> {
     if pid == 0 {
         return None;
     }
     let target = std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).ok()?;
-    let target = target.to_str()?;
-    let path = target.strip_suffix(" (deleted)").unwrap_or(target);
-    let name = path.strip_prefix('/')?.rsplit('/').next()?;
-    (!name.is_empty() && !BUS_PROXY_EXECUTABLES.contains(&name)).then(|| name.to_owned())
+    let link_name = target.to_str()?.strip_prefix('/')?.rsplit('/').next()?;
+    let name = link_name.strip_suffix(" (deleted)").unwrap_or(link_name);
+    (!name.is_empty() && !BUS_PROXY_EXECUTABLES.contains(&name)).then(|| Executable {
+        name: name.to_owned(),
+        link_name: link_name.to_owned(),
+    })
 }
 
 fn unconfirmed_role() -> ProtocolError {
@@ -1196,8 +1250,8 @@ mod tests {
                 assert_eq!(window.name, "Notes");
                 assert_eq!(window.app_name, "Editor");
                 // Identity comes from the bus PID's executable, never the accessible Name.
-                assert_eq!(window.executable.as_deref(), Some("fixture-editor"));
-                assert_eq!(dialog.executable.as_deref(), Some("fixture-editor"));
+                assert_eq!(executable_name(window), Some("fixture-editor"));
+                assert_eq!(executable_name(dialog), Some("fixture-editor"));
                 assert_eq!(root_json("@w1", window, 0)["appId"], "fixture-editor");
                 assert_eq!(window.role, "frame");
                 assert_eq!(
@@ -1649,7 +1703,10 @@ mod tests {
             pid: 42,
             name: "Editor".into(),
             app_name: "Text Editor".into(),
-            executable: Some("fixture-editor".into()),
+            executable: Some(Executable {
+                name: "fixture-editor".into(),
+                link_name: "fixture-editor".into(),
+            }),
             wm_class: Some(("fixture".into(), "Fixture".into())),
             role: "frame".into(),
             frame: Some(Rect {
@@ -1672,10 +1729,21 @@ mod tests {
         assert_eq!(value["appName"], "Text Editor");
         assert_eq!(value["appId"], "fixture-editor");
         assert_eq!(value["processName"], "fixture-editor");
+        assert_eq!(value["blockAliases"], json!([]));
         assert_eq!(
             value["metadata"]["wmClass"],
             json!({"instance":"fixture","class":"Fixture"})
         );
+
+        // A ` (deleted)` link reports the stripped name and keeps the literal one as a block alias.
+        let mut replaced = root.clone();
+        replaced.executable = Some(Executable {
+            name: "editor".into(),
+            link_name: "editor (deleted)".into(),
+        });
+        let replaced = root_json("@w3", &replaced, 0);
+        assert_eq!(replaced["appId"], "editor");
+        assert_eq!(replaced["blockAliases"], json!(["editor (deleted)"]));
 
         let mut wayland_root = root;
         wayland_root.x11_window = None;
@@ -1686,7 +1754,158 @@ mod tests {
         // An unattributed root has no identity: never the accessible app name.
         assert!(wayland["appId"].is_null());
         assert!(wayland["processName"].is_null());
+        assert_eq!(wayland["blockAliases"], json!([]));
         assert!(wayland["metadata"]["wmClass"].is_null());
+    }
+
+    fn executable_name(root: &RootSnapshot) -> Option<&str> {
+        root.executable
+            .as_ref()
+            .map(|executable| executable.name.as_str())
+    }
+
+    /// A bus daemon with two application connections and one well-known name.
+    struct OwnerBus;
+
+    #[zbus::interface(name = "org.freedesktop.DBus")]
+    impl OwnerBus {
+        #[zbus(name = "GetConnectionUnixProcessID")]
+        fn get_connection_unix_process_id(&self, name: &str) -> u32 {
+            match name {
+                ":1.42" => 25361,
+                ":1.43" => 25362,
+                "org.fixture.Named" => 25363,
+                other => panic!("unexpected PID lookup for {other}"),
+            }
+        }
+    }
+
+    /// A root never inherits its application entry's identity: a window that `GetChildren`
+    /// places on another connection is unidentified, and so is a well-known destination.
+    #[tokio::test]
+    async fn roots_are_identified_only_by_their_own_unique_bus_owner() {
+        with_peer(
+            |server| {
+                let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
+                    name,
+                    role,
+                    children,
+                    has_text: false,
+                };
+                server
+                    .serve_at(FIXTURE_DBUS_ROOT, OwnerBus)?
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        node(
+                            "Registry",
+                            "desktop",
+                            &[(":1.42", "/app"), ("org.fixture.Named", "/named")],
+                        ),
+                    )?
+                    .serve_at(
+                        "/app",
+                        node(
+                            "Editor",
+                            "application",
+                            &[(":1.42", "/app/window"), (":1.43", "/other/window")],
+                        ),
+                    )?
+                    .serve_at("/app/window", node("Notes", "frame", &[]))?
+                    .serve_at("/other/window", node("Foreign", "frame", &[]))?
+                    .serve_at(
+                        "/named",
+                        node(
+                            "Named",
+                            "application",
+                            &[("org.fixture.Named", "/named/window")],
+                        ),
+                    )?
+                    .serve_at("/named/window", node("Named window", "frame", &[]))
+            },
+            async |connection| {
+                let proc = ProcFixture::new(&[
+                    (25361, "/usr/bin/fixture-editor"),
+                    (25362, "/usr/bin/other-app"),
+                    (25363, "/usr/bin/named-app"),
+                ]);
+                let client = peer_client(connection).with_proc_root(&proc.0);
+                let roots = client.list_roots(None).await.unwrap();
+                let identities = roots
+                    .iter()
+                    .map(|root| (root.name.as_str(), executable_name(root)))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    identities,
+                    [
+                        ("Notes", Some("fixture-editor")),
+                        ("Foreign", None),
+                        ("Named window", None),
+                    ]
+                );
+                assert!(root_json("@w2", &roots[1], 1)["appId"].is_null());
+            },
+        )
+        .await;
+    }
+
+    /// A descendant on another connection is never read under the root's identity.
+    #[tokio::test]
+    async fn snapshots_never_read_descendants_on_another_connection() {
+        let foreign_text = TreeText::default();
+        with_peer(
+            |server| {
+                server
+                    .serve_at(
+                        "/window",
+                        TreeNode {
+                            name: "frame",
+                            role: "frame",
+                            children: &[(":1.42", "/window/label"), (":1.43", "/foreign")],
+                            has_text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/label",
+                        TreeNode {
+                            name: "label",
+                            role: "label",
+                            children: &[],
+                            has_text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/foreign",
+                        TreeNode {
+                            name: "foreign secret",
+                            role: "label",
+                            children: &[],
+                            has_text: true,
+                        },
+                    )?
+                    .serve_at("/foreign", foreign_text.clone())
+            },
+            async |connection| {
+                let root = AccessibleRef {
+                    destination: ":1.42".into(),
+                    path: "/window".into(),
+                };
+                let snapshot = peer_client(connection)
+                    .snapshot_from(&root, 10, 10)
+                    .await
+                    .unwrap();
+                let paths = snapshot
+                    .nodes
+                    .iter()
+                    .map(|node| node.accessible.path.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(paths, ["/window", "/window/label"]);
+                assert!(snapshot.incomplete);
+                assert!(snapshot.nodes[0].unread, "the parent is marked unread");
+                assert!(!snapshot.nodes[1].unread);
+                assert!(foreign_text.0.lock().unwrap().is_empty());
+            },
+        )
+        .await;
     }
 
     /// A unique fixture procfs tree under the system temp directory, removed on drop.
@@ -1723,18 +1942,35 @@ mod tests {
             (13, "relative/tool"),
             (14, "/"),
             (15, "/app/bin/fixture (deleted) (deleted)"),
+            (16, "/opt/editor (deleted)"),
+            (17, "/usr/bin/xdg-dbus-proxy (deleted)"),
         ]);
         let proc = fixture.0.as_path();
-        assert_eq!(process_executable(proc, 10).as_deref(), Some("KeePassXC"));
+        let executable = |pid| {
+            process_executable(proc, pid).map(|executable| (executable.name, executable.link_name))
+        };
+        let same = |name: &str| Some((name.to_owned(), name.to_owned()));
+        assert_eq!(executable(10), same("KeePassXC"));
+        // The ` (deleted)` suffix is ambiguous: report the stripped name, keep the literal one.
         assert_eq!(
-            process_executable(proc, 11).as_deref(),
-            Some("gnome-terminal-server")
+            executable(11),
+            Some((
+                "gnome-terminal-server".into(),
+                "gnome-terminal-server (deleted)".into()
+            ))
         );
         assert_eq!(
-            process_executable(proc, 15).as_deref(),
-            Some("fixture (deleted)")
+            executable(15),
+            Some((
+                "fixture (deleted)".into(),
+                "fixture (deleted) (deleted)".into()
+            ))
         );
-        for pid in [0, 12, 13, 14, 99] {
+        assert_eq!(
+            executable(16),
+            Some(("editor".into(), "editor (deleted)".into()))
+        );
+        for pid in [0, 12, 13, 14, 17, 99] {
             assert_eq!(process_executable(proc, pid), None, "pid {pid}");
         }
     }
