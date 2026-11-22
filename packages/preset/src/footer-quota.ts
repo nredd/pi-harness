@@ -571,12 +571,18 @@ function matchesModel(id: string, family: string): boolean {
 function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): QuotaCell[] {
 	const models = quota.cells.flatMap((cell) => (cell.kind === "mark" && cell.until > opts.now ? cell.families : []));
 	if (opts.model?.provider === id) models.push(opts.model.id);
-	const cells = quota.cells.filter((cell) => {
+	return quota.cells.filter((cell) => {
 		if (cell.kind === "mark") return cell.until > opts.now;
 		if (cell.kind === "pool") return true;
 		return !cell.families.length || cell.families.some((family) => models.some((model) => matchesModel(model, family)));
 	});
-	// Decided from what this render shows: a failure with no visible cached value says so, beside any marks.
+}
+
+/**
+ * Decided from what a layout actually shows, after it drops cells: a failure with no visible cached
+ * value says so, beside any marks.
+ */
+function withFailure(quota: ProviderQuota, cells: QuotaCell[]): QuotaCell[] {
 	if (!quota.failed || cells.some(hasValue)) return cells;
 	return [{ kind: "status", status: quota.failed }, ...cells.filter((cell) => cell.kind === "mark")];
 }
@@ -695,7 +701,7 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 	const full = layout.tier === "full";
 	const dim = (text: string) => colorize("dim", text);
 	const rendered = segments.flatMap(({ quota, cells }) => {
-		const shown = layout.essential ? cells.filter(isEssential) : cells;
+		const shown = withFailure(quota, layout.essential ? cells.filter(isEssential) : cells);
 		if (!shown.length) return [];
 		// Provider-wide blocks lead model blocks: they stop every model of the provider.
 		const marks = shown
@@ -838,7 +844,7 @@ function budgetRow(
 function segmentsOf(state: QuotaState, opts: ResolvedOptions): Segment[] {
 	return Object.entries(state).flatMap(([id, quota]) => {
 		const cells = activeCells(id, quota, opts);
-		return cells.length ? [{ quota, cells }] : [];
+		return cells.length || quota.failed ? [{ quota, cells }] : [];
 	});
 }
 
@@ -864,7 +870,8 @@ export function fitQuotaRows(state: QuotaState, width: number, colorize: Coloriz
 	const resolved = { ...opts, now: opts.now ?? Date.now() };
 	const segments = segmentsOf(state, resolved);
 	if (!segments.length) return [];
-	const hasEssential = segments.some(({ cells }) => cells.some(isEssential));
+	// A failed view always has an essential cell: its status, if nothing else is left.
+	const hasEssential = segments.some(({ quota, cells }) => quota.failed || cells.some(isEssential));
 	for (const layout of LAYOUTS) {
 		if (layout.essential && !hasEssential) continue;
 		const rows = providerRows(segments, layout, plain, resolved);

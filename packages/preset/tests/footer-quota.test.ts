@@ -2002,3 +2002,20 @@ test("a fallback row searches every block for one that fits whole and counts the
 		"Left: A blocked inf +1!",
 	]);
 });
+
+test("a layout that drops a failed view's cached value reports the failure instead", () => {
+	const state = projected([
+		view("A", {
+			snapshot: snap("A", [], { status: "error", expiresAt: CLOCK + hour }),
+			pools: [{ name: "wallet", unit: "usd", balance: 4 }],
+		}),
+		view("B", { snapshot: snap("B", [{ ...win("w", 50), durationMs: hour }], { expiresAt: CLOCK + hour }) }),
+	]);
+	// The cached balance is shown while it fits, so the row reads stale rather than failed.
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, fixed), "Left: A (stale) wallet $4.00 | B 1h 50%");
+	assert.deepEqual(footer.fitQuotaRows(state, 22, plain, fixed), ["Left: A quota error", "B 1h 50%"]);
+	for (let width = 19; width <= 60; width++) {
+		const rows = footer.fitQuotaRows(state, width, plain, fixed).join("\n");
+		assert.match(rows, /A (quota error|\(stale\) wallet \$4\.00)/, `width ${width}: ${rows}`);
+	}
+});
