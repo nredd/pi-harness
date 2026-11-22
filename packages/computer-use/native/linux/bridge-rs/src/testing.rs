@@ -5,6 +5,9 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::Value;
 
 use x11rb::protocol::xproto::{Keycode, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT};
 
@@ -46,8 +49,46 @@ pub struct RecordingSink {
     panic_posts: Vec<usize>,
     cancel_after: Option<(usize, Arc<InputState>)>,
     query_fails: bool,
+    /// Sleep inside every post, as a slow server round trip would.
+    post_delay: Duration,
 }
 impl RecordingSink {
+    /// Build a sink from a JSON script, for process-level tests that drive the real
+    /// binary: `{"delayMs": 20, "failPosts": [1], "held": [[false, 8]]}`.
+    pub fn scripted(script: &Value) -> Self {
+        let numbers = |key: &str| {
+            script
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+                .map(|n| n as usize)
+                .collect::<Vec<_>>()
+        };
+        let mut sink = Self {
+            fail_posts: numbers("failPosts"),
+            post_delay: Duration::from_millis(
+                script.get("delayMs").and_then(Value::as_u64).unwrap_or(0),
+            ),
+            ..Self::default()
+        };
+        for held in script
+            .get("held")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let (Some(button), Some(detail)) = (
+                held.get(0).and_then(Value::as_bool),
+                held.get(1).and_then(Value::as_u64),
+            ) {
+                sink = sink.held(button, detail as u8);
+            }
+        }
+        sink
+    }
+
     /// Admit the first `admissions` checks, then refuse with `foreground_required`.
     pub fn refuse_admission_after(mut self, admissions: usize) -> Self {
         self.refuse_admission_after = Some(admissions);
@@ -102,6 +143,10 @@ impl RecordingSink {
     /// Events applied so far, in post order.
     pub fn events(&self) -> Vec<PostedEvent> {
         self.events.borrow().clone()
+    }
+    /// `(is_button, detail)` currently down, in order.
+    pub fn held_inputs(&self) -> Vec<(bool, u8)> {
+        self.down.borrow().iter().copied().collect()
     }
     fn apply(&self, event: u8, detail: u8, x: i32, y: i32, admitted: bool) {
         let button = matches!(event, BUTTON_PRESS_EVENT | BUTTON_RELEASE_EVENT);
@@ -189,6 +234,9 @@ impl InputSink for RecordingSink {
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
         let admitted = self.pending_admission.replace(false);
         let attempt = self.attempts.replace(self.attempts.get() + 1);
+        if !self.post_delay.is_zero() {
+            std::thread::sleep(self.post_delay);
+        }
         if self.panic_posts.contains(&attempt) {
             panic!("recorded post {attempt} panicked");
         }

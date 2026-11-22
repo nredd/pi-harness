@@ -1,6 +1,7 @@
 use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::{ErrorCode, ProtocolError, Request, Response};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -174,5 +175,65 @@ fn termination_signals_drain_and_exit_cleanly() {
             status.success(),
             "SIG{signal} must drain and exit 0, not kill the helper: {status:?}"
         );
+    }
+}
+
+/// A `testingAct` request typing `text` through a scripted recording sink.
+fn typing(id: &str, text: &str, sink: Value) -> Value {
+    json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "id": id,
+        "cmd": "testingAct",
+        "args": {"action": "typeText", "params": {"text": text}, "sink": sink}
+    })
+}
+
+/// Read `count` replies, keyed by request id.
+fn replies(helper: &Helper, count: usize) -> HashMap<String, Value> {
+    (0..count)
+        .map(|_| {
+            let reply = helper.reply();
+            (reply["id"].as_str().expect("reply id").to_owned(), reply)
+        })
+        .collect()
+}
+
+#[test]
+fn shutdown_with_full_request_queue() {
+    for ending in ["TERM", "INT", "EOF"] {
+        let mut helper = Helper::spawn(|_| {});
+        helper.send(&diagnostics("ready"));
+        assert_eq!(helper.reply()["id"], "ready");
+        // Four posts per capital at 25 ms each: about 20 s, with shift held for most of it.
+        helper.send(&typing("hold", &"A".repeat(200), json!({"delayMs": 25})));
+        // Let it take the action lock first; request tasks race for it otherwise.
+        thread::sleep(Duration::from_millis(200));
+        // Seven requests take the remaining workers and wait for the action lock; the
+        // eighth waits for a worker in the reader, which saturates the queue.
+        for n in 0..8 {
+            helper.send(&typing(&format!("queued-{n}"), "a", json!({})));
+        }
+        thread::sleep(Duration::from_millis(300));
+        if ending == "EOF" {
+            helper.close_stdin();
+        } else {
+            helper.signal(ending);
+        }
+        let status = helper.wait(Duration::from_secs(5));
+        assert!(status.success(), "{ending}: {status:?} {}", helper.stderr());
+        let replies = replies(&helper, 9);
+        let hold = &replies["hold"]["result"];
+        assert_eq!(hold["outcome"], "unknown", "{ending}: {hold}");
+        assert_eq!(hold["error"]["code"], "cancelled", "{ending}: {hold}");
+        assert_eq!(
+            hold["evidence"]["held"],
+            json!([]),
+            "{ending}: shift released"
+        );
+        for n in 0..8 {
+            let queued = &replies[&format!("queued-{n}")];
+            assert_eq!(queued["ok"], false, "{ending}: {queued}");
+            assert_eq!(queued["error"]["code"], "cancelled", "{ending}: {queued}");
+        }
     }
 }

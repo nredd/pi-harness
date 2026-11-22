@@ -35,18 +35,18 @@ async fn main() {
         }
     });
 
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(REQUEST_WORKERS));
     let mut requests = tokio::task::JoinSet::new();
     // Registered before the first read, so a SIGTERM or SIGINT from then on drains
     // instead of killing the helper between a press and its release.
     let mut shutdown = shutdown_signals();
+    let mut lines = stdin_lines();
     loop {
         let line = tokio::select! {
             () = shutdown.recv() => break,
-            line = lines.next_line() => line,
+            line = lines.recv() => line,
         };
-        let Ok(Some(line)) = line else {
+        let Some(line) = line else {
             break;
         };
         if line.trim().is_empty() {
@@ -66,7 +66,16 @@ async fn main() {
                 continue;
             }
         };
-        let Ok(permit) = semaphore.clone().acquire_owned().await else {
+        // Every worker may be busy behind a long action: a signal must still cancel it
+        // now, not once a worker frees up.
+        let permit = tokio::select! {
+            () = shutdown.recv() => {
+                let _ = output.send(Response::err(&request.id, shutting_down()));
+                break;
+            }
+            permit = semaphore.clone().acquire_owned() => permit,
+        };
+        let Ok(permit) = permit else {
             break;
         };
         let state = Arc::clone(&state);
@@ -80,12 +89,42 @@ async fn main() {
     // Stdin EOF, a read error or a signal: stop physical input before its next unit.
     // An in-flight action runs its owed releases and replies; then the helper exits.
     InputState::shared().cancel();
+    // Requests read but never started are answered, not dropped: none of them ran.
+    while let Ok(line) = lines.try_recv() {
+        if let Some(id) = extract_id(&line) {
+            let _ = output.send(Response::err(&id, shutting_down()));
+        }
+    }
     while requests.join_next().await.is_some() {}
     drop(output);
     let _ = writer.await;
     // Tokio's stdin reads on a blocking thread that runtime shutdown would wait on
     // until EOF; every reply is written, so leave now.
     std::process::exit(0);
+}
+
+/// Read stdin lines on their own task, so EOF is seen even while every worker is busy
+/// and the request loop waits for one. EOF or a read error cancels physical input at
+/// once; lines already read stay queued and are still answered.
+fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(tokio::io::stdin()).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+        InputState::shared().cancel();
+    });
+    receiver
+}
+
+fn shutting_down() -> ProtocolError {
+    ProtocolError::new(
+        "Helper is shutting down; the request did not run",
+        ErrorCode::Cancelled,
+    )
 }
 
 /// SIGTERM and SIGINT, merged. A signal that cannot be registered keeps its default.
@@ -162,6 +201,11 @@ async fn handle_request_with(
         "actBatch" => {
             let _transaction = action_lock().lock().await;
             act_batch_with(&request.args, |args| act(state, args, &connect, physical)).await
+        }
+        #[cfg(feature = "testing")]
+        "testingAct" => {
+            let _transaction = action_lock().lock().await;
+            testing_act(&request.args)
         }
         "atspiReadText" | "uiaReadText" | "axReadText" => {
             read_text_with(state, &request.args, async |accessible| {
@@ -691,6 +735,33 @@ fn physical_act(
 ) -> Result<Value, ProtocolError> {
     let input = Input::connect(policy, owning_window)?;
     deliver_physical(&input, action, params, owning_window, point, &geometry)
+}
+
+/// Drive one physical action through a scripted `RecordingSink` that shares the
+/// helper-wide input state, so process tests exercise shutdown and release debt with no
+/// display. Compiled only with the dev-only `testing` feature, never into a release.
+#[cfg(feature = "testing")]
+fn testing_act(args: &Value) -> Result<Value, ProtocolError> {
+    use linux_bridge::testing::RecordingSink;
+    let sink = RecordingSink::scripted(args.get("sink").unwrap_or(&Value::Null));
+    let input = Input::with_state(sink, InputState::shared());
+    input.settle()?;
+    let action = required_str(args, "action", "testingAct requires action")?;
+    let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
+    let geometry = ActionGeometry {
+        frame: Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        },
+        image_width: 100,
+        image_height: 100,
+    };
+    let mut result = deliver_physical(&input, action, &params, 0, (1, 1), &geometry)?;
+    result["evidence"]["held"] = json!(input.sink().held_inputs());
+    result["evidence"]["events"] = json!(input.sink().events().len());
+    Ok(result)
 }
 
 /// Drive one physical action through `input`. A stop after any posted event, or after
