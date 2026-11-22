@@ -1191,16 +1191,18 @@ struct RootAXEvent {
 	let element: AXUIElement?
 }
 
+/// One observed root's event log. Only the observer's identity is kept: `recordRootAXEvent` routes a
+/// callback to its log by `CFEqual` on it.
 final class RootAXObserverState {
 	let pid: Int32
-	let observer: AXObserver
+	let observer: CFTypeRef
 	let change = NSCondition()
 	var changeGeneration: UInt64 = 0
 	var events: [RootAXEvent] = []
 	var nextSequence: UInt64 = 1
 	var lastUsed: TimeInterval = Date().timeIntervalSince1970
 
-	init(pid: Int32, observer: AXObserver) {
+	init(pid: Int32, observer: CFTypeRef) {
 		self.pid = pid
 		self.observer = observer
 	}
@@ -1491,7 +1493,7 @@ final class Bridge {
 	private var lookRecordOrder: [String] = []
 	private let lookRecordLock = NSLock()
 	private let rootObserverLock = NSLock()
-	var rootObservers: [Int32: RootAXObserverState] = [:]
+	private var rootObservers: [Int32: RootAXObserverState] = [:]
 	private let maxRootObservers = 4
 	private let permissionCacheLock = NSLock()
 	private var grantedPermissionStatus: [String: Any]?
@@ -2941,14 +2943,7 @@ final class Bridge {
 		}
 		guard registered else { return false }
 
-		rootObserverLock.lock()
-		if rootObservers.count >= maxRootObservers,
-			let evict = rootObservers.values.min(by: { $0.lastUsed < $1.lastUsed })?.pid
-		{
-			rootObservers.removeValue(forKey: evict)
-		}
-		rootObservers[pid] = state
-		rootObserverLock.unlock()
+		installRootObserver(state)
 
 		let source = AXObserverGetRunLoopSource(observer)
 		Thread.detachNewThread {
@@ -2960,7 +2955,19 @@ final class Bridge {
 		return true
 	}
 
-	func recordRootAXEvent(observer: AXObserver, notification: String, element: AXUIElement) {
+	/// Register `state` under the observer lock, evicting the least recently used root at the cap.
+	func installRootObserver(_ state: RootAXObserverState) {
+		rootObserverLock.lock()
+		if rootObservers.count >= maxRootObservers,
+			let evict = rootObservers.values.min(by: { $0.lastUsed < $1.lastUsed })?.pid
+		{
+			rootObservers.removeValue(forKey: evict)
+		}
+		rootObservers[state.pid] = state
+		rootObserverLock.unlock()
+	}
+
+	func recordRootAXEvent(observer: CFTypeRef, notification: String, element: AXUIElement) {
 		rootObserverLock.lock()
 		let state = rootObservers.values.first { CFEqual($0.observer, observer) }
 		if let state {

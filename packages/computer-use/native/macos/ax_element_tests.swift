@@ -17,7 +17,7 @@ func runAXElementAssertions() {
     assertElementRelations(bridge)
     assertAXValueDecoding(bridge)
     assertElementPayload(bridge, refStore: refStore)
-    print("macos AX element accessor assertions passed")
+    print("macos AX element accessor assertions passed (AXIsProcessTrusted: \(AXIsProcessTrusted()))")
 }
 
 /// Every reader of a detached element: evidence reads report `failed`, plain reads report nothing.
