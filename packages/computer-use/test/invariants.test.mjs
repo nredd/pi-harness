@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, describe, test } from "vitest";
-import { writeMacosBuildStamp } from "../scripts/build-native.mjs";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
 import {
 	countOutlineNodes,
@@ -15,6 +14,7 @@ import {
 	parseLookResponse,
 	renderInteractiveControls,
 } from "../src/outline.ts";
+import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
 import { runCheckCommand } from "../tests/fixtures/check-async.mjs";
 import { prepareSwiftSdk, runPreparedSwift, SDK_HOOK_TIMEOUT_MS, SDK_IMPORTS } from "./support/swift-sdk.mjs";
