@@ -5,6 +5,7 @@ import { FakeClock } from "@nredd/pi-test-lib/clock";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { expect, onTestFinished, vi } from "vitest";
 import { resumeAgent, runAgent, type ToolActivity } from "../../src/agent-runner.ts";
+import { CompletionOutbox } from "../../src/completion-outbox.ts";
 import { createSubagentsExtension } from "../../src/index.ts";
 import { SubagentScheduler } from "../../src/schedule.ts";
 import { FLEET_STATE_ENTRY, FLEET_STATE_VERSION } from "../../src/ui/fleet-state.ts";
@@ -300,34 +301,112 @@ export const heldTool = { turn: 3, tool: "inspect_fixture" };
 
 type LaunchStack = Awaited<ReturnType<typeof bootLaunchStack>>;
 
-/** The launch a lane's warm-up drives: a background `Agent` call unless the lane says otherwise. */
-const agentLaunch = (stack: LaunchStack) => stack.agent({ run_in_background: true });
+/** The launch a lane's warm-up drives; `kind` names it in a hook failure. */
+export interface WarmLaunch {
+	kind: string;
+	/** Starts the attempt against a fresh stack; settles once the tool has answered. */
+	start(stack: LaunchStack): Promise<{
+		isError?: boolean;
+		content?: { type: string; text?: string }[];
+		details?: { taskId?: string };
+	}>;
+}
+
+/** A background `Agent` call, the warm-up unless the lane says otherwise. */
+const agentLaunch: WarmLaunch = { kind: "Agent", start: (stack) => stack.agent({ run_in_background: true }) };
 
 /** A one-child workflow, the launch `characterize-workflow.test.ts` warms. */
-export const workflowLaunch = (stack: LaunchStack) =>
-	stack.execute("SubagentWorkflow", {
-		script: 'export const meta = { name: "warm-up", description: "launch warm-up" };\nawait agent("warm-up child");',
-	});
+export const workflowLaunch: WarmLaunch = {
+	kind: "SubagentWorkflow",
+	start: (stack) =>
+		stack.execute("SubagentWorkflow", {
+			script: 'export const meta = { name: "warm-up", description: "launch warm-up" };\nawait agent("warm-up child");',
+		}),
+};
+
+/** Under Vitest's default 10 s `hookTimeout`, so a stuck phase names itself instead of the bare hook timeout. */
+const WARM_UP_DEADLINE_MS = 9_000;
 
 /**
- * Drive one launch to the runner and shut its stack down, for a lane's `beforeAll`.
+ * Drive one launch to the runner, let it settle and shut its stack down, for a lane's `beforeAll`.
  *
- * The first launch in a test process runs the host path cold: the boot, the tool, the widgets and,
- * for a workflow, the worker thread's boot all pay first-execution cost. Inside a case that cost shares
- * the case's 5 s timeout and times out on a loaded host (#1245); in the hook every case starts warm.
+ * The first launch in a test process runs the host path cold. Measured under Bun: the workflow
+ * worker's boot took ~100 ms on the first launch vs ~10 ms warm, and `char:10` ran 125-175 ms cold
+ * vs 20-30 ms warm. Paying that here keeps it out of every case's 5 s timeout. The original 5 s
+ * timeouts in #1245 (including `char:15`) were NOT reproduced under load, so this is a mitigation
+ * of the measured cold cost, not a verified fix for them.
  *
- * @param launch Starts the attempt against a fresh stack; settles once the tool has answered.
+ * A workflow is joined before teardown: shutdown only aborts it, and a run still settling would
+ * terminate its worker thread and arm its completion notice after the leak check, overlapping the
+ * lane's first case.
+ *
+ * @param launch What to warm; failures read `warm-up <kind>: <phase>`.
  */
-export async function warmLaunchStack(launch: (stack: LaunchStack) => Promise<{ isError?: boolean }> = agentLaunch) {
+export async function warmLaunchStack({ kind, start }: WarmLaunch = agentLaunch) {
 	const cleanups: (() => Promise<void>)[] = [];
+	// A run's completion notice is added only after its worker thread is down.
+	const noticed = new Set<string>();
+	let onNotice = () => {};
+	const add = CompletionOutbox.prototype.add;
+	const notices = vi.spyOn(CompletionOutbox.prototype, "add").mockImplementation(function (
+		this: CompletionOutbox,
+		item,
+	) {
+		add.call(this, item);
+		for (const id of item.ids) noticed.add(id);
+		onNotice();
+	});
+	const failed = (what: string, error: unknown) =>
+		new Error(`warm-up ${kind}: ${what}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+	let stuck = "";
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const expired = new Error();
+	const deadline = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(() => {
+			expired.message = `warm-up ${kind}: ${stuck}`;
+			reject(expired);
+		}, WARM_UP_DEADLINE_MS);
+	});
+	/** Bound one phase by the shared deadline; a failure names the launch kind and the phase. */
+	async function phase<T>(name: string, ifStuck: string, work: Promise<T>): Promise<T> {
+		stuck = `${ifStuck} (${name})`;
+		try {
+			return await Promise.race([work, deadline]);
+		} catch (error) {
+			throw error === expired ? expired : failed(name, error);
+		}
+	}
 	try {
-		const stack = await bootLaunchStack({}, (cleanup) => cleanups.push(cleanup));
+		const stack = await phase(
+			"booting the stack",
+			"stack never booted",
+			bootLaunchStack({}, (cleanup) => cleanups.push(cleanup)),
+		);
 		const gate = stack.holdAt(heldTool);
-		expect((await launch(stack)).isError).not.toBe(true);
-		await expectHeld(gate);
+		const result = await phase("launching", "launch never answered", start(stack));
+		if (result.isError) {
+			const text = result.content?.map((part) => part.text ?? "").join("\n");
+			throw new Error(`warm-up ${kind}: launch answered with error: ${text}`);
+		}
+		await phase("waiting for held runner", "runner never reached", expectHeld(gate));
 		gate.release();
+		const taskId = result.details?.taskId;
+		if (taskId !== undefined) {
+			const settled = new Promise<void>((resolve) => {
+				onNotice = () => noticed.has(taskId) && resolve();
+				onNotice();
+			});
+			await phase("waiting for its completion notice", "workflow never settled", settled);
+		}
 	} finally {
-		for (const cleanup of cleanups) await cleanup();
+		clearTimeout(timer);
+		try {
+			// Unbounded by the deadline: an expired warm-up still shuts its stack down; the hook timeout bounds it.
+			for (const cleanup of cleanups)
+				await cleanup().catch((error: unknown) => Promise.reject(failed("tearing down", error)));
+		} finally {
+			notices.mockRestore();
+		}
 	}
 }
 
