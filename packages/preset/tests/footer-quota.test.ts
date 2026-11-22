@@ -1840,3 +1840,20 @@ test("an all-legacy-selection reply still budgets its marks: whole with evidence
 		);
 	}
 });
+
+test("getState reuses its state until effective freshness changes", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(
+		v2([view("m", { snapshot: snap("m", [], { expiresAt: NOW + 5 }), meters: [meter("calls", 3)] })]),
+	);
+	const first = present(poller.getState());
+	assert.equal(poller.getState(), first);
+	env.clock.now += 5;
+	const expired = present(poller.getState());
+	assert.notEqual(expired, first);
+	assert.equal(present(expired.m).stale, true);
+	assert.equal(poller.getState(), expired);
+	poller.dispose();
+});

@@ -952,8 +952,24 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 		}
 	}
 
+	// The last effective view of `state`: renders reuse it until a reply or an expiry changes a stale flag.
+	let view: { source: QuotaState; result: QuotaState } | undefined;
+	function getState(): QuotaState | undefined {
+		if (!state) return undefined;
+		const t = now();
+		const current = view;
+		if (
+			current?.source === state &&
+			Object.values(current.result).every((quota) => quota.stale === isStale(quota, t))
+		) {
+			return current.result;
+		}
+		view = { source: state, result: effectiveState(state, t) };
+		return view.result;
+	}
+
 	return {
-		getState: () => (state ? effectiveState(state, now()) : undefined),
+		getState,
 		start() {
 			if (disposed || interval !== undefined) return;
 			request();
