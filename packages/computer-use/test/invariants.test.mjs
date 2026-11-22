@@ -14,6 +14,7 @@ import {
 	parseLookResponse,
 	renderInteractiveControls,
 } from "../src/outline.ts";
+import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
 import { runCheckCommand } from "../tests/fixtures/check-async.mjs";
 import { prepareSwiftSdk, runPreparedSwift, SDK_HOOK_TIMEOUT_MS, SDK_IMPORTS } from "./support/swift-sdk.mjs";
@@ -457,7 +458,8 @@ test("INV-17b macOS activity glow is configurable, headless-safe, and connection
 		"activity glow is not configurable or headless-safe",
 	);
 	assert(
-		macosHelperTs.includes("class MacosActivityGlowConnection") && macosHelperTs.includes('cmd: "setActivityGlow"'),
+		macosHelperTs.includes("class MacosActivityGlowConnection") &&
+			macosHelperTs.includes('this.send(socket, "setActivityGlow", { active })'),
 		"activity glow does not use a persistent helper connection",
 	);
 	assert(
@@ -690,6 +692,7 @@ describeMacosOnly("swiftc", () => {
 				"native/macos/agent_cursor_motion.swift",
 				"native/macos/bridge.swift",
 				"native/macos/helper_entry.swift",
+				writeMacosBuildStamp(root, scratch),
 			],
 			{ cwd: root, label: "INV-8 Swift source typecheck", timeoutMs: 65_000 },
 		);

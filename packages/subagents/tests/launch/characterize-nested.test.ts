@@ -1,6 +1,8 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import { createNestedSubagentTools } from "../../src/nested-tools.ts";
-import { bootLaunchStack, expectHeld, heldTool } from "../fixtures/launch-stack.ts";
+import { bootLaunchStack, expectHeld, heldTool, warmLaunchStack } from "../fixtures/launch-stack.ts";
+
+beforeAll(() => warmLaunchStack());
 
 it.each([
 	[9, false],

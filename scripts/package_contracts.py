@@ -551,10 +551,13 @@ CONTRACTS = (
             "package.json",
             "schemas/codex-reset-journal.schema.json",
             "schemas/subscription-router.schema.json",
+            "src/builtin-collectors.ts",
             "src/codex-contract.ts",
             "src/codex-reset-command.ts",
             "src/codex-resets.ts",
             "src/codex-session.ts",
+            "src/collector-reading.ts",
+            "src/collectors.ts",
             "src/config.ts",
             "src/exhaustion.ts",
             "src/failure.ts",
@@ -665,6 +668,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "README.md",
         "package.json",
         "src/index.ts",
+        "src/platform/macos/helper-build.mjs",
         "scripts/build-native.mjs",
         "scripts/setup-helper.mjs",
         "native/macos/activity_glow.swift",
@@ -765,6 +769,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "src/platform/linux/helper.ts",
         "src/platform/linux/wsl.ts",
         "src/platform/macos/backend.ts",
+        "src/platform/macos/helper-build.mjs",
         "src/platform/macos/browser.ts",
         "src/platform/macos/helper-path.d.mts",
         "src/platform/macos/helper-path.mjs",
@@ -4233,7 +4238,7 @@ def check_macos_helper(tarball: Path, arch: MACHO_ARCH) -> str:
 
 HELPER_SOURCE_LIST_DECLARATIONS = {
     "scripts/setup-helper.mjs": "helperSourcePaths",
-    "scripts/build-native.mjs": "macosSourcePaths",
+    "src/platform/macos/helper-build.mjs": "macosHelperSourcePaths",
 }
 HELPER_SOURCE_LITERAL = re.compile(
     r"\s*(?P<quote>['\"])(?P<value>(?:\\.|(?!\1).)*)(?P=quote)\s*(?:,|$)", re.DOTALL
@@ -4282,11 +4287,13 @@ def parse_helper_source_list(script: str, source: str) -> list[str]:
 
 
 def check_helper_sources_packed(tarball: Path) -> list[str]:
-    """Require every Swift source the packed build scripts compile to be in the tarball.
+    """Require the Swift sources the packed scripts compile and stamp to be one list, all in the tarball.
 
-    `setup-helper.mjs` (`helperSourcePaths`) and `build-native.mjs` (`macosSourcePaths`) name the
-    `native/macos/*.swift` files `--allow-build` and `build:native` compile. A name missing from the
-    tarball would make both fail from an install, so the lists are read from the packed scripts.
+    `setup-helper.mjs` (`helperSourcePaths`) names the `native/macos/*.swift` files `--allow-build`
+    compiles; `helper-build.mjs` (`macosHelperSourcePaths`) names the files `build:native` compiles and
+    the build stamp hashes. A name missing from the tarball would make both fail from an install, and
+    two different lists would make a correctly compiled helper report a build the client refuses, so
+    the lists are read from the packed scripts.
 
     Parameters:
         tarball (Path): Packed tarball.
@@ -4295,12 +4302,17 @@ def check_helper_sources_packed(tarball: Path) -> list[str]:
         list[str]: Sorted `native/macos/<file>` paths verified present.
 
     Raises:
-        ContractError: If a script lacks the list or a listed source is not packed.
+        ContractError: If a script lacks the list, the lists differ or a listed source is not packed.
     """
-    sources: set[str] = set()
-    for script in HELPER_SOURCE_LIST_DECLARATIONS:
-        names = parse_helper_source_list(script, read_member(tarball, script).decode())
-        sources.update(f"native/macos/{name}" for name in names)
+    lists = {
+        script: parse_helper_source_list(script, read_member(tarball, script).decode())
+        for script in HELPER_SOURCE_LIST_DECLARATIONS
+    }
+    require(
+        len({tuple(sorted(names)) for names in lists.values()}) == 1,
+        f"packed helper source lists differ: {lists}",
+    )
+    sources = {f"native/macos/{name}" for names in lists.values() for name in names}
     for source in sorted(sources):
         read_member(tarball, source)
     return sorted(sources)

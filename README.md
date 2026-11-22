@@ -79,12 +79,21 @@ make help                    # every target
   `@nredd/pi-test-lib/temp-dir` for scratch paths that should live until a test finishes.
   It defaults to OS temp. For fixtures that must live under an existing directory, pass
   `makeTestTempDir(prefix, onTestFinished, { baseDir })` with a prefix relative to `baseDir`.
+  Helpers that own their own lifecycle (a `restore` or a `finally`, e.g. the test-lib sandboxes and
+  `createTestExtensionsResult`) use `makeOwnedTempDir(prefix, { baseDir })` and call its `remove`,
+  which targets the absolute path resolved at allocation. `makeGitFixture(onCleanup)` instead
+  allocates through `makeTestTempDir` and hands the root's removal to the caller's `onCleanup`.
   Plan Mode build fixtures use the real package root only for its builder output path checks or
   workspace module resolution. Standalone validation and self-contained builders use OS temp.
   A killed run can leave in-package fixtures behind: they are outside the launcher's temp sandbox.
   The dev-tools and computer-use suites remove per-test scratch at test completion and shared
-  scratch at suite teardown. Keep any fixture symlinks and config reset paths inside managed roots.
-  `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
+  scratch at suite teardown. Dev-tools files whose tools truncate output call
+  `sandboxSpillRoot()` (`tests/fixtures/spill.ts`): `bound` caches its spill directory per process.
+  Keep any fixture symlinks and config reset paths inside managed roots.
+  `scripts/test-tempdirs-baseline.json` is empty: no owned JS/TS test source outside the
+  `tests/lib/src/temp-dir.ts` helper references `mkdtemp`. That is all the scanner proves: Python
+  test helpers, `forks/pi`, and leaks through other APIs (runtime caches, child tools) are not
+  checked. The baseline may only shrink against the merge base of `HEAD` and `BASE`
   (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
   the merge base is allowed for its initial introduction only.
 - Scripts that use `node ../../scripts/run-vitest.ts` give Vitest and its subprocesses a private

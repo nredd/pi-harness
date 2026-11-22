@@ -1869,9 +1869,10 @@ async function performReadText(
 	const state = operationState();
 	const raw = (
 		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
-			if (currentPlatformBackend.name === "windows") await resolveCurrentTarget(signal);
+			const target = currentPlatformBackend.name === "windows" ? await resolveCurrentTarget(signal) : undefined;
 			return await currentPlatformBackend.readText(
 				{
+					...(target ? { pid: target.pid, windowId: target.windowId } : {}),
 					lookId: state.currentOutline!.lookId,
 					elementRef: wireRefForNode(node),
 					offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),
@@ -2701,7 +2702,9 @@ export async function terminalDesktopActionResult(
 			},
 		];
 	}
-	if (targetClosed && condition) {
+	const staleWaitRoot =
+		currentPlatformBackend.name === "windows" && (error as { code?: string } | undefined)?.code === "root_stale";
+	if (targetClosed && condition && !staleWaitRoot) {
 		const verificationStatus = condition.gone ? "verified" : "failed";
 		execution.verification = {
 			status: verificationStatus,
@@ -2743,7 +2746,8 @@ export async function terminalDesktopActionResult(
 	// The probe saw the root listed, yet the helper cannot resolve it: the ref expired. A failed probe proves nothing.
 	const rootExpired =
 		exactRootAvailable === true && (error as { code?: string } | undefined)?.code === "root_not_found";
-	const code = targetClosed ? "target_closed" : rootExpired ? "root_stale" : "post_action_observation_failed";
+	const code =
+		staleWaitRoot || rootExpired ? "root_stale" : targetClosed ? "target_closed" : "post_action_observation_failed";
 	const message = rootExpired
 		? `Root expired or was never valid for observation (${rawMessage}). Rediscover with find_roots.`
 		: rawMessage;

@@ -146,6 +146,7 @@ describe("/computer-use", () => {
 				"headless: disabled",
 				"cursor_overlay: enabled",
 				"activity_glow: disabled",
+				...(platform === "darwin" ? ["helper build: not checked"] : []),
 				...blocklistStatus,
 				"",
 				"Sources:",

@@ -1,5 +1,7 @@
-import { expect, it, vi } from "vitest";
-import { bootLaunchStack, expectHeld, heldTool } from "../fixtures/launch-stack.ts";
+import { beforeAll, expect, it, vi } from "vitest";
+import { bootLaunchStack, expectHeld, heldTool, warmLaunchStack, workflowLaunch } from "../fixtures/launch-stack.ts";
+
+beforeAll(() => warmLaunchStack(workflowLaunch));
 
 it.each([
 	[10, false],

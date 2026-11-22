@@ -45,6 +45,7 @@ export const ALWAYS_BLOCKED_BUNDLE_IDS: readonly string[] = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ];
 
 const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string[]; always: readonly string[] }> = {

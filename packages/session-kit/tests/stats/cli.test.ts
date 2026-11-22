@@ -260,6 +260,13 @@ describe("stats CLI", () => {
 		await expect(main()).rejects.toThrow("usage: export");
 		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", source];
 		await expect(main()).rejects.toThrow("usage: export");
+		// The usage text names what replacement bypasses and costs.
+		await expect(main()).rejects.toThrow(
+			"--replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
+				"clock-rollback, unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
+				"published history absent from the scan (sealed months included), and viewers holding a newer snapshot never import it; " +
+				"they accept this machine again only from a later export timestamped at or after the snapshot they hold",
+		);
 	});
 
 	it("reports a non-Error failure generically", async () => {

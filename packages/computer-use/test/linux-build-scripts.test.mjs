@@ -110,10 +110,11 @@ test("Linux build/setup scripts and process lifetime", async () => {
 			fs.mkdir(fixtureHelperPathDir, { recursive: true }),
 		]);
 		await Promise.all([
-			fs.copyFile(path.join(scriptsDir, "setup-helper.mjs"), path.join(fixtureScriptsDir, "setup-helper.mjs")),
-			fs.copyFile(
-				path.join(rootDir, "src", "platform", "macos", "helper-path.mjs"),
-				path.join(fixtureHelperPathDir, "helper-path.mjs"),
+			...["setup-helper.mjs", "build-native.mjs"].map((name) =>
+				fs.copyFile(path.join(scriptsDir, name), path.join(fixtureScriptsDir, name)),
+			),
+			...["helper-path.mjs", "helper-build.mjs"].map((name) =>
+				fs.copyFile(path.join(rootDir, "src", "platform", "macos", name), path.join(fixtureHelperPathDir, name)),
 			),
 		]);
 		let fixtureEntry = path.join(fixtureScriptsDir, "setup-helper.mjs");

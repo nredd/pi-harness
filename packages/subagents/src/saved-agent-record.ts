@@ -39,6 +39,8 @@ export function savedAgentNote(data: unknown): SavedAgentNote | undefined {
 		completedAt: typeof row.completedAt === "number" ? row.completedAt : 0,
 		sessionFile,
 		sessionCwd: typeof row.sessionCwd === "string" ? row.sessionCwd : undefined,
+		sessionDir: typeof row.sessionDir === "string" ? row.sessionDir : undefined,
+		canonicalSessionFile: typeof row.canonicalSessionFile === "string" ? row.canonicalSessionFile : undefined,
 		...(transcript ? { transcript } : {}),
 		...(typeof row.result === "string" ? { result: capRetained(row.result, transcript) } : {}),
 		...(typeof row.error === "string" ? { error: capRetained(row.error, transcript) } : {}),

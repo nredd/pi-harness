@@ -1,7 +1,9 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import { QUOTA_RESTART_GRACE_MS } from "../../src/quota-admission.ts";
 import { flush } from "../fixtures/boot-extension.ts";
-import { bootLaunchStack, expectHeld, heldTool } from "../fixtures/launch-stack.ts";
+import { bootLaunchStack, expectHeld, heldTool, warmLaunchStack } from "../fixtures/launch-stack.ts";
+
+beforeAll(() => warmLaunchStack());
 
 it.each([
 	["cron", "* * * * * *"],

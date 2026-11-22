@@ -234,10 +234,26 @@ func resolveCaptureTarget(windowId: UInt32?, wantsImage: Bool) -> CaptureTarget 
 	if let windowId, windowId > 0 { return wantsImage ? .capture(windowId: windowId) : .semanticOnly }
 	return wantsImage ? .notCapturable : .semanticOnly
 }
-/// Wire `windowId` -> CG window id. 0, negative and out-of-range values mean "no window" (unpaired root).
-func normalizedWindowId(_ raw: Int?) -> UInt32? {
-	guard let raw, raw > 0, raw <= Int(UInt32.max) else { return nil }
-	return UInt32(raw)
+/// A missing or null wire ID is unpaired; a malformed ID must not trigger fallback.
+func checkedWindowId(_ raw: Any?) throws -> UInt32? {
+	guard let raw, !(raw is NSNull) else { return nil }
+	guard let value = raw as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), decimalIsIntegral(value),
+		let id = UInt32(exactly: value.doubleValue), id > 0
+	else {
+		throw BridgeFailure(message: "windowId must be a positive 32-bit unsigned integer", code: "invalid_args")
+	}
+	return id
+}
+
+/// JSONSerialization decodes long decimals (e.g. `4294967295.00000001`) as `NSDecimalNumber`, whose
+/// `doubleValue` rounds the fraction away. Check integrality on the decoded decimal digits instead.
+/// The decoder keeps 38 significant digits; a fraction beyond that never reaches the helper.
+private func decimalIsIntegral(_ value: NSNumber) -> Bool {
+	guard let decimal = value as? NSDecimalNumber else { return true }
+	var source = decimal.decimalValue
+	var integral = Decimal()
+	NSDecimalRound(&integral, &source, 0, .plain)
+	return !source.isNaN && integral == source
 }
 
 /// Only an unqualified request (no id, no ref) may take the app's first window. A ref that no longer
@@ -246,14 +262,67 @@ func allowsFirstWindowFallback(windowId: UInt32?, windowRef: String?) -> Bool {
 	windowId == nil && windowRef == nil
 }
 
-/// Points from `start` (exclusive) to `end` (inclusive), no more than `maxStep` apart, capped at 400 steps.
+/// Policy cap, not a representability boundary. Real macOS display arrangements span tens of thousands of
+/// points, so a vertex past +/-1e6 is a caller bug. At this size every vertex keeps sub-point precision in
+/// the Float AX hit test (24-bit mantissa), and 1024 vertices keep the summed path length far from overflow.
+private let dragCoordinateLimit = 1_000_000
+
+private func validateDragPoint(_ point: CGPoint) throws {
+	let limit = CGFloat(dragCoordinateLimit)
+	guard abs(point.x) <= limit, abs(point.y) <= limit else {
+		throw BridgeFailure(message: "Drag coordinates must be finite and within +/-\(dragCoordinateLimit)", code: "invalid_args")
+	}
+}
+
+/// The one drag geometry check behind `act`, `actBatch`, `desktopInput` and the native sink: at least two
+/// vertices, each within the coordinate limit, and a finite total length. Returns the interpolation step.
+private func admittedDragStep(_ points: [CGPoint]) throws -> CGFloat {
+	guard points.count >= 2 else {
+		throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
+	}
+	for point in points { try validateDragPoint(point) }
+	// Bounded vertices keep the distance and the capped interpolation count representable.
+	var total: CGFloat = 0
+	for (start, end) in zip(points, points.dropFirst()) {
+		total += hypot(end.x - start.x, end.y - start.y)
+	}
+	guard total.isFinite else {
+		throw BridgeFailure(message: "Drag path geometry must be finite", code: "invalid_args")
+	}
+	// Widen the usual 12pt step on long paths to keep the drag stream short.
+	return max(12, total / 1000)
+}
+
+/// Parse a wire drag path and admit its geometry as sent (image pixels for act, global points for desktop).
+private func dragRequestPoints(_ raw: Any?) throws -> [CGPoint] {
+	guard let path = raw as? [[String: Any]], path.count >= 2 else {
+		throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
+	}
+	let points = try path.map { entry in
+		guard let x = (entry["x"] as? NSNumber)?.doubleValue, let y = (entry["y"] as? NSNumber)?.doubleValue else {
+			throw BridgeFailure(message: "Drag path entries require x and y", code: "invalid_args")
+		}
+		return CGPoint(x: x, y: y)
+	}
+	_ = try admittedDragStep(points)
+	return points
+}
+
+/// Points along a validated segment, ending at `end`. Aim for `maxStep` spacing, capped at 400 steps.
 func interpolatedDragPoints(from start: CGPoint, to end: CGPoint, maxStep: CGFloat) -> [CGPoint] {
-	let distance = hypot(end.x - start.x, end.y - start.y)
+	let dx = end.x - start.x
+	let dy = end.y - start.y
+	let distance = hypot(dx, dy)
 	guard distance > 0, maxStep > 0 else { return [end] }
-	let steps = min(400, max(1, Int((distance / maxStep).rounded(.up))))
+	let steps = Int(max(1, min(400, (distance / maxStep).rounded(.up))))
 	return (1...steps).map { index in
 		let t = CGFloat(index) / CGFloat(steps)
-		return CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+		if index == steps { return end }
+		// Keep each interpolated coordinate within the validated vertex bounds even after rounding.
+		return CGPoint(
+			x: min(max(start.x + dx * t, min(start.x, end.x)), max(start.x, end.x)),
+			y: min(max(start.y + dy * t, min(start.y, end.y)), max(start.y, end.y))
+		)
 	}
 }
 
@@ -350,6 +419,7 @@ let alwaysBlockedBundleIds: [String] = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ]
 
 /// The request's `blockedBundleIds` (sent by the TypeScript policy) plus the always-blocked agents.
@@ -1060,7 +1130,7 @@ final class Bridge {
 	private let refStore: AXRefStore
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
-	private let physicalInputLock = NSRecursiveLock()
+	private let physicalInputLock: NSLocking
 	private let inputSink: NativeInputSink
 	private let supportsAgentCursor = CommandLine.arguments.contains("serve")
 	private let browserBundleIds: Set<String> = [
@@ -1082,11 +1152,13 @@ final class Bridge {
 		writeOutput: @escaping (Data) throws -> Void = { try FileHandle.standardOutput.write(contentsOf: $0) },
 		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) },
 		inputSink: NativeInputSink = .live,
+		physicalInputLock: NSLocking = NSRecursiveLock(),
 		refStore: AXRefStore = AXRefStore()
 	) {
 		self.refStore = refStore
 		self.activityGlow = activityGlow
 		self.inputSink = inputSink
+		self.physicalInputLock = physicalInputLock
 		self.dispatchRequest = dispatchRequest
 		self.readSession = readSession
 		self.writeOutput = writeOutput
@@ -1425,11 +1497,6 @@ final class Bridge {
 		return pid
 	}
 
-	/// `windowId` from the wire, treating invalid ids as absent (unpaired roots have no CG window).
-	func positiveWindowId(_ request: [String: Any]) -> UInt32? {
-		normalizedWindowId(optionalIntArg(request, "windowId"))
-	}
-
 	func optionalIntArg(_ request: [String: Any], _ key: String) -> Int? {
 		if let value = request[key] as? Int {
 			return value
@@ -1496,6 +1563,7 @@ final class Bridge {
 		let parentPath = processPath(pid: parentPid)
 		var output: [String: Any] = [
 			"protocolVersion": protocolVersion,
+			"buildIdentity": helperBuildIdentity,
 			"architectureVersion": 1,
 			"invariants": ["state-scoped-observations", "bounded-observation-history", "multi-root-forest", "progressive-disclosure", "atomic-physical-input", "concurrent-requests", "transactional-batching"],
 			"pid": Int32(getpid()),
@@ -1811,7 +1879,7 @@ final class Bridge {
 
 	private func setWindowFrame(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["ok": false, "reason": "window_not_found"]
@@ -1838,7 +1906,7 @@ final class Bridge {
 
 	private func focusWindow(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = positiveWindowId(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["focused": false, "reason": "window_not_found"]
@@ -2061,8 +2129,9 @@ final class Bridge {
 		_ request: [String: Any], windowOwner: (UInt32) -> Int32?,
 		captureWindow: (UInt32) throws -> CapturedWindowImage
 	) throws -> [String: Any] {
+		// PID first, then window ID: a request with both malformed reports the PID error.
 		let suppliedPid = try request["pid"] == nil || request["pid"] is NSNull ? nil : pidArg(request)
-		let windowId = positiveWindowId(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		let maxDimension = optionalIntArg(request, "maxDimension").map { max(1, $0) }
 		let readText = optionalStringArg(request, "readText") ?? "auto"
@@ -2445,6 +2514,22 @@ final class Bridge {
 		return CGPoint(x: record.windowFrame.origin.x + record.windowFrame.width * relX, y: record.windowFrame.origin.y + record.windowFrame.height * relY)
 	}
 
+	/// The grounded point of an x/y act target. A ref target wins over x/y and returns nil: act grounds it
+	/// on the live element only when it runs.
+	private func coordinateTargetPoint(_ target: [String: Any], record: LookRecord) -> CGPoint? {
+		guard target["ref"] as? String == nil, let x = target["x"] as? NSNumber, let y = target["y"] as? NSNumber else { return nil }
+		return lookPoint(record: record, x: x.doubleValue, y: y.doubleValue)
+	}
+
+	/// The drag geometry admission shared by `act` and `actBatch`: the action point and every grounded
+	/// vertex pass the same checks as the native sink, before any lock, focus, preflight or allocation.
+	private func admittedDragPoints(at point: CGPoint?, params: [String: Any], record: LookRecord) throws -> [CGPoint] {
+		if let point { try validateDragPoint(point) }
+		let points = try dragRequestPoints(params["path"]).map { lookPoint(record: record, x: $0.x, y: $0.y) }
+		_ = try admittedDragStep(points)
+		return points
+	}
+
 	private func payloadNode(element: AXUIElement) -> [String: Any] {
 		let node = lookNode(element: element, transform: { $0 }, offscreen: false)
 		var payload = node.payload()
@@ -2738,11 +2823,11 @@ final class Bridge {
 			element = stored
 			beforeValue = world.stringAttribute(stored, kAXValueAttribute as CFString)
 			beforeSelected = world.stringAttribute(stored, kAXSelectedTextAttribute as CFString)
-		} else if let xNumber = target["x"] as? NSNumber, let yNumber = target["y"] as? NSNumber {
+		} else if let point = coordinateTargetPoint(target, record: record) {
 			guard record.hasImage else {
 				throw BridgeFailure(message: "Coordinate targeting is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
-			rawPoint = lookPoint(record: record, x: xNumber.doubleValue, y: yNumber.doubleValue)
+			rawPoint = point
 			beforeValue = nil
 			beforeSelected = nil
 		} else {
@@ -2819,6 +2904,12 @@ final class Bridge {
 			}
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
+			let dragPoints: [CGPoint]
+			if action == "drag" {
+				dragPoints = try admittedDragPoints(at: point, params: params, record: record)
+			} else {
+				dragPoints = []
+			}
 			acquirePhysicalInputIfNeeded()
 			focusTargetForPhysicalInput()
 			if delivery == "hid" { try preflight(point) }
@@ -2836,18 +2927,9 @@ final class Bridge {
 				try refuseBlockedBeforePost([point])
 				try world.postScrollWheel(point, wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid, delivery)
 			case "drag":
-				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
-					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
-				}
-				let points = try rawPath.map { raw -> CGPoint in
-					guard let x = (raw["x"] as? NSNumber)?.doubleValue, let y = (raw["y"] as? NSNumber)?.doubleValue else {
-						throw BridgeFailure(message: "drag path entries require x and y", code: "invalid_args")
-					}
-					return lookPoint(record: record, x: x, y: y)
-				}
 				animateCursor(at: point)
-				try refuseBlockedBeforePost(points)
-				try world.postMouseDrag(points, pid, delivery)
+				try refuseBlockedBeforePost(dragPoints)
+				try world.postMouseDrag(dragPoints, pid, delivery)
 			default:
 				throw BridgeFailure(message: "Action \(action) cannot use coordinate grounding", code: "invalid_args")
 			}
@@ -3207,6 +3289,18 @@ final class Bridge {
 		guard actions.allSatisfy({ ($0["lookId"] as? String) == lookId }) else {
 			throw BridgeFailure(message: "actBatch actions must belong to one look", code: "invalid_args")
 		}
+		// Reject a malformed drag before the transaction takes its outer HID lock. A ref target's point exists
+		// only once its step runs; act then rejects it before that step's own focus, preflight or allocation.
+		let drags = actions.filter { $0["action"] as? String == "drag" }
+		if !drags.isEmpty {
+			guard let record = world.lookRecord(lookId) else {
+				throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
+			}
+			for drag in drags {
+				let point = coordinateTargetPoint(drag["target"] as? [String: Any] ?? [:], record: record)
+				_ = try admittedDragPoints(at: point, params: drag["params"] as? [String: Any] ?? [:], record: record)
+			}
+		}
 		let finish = world.beginRootDelta(pid)
 		let mayUsePhysicalInput = actions.contains { action in
 			(optionalStringArg(action, "policy") ?? "default") != "ax_only"
@@ -3340,8 +3434,8 @@ final class Bridge {
 
 	private func axWaitFor(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		ensureEnhancedAccessibility(pid: pid)
-		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
 		let role = optionalStringArg(request, "role")?.trimmingCharacters(in: .whitespacesAndNewlines)
 		let text = optionalStringArg(request, "text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -3799,7 +3893,7 @@ final class Bridge {
 
 	private func focusedElement(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		let app = AXUIElementCreateApplication(pid)
 		guard let focusedValue = copyAttribute(app, attribute: kAXFocusedUIElementAttribute as CFString),
@@ -4028,17 +4122,15 @@ final class Bridge {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
 		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request)))
+		var vertices: [CGPoint] = []
 		switch action {
 		case "type", "key":
 			try refuseBlockedKeyboard(true, false)
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
-			// Every vertex, not just the endpoints, so a path cannot route through a blocked window.
-			let vertices = (request["path"] as? [[String: Any]] ?? []).compactMap { raw -> CGPoint? in
-				guard let x = (raw["x"] as? NSNumber)?.doubleValue, let y = (raw["y"] as? NSNumber)?.doubleValue else { return nil }
-				return CGPoint(x: x, y: y)
-			}
+			vertices = try dragRequestPoints(request["path"])
+			// Every vertex, not just the endpoints, is subject to pointer refusal.
 			try refuseBlockedPoints(vertices, blocked: blocked)
 		default:
 			break
@@ -4073,16 +4165,7 @@ final class Bridge {
 		case "scroll":
 			try postScrollWheel(at: try point(), deltaX: optionalIntArg(request, "scrollX") ?? 0, deltaY: optionalIntArg(request, "scrollY") ?? 0, pid: 0)
 		case "drag":
-			guard let raw = request["path"] as? [[String: Any]], raw.count >= 2 else {
-				throw BridgeFailure(message: "drag requires a path of at least two points", code: "invalid_args")
-			}
-			let points = try raw.map { entry -> CGPoint in
-				guard let x = (entry["x"] as? NSNumber)?.doubleValue, let y = (entry["y"] as? NSNumber)?.doubleValue else {
-					throw BridgeFailure(message: "drag path entries require x and y", code: "invalid_args")
-				}
-				return CGPoint(x: x, y: y)
-			}
-			try postMouseDrag(points: points, pid: 0)
+			try postMouseDrag(points: vertices, pid: 0)
 		case "type":
 			try postUnicodeText(try stringArg(request, "text"), pid: 0, beforeKeyDown: refuseBlockedKeyboard)
 		case "key":
@@ -4803,11 +4886,12 @@ final class Bridge {
 	}
 
 	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard points.count >= 2, let first = points.first, let last = points.last else {
+		let maxStep = try admittedDragStep(points)
+		guard let first = points.first, let last = points.last else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
+		if delivery == "hid" { physicalInputLock.lock() }
+		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try inputSink.checkDragCancellation()
 		// Reserve the matching release before sending any input. Unwinding must not allocate it.
 		guard let up = inputSink.mouseEvent(.leftMouseUp, first, .left) else {
@@ -4827,11 +4911,6 @@ final class Bridge {
 		}
 		inputSink.sleep(30_000)
 
-		// Real drags are a stream of positions; apps ignore a single long jump. Step each segment (~12pt),
-		// widening the step so the whole drag stays under ~1000 events (about 8s).
-		var total: CGFloat = 0
-		for pair in zip(points, points.dropFirst()) { total += hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y) }
-		let maxStep = max(12, total / 1000)
 		var previous = first
 		for point in points.dropFirst() {
 			for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
@@ -5198,7 +5277,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- Only a missing or null `windowId` is absent. Other values must be positive unsigned 32-bit integers or the helper returns `invalid_args`. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture

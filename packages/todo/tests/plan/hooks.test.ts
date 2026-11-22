@@ -23,6 +23,7 @@ import {
 	HELD_REMINDER_MESSAGE_TYPE,
 	MONITOR_STARTED_EVENT,
 	MONITOR_STOPPED_EVENT,
+	NUDGE_BUDGET_ENTRY_TYPE,
 	PLAN_APPROVED_EVENT,
 	PLAN_REMINDER_MESSAGE_TYPE,
 	STATE_ENTRY_TYPE,
@@ -643,6 +644,12 @@ describe("settling with nothing armed to wake the parent", () => {
 
 	describe("stale open lists", () => {
 		const customType = "rpiv-todo-stale-reminder";
+		const budget = {
+			type: "custom",
+			customType: NUDGE_BUDGET_ENTRY_TYPE,
+			data: { persistenceVersion: 1, nudge: "stale" },
+		};
+		const nudged = { continue: true, entries: [budget, { type: "custom_message", customType, display: false }] };
 		const expectQuiet = async (settle: () => unknown, count: number) => {
 			for (let i = 0; i < count; i++) expect(await settle()).toBeUndefined();
 		};
@@ -659,7 +666,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(path, JSON.stringify({ staleAfterSettles: 3 }));
 			try {
-				expect(await settle()).toMatchObject({ entries: [{ customType, display: false }] });
+				expect(await settle()).toMatchObject(nudged);
 			} finally {
 				rmSync(path, { force: true });
 			}
@@ -683,11 +690,11 @@ describe("settling with nothing armed to wake the parent", () => {
 			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant]), ctx), 11);
 		});
 
-		it.each(["resume", "reload"])("restores the stale prompt budget on %s", async (reason) => {
+		it.each(["resume", "reload"])("restores the stale prompt budget on %s from bookkeeping", async (reason) => {
 			const persisted = { customType, content: STALE_REMINDER_MARKER, display: false };
 			const { handler, ctx } = await start(tasks({ id: 1 }), {
 				reason,
-				entries: [{ type: "custom_message", ...persisted, id: "nudge", parentId: null, timestamp: "" }],
+				entries: [{ ...budget, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
 			});
 			armWorker();
 			const marker = { role: "custom", ...persisted };
@@ -698,7 +705,38 @@ describe("settling with nothing armed to wake the parent", () => {
 			await handler("input")({ source: "extension" }, ctx);
 			expect(await settle()).toBeUndefined();
 			await handler("input")({ source: "interactive" }, ctx);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
+		});
+
+		it("spends the stale budget on neither a restored marker nor empty-list bookkeeping", async () => {
+			const persisted = { customType, content: STALE_REMINDER_MARKER, display: false };
+			const empty = { ...budget, data: { persistenceVersion: 1, nudge: "empty" } };
+			const { handler, ctx } = await start(tasks({ id: 1 }), {
+				reason: "resume",
+				entries: [
+					{ type: "custom_message", ...persisted, id: "nudge", parentId: null, timestamp: "" },
+					{ ...empty, id: "empty", parentId: "nudge", timestamp: "" },
+				] as SessionEntry[],
+			});
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject(nudged);
+		});
+
+		it.each([
+			["a missing version", { nudge: "stale" }],
+			["an unsupported version", { persistenceVersion: 2, nudge: "stale" }],
+			["null data", null],
+		])("leaves the stale budget unspent for bookkeeping with %s", async (_case, data) => {
+			const { handler, ctx } = await start(tasks({ id: 1 }), {
+				reason: "resume",
+				entries: [{ ...budget, data, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
+			});
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject(nudged);
 		});
 
 		it("evicts stale eligibility on a same-session non-TUI rebind", async () => {
@@ -718,11 +756,8 @@ describe("settling with nothing armed to wake the parent", () => {
 				handler("agent_before_settle")(settleEvent(messages), ctx);
 			await expectQuiet(settle, 9);
 			const result = (await settle()) as { entries: Array<{ content: string }>; continue: boolean };
-			expect(result).toMatchObject({
-				continue: true,
-				entries: [{ type: "custom_message", customType, display: false }],
-			});
-			const marker = { role: "custom", customType, content: result.entries[0].content };
+			expect(result).toMatchObject(nudged);
+			const marker = { role: "custom", customType, content: result.entries[1].content };
 			const messages = [user, assistant, marker];
 			const expanded = await handler("context")({ messages }, ctx);
 			expect(expanded).toMatchObject({
@@ -735,7 +770,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			await handler("input")({ source: "extension" }, ctx);
 			expect(await settle([...messages, user, assistant])).toBeUndefined();
 			await handler("input")({ source: "interactive" }, ctx);
-			expect(await settle([...messages, user, assistant])).toMatchObject({ entries: [{ customType }] });
+			expect(await settle([...messages, user, assistant])).toMatchObject(nudged);
 			await call(ctx, { action: "clear" });
 			expect(await handler("context")({ messages }, ctx)).toBeUndefined();
 		});
@@ -749,14 +784,14 @@ describe("settling with nothing armed to wake the parent", () => {
 			await expectQuiet(settle, 9);
 			await call(ctx, { action: "list" });
 			expect(text(await call(ctx, { action: "update", id: 2, status: "completed" }))).toMatch(/^Error:/);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
 			await call(ctx, { action: "update", id: 1, status: "completed", evidence: "verified" });
 			await expectQuiet(settle, 10);
 			await handler("session_shutdown")({ reason: "quit" }, ctx);
 			await handler("session_start")({ reason: "new" }, ctx);
 			armWorker();
 			await expectQuiet(settle, 9);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
 		});
 
 		it("ignores closed lists and does not age in Plan mode or on an aborted settle", async () => {
@@ -775,7 +810,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			await expectQuiet(() => handler("agent_before_settle")(settleEvent([planning, user, assistant]), ctx), 10);
 			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant], "aborted"), ctx), 10);
 			await expectQuiet(settle, 9);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
 		});
 	});
 

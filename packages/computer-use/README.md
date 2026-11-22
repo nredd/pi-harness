@@ -34,7 +34,8 @@ The native source is `native/windows/bridge-rs/`. This source change is a siblin
 opt-in WSL transport (#981), not a second transport. It does not enable WSL interop,
 install a helper, change accessibility settings or grant privileges. #673 remains release-gating.
 
-- Protocol `4` and architecture `1` remain compatible. Diagnostics advertise
+- Protocol `5` (from `4`: `uiaReadText` and `uiaWaitFor` require the admitted `pid` and `windowId`,
+  so a v4 helper or client fails the version check) and architecture `1`. Diagnostics advertise
   `capabilities: ["fail-closed-live-target-v1"]`. The coordinated WSL client must require this
   capability before accepting a helper; an owner-pinned SHA alone does not make an older executable safe.
   The literal is a STATIC claim in `diagnostics()`, not derived at runtime from the routes. It is guarded
@@ -57,6 +58,8 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   deltas refuse during parsing before any mutation. Every actual rounded drag vertex (start, waypoints, end) is
   checked before the first mutation for live containment and hit-tested ownership. Coordinate paths
   use observed image pixels, reject stale window geometry and never clamp out-of-range vertices.
+  The macOS helper rejects non-finite drag vertices or coordinates outside `[-1000000, 1000000]`
+  (image pixels and grounded global points) before acquiring the HID lock or preparing input.
   Ref drag paths use `params.path` fractions in `[0,1]` of the current live control, starting at its
   current center, and remain entirely within that control and its owning window. Paths contain at
   most 1024 requested vertices. Scroll/click/move paths use the same read-only ownership boundary.
@@ -221,19 +224,17 @@ hosted app. Match the exact executable basename, case-insensitively: `powershell
 no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, `OpenConsole.exe`,
 `wt.exe`, and `wsl.exe` when those processes own a root.
 
-Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. The Windows helper checks the owning look's PID before a live UIA text read; this does not make TypeScript admission atomic with native delivery.
-
-Windows helper limits:
-
-- After a helper restart, look IDs and element-ref counters start over. `uiaReadText` receives
-  neither the admitted PID nor HWND. A restored state for window A can read window B's look if B
-  was observed after the restart and got the same look ID and ref. B was admitted on its own
-  observation, so this is a wrong-window read, not a blocklist bypass. The Rust helper needs a
-  per-helper generation in look IDs and PID and HWND supplied to `uiaReadText`.
-- Windows `wait_for` and `act_ui` postcondition polling query the admitted HWND by number without
-  revalidating its PID between polls. If that window closes and another process reuses its HWND
-  during the wait, a poll can read the replacement. Bind waits to HWND and PID and revalidate
-  ownership before each poll.
+Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. Look IDs are scoped to one helper lifetime: after a restart, observe again before reading text.
+The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
+On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
+poll. A closed HWND, or one now owned by a different PID, fails the next poll with `root_stale`.
+Text reads and each wait poll recheck that owner after acquiring the UIA root, before walking it,
+and again after the walk, discarding the result as `root_stale` if a check detects ownership drift.
+These are samples, not continuous monitoring. A text read whose desktop access check refuses a
+closed or reassigned HWND also reports `root_stale`; `coordinate_blocked` means the owner still
+matched. A replacement that reuses the exact numeric HWND and PID pair passes every check
+(#1231). Semantic `act_ui` delivery
+checks the owner before resolving the element, not after acquiring the UIA root.
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
@@ -365,8 +366,10 @@ Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`,
   `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in `src/platform/macos/backend.ts`,
   which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A request with a `windowRef` and no usable `windowId` that no longer resolves fails; it
-  never falls back to the app's first window. With a positive `windowId` it still pairs by id.
+- The helper treats only a missing or null `windowId` as absent. A supplied ID must be a positive
+  unsigned 32-bit integer or the helper returns `invalid_args`. The PID is checked first, so a request
+  with both an invalid PID and an invalid ID reports the PID error. A stale `windowRef` without an ID
+  never falls back to the app's first window. With a valid ID it still pairs by ID.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ### Capture
@@ -430,7 +433,10 @@ Measured, not assumed:
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
 - `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
-- `ensureProtocol()` restarts a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
+- The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the Swift sources `build:native` compiles (line endings normalized; any other `.swift` file in the checkout is ignored). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
+- The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched; once a probe timed out, a later absence is not proof either, only a verified reply is. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
+- After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
 
 ### Whole-desktop control
 
@@ -863,7 +869,7 @@ Browser pages are roots, not a second agent-facing context hierarchy. `launch_br
 
 The macOS socket server and Windows line protocol accept multiple in-flight requests and correlate responses by request id. macOS protects shared AX ref/look stores and the root-event sequence; Windows uses a fixed worker pool and initializes UIA per worker thread. Both platforms keep eight immutable native look records and serialize global synthesized input. Target focus, bounded occlusion preflight, and event delivery share that same critical section; another worker cannot change the foreground between validation and delivery. UIA-only Windows batches do not acquire the global input lock, while any batch that may fall back to pointer or keyboard delivery holds it for the complete transaction. Further event-delivery and occlusion details live in the [macOS implementation reference](../reference/platforms/macos/implementation.mdx) and [Windows bridge reference](../reference/platforms/windows.mdx).
 
-The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. An unknown accessibility role suppresses text reads and is treated as secure. Observations can return partial trees. The helper marks a node `truncated` when one of its interface, name, description or text reads timed out, when its role is unknown, when `GetChildren` failed, or when the node or depth bound skipped one of its children. Other field errors still default to empty without the mark, and a failed geometry read never marks a node. The bridge reads a Linux node sent without the marker as `truncated` too. `wait_for` with `gone` cannot confirm absence from incomplete data. A PID-scoped root listing that times out fails instead of returning an empty inventory, so it never proves a window closed. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and the transaction stops at that step with outcome `unknown` and `stoppedAt`, whether the helper returned the step (a batch) or rejected a single `act` with code `timeout`. Later actions do not run, the completed prefix is kept, and a later postcondition, observed value or closed root does not change that outcome. `act_ui` names the timed-out action and says not to replay the transaction, and the returned state's note marks the region `acted here; delivery unknown (action N timed out)` for every later call on that state. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
+The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. The helper validates numeric AT-SPI `GetRole` IDs, not role names. It treats password, invalid, unknown, extended, unrecognized and unavailable roles as secure and suppresses their accessible names, descriptions and text. Snapshot and explicit text reads check the live role before `GetText` and discard the reply if the role changes or cannot be confirmed afterward. Root discovery likewise rechecks each application and window role after reading its names and redacts them unless the same readable role is confirmed. These are separate calls: the recheck narrows the race but cannot catch a role that changes and switches back between checks. Observations can return partial trees. The helper marks a node `truncated` when one of its interface, name, description or text reads timed out, when its role is unclassified or unavailable (a password role is secure but not unread), when its live role could not be reconfirmed after a read, when `GetChildren` failed, or when the node or depth bound skipped one of its children. Other field errors still default to empty without the mark, and a failed geometry read never marks a node. The bridge reads a Linux node sent without the marker as `truncated` too. `wait_for` with `gone` cannot confirm absence from incomplete data. A PID-scoped root listing that times out fails instead of returning an empty inventory, so it never proves a window closed. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and the transaction stops at that step with outcome `unknown` and `stoppedAt`, whether the helper returned the step (a batch) or rejected a single `act` with code `timeout`. Later actions do not run, the completed prefix is kept, and a later postcondition, observed value or closed root does not change that outcome. `act_ui` names the timed-out action and says not to replay the transaction, and the returned state's note marks the region `acted here; delivery unknown (action N timed out)` for every later call on that state. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
 
 Windows UIA extraction is bounded. When the native limit omits descendants, the nearest retained ancestors are marked `truncated`; `expand_ui` performs a scoped look and the helper carries forward the untouched refs into the new immutable look record. Windows root deltas combine an event journal with authoritative before/after snapshots. `SetWinEventHook` accelerates settling and retains short-lived root transitions, while snapshots remain the source of truth for persistent state.
 
@@ -1382,7 +1388,7 @@ There is no portal session, PipeWire frame, input dispatch, or restore-token imp
 
 - The helper is a local stdin/stdout child process and opens no helper network listener.
 - It can inspect applications exposed on the current user's AT-SPI bus; run only trusted agents and extensions in that session.
-- Password-role values are omitted and explicit reads are rejected, though application mislabeling remains possible.
+- The helper suppresses accessible names, descriptions and text values when AT-SPI reports a password role or cannot provide a recognized role. This depends on the application reporting its role correctly. The checks are not atomic with the name or `GetText` reads. Root discovery protects each application and window by its own role. Snapshot reads also apply protection per node: a protected ancestor does not protect a descendant reported with a readable role (#1233).
 - On X11, capture can read window pixels and non-headless physical fallback can control the global pointer/keyboard and request focus. These are broad desktop capabilities; strict headless/background policy blocks XTEST and focus, but does not make AT-SPI or requested X11 observation private.
 - On Wayland, portal diagnostics are read-only; capture and input are not implemented.
 - CDP is separate: its loopback TCP listener is unauthenticated, not UID-bound. Any local process that can reach the port, including another UID, can discover the websocket at `/json/version`, control pages and request cookies with `Storage.getCookies`. A random port and profile mode `0700` do not authenticate clients. `launch_browser` defaults to a fresh non-default temporary profile, matching modern Chrome's [remote-debugging security policy](https://developer.chrome.com/blog/remote-debugging-port), but opt-in `managed_browser_profile` exposes the reused profile's live sessions. Do not enable persistence on shared or untrusted hosts; a UID-bound pipe is not implemented.
@@ -1447,13 +1453,17 @@ The normal runtime requires this executable inside the resolved helper app:
 
 Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. Set `PI_COMPUTER_USE_HELPER_APP_PATH` only when an explicit location is needed for development or testing.
 
-Install the packaged, downloaded, or locally buildable helper with:
+A stale or unstamped managed helper is refused before desktop commands run; the client does not replace, restart or stop it. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run.
+
+From the installed package root, explicitly repair a missing or stale helper with:
 
 ```bash
 node scripts/setup-helper.mjs --runtime
 ```
 
-For source development, rebuild first and then run the same installer:
+Setup stops the old daemon only when it replaces the bundle. If it reports the app already current but the refusal persists, e.g. a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
+
+For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
 ```bash
 npm run build:native
@@ -1468,7 +1478,7 @@ If the macOS helper crashes or drops its socket, or the Windows or Linux helper 
 
 ## Grant macOS permissions
 
-Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again.
+Grant Accessibility and Screen Recording to the resolved `pi-computer-use.app`, normally `~/Applications/pi-computer-use.app`, then choose Recheck. Recheck restarts the helper before checking again. With an external `PI_CU_SOCKET_PATH` helper, Recheck only checks again: grant access to that helper and have its operator restart it first if needed.
 
 The helper checks Accessibility with `AXIsProcessTrusted` and Screen Recording with Core Graphics preflight plus a ScreenCaptureKit content query ([macOS permissions reference](../reference/platforms/macos/accessibility.mdx#trust-and-permission)). System Settings labels can vary by macOS version, so identify the app by its name and path rather than relying on one pane label.
 
@@ -2044,6 +2054,8 @@ Physical mouse and keyboard input in global screen points, like a person at the 
 
 activateApp before typing or keys (input goes to the frontmost app); verify with desktop_screenshot; prefer act_ui for ref-targetable app controls.
 
+On macOS, a drag returns `invalid_args` before any mouse event is sent when a coordinate is not finite or lies outside `[-1000000, 1000000]` global points (a policy cap far beyond any real display arrangement), or when its total length is not finite.
+
 ### parameters
 
 | parameter | type | required | description and constraints |
@@ -2300,7 +2312,7 @@ Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, Pow
 
 The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 
-The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
+The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`, `com.apple.ScreenSaver.Engine` and `com.apple.LocalAuthenticationRemoteService` (the macOS Touch ID/password prompt) are always blocked and cannot be removed by this option.
 
 On macOS and Windows, `find_roots` marks matching roots `blocked`, and a known blocked root fails with `app_blocked` before helper calls. This is a guard against mistakes, not a sandbox: focus can change between a check and delivery. The helper-side checks below are macOS-only: keyboard delivery checks the frontmost app on every unit but probes AX key focus only on a bounded cadence, so an app that takes key focus without becoming frontmost can receive a few units (up to eight) before the next probe. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
 
@@ -2760,7 +2772,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- For root targeting, the helper treats only a missing or null `windowId` as absent. All five request sites (`setWindowFrame`, `focusedElement`, `focusWindow`, `look`, `axWaitFor`) return `invalid_args` for a supplied ID that is not a positive unsigned 32-bit integer. The PID is validated first, so a request with both an invalid PID and an invalid ID reports `pid must be a positive 32-bit integer`.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture
@@ -2809,7 +2821,7 @@ description: 'Windows backend contract, UIA behavior, refs, actions, deltas, pro
 
 {/* This file is generated by scripts/docs-generators/generate-source-references.mjs. Do not edit it directly. */}
 
-`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **4**.
+`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **5**.
 
 ## Backend contract
 
@@ -2840,7 +2852,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND still belongs to that PID before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 
@@ -2849,13 +2861,13 @@ Root deltas are baselined at act time. The helper polls a cheap top-level HWND s
 Request envelope:
 
 ```json
-{ "protocolVersion": 4, "id": "req_1", "cmd": "listRoots", "args": {} }
+{ "protocolVersion": 5, "id": "req_1", "cmd": "listRoots", "args": {} }
 ```
 
 Response envelope:
 
 ```json
-{ "protocolVersion": 4, "id": "req_1", "ok": true, "result": { } }
+{ "protocolVersion": 5, "id": "req_1", "ok": true, "result": { } }
 ```
 
 Diagnostics (`cmd: "diagnostics"`) returns the protocol version and helper process metadata. The TypeScript backend rejects a mismatched version with a “Restart Pi …” error.

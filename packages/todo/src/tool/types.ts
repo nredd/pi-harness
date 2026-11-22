@@ -106,6 +106,18 @@ export const HELD_REMINDER_MESSAGE_TYPE = "rpiv-todo-held-reminder";
 /** Hidden settle marker for autonomous work without a todo list. */
 export const EMPTY_REMINDER_MESSAGE_TYPE = "rpiv-todo-empty-reminder";
 
+/**
+ * Custom (non-message) entry recording a spent stale- or empty-list prompt budget. Session start
+ * restores the budget from it, never from the transcript marker the continuation still needs.
+ */
+export const NUDGE_BUDGET_ENTRY_TYPE = "rpiv-todo-nudge-budget";
+
+/** Data of a `NUDGE_BUDGET_ENTRY_TYPE` entry. */
+export interface NudgeBudgetEntry {
+	persistenceVersion: 1;
+	nudge: "stale" | "empty";
+}
+
 // ---------------------------------------------------------------------------
 // Public domain types
 // ---------------------------------------------------------------------------

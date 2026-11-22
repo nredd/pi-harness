@@ -120,7 +120,11 @@ func runRequestFramingAssertions() {
     actual.handleLine("{\"id\":\"locked-router\",\"cmd\":\"act\"}")
     let routedResponses = routed.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     check(routedResponses.count == 2 && routedResponses[0]["id"] as? String == "real-router" && (routedResponses[0]["error"] as? [String: String])?["code"] == "unknown_command" && (routedResponses[1]["error"] as? [String: String])?["code"] == "screen_locked" && sessionReads == 4, "framing invokes actual router for unknown and locked commands")
-    // No live command or shutdown is invoked here.
+    actual.handleLine("{\"id\":\"build-probe\",\"cmd\":\"diagnostics\"}")
+    let diagnosticsReply = routed.last.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    let diagnostics = diagnosticsReply?["result"] as? [String: Any]
+    check(diagnostics?["buildIdentity"] as? String == helperBuildIdentity, "wire diagnostics reports the compiled build identity")
+    // No live input, capture, or shutdown is invoked here.
     for invalid: Any in [NSNull(), true, 7, 1.5, [], [:]] {
         failure("invalid_args", "Missing string argument 'value'") { try actual.stringArg(["value": invalid], "value") }
         check(actual.optionalStringArg(["value": invalid], "value") == nil, "optional string rejects \(invalid)")
@@ -141,10 +145,6 @@ func runRequestFramingAssertions() {
     for (value, expected): (Any, Bool) in [(true, true), (false, false), (0, false), (2, true), (-0.5, true)] {
         check(actual.boolArg(["value": value], "value") == expected, "bool coercion \(value)")
     }
-    for value: Any in [NSNull(), "12", 0, -1, UInt64(UInt32.max) + 1] {
-        check(actual.positiveWindowId(["windowId": value]) == nil, "invalid window id \(value)")
-    }
-    check(actual.positiveWindowId([:]) == nil && actual.positiveWindowId(["windowId": UInt32.max]) == UInt32.max && actual.positiveWindowId(["windowId": 12.75]) == 12 && actual.positiveWindowId(["windowId": true]) == 1, "window id preserves numeric coercion and UInt32 bound")
     if failures > 0 { print("\(failures) request framing assertion(s) failed"); exit(1) }
     print("request framing assertions passed")
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { registerGitTools } from "../../src/git/index.ts";
+import { sandboxSpillRoot } from "../fixtures/spill.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
 const ENV = {
@@ -16,6 +17,7 @@ const ENV = {
 const sh = (cwd: string, args: string[], env: NodeJS.ProcessEnv = ENV): string =>
 	execFileSync("git", ["-c", "commit.gpgsign=false", ...args], { cwd, env, encoding: "utf8" }).trim();
 
+sandboxSpillRoot();
 const mock = createToolHost();
 beforeAll(() => registerGitTools(mock.pi));
 const oldPath = process.env.PATH;
