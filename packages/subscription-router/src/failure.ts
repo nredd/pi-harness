@@ -55,6 +55,13 @@ const LEGACY_LABEL = /^(?:quota|rate.?limit|usage.?limit|extra.?usage|available 
 // Affirmative payment exhaustion only. A bare mention of billing is weak: it can be an address or a service name.
 const BILLING =
 	/\b(?:credits? (?:depleted|exhausted)|(?:no|insufficient) (?:prepayment )?credits?\b|insufficient (?:balance|funds)\b|credit balance is too low|payment required|billing hard limit|billing account (?:is )?(?:disabled|suspended|inactive)\b)/i;
+const BILLING_CODE =
+	/^(?:billing_hard_limit_reached|billing_not_active|insufficient_credits|credits_exhausted|payment_required)$/i;
+// Quoted literals echo the request (`Invalid enum value 'insufficient credits'`), never the account.
+// An apostrophe inside a word (`You're`) does not open a quote.
+const QUOTED = /(?<!\w)'[^'\r\n]*'(?!\w)|"(?:[^"\\\r\n]|\\.)*"|`[^`\r\n]*`/g;
+// A 4xx validation error that names a payment phrase is about the request, not the balance.
+const VALIDATION = /\b(?:invalid (?:enum )?value|validation (?:error|failed)|must be one of|expected one of)\b/i;
 const WEAK =
 	/\b(?:429|402)\b|quota|billing|rate.?limit|too many requests|usage.?limit|out of budget|extra.?usage|available balance/i;
 const DAILY = /PerDay|Daily/i;
@@ -179,7 +186,12 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 	) {
 		return { class: "not-quota", scope: "model", cause: "other" };
 	}
-	if (http === 402 || BILLING.test(signal)) return { class: "billing", scope: "provider", cause: "billing" };
+	const validation = typeof http === "number" && http >= 400 && http < 500 && VALIDATION.test(message);
+	const billing =
+		http === 402 ||
+		codes.some((code) => BILLING_CODE.test(code)) ||
+		(!validation && BILLING.test([...codes, message.replace(QUOTED, " ")].join(" ")));
+	if (billing) return { class: "billing", scope: "provider", cause: "billing" };
 	const interactionsDaily = codes.includes("quota_exceeded") || message === "quota_exceeded";
 	if (
 		http === 429 ||

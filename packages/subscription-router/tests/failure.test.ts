@@ -375,3 +375,23 @@ it.each<[string, string, FailureClassification]>([
 ])("reads statuses only from core wrappers: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
 });
+
+// Billing needs a 402, a billing error code or affirmative payment wording of the provider's own.
+it.each<[string, string, FailureClassification]>([
+	["quoted single-quoted enum value", "400: Invalid enum value 'insufficient credits'", other],
+	["quoted double-quoted value", '400: Invalid value "payment required" for field tier', other],
+	[
+		"unquoted validation of a 4xx",
+		"422: Validation failed: plan must be one of free, pro; got insufficient credits",
+		other,
+	],
+	["billing error code", '{"error":{"code":"billing_hard_limit_reached","message":"Limit reached"}}', billing],
+	["apostrophes are not quotes", "You're out of credits. Credits depleted, top up", billing],
+	[
+		"Anthropic 400 credit balance",
+		'400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}',
+		billing,
+	],
+])("requires affirmative billing evidence: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
