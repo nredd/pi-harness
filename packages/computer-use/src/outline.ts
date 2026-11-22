@@ -223,7 +223,17 @@ function parseText(raw: unknown): OutlineText[] {
 		.filter((item): item is OutlineText => Boolean(item));
 }
 
-function parseNode(raw: unknown, parent?: OutlineNode): OutlineNode {
+/** How a backend's look payload is read. */
+export interface ParseLookOptions {
+	/**
+	 * Read a node without a boolean `truncated` marker as unread. Set only for a backend whose helper
+	 * always emits the marker and can return partial trees (Linux AT-SPI2), so an omitted marker is
+	 * unknown completeness, not proof the node was fully read.
+	 */
+	unmarkedNodesUnread?: boolean;
+}
+
+function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode): OutlineNode {
 	const record = isRecord(raw) ? raw : {};
 	const wireRef = toString(record.ref) || undefined;
 	const node: OutlineNode = {
@@ -249,7 +259,8 @@ function parseNode(raw: unknown, parent?: OutlineNode): OutlineNode {
 		focused: toBoolean(record.focused),
 		offscreen: toBoolean(record.offscreen),
 		pictureOnly: toBoolean(record.pictureOnly),
-		truncated: toBoolean(record.truncated),
+		truncated:
+			options.unmarkedNodesUnread && typeof record.truncated !== "boolean" ? true : toBoolean(record.truncated),
 		scrollExtent: isRecord(record.scrollExtent)
 			? {
 					seen: Math.max(0, Math.trunc(toNumber(record.scrollExtent.seen))),
@@ -260,16 +271,18 @@ function parseNode(raw: unknown, parent?: OutlineNode): OutlineNode {
 		children: [],
 		parent,
 	};
-	node.children = (Array.isArray(record.children) ? record.children : []).map((child) => parseNode(child, node));
+	node.children = (Array.isArray(record.children) ? record.children : []).map((child) =>
+		parseNode(child, options, node),
+	);
 	return sanitizeProtected(node);
 }
 
-export function parseLookResponse(raw: unknown): LookResponse {
+export function parseLookResponse(raw: unknown, options: ParseLookOptions = {}): LookResponse {
 	const record = isRecord(raw) ? raw : {};
 	const image = isRecord(record.image) ? record.image : undefined;
 	const window = isRecord(record.window) ? record.window : {};
 	const metadata = isRecord(window.metadata) ? window.metadata : undefined;
-	const outline = buildOutline(toString(record.lookId), parseNode(record.outline));
+	const outline = buildOutline(toString(record.lookId), parseNode(record.outline, options));
 	const readText = isRecord(record.readText) ? record.readText : undefined;
 	const requestedReadText =
 		readText?.requested === "auto" || readText?.requested === "always" || readText?.requested === "never"
@@ -788,7 +801,8 @@ function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRe
 	target.focused = source.focused;
 	target.offscreen = source.offscreen;
 	target.pictureOnly = source.pictureOnly;
-	target.truncated = false;
+	// A scoped look that still could not read the subtree leaves the node unread.
+	target.truncated = source.truncated;
 	target.scrollExtent = source.scrollExtent ? { ...source.scrollExtent } : undefined;
 	target.text = source.text.map((text) => ({ ...text, rect: text.rect ? { ...text.rect } : undefined }));
 }

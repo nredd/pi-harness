@@ -43,6 +43,8 @@ interface NoteRefreshOutcome {
 	windowChanged?: boolean;
 	newWindowLabel?: string;
 	rootDelta?: Array<{ change: string; kind: string; title?: string; ref?: string }>;
+	/** 1-based number of the acted action when it timed out, so its delivery is unknown. */
+	timedOutAction?: number;
 }
 
 function normalizedLabel(value: string): string {
@@ -196,15 +198,19 @@ export function noteAfterAct(
 			const ancestor = topLevelAncestor(target, outline);
 			const key = regionKey(ancestor);
 			const region = note.regions.find((candidate) => candidate.key === key);
+			const detail =
+				refreshOutcome.timedOutAction === undefined
+					? "acted here"
+					: `acted here; delivery unknown (action ${refreshOutcome.timedOutAction} timed out)`;
 			if (region) {
 				region.status = "changed";
-				region.detail = "acted here";
+				region.detail = detail;
 			} else {
 				note.regions.unshift({
 					key,
 					label: regionLabel(ancestor),
 					status: "changed",
-					detail: "acted here",
+					detail,
 					ref: ancestor.ref,
 				});
 			}
