@@ -2,8 +2,8 @@
 // never on `exit` alone, and frame each child's output separately.
 import assert from "node:assert/strict";
 import { afterEach, describe, test, vi } from "vitest";
+import { linuxHelperClient as clientFor } from "../tests/fixtures/linux-helper.mjs";
 import { effect, ok, silent } from "./support/fake-helper.mjs";
-import { linuxHelperClient as clientFor } from "./support/linux-helper.mjs";
 
 afterEach(() => {
 	vi.doUnmock("node:child_process");

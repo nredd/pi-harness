@@ -2,7 +2,7 @@
 // children served by one Linux protocol engine. Callers reset the mock in their own `afterEach`
 // (`vi.doUnmock("node:child_process")`, `vi.resetModules()`). No helper binary or X server runs.
 import { vi } from "vitest";
-import { createFakeChild, createFakeSpawn, createHelperEngine } from "./fake-helper.mjs";
+import { createFakeChild, createFakeSpawn, createHelperEngine } from "../../test/support/fake-helper.mjs";
 
 /**
  * Import the Linux helper module against a fake `spawn` and build a client whose install check always passes.

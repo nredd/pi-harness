@@ -3,7 +3,7 @@
 // exit waits instead of stacking them. Fake children only; no helper binary or X server runs.
 import { afterEach, expect, test, vi } from "vitest";
 import { effect, ok, silent } from "../test/support/fake-helper.mjs";
-import { linuxHelperClient } from "../test/support/linux-helper.mjs";
+import { linuxHelperClient } from "./fixtures/linux-helper.mjs";
 
 type Fixture = Awaited<ReturnType<typeof linuxHelperClient>>;
 type FakeChild = Fixture["children"][number];
