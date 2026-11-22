@@ -30,7 +30,7 @@ export interface ExhaustionMark {
 	evidence?: "inferred" | "observed";
 	expiry?: "hinted" | "window-reset" | "backoff";
 	cause?: "quota" | "billing";
-	/** When an evidence-carrying mark was written, for idempotent re-confirmation. */
+	/** When an evidence-carrying mark was written. */
 	markedAt?: number;
 }
 
@@ -39,7 +39,7 @@ export function markEvidence(mark: ExhaustionMark): "read" | "inferred" | "obser
 	return mark.evidence ?? "read";
 }
 
-import type { ModelRef } from "./model-ref.ts";
+import { type ModelRef, refKey } from "./model-ref.ts";
 
 function scopeKey(provider: string, families: readonly string[] | undefined): string {
 	return families?.length ? `${provider}:${[...families].sort().join(",")}` : `${provider}:*`;
@@ -49,6 +49,8 @@ function scopeKey(provider: string, families: readonly string[] | undefined): st
 export class ExhaustionTracker {
 	private readonly marks = new Map<string, ExhaustionMark>();
 	private readonly lifetimes = new Map<string, Disposable>();
+	/** Failures (`model@timestamp`) already counted by each live evidence-carrying mark. */
+	private readonly counted = new Map<string, ReadonlySet<string>>();
 
 	constructor(private readonly now: () => number = Date.now) {}
 
@@ -69,14 +71,11 @@ export class ExhaustionTracker {
 		const key = scopeKey(model.provider, families);
 		const now = this.now();
 		const previous = this.marks.get(key);
-		// One failure counts once: a live mark already written for it is not re-counted.
-		if (
-			decision.evidenceAt !== undefined &&
-			previous?.markedAt !== undefined &&
-			previous.until > now &&
-			previous.markedAt >= decision.evidenceAt
-		)
-			return previous;
+		// One failure, keyed by model and message timestamp, counts once while its mark is live.
+		// Distinct failures count separately even when both precede the first confirmation.
+		const failure = decision.evidenceAt === undefined ? undefined : `${refKey(model)}@${decision.evidenceAt}`;
+		const counted = previous !== undefined && previous.until > now ? this.counted.get(key) : undefined;
+		if (previous && failure !== undefined && counted?.has(failure)) return previous;
 		// A block that lifted more than a full backoff cycle ago is a new episode.
 		const recent = previous !== undefined && now - previous.until < BACKOFF_CAP_MS;
 		const confirmations = (recent ? previous.confirmations : 0) + 1;
@@ -102,6 +101,8 @@ export class ExhaustionTracker {
 		}
 		this.detach(key);
 		this.marks.set(key, mark);
+		if (failure === undefined) this.counted.delete(key);
+		else this.counted.set(key, new Set(counted).add(failure));
 		const signal = decision[COLLECTOR_EVIDENCE];
 		if (signal)
 			this.lifetimes.set(
@@ -157,6 +158,7 @@ export class ExhaustionTracker {
 	private remove(key: string): void {
 		this.detach(key);
 		this.marks.delete(key);
+		this.counted.delete(key);
 	}
 
 	private detach(key: string): void {

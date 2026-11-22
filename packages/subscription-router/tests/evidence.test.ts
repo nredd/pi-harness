@@ -518,6 +518,21 @@ describe("inferred marks", () => {
 		expect(later).toMatchObject({ confirmations: 2, until: T0 + 1000 + 10 * MINUTE });
 	});
 
+	it("L7: dedupes on model and failure timestamp, not on when the mark was written", () => {
+		const { clock, tracker } = tracked();
+		const billing = { block: true, window: "inferred:billing", scope: "provider", evidence: "inferred" } as const;
+		// Both failures happened before the first confirmation finished.
+		clock.now = T0 + 10_000;
+		expect(tracker.record(CARBON, { ...billing, evidenceAt: T0 })?.confirmations).toBe(1);
+		expect(tracker.record(CARBON, { ...billing, evidenceAt: T0 + 1000 })?.confirmations).toBe(2);
+		expect(tracker.record(CARBON, { ...billing, evidenceAt: T0 + 1000 })?.confirmations).toBe(2);
+		// Another model's failure at the same instant is a different failure.
+		expect(tracker.record(NEON, { ...billing, evidenceAt: T0 + 1000 })).toMatchObject({
+			confirmations: 3,
+			until: T0 + 10_000 + 20 * MINUTE,
+		});
+	});
+
 	it("re-counts after the mark lapses, and never dedupes read marks", () => {
 		const { clock, tracker } = tracked();
 		const decision = { block: true, window: "inferred:backoff", evidence: "inferred", evidenceAt: T0 } as const;
@@ -598,6 +613,34 @@ describe("routing on the composed chain", () => {
 		]);
 		expect(results).toEqual([true, true]);
 		expect(tracker.active()).toMatchObject([{ confirmations: 1, evidence: "inferred" }]);
+	});
+
+	it("L7: two distinct failures racing one confirmation both count", async () => {
+		const clock = { now: T0 };
+		const tracker = new ExhaustionTracker(() => clock.now);
+		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => clock.now);
+		const releases: Array<() => void> = [];
+		const usage: UsageRead = {
+			get: (provider) =>
+				new Promise((resolve) => {
+					const read = { provider, status: "unavailable" as const, windows: [], retrievedAt: T0, expiresAt: T0 };
+					releases.push(() => resolve(Object.defineProperty(read, NO_USAGE_SOURCE, { value: true })));
+				}),
+			decisionFor: () => ({ block: false }),
+		};
+		const confirm = confirmEvidence(usage, new FailureHistory(), undefined);
+		const env: RouteEnv = {
+			resolve: (entry) => asModel(entry),
+			refresh: (model, signal, failedAt, message) => confirm({ model, signal, failedAt, message }),
+		};
+		const failed = (timestamp: number) =>
+			fauxAssistantMessage("", { stopReason: "error", errorMessage: "402: credits depleted", timestamp });
+		const first = router.confirm(asModel(CARBON), env, undefined, T0, failed(T0));
+		const second = router.confirm(asModel(CARBON), env, undefined, T0 + 1000, failed(T0 + 1000));
+		clock.now = T0 + 5000;
+		for (const release of releases) release();
+		expect(await Promise.all([first, second])).toEqual([true, true]);
+		expect(tracker.active()).toMatchObject([{ confirmations: 2, until: T0 + 5000 + 10 * MINUTE }]);
 	});
 
 	it("C5: fails over to a member pinned xhigh", async () => {
