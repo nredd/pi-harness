@@ -530,7 +530,7 @@ test("INV-19 macOS root identity resolution", () => {
 		"look does not resolve native root refs from the window store",
 	);
 	assert(
-		swift.includes("else if let requestedRoot, let owner = pidForElement(requestedRoot)"),
+		swift.includes("else if !shouldCapture, let requestedRoot, let owner = pidForElement(requestedRoot)"),
 		"look cannot recover the owner pid from a stored native root",
 	);
 	assert(
