@@ -429,6 +429,80 @@ it("sanitizes thrown adapter callbacks independently of reading validation", asy
 	expect(await usage.get(ctx, provider)).toMatchObject({ status: "error", message: "Usage request failed." });
 });
 
+it("sanitizes throwables whose properties throw beside a healthy collector", async () => {
+	const { usage } = harness();
+	const { pi, handlers } = createRecordingPi();
+	const listeners = new Map<string, (data: unknown) => unknown>();
+	const emit = vi.fn();
+	const on = (event: string, fn: (data: unknown) => unknown) => {
+		listeners.set(event, fn);
+		return () => listeners.delete(event);
+	};
+	await createSubscriptionRouter({ usage, config: { ok: true, profiles: [] }, now: () => T0 })({
+		...pi,
+		events: { on, emit },
+	});
+	await handlers.get("session_start")?.[0]?.({}, { ...ctx, scopedModels: [] } as unknown as ExtensionContext);
+	const throwing = () => {
+		throw new Error("private fake payload");
+	};
+	const throwables = [
+		Object.defineProperty(new Error("private fake payload"), "name", { get: throwing }),
+		new Proxy({}, { getPrototypeOf: throwing }),
+		{ toString: throwing, valueOf: throwing },
+	];
+	install(fake);
+	throwables.forEach((throwable, index) => {
+		install({
+			...fake,
+			provider: `faux-hostile-${index}`,
+			read: () => {
+				throw throwable;
+			},
+		});
+	});
+	const reply = listeners.get("router:rpc:usage")?.({ requestId: "refresh", refresh: true });
+	await vi.advanceTimersByTimeAsync(0);
+	await reply;
+	expect(emit).toHaveBeenCalledWith("router:rpc:usage:reply:refresh", {
+		success: true,
+		data: {
+			snapshots: [expect.objectContaining({ provider, status: "available" })],
+			blocks: [],
+		},
+	});
+	// A sanitized failure, not a rejected read, records the provider's backoff.
+	for (const index of throwables.keys()) {
+		expect(await usage.get(ctx, `faux-hostile-${index}`)).toMatchObject({
+			status: "error",
+			message: expect.stringContaining("Backing off"),
+		});
+	}
+});
+
+it("answers a caller when the shared read rejects", async () => {
+	vi.useFakeTimers();
+	const now = vi
+		.fn(() => T0)
+		.mockReturnValueOnce(T0)
+		.mockImplementation(() => {
+			throw new Error("fake clock failure");
+		});
+	const usage = new UsageService({ fetch: vi.fn(), now, getAccessToken: async () => "fake-token" });
+	install({
+		...fake,
+		read: () => {
+			throw new Error("private fake payload");
+		},
+	});
+	const settled = vi.fn();
+	void usage.get(ctx, provider).then(settled);
+	await vi.advanceTimersByTimeAsync(0);
+	expect(settled).toHaveBeenCalledWith(
+		expect.objectContaining({ provider, status: "error", message: "Usage request failed." }),
+	);
+});
+
 it("selects configured collector IDs without changing the credential provider", async () => {
 	const { usage, getAccessToken } = harness();
 	const { pi } = createRecordingPi();

@@ -269,7 +269,8 @@ export class UsageService {
 			this.lastManualRefreshAt.set(provider, now);
 		}
 		const refresh = this.refresh(ctx, provider, collector, now, options.notBefore);
-		const snapshot = await waitForCaller(refresh.read, options.signal, () => {
+		const failed = () => errorSnapshot(provider, "error", now, "Usage request failed.");
+		const snapshot = await waitForCaller(refresh.read, options.signal, failed, () => {
 			// The one outer deadline owns fallback selection. Inner waits must not
 			// race it with separate timers or extend it for each newer owner.
 			let fallback: UsageSnapshot | undefined;
@@ -580,8 +581,7 @@ export class UsageService {
 				failed: false,
 			};
 		} catch (error) {
-			const aborted = error instanceof Error && error.name === "AbortError";
-			if (aborted) return failure(timedOut ? "Usage request timed out." : "Usage request was cancelled.");
+			if (isAbortError(error)) return failure(timedOut ? "Usage request timed out." : "Usage request was cancelled.");
 			return failure("Usage request failed.");
 		} finally {
 			clearTimeout(timeout);
@@ -613,6 +613,15 @@ async function readUsageJson(response: Response, signal: AbortSignal): Promise<u
 	return JSON.parse(json + decoder.decode());
 }
 
+/** Total: a throwable's `name` getter or prototype trap cannot escape sanitization. */
+function isAbortError(error: unknown): boolean {
+	try {
+		return error instanceof Error && error.name === "AbortError";
+	} catch {
+		return false;
+	}
+}
+
 /** Bound awaited work even when an adapter ignores the signal. */
 async function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 	let listener: Disposable | undefined;
@@ -626,10 +635,11 @@ async function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T
 	}
 }
 
-/** Prefer the completed read; at the total deadline use live evidence, never on abort. */
+/** Prefer the completed read; at the total deadline use live evidence, never on abort. A rejected read fails now. */
 function waitForCaller(
 	refresh: Promise<UsageSnapshot>,
 	signal: AbortSignal | undefined,
+	onRejected: () => UsageSnapshot,
 	onTimeout: () => UsageSnapshot | undefined,
 ): Promise<UsageSnapshot | undefined> {
 	// The credential lookup runs synchronously inside `refresh` and may abort the signal
@@ -649,6 +659,6 @@ function waitForCaller(
 		// the signal: a foreign listener can stop the `abort` event before ours runs.
 		const timer = setTimeout(() => finish(signal?.aborted ? undefined : onTimeout()), 2 * REQUEST_TIMEOUT_MS);
 		signal?.addEventListener("abort", abort, { once: true });
-		void refresh.then(finish);
+		void refresh.then(finish, () => finish(onRejected()));
 	});
 }
