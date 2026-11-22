@@ -2,7 +2,7 @@ use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::{ErrorCode, ProtocolError, Request, Response};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -19,6 +19,8 @@ struct Helper {
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
     stderr: Receiver<String>,
+    /// Stderr lines already consumed by `ready`.
+    seen: std::cell::RefCell<Vec<String>>,
 }
 impl Helper {
     /// Spawn the helper with no display, so physical input can never reach a desktop.
@@ -41,12 +43,14 @@ impl Helper {
                 }
             }
         });
-        let mut stderr_pipe = child.stderr.take().expect("piped stderr");
+        let stderr_pipe = child.stderr.take().expect("piped stderr");
         let (stderr_tx, stderr) = mpsc::channel();
         thread::spawn(move || {
-            let mut text = String::new();
-            let _ = stderr_pipe.read_to_string(&mut text);
-            let _ = stderr_tx.send(text);
+            for line in BufReader::new(stderr_pipe).lines().map_while(Result::ok) {
+                if stderr_tx.send(line).is_err() {
+                    return;
+                }
+            }
         });
         let stdin = child.stdin.take();
         Self {
@@ -54,6 +58,7 @@ impl Helper {
             stdin,
             lines,
             stderr,
+            seen: std::cell::RefCell::default(),
         }
     }
     fn send(&mut self, request: &Value) {
@@ -93,9 +98,35 @@ impl Helper {
             thread::sleep(Duration::from_millis(10));
         }
     }
+    /// Wait for the testing build's `linux-bridge testing: <event>` stderr line, in any
+    /// order with earlier ones, or panic once `DEADLINE` passes. Establishes a scheduling precondition, e.g. that a
+    /// request holds the action lock, instead of sleeping and assuming it.
+    fn ready(&self, event: &str) {
+        let wanted = format!("linux-bridge testing: {event}");
+        if self.seen.borrow().contains(&wanted) {
+            return;
+        }
+        let start = Instant::now();
+        loop {
+            let left = DEADLINE.saturating_sub(start.elapsed());
+            let line = self
+                .stderr
+                .recv_timeout(left)
+                .unwrap_or_else(|_| panic!("no `{wanted}` before the deadline"));
+            let found = line == wanted;
+            self.seen.borrow_mut().push(line);
+            if found {
+                return;
+            }
+        }
+    }
     /// Everything the helper wrote to stderr; call after it exited.
     fn stderr(&self) -> String {
-        self.stderr.recv_timeout(DEADLINE).unwrap_or_default()
+        let mut lines = self.seen.borrow().clone();
+        while let Ok(line) = self.stderr.recv_timeout(DEADLINE) {
+            lines.push(line);
+        }
+        lines.join("\n")
     }
 }
 impl Drop for Helper {
@@ -205,14 +236,16 @@ fn shutdown_with_full_request_queue() {
         assert_eq!(helper.reply()["id"], "ready");
         // Four posts per capital at 25 ms each: about 20 s, with shift held for most of it.
         helper.send(&typing("hold", &"A".repeat(200), json!({"delayMs": 25})));
-        // Let it take the action lock first; request tasks race for it otherwise.
-        thread::sleep(Duration::from_millis(200));
+        helper.ready("locked hold");
         // Seven requests take the remaining workers and wait for the action lock; the
         // eighth waits for a worker in the reader, which saturates the queue.
         for n in 0..8 {
             helper.send(&typing(&format!("queued-{n}"), "a", json!({})));
         }
-        thread::sleep(Duration::from_millis(300));
+        for n in 0..7 {
+            helper.ready(&format!("waiting queued-{n}"));
+        }
+        helper.ready("saturated queued-7");
         if ending == "EOF" {
             helper.close_stdin();
         } else {

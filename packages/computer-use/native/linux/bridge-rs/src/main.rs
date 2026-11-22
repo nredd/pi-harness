@@ -71,6 +71,9 @@ async fn main() {
                 continue;
             }
         };
+        if semaphore.available_permits() == 0 {
+            testing_ready("saturated", &request.id);
+        }
         // Every worker may be busy behind a long action: a signal must still cancel it
         // now, not once a worker frees up.
         let permit = tokio::select! {
@@ -186,6 +189,23 @@ fn action_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+/// Wait for the action lock: actions and batches run one at a time.
+async fn begin_transaction(id: &str) -> tokio::sync::MutexGuard<'static, ()> {
+    testing_ready("waiting", id);
+    let guard = action_lock().lock().await;
+    testing_ready("locked", id);
+    guard
+}
+
+/// Report a scheduling point on stderr, so process tests establish their preconditions
+/// (lock held, queue saturated) instead of sleeping. Only in the dev-only `testing`
+/// build; a no-op in the release helper.
+fn testing_ready(event: &str, id: &str) {
+    if cfg!(feature = "testing") {
+        eprintln!("linux-bridge testing: {event} {id}");
+    }
+}
+
 fn extract_id(line: &str) -> Option<String> {
     serde_json::from_str::<Value>(line)
         .ok()?
@@ -220,16 +240,16 @@ async fn handle_request_with(
             look_with(state, &request.args, &connect, x11::capture_window).await
         }
         "act" => {
-            let _transaction = action_lock().lock().await;
+            let _transaction = begin_transaction(&request.id).await;
             act(state, &request.args, &connect, physical).await
         }
         "actBatch" => {
-            let _transaction = action_lock().lock().await;
+            let _transaction = begin_transaction(&request.id).await;
             act_batch_with(&request.args, |args| act(state, args, &connect, physical)).await
         }
         #[cfg(feature = "testing")]
         "testingAct" => {
-            let _transaction = action_lock().lock().await;
+            let _transaction = begin_transaction(&request.id).await;
             testing_act(&request.args)
         }
         "atspiReadText" | "uiaReadText" | "axReadText" => {
