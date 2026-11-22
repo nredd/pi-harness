@@ -64,7 +64,8 @@ async function rig(
 	const socketPath = shortSocketPath();
 	const fake = await startFakeHelper({
 		socketPath,
-		diagnostics: { protocolVersion: 8, pid: 0, buildIdentity },
+		// The installed helper as `ensureProtocol` expects it: its executable and a pid that `ps` reads below.
+		diagnostics: { protocolVersion: 8, pid: 4242, executablePath: executable, buildIdentity },
 		handlers: { listApps: ok([]), setActivityGlow: ok({}) },
 	});
 	onTestFinished(() => fake.stop());
@@ -127,7 +128,12 @@ async function rig(
 	const spawn = vi.fn(() => {
 		throw new Error("Unexpected helper process launch");
 	});
-	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn }));
+	// `ps` answers the start-time check with a just-started daemon; every other spawn is a launch and goes to `spawn`.
+	const routed = (command: string, ...rest: unknown[]) =>
+		command === "ps"
+			? createFakeChild({ stdout: "00:00\n", exitCode: 0 })
+			: (spawn as (...a: unknown[]) => unknown)(command, ...rest);
+	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn: routed }));
 	const { macosHelper, macosActivityGlow } = await import("../src/platform/macos/helper.ts");
 	onTestFinished(() => macosActivityGlow.close());
 	return {
@@ -610,7 +616,7 @@ test("macOS status shows unchecked, then stale with the expected build, then the
 	assert.ok(!stale.includes(reportedPath), "status never shows the daemon-reported executable path");
 	assert.ok(!stale.includes(executable));
 	fake.diagnostics.buildIdentity = current;
-	fake.diagnostics.executablePath = undefined;
+	fake.diagnostics.executablePath = executable;
 	await client.ensureProtocol();
 	assert.ok((await status()).split("\n").includes(`helper build: ${current}`));
 });

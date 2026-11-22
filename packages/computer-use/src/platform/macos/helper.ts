@@ -131,6 +131,10 @@ function parseReply(line: string): HelperReply {
 export const STALE_HELPER_REPAIR =
 	"from the package root, run `node scripts/setup-helper.mjs --runtime`. For a source checkout, rebuild first with `npm run build:native`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper";
 
+/** The operator's repair for a matching-build daemon that is not the installed helper. */
+export const RESIDENT_MISMATCH_REPAIR =
+	"Quit that helper process, then retry: the next command launches the installed app. If the refusal persists, repair the install: from the package root, run `node scripts/setup-helper.mjs --runtime`.";
+
 export class HelperTransportError extends Error {
 	readonly code?: string;
 
@@ -209,8 +213,7 @@ async function helperExecutableState(): Promise<"ready" | "missing" | { unusable
 	}
 }
 
-async function isResolvedHelperExecutable(filePath?: string): Promise<boolean> {
-	if (!filePath) return true;
+async function isResolvedHelperExecutable(filePath: string): Promise<boolean> {
 	const [actualPath, expectedPath] = await Promise.all([
 		realpath(filePath).catch(() => path.resolve(filePath)),
 		realpath(HELPER_APP_EXECUTABLE_PATH).catch(() => path.resolve(HELPER_APP_EXECUTABLE_PATH)),
@@ -223,8 +226,21 @@ export function helperPredatesBinary(processStartMs: number, binaryChangeMs: num
 	return Number.isFinite(processStartMs) && Number.isFinite(binaryChangeMs) && processStartMs + 1_000 < binaryChangeMs;
 }
 
-async function daemonRunsOldBinary(pid: number): Promise<boolean> {
-	if (!Number.isFinite(pid) || pid <= 0) return false;
+/** `ps -o etime=` output, `[[dd-]hh:]mm:ss`, in seconds; `undefined` for anything else. */
+export function parseElapsedSeconds(elapsed: string): number | undefined {
+	const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(elapsed.trim());
+	if (!match) return undefined;
+	const [, days = "0", hours = "0", minutes, seconds] = match;
+	return ((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds);
+}
+
+/**
+ * Compare the daemon's start time with the installed binary's `ctime`.
+ * @returns `old` when it started before the binary was last written, `current` when not, and `unknown` when the
+ * pid, `ps` or the binary cannot be read. Unknown is never proof of current.
+ */
+async function daemonAge(pid: number): Promise<"old" | "current" | "unknown"> {
+	if (!Number.isSafeInteger(pid) || pid <= 1) return "unknown";
 	try {
 		const elapsed = await new Promise<string>((resolve, reject) => {
 			const child = spawn("ps", ["-o", "etime=", "-p", String(pid)], { stdio: ["ignore", "pipe", "ignore"] });
@@ -233,19 +249,36 @@ async function daemonRunsOldBinary(pid: number): Promise<boolean> {
 				out += chunk;
 			});
 			child.on("error", reject);
-			child.on("close", () => resolve(out.trim()));
+			child.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(`ps exited ${code}`))));
 		});
-		// etime is [[dd-]hh:]mm:ss
-		const [days, clock] = elapsed.includes("-") ? elapsed.split("-") : ["0", elapsed];
-		const parts = clock.split(":").map(Number);
-		const seconds = parts.reduce((total, part) => total * 60 + part, 0) + Number(days) * 86_400;
-		if (!Number.isFinite(seconds)) return false;
+		const seconds = parseElapsedSeconds(elapsed);
+		if (seconds === undefined) return "unknown";
 		// ctime, not mtime: ditto preserves mtime, but any install changes ctime.
 		const { ctimeMs } = await stat(HELPER_APP_EXECUTABLE_PATH);
-		return helperPredatesBinary(Date.now() - seconds * 1_000, ctimeMs);
+		return helperPredatesBinary(Date.now() - seconds * 1_000, ctimeMs) ? "old" : "current";
 	} catch {
-		return false;
+		return "unknown";
 	}
+}
+
+/**
+ * Why a managed daemon whose build already matched is still not the installed helper, or `undefined` when it is.
+ * Missing or unreadable evidence is a mismatch, never a match.
+ */
+async function residentMismatch(diagnostics: PlatformDiagnostics): Promise<string | undefined> {
+	if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION) {
+		return `reports protocol ${diagnostics.protocolVersion} (expected ${HELPER_PROTOCOL_VERSION})`;
+	}
+	if (!diagnostics.executablePath) return `reports no executable path (expected ${HELPER_APP_EXECUTABLE_PATH})`;
+	if (!(await isResolvedHelperExecutable(diagnostics.executablePath))) {
+		return `runs ${diagnostics.executablePath} (expected ${HELPER_APP_EXECUTABLE_PATH})`;
+	}
+	const age = await daemonAge(diagnostics.pid);
+	if (age === "old") return `its process (pid ${diagnostics.pid}) started before the installed binary was last written`;
+	if (age === "unknown") {
+		return `its start time (pid ${diagnostics.pid}) could not be compared with the installed binary`;
+	}
+	return undefined;
 }
 
 export async function runProcess(
@@ -620,32 +653,22 @@ export class MacosHelperClient {
 		return diagnostics;
 	}
 
+	/**
+	 * Check that a managed daemon whose build matched is the installed helper: expected protocol, executable path and
+	 * a process no older than the installed binary. A mismatch, or evidence that cannot be read, is refused with
+	 * `helper_mismatch`; the daemon is never shut down, relaunched or stopped here.
+	 */
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
 		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection.
-		let diagnostics = await this.diagnosticsCommand(signal);
+		const diagnostics = await this.diagnosticsCommand(signal);
 		if (usingExternalHelperSocket) return diagnostics;
-		const executableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
-		if (
-			diagnostics.protocolVersion === HELPER_PROTOCOL_VERSION &&
-			executableMatches &&
-			!(await daemonRunsOldBinary(diagnostics.pid))
-		)
-			return diagnostics;
-
-		// The helper daemon outlives Pi, so restarting/reloading Pi alone does not
-		// replace a stale daemon or one launched from the legacy system location.
-		// Stop it through the backwards-compatible command channel and relaunch
-		// the exact app bundle that ensureInstalled() resolved.
-		await this.restart(signal);
-		diagnostics = await this.diagnosticsCommand(signal);
-		const relaunchedExecutableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
-		if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION || !relaunchedExecutableMatches) {
-			this.daemonAvailable = false;
-			throw new Error(
-				`pi-computer-use helper mismatch after relaunch: expected protocol ${HELPER_PROTOCOL_VERSION} and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol ${diagnostics.protocolVersion} and executable ${diagnostics.executablePath ?? "unknown"}. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
-			);
-		}
-		return diagnostics;
+		const mismatch = await residentMismatch(diagnostics);
+		if (mismatch === undefined) return diagnostics;
+		this.daemonAvailable = false;
+		throw new HelperCommandError(
+			`pi-computer-use helper at ${HELPER_SOCKET_PATH} has this package's build but ${mismatch}; it was not restarted or stopped. ${RESIDENT_MISMATCH_REPAIR}`,
+			"helper_mismatch",
+		);
 	}
 }
 

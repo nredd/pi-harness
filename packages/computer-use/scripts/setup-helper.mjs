@@ -427,6 +427,8 @@ function createSetup(argv, deps) {
 
 	const args = new Set(argv);
 	const isPostinstall = args.has("--postinstall");
+	/** npm postinstall or the client's runtime repair: no operator chose this run's destination or timing. */
+	const isAutomatic = isPostinstall || args.has("--runtime");
 	const allowBuildFallback =
 		args.has("--allow-build") || args.has("--runtime") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
 	const allowLinuxBuildFallback = args.has("--allow-build") || env.PI_COMPUTER_USE_ALLOW_BUILD === "1";
@@ -763,22 +765,105 @@ function createSetup(argv, deps) {
 		await fs.access(parentPath, fsConstants.W_OK);
 	}
 
-	/** A running helper keeps its old code after the bundle is replaced; stop it so the next command relaunches the new one. */
-	async function stopRunningHelper() {
-		// -f takes an extended regex: escape the path so `.`, `+`, `(` and spaces match literally.
-		const pattern = `${helperAppExecutablePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
-		await execFile("pkill", ["-f", pattern]).catch(() => {});
-		for (let attempt = 0; attempt < 20; attempt += 1) {
-			const alive = await execFile("pgrep", ["-f", pattern]).then(
-				() => true,
-				() => false,
+	/** `pkill`/`pgrep -f` pattern for the installed helper daemon: the path escaped so `.`, `+`, `(` and spaces match literally. */
+	const runningHelperPattern = `${helperAppExecutablePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} serve`;
+
+	/**
+	 * @param {unknown} error A rejection.
+	 * @returns {string} Its message, or the value itself as a string.
+	 * @throws {never} Pure.
+	 */
+	function errorText(error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+
+	/**
+	 * Whether `pkill`/`pgrep` reported no matching process: exit status 1, and nothing else.
+	 * @param {unknown} error The `execFile` rejection.
+	 * @returns {boolean} True only for exit status 1; 2 and 3 are errors and a spawn failure has a string code.
+	 * @throws {never} Pure.
+	 */
+	function noProcessMatched(error) {
+		return /** @type {{code?: unknown}} */ (error)?.code === 1;
+	}
+
+	/**
+	 * Whether the installed helper daemon is running.
+	 * @returns {Promise<boolean>} True when `pgrep` matched, false only when it reported no match (exit 1).
+	 * @throws {Error} When `pgrep` fails any other way: that is no proof of absence.
+	 */
+	async function helperIsRunning() {
+		try {
+			await execFile("pgrep", ["-f", runningHelperPattern]);
+			return true;
+		} catch (error) {
+			if (noProcessMatched(error)) return false;
+			throw new Error(
+				`Cannot tell whether the helper at ${helperAppExecutablePath} is running (pgrep: ${errorText(error)}); it was not replaced.`,
 			);
-			if (!alive) return;
-			await sleep(100);
 		}
 	}
 
+	/**
+	 * A running helper keeps its old code after the bundle is replaced; stop it so the next command relaunches the
+	 * new one. npm `--postinstall` never stops a resident helper: it refuses instead, and the operator repairs with
+	 * `--runtime`. Only a `pgrep` that reports no match proves the helper stopped.
+	 * @returns {Promise<void>} Resolves once no helper daemon from this bundle is running.
+	 * @throws {Error} When `--postinstall` finds a running helper, `pkill` or `pgrep` fails, or the helper outlives the wait.
+	 */
+	async function stopRunningHelper() {
+		if (isPostinstall) {
+			if (await helperIsRunning()) {
+				throw new Error(
+					`The helper at ${helperAppExecutablePath} is running; postinstall does not stop it. Quit it, then run \`node scripts/setup-helper.mjs --runtime\` from the package root.`,
+				);
+			}
+			return;
+		}
+		try {
+			await execFile("pkill", ["-f", runningHelperPattern]);
+		} catch (error) {
+			if (!noProcessMatched(error)) {
+				throw new Error(
+					`Could not stop the helper at ${helperAppExecutablePath} (pkill: ${errorText(error)}); it was not replaced.`,
+				);
+			}
+		}
+		for (let attempt = 0; attempt < 20; attempt += 1) {
+			if (!(await helperIsRunning())) return;
+			await sleep(100);
+		}
+		throw new Error(`The helper at ${helperAppExecutablePath} is still running after pkill; it was not replaced.`);
+	}
+
+	/**
+	 * Automatic setup (`--postinstall`, `--runtime`) with a `PI_COMPUTER_USE_HELPER_APP_PATH` override replaces only
+	 * nothing or this helper's own bundle: an existing destination whose `Contents/Info.plist` does not name
+	 * `helperBundleId` is refused, as is one that cannot be read. A binary plist stores the ID as plain ASCII too.
+	 * @returns {Promise<void>} Resolves when the destination may be replaced.
+	 * @throws {Error} When the override names an existing directory that is not provably this helper.
+	 */
+	async function assertReplaceableDestination() {
+		if (!isAutomatic || !env.PI_COMPUTER_USE_HELPER_APP_PATH?.trim()) return;
+		let plist;
+		try {
+			plist = await fs.readFile(path.join(helperAppPath, "Contents", "Info.plist"));
+		} catch {
+			// No readable Info.plist: only a destination that provably does not exist may be created.
+			try {
+				await fs.lstat(helperAppPath);
+			} catch (error) {
+				if (error?.code === "ENOENT") return;
+			}
+		}
+		if (plist?.includes(helperBundleId)) return;
+		throw new Error(
+			`PI_COMPUTER_USE_HELPER_APP_PATH points at ${helperAppPath}, which exists but is not a ${helperBundleId} bundle; automatic setup does not replace it. Remove it or fix the override, then run \`node scripts/setup-helper.mjs\` from the package root.`,
+		);
+	}
+
 	async function installPrebuiltHelperApp(sourceAppPath) {
+		await assertReplaceableDestination();
 		await ensureHelperParentDirectory();
 		const sourceExecutablePath = path.join(sourceAppPath, "Contents", "MacOS", "bridge");
 		const sourceInfoPath = path.join(sourceAppPath, "Contents", "Info.plist");
@@ -807,6 +892,7 @@ function createSetup(argv, deps) {
 	}
 
 	async function installHelperApp(sourcePath) {
+		await assertReplaceableDestination();
 		await ensureHelperParentDirectory();
 		const version = await packageVersion();
 		const infoPlistPath = path.join(helperAppPath, "Contents", "Info.plist");
@@ -834,6 +920,8 @@ function createSetup(argv, deps) {
 			// require permission review after native code changes.
 			const signingIdentity = env.PI_COMPUTER_USE_NO_SIGN === "1" ? "-" : await resolveCodeSignIdentity();
 			if (signingIdentity !== "-" && (await helperHasAdhocSignature())) {
+				// Re-signing rewrites the binary, so a resident daemon would predate it and be refused.
+				await stopRunningHelper();
 				await signHelper(helperAppPath, helperBundleId);
 				await registerHelperApp();
 				return true;

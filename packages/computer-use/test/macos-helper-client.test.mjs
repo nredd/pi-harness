@@ -447,15 +447,45 @@ test.each([8, 6])("external daemon from another executable with protocol %s is n
 });
 
 describe("ensureProtocol", () => {
-	const psFor = (etime) => ({ ps: { stdout: `${etime}\n`, exitCode: 0 } });
+	const psFor = (etime, exitCode = 0) => ({ ps: { stdout: `${etime}\n`, exitCode } });
 
-	async function protocolRig({ diagnostics = {}, etime = "00:00", ps, afterRestart, install = true } = {}) {
+	async function protocolRig({ diagnostics = {}, etime = "00:00", ps, install = true } = {}) {
 		if (install) installExecutable();
 		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...diagnostics } });
 		const spawn = createFakeSpawn(ps ?? psFor(etime));
 		const mod = await load({ external: false, fake, spawn });
-		fake.relaunchAfterExit({ diagnostics: afterRestart });
 		return { fake, spawn, ...mod, client: new mod.MacosHelperClient() };
+	}
+
+	/**
+	 * A matching-build daemon that is not the installed helper is refused with `helper_mismatch`: never shut down,
+	 * relaunched or stopped, and the client drops its cached availability so the next command probes again.
+	 */
+	async function assertRefused(rig, reason) {
+		const { client, fake, spawn, HelperCommandError, HELPER_SOCKET_PATH, RESIDENT_MISMATCH_REPAIR } = rig;
+		await client.ensureDaemon();
+		await assert.rejects(client.ensureProtocol(), (error) => {
+			assert.ok(error instanceof HelperCommandError);
+			assert.equal(error.code, "helper_mismatch");
+			assert.match(error.message, reason);
+			assert.equal(
+				error.message.startsWith(`pi-computer-use helper at ${HELPER_SOCKET_PATH} has this package's build but `),
+				true,
+			);
+			assert.equal(error.message.endsWith(`; it was not restarted or stopped. ${RESIDENT_MISMATCH_REPAIR}`), true);
+			return true;
+		});
+		assert.equal(client.daemonAvailable, false);
+		assert.deepEqual(
+			fake.requests.map(({ cmd }) => cmd),
+			["diagnostics", "diagnostics"],
+			"only read-only probes: no shutdown",
+		);
+		assert.equal(
+			spawn.calls.some(({ command }) => command === "open"),
+			false,
+			"nothing is relaunched",
+		);
 	}
 
 	test("accepts a current daemon without restarting", async () => {
@@ -468,11 +498,6 @@ describe("ensureProtocol", () => {
 		assert.deepEqual(spawn.calls[0].args, ["-o", "etime=", "-p", "77"]);
 	});
 
-	test("accepts a daemon with no reported executable path", async () => {
-		const { client } = await protocolRig({ diagnostics: { executablePath: undefined } });
-		await assert.doesNotReject(client.ensureProtocol());
-	});
-
 	test("accepts a daemon whose executable is a symlink to the installed one", async () => {
 		installExecutable();
 		const link = path.join(tmp, "link-bridge");
@@ -481,111 +506,58 @@ describe("ensureProtocol", () => {
 		await assert.doesNotReject(client.ensureProtocol());
 	});
 
-	test(
-		"restarts a stale-protocol daemon and accepts the relaunched one",
-		async () => {
-			const { client, fake } = await protocolRig({
-				diagnostics: { protocolVersion: 6 },
-				afterRestart: { protocolVersion: 8 },
-			});
-			assert.equal((await client.ensureProtocol()).protocolVersion, 8);
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
+	test("refuses a matching-build daemon that reports another protocol", async () => {
+		await assertRefused(
+			await protocolRig({ diagnostics: { protocolVersion: 6 } }),
+			/ reports protocol 6 \(expected 8\)/,
+		);
+	});
 
-	test(
-		"restarts a daemon launched from another executable (unresolvable paths compare resolved)",
-		async () => {
-			const { client, fake } = await protocolRig({
-				install: false,
-				diagnostics: { executablePath: path.join(tmp, "elsewhere", "bridge") },
-				afterRestart: { executablePath: executable },
-			});
-			await client.ensureProtocol();
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
+	test("refuses a daemon that reports no executable path", async () => {
+		const rig = await protocolRig({ diagnostics: { executablePath: undefined } });
+		await assertRefused(rig, new RegExp(`reports no executable path \\(expected ${rig.HELPER_APP_EXECUTABLE_PATH}\\)`));
+	});
 
-	test(
-		"restarts when the daemon process predates the installed binary",
-		async () => {
-			const { client, fake } = await protocolRig({ etime: "00:01" });
-			// 100 s before the binary's ctime: started + 1 s < ctime.
-			const now = Date.now();
-			vi.spyOn(Date, "now").mockReturnValue(now - 100_000);
-			await client.ensureProtocol();
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
+	test("refuses a daemon launched from another executable (unresolvable paths compare resolved)", async () => {
+		const elsewhere = path.join(tmp, "elsewhere", "bridge");
+		const rig = await protocolRig({ install: false, diagnostics: { executablePath: elsewhere } });
+		await assertRefused(rig, new RegExp(`runs ${elsewhere} \\(expected ${rig.HELPER_APP_EXECUTABLE_PATH}\\)`));
+	});
 
-	test(
-		"throws and drops the daemon when the relaunched helper still mismatches",
-		async () => {
-			const { client, HELPER_APP_EXECUTABLE_PATH, HELPER_APP_PATH } = await protocolRig({
-				diagnostics: { protocolVersion: 5, executablePath: undefined },
-			});
-			await assert.rejects(client.ensureProtocol(), (error) => {
-				assert.equal(
-					error.message,
-					`pi-computer-use helper mismatch after relaunch: expected protocol 8 and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol 5 and executable unknown. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
-				);
-				return true;
-			});
-			assert.equal(client.daemonAvailable, false);
-		},
-		SLOW_MS,
-	);
+	test("refuses a daemon whose process predates the installed binary", async () => {
+		const rig = await protocolRig({ diagnostics: { pid: 77 }, etime: "00:01" });
+		await rig.client.ensureDaemon();
+		// 100 s before the binary's ctime: started + 1 s < ctime.
+		vi.spyOn(Date, "now").mockReturnValue(Date.now() - 100_000);
+		await assertRefused(rig, /its process \(pid 77\) started before the installed binary was last written/);
+	});
 
-	test(
-		"throws when the relaunched helper reports the wrong executable",
-		async () => {
-			const { client } = await protocolRig({
-				diagnostics: { protocolVersion: 5 },
-				afterRestart: { protocolVersion: 8, executablePath: path.join(tmp, "other") },
-			});
-			await assert.rejects(client.ensureProtocol(), /got protocol 8 and executable .*other/);
-		},
-		SLOW_MS,
-	);
-
-	test.each([
-		["no pid", { pid: 0 }, undefined],
-		["negative pid", { pid: -3 }, undefined],
-		["non-numeric elapsed time", { pid: 5 }, "garbage"],
-	])("does not call a daemon stale for %s", async (_name, diagnostics, etime) => {
-		const { client, fake } = await protocolRig({ diagnostics, etime: etime ?? "00:00" });
-		await client.ensureProtocol();
-		assert.equal(
-			fake.requests.some((request) => request.cmd === "shutdown"),
-			false,
+	test("reads day-prefixed elapsed times: a daemon running for days predates the binary", async () => {
+		await assertRefused(
+			await protocolRig({ diagnostics: { pid: 5 }, etime: "2-00:00:01" }),
+			/\(pid 5\) started before/,
 		);
 	});
 
 	test.each([
-		["ps fails to spawn", { ps: { spawnError: new Error("ENOENT") } }],
-		["the helper binary is missing", { install: false, diagnostics: { executablePath: undefined } }],
-	])("does not call a daemon stale when %s", async (_name, options) => {
-		const { client, fake } = await protocolRig(options);
-		await client.ensureProtocol();
-		assert.equal(
-			fake.requests.some((request) => request.cmd === "shutdown"),
-			false,
+		["no pid", { diagnostics: { pid: 0 } }],
+		["a negative pid", { diagnostics: { pid: -3 } }],
+		["pid 1", { diagnostics: { pid: 1 } }],
+		["non-numeric elapsed time", { diagnostics: { pid: 5 }, etime: "garbage" }],
+		["empty elapsed time (no such process)", { diagnostics: { pid: 5 }, etime: "" }],
+		["ps exiting non-zero", { diagnostics: { pid: 5 }, ps: psFor("00:00", 1) }],
+		["ps failing to spawn", { diagnostics: { pid: 5 }, ps: { ps: { spawnError: new Error("ENOENT") } } }],
+	])("refuses when the start time is unknown: %s", async (_name, options) => {
+		await assertRefused(
+			await protocolRig(options),
+			/its start time \(pid -?\d+\) could not be compared with the installed binary/,
 		);
 	});
 
-	test(
-		"reads day-prefixed elapsed times: a daemon running for days predates the binary",
-		async () => {
-			const { client, fake, spawn } = await protocolRig({ etime: "2-00:00:01" });
-			await client.ensureProtocol();
-			assert.equal(spawn.calls.length >= 1, true);
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
+	test("refuses when the installed binary cannot be stat'ed", async () => {
+		const rig = await protocolRig({ install: false, diagnostics: { pid: 5 } });
+		await assertRefused(rig, /its start time \(pid 5\) could not be compared/);
+	});
 
 	test("helperPredatesBinary allows a 1 s grace and rejects non-finite times", async () => {
 		const { helperPredatesBinary } = await load({ external: true, fake: await fakeOn() });
@@ -593,6 +565,16 @@ describe("ensureProtocol", () => {
 		assert.equal(helperPredatesBinary(0, 1_000), false);
 		assert.equal(helperPredatesBinary(Number.NaN, 5_000), false);
 		assert.equal(helperPredatesBinary(0, Number.POSITIVE_INFINITY), false);
+	});
+
+	test("parseElapsedSeconds reads every `etime` form and nothing else", async () => {
+		const { parseElapsedSeconds } = await load({ external: true, fake: await fakeOn() });
+		assert.equal(parseElapsedSeconds("  00:07\n"), 7);
+		assert.equal(parseElapsedSeconds("03:07"), 187);
+		assert.equal(parseElapsedSeconds("01:03:07"), 3_787);
+		assert.equal(parseElapsedSeconds("2-01:03:07"), 2 * 86_400 + 3_787);
+		for (const bad of ["", "7", "garbage", "1-2", "00:0x", "-1:00"])
+			assert.equal(parseElapsedSeconds(bad), undefined, bad);
 	});
 });
 

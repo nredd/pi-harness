@@ -212,10 +212,16 @@ async function makeHost({ platform = "darwin", hostArch = "arm64", env = {}, sou
 			if (state.codesignInfo instanceof Error) throw state.codesignInfo;
 			return state.codesignInfo;
 		}
+		if (command === "pkill") {
+			if (state.pkillError !== undefined) throw state.pkillError;
+			// `pkill` exits 1 when nothing matched; a real execFile reports that as a numeric code.
+			throw sysError("no match", 1);
+		}
 		if (command === "pgrep") {
 			rec.pgrep += 1;
+			if (state.pgrepError !== undefined) throw state.pgrepError;
 			if (state.pgrepForever || rec.pgrep <= state.pgrepAlive) return { stdout: "1\n", stderr: "" };
-			throw sysError("no match", "1");
+			throw sysError("no match", 1);
 		}
 		throw sysError(`${command} unavailable`, "ENOENT");
 	};
@@ -677,17 +683,14 @@ describe("macOS sealed app installs", () => {
 		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "Info.plist"), "utf8"), "<plist v2/>");
 	});
 
-	test("a changed executable alone reinstalls, and an exited-0 pgrep that never clears is bounded", async () => {
+	test("a changed executable alone reinstalls", async () => {
 		const host = await makeHost();
 		await makeApp(universal(host), "one");
 		await runMain(host, []);
 		await put(path.join(universal(host), "Contents", "MacOS", "bridge"), "two");
-		host.state.pgrepForever = true;
-		host.rec.pgrep = 0;
 		const rec = await runMain(host, []);
 		assert.equal(rec.log[0].startsWith("[pi-computer-use] installed pre-signed"), true);
-		assert.equal(host.rec.pgrep, 20, "gives up after 20 polls rather than hanging");
-		assert.equal(host.rec.sleep, 20);
+		assert.equal(await realFs.readFile(path.join(host.dirs.app, "Contents", "MacOS", "bridge"), "utf8"), "two");
 	});
 
 	test("a bundle that fails strict verification is never installed", async () => {
@@ -722,6 +725,206 @@ describe("macOS sealed app installs", () => {
 		assert.deepEqual(rec.exit, [1]);
 		assert.equal(rec.error[0], "read-only");
 		assert.deepEqual(rec.spawn, []);
+	});
+});
+
+describe("macOS helper lifecycle refusals (#1235)", () => {
+	const universal = (host) => path.join(host.dirs.root, "prebuilt", "macos", "universal", "pi-computer-use.app");
+	const installedExe = (host) => path.join(host.dirs.app, "Contents", "MacOS", "bridge");
+
+	/** A host with `old` installed and a changed universal bundle waiting to replace it. */
+	async function pendingReplacement(options) {
+		const host = await makeHost(options);
+		await makeApp(host.dirs.app, "old", "<plist com.injaneity.pi-computer-use/>");
+		await makeApp(universal(host), "new", "<plist com.injaneity.pi-computer-use/>");
+		return host;
+	}
+
+	test.each([
+		["exit status 2", sysError("pgrep: bad pattern", 2), /pgrep: pgrep: bad pattern/],
+		["a spawn failure", sysError("spawn pgrep ENOENT", "ENOENT"), /pgrep: spawn pgrep ENOENT/],
+		["a non-Error rejection", "boom", /pgrep: boom/],
+	])("a pgrep failure (%s) is no proof the helper stopped: nothing is replaced", async (_name, failure, message) => {
+		const host = await pendingReplacement();
+		host.state.pgrepError = failure;
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^Cannot tell whether the helper at .* is running/);
+		assert.match(rec.error[0], message);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test.each([
+		["exit status 3", sysError("pkill: failed", 3), /pkill: pkill: failed/],
+		["a non-Error rejection", "boom", /pkill: boom/],
+	])("a pkill failure (%s) refuses the replacement", async (_name, failure, message) => {
+		const host = await pendingReplacement();
+		host.state.pkillError = failure;
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^Could not stop the helper at /);
+		assert.match(rec.error[0], message);
+		assert.equal(rec.pgrep, 0);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("a pkill that matched (exit 0) is followed by pgrep until it reports no match", async () => {
+		const host = await pendingReplacement();
+		host.deps.execFile = (
+			(inner) => async (command, args) =>
+				command === "pkill" ? { stdout: "", stderr: "" } : inner(command, args)
+		)(host.deps.execFile);
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(rec.pgrep, 1);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+	});
+
+	test("a helper that outlives pkill is never replaced", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepForever = true;
+		const rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /^The helper at .* is still running after pkill; it was not replaced\.$/);
+		assert.equal(host.rec.pgrep, 20, "gives up after 20 polls rather than hanging");
+		assert.equal(host.rec.sleep, 20);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("npm --postinstall never stops a running helper: it warns, exits 0 and replaces nothing", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepForever = true;
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, [0]);
+		assert.match(
+			rec.warn[0],
+			/postinstall helper setup skipped: The helper at .* is running; postinstall does not stop it/,
+		);
+		assert.match(rec.warn[0], /node scripts\/setup-helper\.mjs --runtime/);
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill"),
+			false,
+		);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("npm --postinstall replaces the bundle when pgrep reports no running helper, without pkill", async () => {
+		const host = await pendingReplacement();
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(rec.pgrep, 1);
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill"),
+			false,
+		);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+	});
+
+	test("npm --postinstall refuses when pgrep fails", async () => {
+		const host = await pendingReplacement();
+		host.state.pgrepError = sysError("pgrep: killed", 2);
+		const rec = await runMain(host, ["--postinstall"]);
+		assert.deepEqual(rec.exit, [0]);
+		assert.match(rec.warn[0], /Cannot tell whether the helper at .* is running/);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	const unrelated = "not a pi-computer-use helper bundle";
+
+	test.each([
+		[
+			"--runtime",
+			"an existing directory without Info.plist",
+			async (app) => put(path.join(app, "notes.txt"), unrelated),
+		],
+		[
+			"--postinstall",
+			"an Info.plist naming another bundle",
+			async (app) => makeApp(app, unrelated, "<plist com.example.other/>"),
+		],
+		["--runtime", "a regular file", async (app) => put(app, unrelated)],
+	])("automatic %s refuses to replace an app-path override at %s", async (flag, _name, create) => {
+		const host = await makeHost();
+		await create(host.dirs.app);
+		await makeApp(universal(host), "new");
+		const rec = await runMain(host, [flag]);
+		const message = flag === "--postinstall" ? rec.warn[0] : rec.error[0];
+		assert.match(
+			message,
+			/PI_COMPUTER_USE_HELPER_APP_PATH points at .* which exists but is not a com\.injaneity\.pi-computer-use bundle; automatic setup does not replace it/,
+		);
+		assert.equal(rec.spawn.length, 0, "nothing is verified, stopped or copied");
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill" || command === "pgrep"),
+			false,
+		);
+		const kept = (await realFs.stat(host.dirs.app)).isFile()
+			? await realFs.readFile(host.dirs.app, "utf8")
+			: await realFs.readdir(host.dirs.app);
+		assert.notDeepEqual(kept, []);
+	});
+
+	test("automatic setup refuses an app-path override whose Info.plist cannot be read", async () => {
+		const host = await makeHost();
+		await makeApp(host.dirs.app, "old", "<plist com.injaneity.pi-computer-use/>");
+		await prebuiltBinary(host, "arm64", "new");
+		const plist = path.join(host.dirs.app, "Contents", "Info.plist");
+		host.deps.fs = {
+			...host.deps.fs,
+			readFile: async (target, ...rest) => {
+				if (target === plist) throw sysError("denied", "EACCES");
+				return realFs.readFile(target, ...rest);
+			},
+		};
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /automatic setup does not replace it/);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "old");
+	});
+
+	test("automatic setup refuses when the override destination cannot be inspected", async () => {
+		const host = await makeHost();
+		await makeApp(universal(host), "new");
+		host.deps.fs = {
+			...host.deps.fs,
+			lstat: async (target, ...rest) => {
+				if (target === host.dirs.app) throw sysError("denied", "EACCES");
+				return realFs.lstat(target, ...rest);
+			},
+		};
+		const rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, [1]);
+		assert.match(rec.error[0], /automatic setup does not replace it/);
+	});
+
+	test("automatic setup replaces its own bundle at an override, and installs where nothing exists", async () => {
+		const host = await pendingReplacement();
+		let rec = await runMain(host, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+
+		const fresh = await makeHost();
+		await makeApp(universal(fresh), "new");
+		rec = await runMain(fresh, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(installedExe(fresh), "utf8"), "new");
+	});
+
+	test("an operator run, or automatic setup at the default path, keeps replacing an existing destination", async () => {
+		const host = await makeHost();
+		await put(path.join(host.dirs.app, "notes.txt"), unrelated);
+		await makeApp(universal(host), "new");
+		let rec = await runMain(host, []);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(installedExe(host), "utf8"), "new");
+
+		const home = await makeHost({ env: { PI_COMPUTER_USE_HELPER_APP_PATH: " " } });
+		const defaultApp = path.join(home.dirs.home, "Applications", "pi-computer-use.app");
+		await put(path.join(defaultApp, "notes.txt"), unrelated);
+		await makeApp(universal(home), "new");
+		rec = await runMain(home, ["--runtime"]);
+		assert.deepEqual(rec.exit, []);
+		assert.equal(await realFs.readFile(path.join(defaultApp, "Contents", "MacOS", "bridge"), "utf8"), "new");
 	});
 });
 
@@ -816,6 +1019,11 @@ describe("macOS local helper install and signing", () => {
 		rec = await runMain(host, []);
 		assert.equal(rec.log[0], `[pi-computer-use] installed helper app (arm64) at ${host.dirs.app}`);
 		assert.equal(rec.spawn.filter(([command]) => command === "codesign").length, 1, "re-signed in place");
+		assert.equal(
+			rec.exec.some(([command]) => command === "pkill"),
+			true,
+			"re-signing rewrites the binary, so the resident helper is stopped first",
+		);
 
 		host.state.codesignInfo = { stdout: "Signature size=9\n", stderr: "" };
 		rec = await runMain(host, []);
