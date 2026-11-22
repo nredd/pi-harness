@@ -1499,6 +1499,24 @@ impl AdmittedRoot {
             .ok_or_else(|| invalid("Expected an exact target windowId"))?;
         Ok(Self { hwnd, pid })
     }
+
+    /// Return `look_id` only if this admitted root issued it.
+    fn owned_look<'a>(
+        self,
+        state: &'a HelperState,
+        look_id: &str,
+    ) -> Result<&'a LookRecord, ProtocolError> {
+        let look = state.looks.get(look_id).ok_or_else(|| {
+            ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
+        })?;
+        if self.pid != look.pid || self.hwnd != look.hwnd {
+            return Err(ProtocolError::new(
+                "Owning look does not match the admitted root",
+                ErrorCode::StaleLook,
+            ));
+        }
+        Ok(look)
+    }
 }
 
 fn read_text_element(
@@ -1514,15 +1532,7 @@ fn read_text_element(
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("uiaReadText requires elementRef"))?;
     let root = AdmittedRoot::parse(args)?;
-    let look = state.looks.get(look_id).ok_or_else(|| {
-        ProtocolError::new("Owning look is no longer available", ErrorCode::StaleLook)
-    })?;
-    if root.pid != look.pid || root.hwnd != look.hwnd {
-        return Err(ProtocolError::new(
-            "Owning look does not match the admitted root",
-            ErrorCode::StaleLook,
-        ));
-    }
+    root.owned_look(state, look_id)?;
     Ok((state.element_for_look(look_id, element_ref)?, root.pid))
 }
 
@@ -1608,13 +1618,14 @@ fn handle_wait_for_with(
         args.get("lookId").and_then(Value::as_str),
         args.get("scopeRef").and_then(Value::as_str),
     ) {
-        (Some(look_id), Some(scope_ref)) => Some(
-            helper_state()
+        (Some(look_id), Some(scope_ref)) => {
+            let state = helper_state()
                 .lock()
-                .map_err(|_| internal("helper state lock poisoned"))?
-                .element_for_look(look_id, scope_ref)?
-                .runtime_id,
-        ),
+                .map_err(|_| internal("helper state lock poisoned"))?;
+            // A valid scope from another root must never steer this root's UIA poll.
+            root.owned_look(&state, look_id)?;
+            Some(state.element_for_look(look_id, scope_ref)?.runtime_id)
+        }
         (None, Some(_)) => return Err(invalid("scopeRef requires lookId")),
         _ => None,
     };
@@ -2175,6 +2186,25 @@ mod tests {
             )
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidRequest);
+        }
+    }
+
+    #[test]
+    fn scoped_wait_refuses_a_look_from_another_root_before_uia() {
+        let look_id = "scoped-wait-owner-check";
+        helper_state()
+            .lock()
+            .unwrap()
+            .insert_look(look_id.to_owned(), look_with_element(1.0));
+        for (pid, hwnd) in [(2, 1), (1, 2), (2, 2)] {
+            let error = handle_wait_for_with(
+                &json!({"pid": pid, "windowId": hwnd, "lookId": look_id, "scopeRef": "same-ref", "text": "Ready"}),
+                || panic!("must not poll a mismatched scope"),
+                |_| panic!("must not check the owner of a mismatched scope"),
+                |_| panic!("must not query UIA for a mismatched scope"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::StaleLook);
         }
     }
 
