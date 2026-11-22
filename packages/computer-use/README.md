@@ -58,6 +58,8 @@ install a helper, change accessibility settings or grant privileges. #673 remain
   deltas refuse during parsing before any mutation. Every actual rounded drag vertex (start, waypoints, end) is
   checked before the first mutation for live containment and hit-tested ownership. Coordinate paths
   use observed image pixels, reject stale window geometry and never clamp out-of-range vertices.
+  The macOS helper rejects non-finite drag vertices or coordinates outside `[-1000000, 1000000]`
+  (image pixels and grounded global points) before acquiring the HID lock or preparing input.
   Ref drag paths use `params.path` fractions in `[0,1]` of the current live control, starting at its
   current center, and remain entirely within that control and its owning window. Paths contain at
   most 1024 requested vertices. Scroll/click/move paths use the same read-only ownership boundary.
@@ -364,8 +366,10 @@ Carried behavior notes for `@nredd/pi-computer-use`. Root targeting is now based
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`,
   `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in `src/platform/macos/backend.ts`,
   which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A request with a `windowRef` and no usable `windowId` that no longer resolves fails; it
-  never falls back to the app's first window. With a positive `windowId` it still pairs by id.
+- The helper treats only a missing or null `windowId` as absent. A supplied ID must be a positive
+  unsigned 32-bit integer or the helper returns `invalid_args`. The PID is checked first, so a request
+  with both an invalid PID and an invalid ID reports the PID error. A stale `windowRef` without an ID
+  never falls back to the app's first window. With a valid ID it still pairs by ID.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ### Capture
@@ -2045,6 +2049,8 @@ Physical mouse and keyboard input in global screen points, like a person at the 
 
 activateApp before typing or keys (input goes to the frontmost app); verify with desktop_screenshot; prefer act_ui for ref-targetable app controls.
 
+On macOS, a drag returns `invalid_args` before any mouse event is sent when a coordinate is not finite or lies outside `[-1000000, 1000000]` global points (a policy cap far beyond any real display arrangement), or when its total length is not finite.
+
 ### parameters
 
 | parameter | type | required | description and constraints |
@@ -2301,7 +2307,7 @@ Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, Pow
 
 The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 
-The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
+The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`, `com.apple.ScreenSaver.Engine` and `com.apple.LocalAuthenticationRemoteService` (the macOS Touch ID/password prompt) are always blocked and cannot be removed by this option.
 
 On macOS and Windows, `find_roots` marks matching roots `blocked`, and a known blocked root fails with `app_blocked` before helper calls. This is a guard against mistakes, not a sandbox: focus can change between a check and delivery. The helper-side checks below are macOS-only: keyboard delivery checks the frontmost app on every unit but probes AX key focus only on a bounded cadence, so an app that takes key focus without becoming frontmost can receive a few units (up to eight) before the next probe. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
 
@@ -2761,7 +2767,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- For root targeting, the helper treats only a missing or null `windowId` as absent. All five request sites (`setWindowFrame`, `focusedElement`, `focusWindow`, `look`, `axWaitFor`) return `invalid_args` for a supplied ID that is not a positive unsigned 32-bit integer. The PID is validated first, so a request with both an invalid PID and an invalid ID reports `pid must be a positive 32-bit integer`.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture

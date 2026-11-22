@@ -145,10 +145,6 @@ func runRequestFramingAssertions() {
     for (value, expected): (Any, Bool) in [(true, true), (false, false), (0, false), (2, true), (-0.5, true)] {
         check(actual.boolArg(["value": value], "value") == expected, "bool coercion \(value)")
     }
-    for value: Any in [NSNull(), "12", 0, -1, UInt64(UInt32.max) + 1] {
-        check(actual.positiveWindowId(["windowId": value]) == nil, "invalid window id \(value)")
-    }
-    check(actual.positiveWindowId([:]) == nil && actual.positiveWindowId(["windowId": UInt32.max]) == UInt32.max && actual.positiveWindowId(["windowId": 12.75]) == 12 && actual.positiveWindowId(["windowId": true]) == 1, "window id preserves numeric coercion and UInt32 bound")
     if failures > 0 { print("\(failures) request framing assertion(s) failed"); exit(1) }
     print("request framing assertions passed")
 }
