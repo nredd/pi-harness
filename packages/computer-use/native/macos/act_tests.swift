@@ -479,7 +479,20 @@ private func runWindowIDAssertions() throws {
     let null = try checkedWindowId(NSNull())
     let smallest = try checkedWindowId(NSNumber(value: 1))
     let largest = try checkedWindowId(NSNumber(value: UInt32.max))
-    expect(omitted == nil && null == nil && smallest == 1 && largest == UInt32.max, "missing and null IDs are absent; both positive UInt32 boundaries are accepted")
+    let decimal = try checkedWindowId(NSDecimalNumber(string: "4294967295"))
+    expect(omitted == nil && null == nil && smallest == 1 && largest == UInt32.max && decimal == UInt32.max, "missing and null IDs are absent; both positive UInt32 boundaries are accepted")
+
+    // Real NDJSON framing and JSONSerialization: these decode as NSDecimalNumber, whose Double view is integral.
+    var frames: [Data] = []
+    let framed = Bridge(activityGlow: nil, readSession: { nil }, writeOutput: { frames.append($0) })
+    for command in ["setWindowFrame", "focusedElement", "focusWindow", "look", "axWaitFor"] {
+        for id in ["4294967295.00000001", "4294967295.0000000001", "1.000000000000000001"] {
+            frames = []
+            framed.handleLine(#"{"id":"w","cmd":"\#(command)","pid":2147483647,"windowId":\#(id),"includeImage":false,"role":"AXButton"}"#)
+            let response = frames.count == 1 ? (try? JSONSerialization.jsonObject(with: frames[0])) as? [String: Any] : nil
+            expect(response?["ok"] as? Bool == false && (response?["error"] as? [String: String]) == ["message": "windowId must be a positive 32-bit unsigned integer", "code": "invalid_args"], "\(command) must reject fractional decimal windowId \(id): \(String(describing: response))")
+        }
+    }
 }
 
 private final class RecordingInputLock: NSLocking {

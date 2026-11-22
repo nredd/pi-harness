@@ -237,12 +237,23 @@ func resolveCaptureTarget(windowId: UInt32?, wantsImage: Bool) -> CaptureTarget 
 /// A missing or null wire ID is unpaired; a malformed ID must not trigger fallback.
 func checkedWindowId(_ raw: Any?) throws -> UInt32? {
 	guard let raw, !(raw is NSNull) else { return nil }
-	guard let value = raw as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(),
+	guard let value = raw as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), decimalIsIntegral(value),
 		let id = UInt32(exactly: value.doubleValue), id > 0
 	else {
 		throw BridgeFailure(message: "windowId must be a positive 32-bit unsigned integer", code: "invalid_args")
 	}
 	return id
+}
+
+/// JSONSerialization decodes long decimals (e.g. `4294967295.00000001`) as `NSDecimalNumber`, whose
+/// `doubleValue` rounds the fraction away. Check integrality on the decoded decimal digits instead.
+/// The decoder keeps 38 significant digits; a fraction beyond that never reaches the helper.
+private func decimalIsIntegral(_ value: NSNumber) -> Bool {
+	guard let decimal = value as? NSDecimalNumber else { return true }
+	var source = decimal.decimalValue
+	var integral = Decimal()
+	NSDecimalRound(&integral, &source, 0, .plain)
+	return !source.isNaN && integral == source
 }
 
 /// Only an unqualified request (no id, no ref) may take the app's first window. A ref that no longer
