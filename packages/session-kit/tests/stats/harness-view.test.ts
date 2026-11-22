@@ -373,6 +373,13 @@ describe("StatsView quota block", () => {
 			{ label: giant, head: { kind: "gauge", percent: 40 }, basis: "inferred", expired: false, old: false },
 			{ label: "vendor day", head: { kind: "text", text: "37/250 requests" }, expired: false, old: false },
 			{
+				label: "y".repeat(100),
+				head: { kind: "text", text: "" },
+				reset: "reset 0s ago, no newer reading",
+				expired: true,
+				old: false,
+			},
+			{
 				label: "vendor mark",
 				head: { kind: "text", text: "blocked until 2026-01-16 08:00 UTC" },
 				expired: false,
@@ -390,6 +397,7 @@ describe("StatsView quota block", () => {
 			expect(shown).toMatch(/█████░░░░░ +47\.3%/);
 			expect(shown).toContain("37/250 requests");
 			expect(shown).toContain("blocked until 2026-01-16");
+			expect(shown).toContain("reset 0s ago, no newer reading");
 			expect(shown).toContain("no local reading");
 			expect(shown).not.toContain("x".repeat(QUOTA_LABEL_MAX));
 			expect(shown).toContain("…");
