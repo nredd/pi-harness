@@ -422,101 +422,30 @@ fn decode(
     Ok(out)
 }
 
-pub struct Input {
+/// Destination for physical input events, so sequencing runs headless in tests.
+///
+/// `admit` and `admit_point` recheck the live target immediately before an effect.
+/// `post` emits one event without admission: owed releases go through it, so a
+/// refused target can never strand a held key or button.
+pub trait InputSink {
+    /// Refuse unless the target window is still mapped and active.
+    fn admit(&self) -> Result<(), ProtocolError>;
+    /// Refuse unless the screen point hits the target or one of its descendants.
+    fn admit_point(&self, x: i32, y: i32) -> Result<(), ProtocolError>;
+    /// Resolve a keysym to a keycode, or `None` when the keymap lacks it.
+    fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError>;
+    /// Post one event unconditionally.
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError>;
+}
+
+/// Live XTEST delivery pinned to one owning window.
+pub struct XtestSink {
     conn: RustConnection,
     root: Window,
     target: Window,
 }
-impl Input {
-    pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
-        policy.require_physical(SessionKind::detect())?;
-        let (conn, screen) = connect()?;
-        let root = conn.setup().roots[screen].root;
-        validate_target(&conn, root, target)?;
-        prepare_focus(&conn, root, target, policy)?;
-        xtest::get_version(&conn, 2, 2)
-            .map_err(xerr)?
-            .reply()
-            .map_err(|e| {
-                err(
-                    format!("XTEST unavailable: {e}"),
-                    ErrorCode::CapabilityDeferred,
-                )
-            })?;
-        Ok(Self { conn, root, target })
-    }
-    pub fn move_pointer(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)
-    }
-    pub fn click(&self, x: i32, y: i32, button: &str, count: u64) -> Result<(), ProtocolError> {
-        let b = button_detail(button)?;
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
-        for _ in 0..count.clamp(1, 3) {
-            self.fake(BUTTON_PRESS_EVENT, b, 0, 0)?;
-            self.fake(BUTTON_RELEASE_EVENT, b, 0, 0)?;
-        }
-        Ok(())
-    }
-    pub fn scroll(&self, x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
-        for _ in 0..dy.abs().ceil().clamp(0., 100.) as usize {
-            self.button(if dy < 0. { 4 } else { 5 })?;
-        }
-        for _ in 0..dx.abs().ceil().clamp(0., 100.) as usize {
-            self.button(if dx < 0. { 6 } else { 7 })?;
-        }
-        Ok(())
-    }
-    pub fn drag(&self, path: &[(i32, i32)], button: &str) -> Result<(), ProtocolError> {
-        if path.len() < 2 {
-            return Err(invalid("drag requires at least two points"));
-        }
-        let b = button_detail(button)?;
-        for &(x, y) in path {
-            self.preflight_point(x, y)?;
-        }
-        self.fake(MOTION_NOTIFY_EVENT, 0, path[0].0, path[0].1)?;
-        self.fake(BUTTON_PRESS_EVENT, b, 0, 0)?;
-        for &(x, y) in &path[1..] {
-            self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
-        }
-        self.fake(BUTTON_RELEASE_EVENT, b, 0, 0)
-    }
-    pub fn type_text(&self, text: &str) -> Result<(), ProtocolError> {
-        for ch in text.chars() {
-            let (sym, shift) = char_keysym(ch)
-                .ok_or_else(|| invalid(format!("Unsupported XTEST character {ch:?}")))?;
-            if shift {
-                self.key(0xffe1, KEY_PRESS_EVENT)?;
-            }
-            self.key(sym, KEY_PRESS_EVENT)?;
-            self.key(sym, KEY_RELEASE_EVENT)?;
-            if shift {
-                self.key(0xffe1, KEY_RELEASE_EVENT)?;
-            }
-        }
-        Ok(())
-    }
-    pub fn keypress(&self, names: &[&str]) -> Result<(), ProtocolError> {
-        if names.is_empty() {
-            return Err(invalid("keypress requires keys"));
-        }
-        let syms = names
-            .iter()
-            .map(|n| named_keysym(n).ok_or_else(|| invalid(format!("Unsupported key '{n}'"))))
-            .collect::<Result<Vec<_>, _>>()?;
-        for &s in &syms {
-            self.key(s, KEY_PRESS_EVENT)?;
-        }
-        for &s in syms.iter().rev() {
-            self.key(s, KEY_RELEASE_EVENT)?;
-        }
-        Ok(())
-    }
-    fn preflight_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+impl InputSink for XtestSink {
+    fn admit(&self) -> Result<(), ProtocolError> {
         validate_target(&self.conn, self.root, self.target)?;
         if active_window(&self.conn, self.root)? != Some(self.target) {
             return Err(err(
@@ -524,6 +453,9 @@ impl Input {
                 ErrorCode::ForegroundRequired,
             ));
         }
+        Ok(())
+    }
+    fn admit_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
         let hit = self
             .conn
             .translate_coordinates(self.root, self.root, clamp_i16(x), clamp_i16(y))
@@ -538,12 +470,6 @@ impl Input {
             ));
         }
         Ok(())
-    }
-    fn key(&self, sym: u32, event: u8) -> Result<(), ProtocolError> {
-        let code = self
-            .keycode(sym)?
-            .ok_or_else(|| invalid(format!("No keycode for keysym 0x{sym:x}")))?;
-        self.fake(event, code, 0, 0)
     }
     fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError> {
         let setup = self.conn.setup();
@@ -560,18 +486,7 @@ impl Input {
             .position(|s| s.contains(&sym))
             .map(|i| min + i as u8))
     }
-    fn button(&self, b: u8) -> Result<(), ProtocolError> {
-        self.fake(BUTTON_PRESS_EVENT, b, 0, 0)?;
-        self.fake(BUTTON_RELEASE_EVENT, b, 0, 0)
-    }
-    fn fake(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
-        validate_target(&self.conn, self.root, self.target)?;
-        if active_window(&self.conn, self.root)? != Some(self.target) {
-            return Err(err(
-                "Refusing XTEST delivery because the owning window is no longer active",
-                ErrorCode::ForegroundRequired,
-            ));
-        }
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
         xtest::fake_input(
             &self.conn,
             event,
@@ -586,6 +501,316 @@ impl Input {
         .check()
         .map_err(xerr)?;
         self.conn.flush().map_err(xerr)
+    }
+}
+
+/// One event a [`RecordingSink`] accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PostedEvent {
+    pub event: u8,
+    pub detail: u8,
+    pub x: i32,
+    pub y: i32,
+    /// Whether an admission check immediately preceded this post.
+    pub admitted: bool,
+}
+
+/// Headless sink that records posts and refuses on a script.
+///
+/// Keycodes are assigned in first-use order from 8, the lowest X11 keycode.
+#[derive(Debug, Default)]
+pub struct RecordingSink {
+    events: std::cell::RefCell<Vec<PostedEvent>>,
+    keymap: std::cell::RefCell<Vec<u32>>,
+    pending_admission: std::cell::Cell<bool>,
+    admissions: std::cell::Cell<usize>,
+    attempts: std::cell::Cell<usize>,
+    refuse_admission_after: Option<usize>,
+    fail_post: Option<usize>,
+    refuse_points: bool,
+    unmapped: Option<u32>,
+}
+impl RecordingSink {
+    /// Admit the first `admissions` checks, then refuse with `foreground_required`.
+    pub fn refuse_admission_after(mut self, admissions: usize) -> Self {
+        self.refuse_admission_after = Some(admissions);
+        self
+    }
+    /// Fail only the post attempt at zero-based `attempt` with `internal_error`.
+    pub fn fail_post(mut self, attempt: usize) -> Self {
+        self.fail_post = Some(attempt);
+        self
+    }
+    /// Refuse every point admission with `coordinate_blocked`.
+    pub fn refuse_points(mut self) -> Self {
+        self.refuse_points = true;
+        self
+    }
+    /// Report `sym` as missing from the keymap.
+    pub fn unmapped(mut self, sym: u32) -> Self {
+        self.unmapped = Some(sym);
+        self
+    }
+    /// Events accepted so far, in post order.
+    pub fn events(&self) -> Vec<PostedEvent> {
+        self.events.borrow().clone()
+    }
+}
+impl InputSink for RecordingSink {
+    fn admit(&self) -> Result<(), ProtocolError> {
+        let admissions = self.admissions.get();
+        if self
+            .refuse_admission_after
+            .is_some_and(|limit| admissions >= limit)
+        {
+            return Err(err(
+                "Recorded target is no longer active",
+                ErrorCode::ForegroundRequired,
+            ));
+        }
+        self.admissions.set(admissions + 1);
+        self.pending_admission.set(true);
+        Ok(())
+    }
+    fn admit_point(&self, _x: i32, _y: i32) -> Result<(), ProtocolError> {
+        if self.refuse_points {
+            return Err(err(
+                "Recorded point is occluded",
+                ErrorCode::CoordinateBlocked,
+            ));
+        }
+        Ok(())
+    }
+    fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError> {
+        if self.unmapped == Some(sym) {
+            return Ok(None);
+        }
+        let mut keymap = self.keymap.borrow_mut();
+        let index = keymap
+            .iter()
+            .position(|&known| known == sym)
+            .unwrap_or_else(|| {
+                keymap.push(sym);
+                keymap.len() - 1
+            });
+        Ok(Some(8 + index as u8))
+    }
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
+        let admitted = self.pending_admission.replace(false);
+        let attempt = self.attempts.replace(self.attempts.get() + 1);
+        if self.fail_post == Some(attempt) {
+            return Err(err("Recorded post failed", ErrorCode::InternalError));
+        }
+        self.events.borrow_mut().push(PostedEvent {
+            event,
+            detail,
+            x,
+            y,
+            admitted,
+        });
+        Ok(())
+    }
+}
+
+/// Guarded physical input. Every event is admitted against the live target first,
+/// and every key or button pressed is released on every exit path.
+pub struct Input<S: InputSink = XtestSink> {
+    sink: S,
+    delivered: std::cell::Cell<usize>,
+}
+impl Input<XtestSink> {
+    pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
+        policy.require_physical(SessionKind::detect())?;
+        let (conn, screen) = connect()?;
+        let root = conn.setup().roots[screen].root;
+        validate_target(&conn, root, target)?;
+        prepare_focus(&conn, root, target, policy)?;
+        xtest::get_version(&conn, 2, 2)
+            .map_err(xerr)?
+            .reply()
+            .map_err(|e| {
+                err(
+                    format!("XTEST unavailable: {e}"),
+                    ErrorCode::CapabilityDeferred,
+                )
+            })?;
+        Ok(Self::with_sink(XtestSink { conn, root, target }))
+    }
+}
+impl<S: InputSink> Input<S> {
+    pub fn with_sink(sink: S) -> Self {
+        Self {
+            sink,
+            delivered: std::cell::Cell::new(0),
+        }
+    }
+    pub fn sink(&self) -> &S {
+        &self.sink
+    }
+    /// Events posted so far, including owed releases. Admission is per event, so a
+    /// stop leaves every earlier event delivered and no later one.
+    pub fn delivered_units(&self) -> usize {
+        self.delivered.get()
+    }
+    pub fn move_pointer(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.preflight_point(x, y)?;
+        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)
+    }
+    pub fn click(&self, x: i32, y: i32, button: &str, count: u64) -> Result<(), ProtocolError> {
+        let b = button_detail(button)?;
+        self.preflight_point(x, y)?;
+        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        let mut held = Held::new(self);
+        for _ in 0..count.clamp(1, 3) {
+            held.tap(BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, b)?;
+        }
+        Ok(())
+    }
+    pub fn scroll(&self, x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
+        self.preflight_point(x, y)?;
+        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        let mut held = Held::new(self);
+        for _ in 0..dy.abs().ceil().clamp(0., 100.) as usize {
+            held.tap(
+                BUTTON_PRESS_EVENT,
+                BUTTON_RELEASE_EVENT,
+                if dy < 0. { 4 } else { 5 },
+            )?;
+        }
+        for _ in 0..dx.abs().ceil().clamp(0., 100.) as usize {
+            held.tap(
+                BUTTON_PRESS_EVENT,
+                BUTTON_RELEASE_EVENT,
+                if dx < 0. { 6 } else { 7 },
+            )?;
+        }
+        Ok(())
+    }
+    pub fn drag(&self, path: &[(i32, i32)], button: &str) -> Result<(), ProtocolError> {
+        if path.len() < 2 {
+            return Err(invalid("drag requires at least two points"));
+        }
+        let b = button_detail(button)?;
+        for &(x, y) in path {
+            self.preflight_point(x, y)?;
+        }
+        self.fake(MOTION_NOTIFY_EVENT, 0, path[0].0, path[0].1)?;
+        let mut held = Held::new(self);
+        held.press(BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, b)?;
+        for &(x, y) in &path[1..] {
+            self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        }
+        held.release()
+    }
+    pub fn type_text(&self, text: &str) -> Result<(), ProtocolError> {
+        // Reject unsupported characters before the first post, not midway through.
+        let keys = text
+            .chars()
+            .map(|ch| {
+                char_keysym(ch)
+                    .ok_or_else(|| invalid(format!("Unsupported XTEST character {ch:?}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut held = Held::new(self);
+        for (sym, shift) in keys {
+            if shift {
+                held.press(
+                    KEY_PRESS_EVENT,
+                    KEY_RELEASE_EVENT,
+                    self.key_code(SHIFT_KEYSYM)?,
+                )?;
+            }
+            held.tap(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, self.key_code(sym)?)?;
+            if shift {
+                held.release()?;
+            }
+        }
+        Ok(())
+    }
+    pub fn keypress(&self, names: &[&str]) -> Result<(), ProtocolError> {
+        if names.is_empty() {
+            return Err(invalid("keypress requires keys"));
+        }
+        let syms = names
+            .iter()
+            .map(|n| named_keysym(n).ok_or_else(|| invalid(format!("Unsupported key '{n}'"))))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut held = Held::new(self);
+        for &s in &syms {
+            held.press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, self.key_code(s)?)?;
+        }
+        for _ in &syms {
+            held.release()?;
+        }
+        Ok(())
+    }
+    fn preflight_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.sink.admit()?;
+        self.sink.admit_point(x, y)
+    }
+    fn key_code(&self, sym: u32) -> Result<Keycode, ProtocolError> {
+        self.sink
+            .keycode(sym)?
+            .ok_or_else(|| invalid(format!("No keycode for keysym 0x{sym:x}")))
+    }
+    /// Admit, then post one event.
+    fn fake(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.sink.admit()?;
+        self.post(event, detail, x, y)
+    }
+    /// Post one event without admission and count it.
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.sink.post(event, detail, x, y)?;
+        self.delivered.set(self.delivered.get() + 1);
+        Ok(())
+    }
+}
+
+const SHIFT_KEYSYM: u32 = 0xffe1;
+
+/// Keys and buttons pressed and not yet released. Dropping it releases each owed
+/// input once, newest first, without admission: a refused, failed or panicking
+/// sequence never leaves input held. Release failures there are not reported,
+/// because the sequence is already failing with its own error.
+struct Held<'a, S: InputSink> {
+    input: &'a Input<S>,
+    /// `(release event, detail)` pairs still owed.
+    owed: Vec<(u8, u8)>,
+}
+impl<'a, S: InputSink> Held<'a, S> {
+    fn new(input: &'a Input<S>) -> Self {
+        Self {
+            input,
+            owed: Vec::new(),
+        }
+    }
+    /// Admit and press. The release is owed from admission on, because a failed post
+    /// may still have reached the server; releasing an unpressed input is harmless.
+    fn press(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
+        self.input.sink.admit()?;
+        self.owed.push((release, detail));
+        self.input.post(press, detail, 0, 0)
+    }
+    /// Admit and release the newest owed input; a no-op when nothing is held. Sequences
+    /// release in reverse press order, so the newest is always the one to release. It
+    /// stays owed until the post succeeds.
+    fn release(&mut self) -> Result<(), ProtocolError> {
+        if let Some(&(event, detail)) = self.owed.last() {
+            self.input.fake(event, detail, 0, 0)?;
+            self.owed.pop();
+        }
+        Ok(())
+    }
+    fn tap(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
+        self.press(press, release, detail)?;
+        self.release()
+    }
+}
+impl<S: InputSink> Drop for Held<'_, S> {
+    fn drop(&mut self) {
+        while let Some((event, detail)) = self.owed.pop() {
+            let _ = self.input.post(event, detail, 0, 0);
+        }
     }
 }
 
@@ -1075,6 +1300,214 @@ mod tests {
         assert_eq!(resize_rgba(&source, 2, 2, 1, 1), vec![1, 2, 3, 4]);
         assert_eq!(resize_rgba(&source, 2, 2, 2, 2), source);
     }
+    /// `(kind, detail, admitted)` per recorded event, keycodes in first-use order from 8.
+    fn trace(input: &Input<RecordingSink>) -> Vec<(&'static str, u8, bool)> {
+        input
+            .sink()
+            .events()
+            .iter()
+            .map(|e| {
+                let kind = match e.event {
+                    KEY_PRESS_EVENT => "key+",
+                    KEY_RELEASE_EVENT => "key-",
+                    BUTTON_PRESS_EVENT => "button+",
+                    BUTTON_RELEASE_EVENT => "button-",
+                    _ => "move",
+                };
+                (kind, e.detail, e.admitted)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn completed_input_admits_every_event_and_counts_it() {
+        let input = Input::with_sink(RecordingSink::default());
+        input.click(5, 6, "left", 2).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 1, true),
+                ("button-", 1, true),
+                ("button+", 1, true),
+                ("button-", 1, true),
+            ]
+        );
+        assert_eq!(
+            (input.sink().events()[0].x, input.sink().events()[0].y),
+            (5, 6)
+        );
+        assert_eq!(input.delivered_units(), 5);
+        let input = Input::with_sink(RecordingSink::default());
+        input.type_text("aA").unwrap();
+        input.keypress(&["control", "a"]).unwrap();
+        input.move_pointer(1, 2).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key+", 9, true),
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key-", 9, true),
+                ("key+", 10, true),
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key-", 10, true),
+                ("move", 0, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn refusal_after_a_press_releases_owed_input_without_admission() {
+        // Drag: three point preflights, the start motion and the press are admitted.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(5));
+        let error = input.drag(&[(1, 1), (2, 2), (3, 3)], "right").unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 3, true),
+                ("button-", 3, false)
+            ]
+        );
+        assert_eq!(input.delivered_units(), 3);
+
+        // Chord refused before its third key: both held modifiers release, newest first.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(2));
+        let error = input.keypress(&["control", "shift", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, false),
+                ("key-", 8, false),
+            ]
+        );
+
+        // Chord refused while releasing: each key is released exactly once.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(3));
+        input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, true),
+                ("key-", 8, false),
+            ]
+        );
+
+        // Typing refused after shift: shift releases and the shifted key never posts.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(3));
+        input.type_text("aB").unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, false),
+            ]
+        );
+        assert_eq!(input.delivered_units(), 4);
+
+        // Scroll refused on the second notch release.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(5));
+        input.scroll(0, 0, 0.0, 3.0).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 5, true),
+                ("button-", 5, true),
+                ("button+", 5, true),
+                ("button-", 5, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_posts_and_missing_keys_still_release_held_input() {
+        // The press post fails: its release is still owed, since the server may have it.
+        let input = Input::with_sink(RecordingSink::default().fail_post(1));
+        let error = input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert_eq!(
+            trace(&input),
+            [("key+", 8, true), ("key-", 9, false), ("key-", 8, false)]
+        );
+        assert_eq!(input.delivered_units(), 3);
+
+        // The release post fails: it stays owed and is retried once on unwind.
+        let input = Input::with_sink(RecordingSink::default().fail_post(2));
+        input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, false),
+                ("key-", 8, false),
+            ]
+        );
+
+        // A key missing from the keymap mid-chord releases the keys already down.
+        let input = Input::with_sink(RecordingSink::default().unmapped('a' as u32));
+        let error = input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, false)]);
+    }
+
+    #[test]
+    fn rejected_input_posts_nothing() {
+        let input = Input::with_sink(RecordingSink::default());
+        assert_eq!(
+            input.type_text("a\u{e9}").unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.keypress(&["control", "nope"]).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.keypress(&[]).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.drag(&[(1, 1)], "left").unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.click(1, 1, "fourth", 1).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        let blocked = Input::with_sink(RecordingSink::default().refuse_points());
+        assert_eq!(
+            blocked.click(1, 1, "left", 1).unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert_eq!(
+            blocked.drag(&[(1, 1), (2, 2)], "left").unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert_eq!(
+            blocked.scroll(1, 1, 1.0, 0.0).unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert_eq!(
+            blocked.move_pointer(1, 1).unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert!(input.sink().events().is_empty() && blocked.sink().events().is_empty());
+        assert_eq!(input.delivered_units() + blocked.delivered_units(), 0);
+    }
+
     #[test]
     fn decode_limits() {
         assert_eq!(
