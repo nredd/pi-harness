@@ -988,10 +988,22 @@ export async function exportStats(
 	// The portable kit cannot import the dev-tools lock. Fail closed on contention or a
 	// crashed writer; never infer that another writer is dead from the age of the lock.
 	await mkdir(lock);
+	let result: ExportResult | undefined;
 	try {
-		return await publishStats(dir, snapshotDir, root, options, identity);
+		result = await publishStats(dir, snapshotDir, root, options, identity);
+		return result;
 	} finally {
-		await rmdir(lock);
+		try {
+			await rmdir(lock);
+		} catch {
+			// Do not mask a publication error, or turn an already-visible publish into a failure.
+			if (result) {
+				result.warnings ??= [];
+				result.warnings.push(
+					`could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
+				);
+			}
+		}
 	}
 }
 

@@ -519,7 +519,9 @@ was never recorded; that double fault is not defended.)
 Exports lock the machine outbox from reading the previous manifest through pruning and recording
 export state. A concurrent export fails without publishing; retry after the first writer finishes.
 If a crash leaves `.export.lock` behind, remove that directory only after verifying no export is
-running. `pi-usage-sync` separately serializes whole sync runs.
+running. If releasing the lock fails after publication, export still succeeds and reports a warning
+with the lock path. A failed publication still reports the original error. `pi-usage-sync`
+separately serializes whole sync runs.
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
 `PI_CODING_AGENT_SESSION_DIR`, then `DIR/sessions`; `--sessions-dir` takes precedence. History

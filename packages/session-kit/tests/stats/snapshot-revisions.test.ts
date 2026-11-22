@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -29,6 +29,7 @@ vi.mock("node:fs/promises", async (original) => {
 		rename: vi.fn(actual.rename),
 		readdir: vi.fn(actual.readdir),
 		readFile: vi.fn(actual.readFile),
+		rmdir: vi.fn(actual.rmdir),
 		writeFile: vi.fn(actual.writeFile),
 	};
 });
@@ -49,6 +50,7 @@ afterEach(() => {
 	vi.mocked(rename).mockRestore();
 	vi.mocked(readdir).mockRestore();
 	vi.mocked(readFile).mockRestore();
+	vi.mocked(rmdir).mockRestore();
 	vi.mocked(writeFile).mockRestore();
 });
 const manifest = (path: string): Manifest => JSON.parse(readFileSync(join(path, "manifest.json"), "utf8")) as Manifest;
@@ -838,6 +840,40 @@ it.each(["previous manifest read", "manifest rename", "pruning", "state recordin
 		expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([13]);
 	},
 );
+
+it.each(["published", "failed"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
+	const ms = at("2026-11-01");
+	sessionFile(join(agent, "sessions", "new.jsonl"), {
+		startMs: ms,
+		lines: [assistantLine({ ms, provider: "physical", model: "fixture", input: 7 })],
+	});
+	const denied = Object.assign(new Error("unlock denied"), { code: "EACCES" });
+	let shardsAtUnlock: number | undefined;
+	vi.mocked(rmdir).mockImplementationOnce(async (lock) => {
+		if (outcome === "published") shardsAtUnlock = manifest(dirname(String(lock))).shards.length;
+		throw denied;
+	});
+	if (outcome === "failed") {
+		const failure = new Error("manifest rename failed");
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		vi.mocked(rename).mockImplementation(async (from, to) => {
+			if (basename(String(to)) === "manifest.json") throw failure;
+			await actual.rename(from, to);
+		});
+		await expect(exportStats(agent, out)).rejects.toBe(failure);
+	} else {
+		const result = await exportStats(agent, out);
+		expect(shardsAtUnlock).toBe(1);
+		expect(result.warnings).toEqual([
+			expect.stringContaining(
+				`could not release export lock ${JSON.stringify(join(result.snapshotDir, ".export.lock"))}`,
+			),
+		]);
+		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+		expect((await loadCombined(viewer)).calls.map((row) => row.input)).toEqual([7]);
+	}
+	expect(rmdir).toHaveBeenCalledOnce();
+});
 
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {
 	const a = join(agent, "sessions", "a.jsonl");
