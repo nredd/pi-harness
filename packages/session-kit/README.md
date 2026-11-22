@@ -577,7 +577,8 @@ CLI results:
   last published for that harness (events, sessions, quota) is carried into the new snapshot
   unchanged, a diagnostic goes to stderr, and the export still succeeds, so one flaky harness
   cannot stop the pi export or replace good history with a partial scan. With nothing published
-  yet there is nothing to carry. If the previous snapshot itself is unreadable the harness is
+  yet there is nothing to carry. If the previous manifest itself is unreadable (or replacement
+  was requested over unreadable shards, see below) the harness is
   `failed: "lost"` (diagnostic `<harness>: last published contents unreadable`): it is missing
   from this snapshot, and stderr says so. While the harness is still missing, further unreadable
   manifests do not mark it fresh. A lost harness with no data to carry gets no `lastGoodAt` stamp,
@@ -600,7 +601,8 @@ CLI results:
   recorded"]`, when the snapshot is out but `export-state.json` could not be written (the next
   export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
-  state, a refused narrower harness set, or a clock behind the last published export. (A harness cache that cannot be written is a failed
+  state, a refused narrower harness set, a clock behind the last published export, or a readable
+  manifest whose history is not. (A harness cache that cannot be written is a failed
   harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits
   nonzero, retaining every failed machine's last-good snapshot; one that only finds stale harnesses
   exits 0 and lists them in `stale`.
@@ -693,7 +695,12 @@ gzip files; its separate assembled 128 MiB bound and last-good replacement rule 
 Shards are published first, manifest last. After publication the serialized exporter removes
 unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
 machine snapshot and retry next sync. Valid content-addressed files are never rewritten; corrupt
-bytes at an existing filename are repaired through an atomic rename. A read failure freezes the
+bytes at an existing filename are repaired through an atomic rename. A readable manifest whose
+shards are missing, corrupt or inconsistent with each other is kept: export fails before writing,
+naming every unreadable shard file (`Published usage history is unreadable (...)`), because
+publishing the scan alone would evict the intact archived months from the active snapshot. Restore
+the files from the sync checkout and export again, or pass `--replace-harnesses` to publish
+without that history. An unreadable manifest cannot name its history; that read failure freezes the
 then-present recovery filenames before publication. Only that set is protected: later superseded
 active-month generations still prune normally, even while recovery remains pending. A genuinely
 new read failure can extend the protected set; ordinary exports cannot. Recovery copies therefore

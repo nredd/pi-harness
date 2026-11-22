@@ -173,7 +173,7 @@ it("preserves recovery files and keeps a vanished harness lost across repeated u
 	rmSync(roots.claude, { recursive: true, force: true });
 	for (let run = 0; run < 3; run++) {
 		// After one recovery export, the active snapshot no longer contains Claude rows.
-		if (run === 1) writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
+		if (run < 2) writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
 		vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + (run + 1) * 60_000);
 		const result = await exportStats(agent, out, undefined, options);
 		expect(readdirSync(first.snapshotDir)).toContain(ref.file);
@@ -259,7 +259,7 @@ it("prunes post-recovery active generations while retaining only the frozen reco
 	const first = await exportStats(agent, out);
 	const original = manifest(first.snapshotDir).shards[0];
 	if (!original) throw new Error("Missing shard");
-	writeFileSync(join(first.snapshotDir, original.file), "corrupt");
+	writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
 	await exportStats(agent, out);
 	for (let i = 0; i < 5; i++) {
 		seed(8 + i);
@@ -338,8 +338,8 @@ it("refuses publication when the durable recovery barrier cannot be written", as
 	const ref = manifest(first.snapshotDir).shards[0];
 	if (!ref) throw new Error("Missing shard");
 	const manifestPath = join(first.snapshotDir, "manifest.json");
+	writeFileSync(manifestPath, "corrupt");
 	const before = readFileSync(manifestPath);
-	writeFileSync(join(first.snapshotDir, ref.file), "corrupt");
 	rmSync(roots.claude, { recursive: true, force: true });
 	const statePath = join(agent, "pi-session-kit", "export-state.json");
 	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -405,9 +405,7 @@ it("migrates a legacy boolean recovery marker to a frozen file set once", async 
 	state.historyHarnesses = null;
 	state.recoveryPending = true;
 	writeFileSync(statePath, JSON.stringify(state));
-	const ref = before[0];
-	if (!ref) throw new Error("Missing shard");
-	writeFileSync(join(first.snapshotDir, ref.file), "corrupt");
+	writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
 	const migrated = await exportStats(agent, out, undefined, options);
 	expect(migrated.harnesses?.codex?.failed).toBeUndefined();
 	const frozen = JSON.parse(readFileSync(statePath, "utf8")).recoveryFiles;
@@ -1053,6 +1051,64 @@ it("clock rollback preserves sealed history", async () => {
 	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-10-25"));
 });
 
+it.each(["corrupt", "missing"])("keeps the active manifest when one shard among intact ones is %s", async (damage) => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	const months = ["2026-08-10", "2026-09-10", "2026-10-10"];
+	sessionFile(path, {
+		startMs: at("2026-08-10"),
+		lines: months.map((day, i) => {
+			const row = JSON.parse(assistantLine({ ms: at(day), provider: "physical", model: "fixture", input: i + 1 }));
+			row.id = `fixture-${i}`;
+			return JSON.stringify(row);
+		}),
+	});
+	const first = await exportStats(agent, out);
+	const published = manifest(first.snapshotDir);
+	expect(published.shards.map((ref) => ref.month)).toEqual(["2026-08", "2026-09", "2026-10"]);
+	// The archived calls now exist only in published history.
+	rmSync(path);
+	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+	const bad = published.shards[1];
+	if (!bad) throw new Error("Missing shard");
+	const backup = readFileSync(join(first.snapshotDir, bad.file));
+	if (damage === "missing") rmSync(join(first.snapshotDir, bad.file));
+	else writeFileSync(join(first.snapshotDir, bad.file), "corrupt");
+	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
+	const files = readdirSync(first.snapshotDir).sort();
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	await expect(exportStats(agent, out)).rejects.toThrow(
+		`Published usage history is unreadable (${bad.file}); restore it from the sync checkout, or pass --replace-harnesses to publish without it`,
+	);
+	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(before);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	// Restoring the shard is enough: the next export publishes over intact history again.
+	writeFileSync(join(first.snapshotDir, bad.file), backup);
+	await exportStats(agent, out);
+	expect(manifest(first.snapshotDir).shards).toEqual(published.shards);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([1, 2, 3]);
+});
+
+it("names every unreadable shard and replaces history only when the owner asks", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	sessionFile(path, {
+		startMs: at("2026-09-10"),
+		lines: ["2026-09-10", "2026-10-10"].map((day, i) =>
+			assistantLine({ ms: at(day), provider: "physical", model: "fixture", input: i + 1 }),
+		),
+	});
+	const first = await exportStats(agent, out);
+	const refs = manifest(first.snapshotDir).shards;
+	for (const ref of refs) writeFileSync(join(first.snapshotDir, ref.file), "corrupt");
+	await expect(exportStats(agent, out)).rejects.toThrow(
+		`Published usage history is unreadable (${refs.map((ref) => ref.file).join(", ")})`,
+	);
+	const replaced = await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	expect(replaced.warnings ?? []).toEqual([]);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([1, 2]);
+});
+
 it("atomically repairs corrupt bytes at an existing content-addressed filename", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
 		startMs: at("2026-10-01"),
@@ -1064,7 +1120,8 @@ it("atomically repairs corrupt bytes at an existing content-addressed filename",
 	const path = join(first.snapshotDir, ref.file);
 	const original = readFileSync(path);
 	writeFileSync(path, "corrupt");
-	await exportStats(agent, out);
+	await expect(exportStats(agent, out)).rejects.toThrow(`Published usage history is unreadable (${ref.file})`);
+	await exportStats(agent, out, undefined, { replaceHarnesses: true });
 	expect(readFileSync(path)).toEqual(original);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 });

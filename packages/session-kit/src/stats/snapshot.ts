@@ -765,28 +765,54 @@ const emptyContribution = (): Contribution => ({ calls: [], sessions: [], quota:
 /** This machine's last published snapshot: `null` if there is none, `"unreadable"` if it cannot be trusted. */
 type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unreadable";
 
-async function loadPrevious(snapshotDir: string): Promise<Previous> {
+/** A readable manifest whose history is not: the unreadable shard files, empty when only their union is invalid. */
+interface Damaged {
+	damaged: string[];
+}
+
+async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 	let manifest: Manifest;
 	try {
 		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
-	try {
-		const shards: Shard[] = [];
-		const expandedSizes: number[] = [];
-		let remaining = MAX_BYTES;
-		for (const ref of manifest.shards) {
+	const shards: Shard[] = [];
+	const expandedSizes: number[] = [];
+	const damaged: string[] = [];
+	let remaining = MAX_BYTES;
+	// Read every reference so the owner learns all the files to restore, not just the first.
+	for (const ref of manifest.shards) {
+		try {
 			const read = await readShard(snapshotDir, manifest, ref, remaining);
 			shards.push(read.shard);
 			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
+		} catch {
+			damaged.push(ref.file);
 		}
-		validateSnapshot({ manifest, shards });
-		return { manifest, shards, expandedSizes };
-	} catch {
-		return "unreadable";
 	}
+	if (damaged.length > 0) return { damaged };
+	try {
+		validateSnapshot({ manifest, shards });
+	} catch {
+		return { damaged: [] };
+	}
+	return { manifest, shards, expandedSizes };
+}
+
+/**
+ * Publishing over a readable manifest with unreadable shards would evict its intact history from the
+ * active snapshot. Keep it, naming what to restore, unless the owner explicitly asks for replacement.
+ */
+function intactPrevious(previous: Previous | Damaged, replace: boolean): Previous {
+	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
+	if (replace) return "unreadable";
+	const what = previous.damaged.length > 0 ? previous.damaged.join(", ") : "shards inconsistent with each other";
+	throw new Error(
+		`Published usage history is unreadable (${what}); restore it from the sync checkout, ` +
+			"or pass --replace-harnesses to publish without it",
+	);
 }
 
 /**
@@ -1040,7 +1066,7 @@ async function publishStats(
 ): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
 	const state = await exportState(dir);
-	const previous = await loadPrevious(snapshotDir);
+	const previous = intactPrevious(await loadPrevious(snapshotDir), options.replaceHarnesses === true);
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
 	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);

@@ -796,8 +796,10 @@ describe("exportStats with harnesses", () => {
 			// every shard is valid and digest-correct, but an event has no session metadata
 			publish((await machineIdentity(agent)).machineId, 2, [event("opencode", "orphan")], [], []);
 			const opts = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
-			// no recorded set either, so what was published cannot be established without saying so
-			await expect(exportStats(agent, repo, undefined, opts)).rejects.toThrow(/Cannot establish/);
+			// a readable manifest over inconsistent history is kept until replacement is explicit
+			await expect(exportStats(agent, repo, undefined, opts)).rejects.toThrow(
+				"Published usage history is unreadable (shards inconsistent with each other)",
+			);
 			const result = await exportStats(agent, repo, undefined, { ...opts, replaceHarnesses: true });
 			expect(result.harnesses?.opencode).toMatchObject({ failed: "lost" });
 			expect(published(result.snapshotDir).flatMap((sh) => sh.events.map((e) => e.harness))).toEqual(["pi"]);
@@ -807,8 +809,7 @@ describe("exportStats with harnesses", () => {
 			seedPi();
 			const roots = seedHarnessHome(home);
 			const first = await exportStats(agent, repo, undefined, { harnesses: ["pi", "opencode"], roots, home });
-			const manifest = JSON.parse(readFileSync(join(first.snapshotDir, "manifest.json"), "utf8")) as Manifest;
-			for (const ref of manifest.shards) writeFileSync(join(first.snapshotDir, ref.file), "tampered");
+			writeFileSync(join(first.snapshotDir, "manifest.json"), "tampered");
 			const second = await exportStats(agent, repo, undefined, {
 				harnesses: ["pi", "opencode"],
 				roots,
@@ -946,8 +947,7 @@ describe("exportStats with harnesses", () => {
 			expect(m2.lastGoodAt).toEqual({ pi: m2.exportedAt, claude: m2.exportedAt, opencode: m1.exportedAt });
 
 			// a clean read gets its mark even when the previous snapshot cannot be trusted
-			const unreadable = manifestOf(second.snapshotDir);
-			for (const ref of unreadable.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
+			writeFileSync(join(second.snapshotDir, "manifest.json"), "tampered");
 			const healthy = await exportStats(agent, repo, undefined, { harnesses, roots, home });
 			expect(manifestOf(healthy.snapshotDir).lastGoodAt).toEqual({
 				pi: manifestOf(healthy.snapshotDir).exportedAt,
@@ -956,8 +956,7 @@ describe("exportStats with harnesses", () => {
 			});
 			await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			// no mark at all for a harness whose previous snapshot could not be read
-			const manifest = manifestOf(second.snapshotDir);
-			for (const ref of manifest.shards) writeFileSync(join(second.snapshotDir, ref.file), "tampered");
+			writeFileSync(join(second.snapshotDir, "manifest.json"), "tampered");
 			const third = await exportStats(agent, repo, undefined, { harnesses, roots, home, loadSqlite: busyDb(roots) });
 			expect(manifestOf(third.snapshotDir).lastGoodAt).not.toHaveProperty("opencode");
 		});
