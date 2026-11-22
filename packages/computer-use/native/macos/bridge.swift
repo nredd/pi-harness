@@ -271,18 +271,38 @@ private func validateDragPoint(_ point: CGPoint) throws {
 	}
 }
 
+/// The one drag geometry check behind `act`, `actBatch`, `desktopInput` and the native sink: at least two
+/// vertices, each within the coordinate limit, and a finite total length. Returns the interpolation step.
+private func admittedDragStep(_ points: [CGPoint]) throws -> CGFloat {
+	guard points.count >= 2 else {
+		throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
+	}
+	for point in points { try validateDragPoint(point) }
+	// Bounded vertices keep the distance and the capped interpolation count representable.
+	var total: CGFloat = 0
+	for (start, end) in zip(points, points.dropFirst()) {
+		total += hypot(end.x - start.x, end.y - start.y)
+	}
+	guard total.isFinite else {
+		throw BridgeFailure(message: "Drag path geometry must be finite", code: "invalid_args")
+	}
+	// Widen the usual 12pt step on long paths to keep the drag stream short.
+	return max(12, total / 1000)
+}
+
+/// Parse a wire drag path and admit its geometry as sent (image pixels for act, global points for desktop).
 private func dragRequestPoints(_ raw: Any?) throws -> [CGPoint] {
 	guard let path = raw as? [[String: Any]], path.count >= 2 else {
 		throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 	}
-	return try path.map { entry in
+	let points = try path.map { entry in
 		guard let x = (entry["x"] as? NSNumber)?.doubleValue, let y = (entry["y"] as? NSNumber)?.doubleValue else {
 			throw BridgeFailure(message: "Drag path entries require x and y", code: "invalid_args")
 		}
-		let point = CGPoint(x: x, y: y)
-		try validateDragPoint(point)
-		return point
+		return CGPoint(x: x, y: y)
 	}
+	_ = try admittedDragStep(points)
+	return points
 }
 
 /// Points along a validated segment, ending at `end`. Aim for `maxStep` spacing, capped at 400 steps.
@@ -2478,12 +2498,20 @@ final class Bridge {
 		return CGPoint(x: record.windowFrame.origin.x + record.windowFrame.width * relX, y: record.windowFrame.origin.y + record.windowFrame.height * relY)
 	}
 
-	private func groundedDragPoints(_ rawPath: Any?, record: LookRecord) throws -> [CGPoint] {
-		try dragRequestPoints(rawPath).map { raw in
-			let grounded = lookPoint(record: record, x: raw.x, y: raw.y)
-			try validateDragPoint(grounded)
-			return grounded
-		}
+	/// The grounded point of an x/y act target. A ref target wins over x/y and returns nil: act grounds it
+	/// on the live element only when it runs.
+	private func coordinateTargetPoint(_ target: [String: Any], record: LookRecord) -> CGPoint? {
+		guard target["ref"] as? String == nil, let x = target["x"] as? NSNumber, let y = target["y"] as? NSNumber else { return nil }
+		return lookPoint(record: record, x: x.doubleValue, y: y.doubleValue)
+	}
+
+	/// The drag geometry admission shared by `act` and `actBatch`: the action point and every grounded
+	/// vertex pass the same checks as the native sink, before any lock, focus, preflight or allocation.
+	private func admittedDragPoints(at point: CGPoint?, params: [String: Any], record: LookRecord) throws -> [CGPoint] {
+		if let point { try validateDragPoint(point) }
+		let points = try dragRequestPoints(params["path"]).map { lookPoint(record: record, x: $0.x, y: $0.y) }
+		_ = try admittedDragStep(points)
+		return points
 	}
 
 	private func payloadNode(element: AXUIElement) -> [String: Any] {
@@ -2779,11 +2807,11 @@ final class Bridge {
 			element = stored
 			beforeValue = world.stringAttribute(stored, kAXValueAttribute as CFString)
 			beforeSelected = world.stringAttribute(stored, kAXSelectedTextAttribute as CFString)
-		} else if let xNumber = target["x"] as? NSNumber, let yNumber = target["y"] as? NSNumber {
+		} else if let point = coordinateTargetPoint(target, record: record) {
 			guard record.hasImage else {
 				throw BridgeFailure(message: "Coordinate targeting is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
-			rawPoint = lookPoint(record: record, x: xNumber.doubleValue, y: yNumber.doubleValue)
+			rawPoint = point
 			beforeValue = nil
 			beforeSelected = nil
 		} else {
@@ -2862,8 +2890,7 @@ final class Bridge {
 			if delivery == "pid" { performed["verification"] = "caller_required" }
 			let dragPoints: [CGPoint]
 			if action == "drag" {
-				try validateDragPoint(point)
-				dragPoints = try groundedDragPoints(params["path"], record: record)
+				dragPoints = try admittedDragPoints(at: point, params: params, record: record)
 			} else {
 				dragPoints = []
 			}
@@ -3246,15 +3273,16 @@ final class Bridge {
 		guard actions.allSatisfy({ ($0["lookId"] as? String) == lookId }) else {
 			throw BridgeFailure(message: "actBatch actions must belong to one look", code: "invalid_args")
 		}
-		// Reject a malformed drag before the transaction takes its outer HID lock.
+		// Reject a malformed drag before the transaction takes its outer HID lock. A ref target's point exists
+		// only once its step runs; act then rejects it before that step's own focus, preflight or allocation.
 		let drags = actions.filter { $0["action"] as? String == "drag" }
 		if !drags.isEmpty {
 			guard let record = world.lookRecord(lookId) else {
 				throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
 			}
 			for drag in drags {
-				let params = drag["params"] as? [String: Any]
-				_ = try groundedDragPoints(params?["path"], record: record)
+				let point = coordinateTargetPoint(drag["target"] as? [String: Any] ?? [:], record: record)
+				_ = try admittedDragPoints(at: point, params: drag["params"] as? [String: Any] ?? [:], record: record)
 			}
 		}
 		let finish = world.beginRootDelta(pid)
@@ -4841,20 +4869,10 @@ final class Bridge {
 	}
 
 	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
-		guard points.count >= 2, let first = points.first, let last = points.last else {
+		let maxStep = try admittedDragStep(points)
+		guard let first = points.first, let last = points.last else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
-		for point in points { try validateDragPoint(point) }
-		// Bounded vertices keep the distance and the capped interpolation count representable.
-		var total: CGFloat = 0
-		for (start, end) in zip(points, points.dropFirst()) {
-			total += hypot(end.x - start.x, end.y - start.y)
-		}
-		guard total.isFinite else {
-			throw BridgeFailure(message: "Drag path geometry must be finite", code: "invalid_args")
-		}
-		// Widen the usual 12pt step on long paths to keep the drag stream short.
-		let maxStep = max(12, total / 1000)
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try inputSink.checkDragCancellation()

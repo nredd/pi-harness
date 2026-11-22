@@ -414,6 +414,15 @@ private func runBatchAssertions() throws {
         try fixture.bridge.actBatch(["actions": [move, fixture.request("drag", coords: true), press]], world: fixture.world, supportsAgentCursor: false)
     }
     expect(fixture.trace.isEmpty, "malformed batch drag must not acquire outer lock or execute an earlier action")
+    // In-range vertices, but the coordinate target grounds past the limit on a far-right window.
+    fixture.windowFrame.origin.x = 999_900
+    let farTarget = fixture.request("drag", params: ["path": [["x": 0, "y": 0], ["x": 50, "y": 0]]])
+        .merging(["target": ["x": 290, "y": 10]]) { _, new in new }
+    try actionFailure("invalid_args", message: "Drag coordinates must be finite and within +/-1000000") {
+        try fixture.bridge.actBatch(["actions": [move, farTarget, press]], world: fixture.world, supportsAgentCursor: false)
+    }
+    expect(fixture.trace.isEmpty, "out-of-range batch drag target must not lock, activate, preflight or execute an earlier step: \(fixture.trace)")
+    fixture.windowFrame.origin.x = 100
     fixture.blocked = true
     let drag = fixture.request("drag", coords: true, params: ["path": [["x": 10, "y": 20], ["x": 30, "y": 40]]])
     let result = try fixture.bridge.actBatch(["actions": [move, drag, press]], world: fixture.world, supportsAgentCursor: false)
