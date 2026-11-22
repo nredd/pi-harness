@@ -2141,6 +2141,9 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 
 function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
 	if (a.pid !== b.pid) return false;
+	// A Windows native ref names one window instance; a same-HWND replacement is another root.
+	if (currentPlatformBackend.name === "windows")
+		return a.nativeWindowRef !== undefined && a.nativeWindowRef === b.nativeWindowRef;
 	if (a.windowId > 0 && b.windowId > 0) return a.windowId === b.windowId;
 	if (a.nativeWindowRef && b.nativeWindowRef) return a.nativeWindowRef === b.nativeWindowRef;
 	return normalizeText(a.windowTitle) === normalizeText(b.windowTitle);
@@ -2590,6 +2593,8 @@ function exactPlatformRootMatchesTarget(root: HelperWindow, target: ResolvedTarg
 	const nativeRefMatches = Boolean(
 		target.nativeWindowRef && (root.rootRef === target.nativeWindowRef || root.windowRef === target.nativeWindowRef),
 	);
+	// Windows: only the instance's native ref identifies it; a same-HWND replacement must not pass.
+	if (currentPlatformBackend.name === "windows") return nativeRefMatches;
 	const windowIdMatches = target.windowId > 0 && root.windowId === target.windowId;
 	return nativeRefMatches || windowIdMatches;
 }

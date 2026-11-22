@@ -7,6 +7,8 @@ import {
 	executeReadText,
 	executeSearchUi,
 	executeWaitFor,
+	terminalDesktopActionResult,
+	testing,
 } from "../src/bridge.ts";
 import { currentPlatformBackend, platformBackendForRuntime } from "../src/platform/index.ts";
 import { windowsHelper } from "../src/platform/windows/helper.ts";
@@ -229,4 +231,42 @@ test("A Windows root ref from an earlier helper lifetime never observes a same-H
 	await observe(replacement.windowRef);
 	await expect(observe(originalRef)).rejects.toMatchObject({ code: "root_stale" });
 	expect(looks()).toEqual([lifetimeRef(3), lifetimeRef(5)]);
+});
+
+test("Windows root identity is the instance native ref, never the HWND", async ({ onTestFinished }) => {
+	const original = { ...currentPlatformBackend };
+	onTestFinished(() => {
+		Object.assign(currentPlatformBackend, original);
+		vi.restoreAllMocks();
+	});
+	Object.assign(currentPlatformBackend, platformBackendForRuntime("win32"));
+	const target = {
+		appName: "Notes",
+		appId: "notes.exe",
+		pid: root.pid,
+		windowTitle: "Notes",
+		windowId: root.windowId,
+		windowRef: "@r1",
+		nativeWindowRef: "@w1",
+	};
+	// Outline reuse: a same-HWND replacement (another native ref) is a different root.
+	const same = testing.sameRootIdentity;
+	expect(same(target, { ...target })).toBe(true);
+	expect(same(target, { ...target, nativeWindowRef: "@w2" })).toBe(false);
+	expect(same({ ...target, nativeWindowRef: undefined }, { ...target, nativeWindowRef: undefined })).toBe(false);
+
+	// Terminal probe: only the replacement is listed under the same HWND, so the target closed.
+	let listed: Record<string, unknown>[] = [{ ...root, rootRef: "@w2" }];
+	vi.spyOn(windowsHelper, "command").mockImplementation(async () => ({ roots: listed }));
+	const terminal = async () =>
+		await testing.runInOperation(
+			async () => await terminalDesktopActionResult(target, "s1", { strategy: "act", rootDelta: [] }, new Error("x")),
+		);
+	const replaced = await terminal();
+	expect(replaced.details.status).toBe("target_closed");
+	expect(replaced.details.execution.rootDelta).toContainEqual(
+		expect.objectContaining({ change: "closed", ref: "@r1", metadata: { source: "post_action_identity_probe" } }),
+	);
+	listed = [{ ...root, rootRef: "@w1" }];
+	expect((await terminal()).details.status).not.toBe("target_closed");
 });

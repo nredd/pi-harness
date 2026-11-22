@@ -248,6 +248,9 @@ creation time. Each root ref names one instance:
   message, distinct from the stale-instance message
 - Without a look, the helper requires the exact `rootRef` for `uiaWaitFor` and resolves only that ref's
   binding, never the latest binding of the HWND
+- The extension compares Windows roots by that instance's native ref, never the HWND: after an action
+  the closure probe reports `target_closed` when only a same-HWND replacement is listed, and a new
+  observation never reuses the old instance's outline refs
 
 On Windows, `wait_for` and `act_ui` postconditions check the admitted instance before every UIA
 poll. A closed HWND, a different owning PID or process, or a replacement window fails the next poll
