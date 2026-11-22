@@ -199,7 +199,10 @@ export function isConfirmedReadable(node: OutlineNode): boolean {
 	return !node.unconfirmed && !isProtectedNode(node);
 }
 
-/** Whether `rect` is a known region with positive area. */
+/**
+ * Whether `rect` is a known region with positive area. Parse and restore keep only rects whose four fields are finite
+ * numbers, so anything else is already `undefined` here.
+ */
 function hasArea(rect: OutlineRect | undefined): rect is OutlineRect {
 	return rect !== undefined && rect.w > 0 && rect.h > 0;
 }
@@ -229,45 +232,61 @@ function collectNodes(root: OutlineNode): OutlineNode[] {
 	return nodes;
 }
 
+/** Replace a picture-only node's title (OCR text) with the marker; it then counts as protected. Mutates `node`. */
+function redactPicture(node: OutlineNode): void {
+	node.title = PROTECTED_LABEL;
+	sanitizeProtected(node);
+}
+
 /**
- * Drop text that may show a protected or unconfirmed node's pixels (#1263): a `text` box on another node, or a
- * picture-only node (whose title is OCR text), that overlaps such a node's rect. Fails closed: when any protected or
- * unconfirmed node has no known area, or a box has none, the box is dropped. The one exception is a box enclosed by
- * its own readable node's rect when the protected node is that node's ancestor (the Linux helper's own-value text).
- * A redacted picture-only node is itself protected, so this repeats until stable and gives the same result on
- * restore. Mutates the tree.
+ * Drop text that may show the pixels of a protected or unconfirmed node (#1263): a `text` box on another node, or
+ * a picture-only node (whose title is OCR text), that overlaps such a node's rect. Fails closed: when any such
+ * node has no known area, every box and picture-only title goes, and while one exists a box with no known area goes
+ * too. The one exception is a box enclosed by its own readable node's rect under the protected ancestor (the Linux
+ * helper's own-value text). A redacted
+ * picture-only node is itself protected, so its region joins the worklist; restore therefore gives the same result.
+ * Mutates the tree.
  */
 function dropTextOverProtected(root: OutlineNode): void {
 	const nodes = collectNodes(root);
-	for (;;) {
-		const regions: Array<{ node: OutlineNode; rect: OutlineRect }> = [];
-		let unknownRegion = false;
-		for (const node of nodes) {
-			if (isConfirmedReadable(node)) continue;
-			if (hasArea(node.rect)) regions.push({ node, rect: node.rect });
-			else unknownRegion = true;
-		}
-		if (!regions.length && !unknownRegion) return;
-		const exposes = (box: OutlineRect | undefined, owner?: OutlineNode): boolean =>
+	const regions: Array<{ node: OutlineNode; rect: OutlineRect }> = [];
+	let unknownRegion = false;
+	const addRegion = (node: OutlineNode): void => {
+		if (hasArea(node.rect)) regions.push({ node, rect: node.rect });
+		else unknownRegion = true;
+	};
+	for (const node of nodes) if (!isConfirmedReadable(node)) addRegion(node);
+	if (!regions.length && !unknownRegion) return;
+
+	const mustDropBox = (owner: OutlineNode, text: OutlineText): boolean => {
+		const box = text.rect;
+		return (
 			unknownRegion ||
 			!hasArea(box) ||
-			regions.some(
-				({ node, rect }) =>
-					overlaps(rect, box) &&
-					!(owner && hasArea(owner.rect) && isAncestor(node, owner) && encloses(owner.rect, box)),
-			);
-		let redacted = false;
-		for (const node of nodes) {
-			if (!isConfirmedReadable(node)) continue;
-			node.text = node.text.filter((text) => !exposes(text.rect, node));
-			if (node.pictureOnly && exposes(node.rect)) {
-				node.title = PROTECTED_LABEL;
-				sanitizeProtected(node);
-				redacted = true;
+			regions.some(({ node, rect }) => overlaps(rect, box) && !isOwnValueText(owner, box, node))
+		);
+	};
+
+	// Picture-only closure as a worklist: a redacted picture-only node is a new region, which may expose another.
+	const pictures = nodes.filter((node) => node.pictureOnly && isConfirmedReadable(node));
+	for (let index = 0; index < regions.length && !unknownRegion; index += 1) {
+		const region = regions[index];
+		for (const picture of pictures) {
+			if (isConfirmedReadable(picture) && (!hasArea(picture.rect) || overlaps(region.rect, picture.rect))) {
+				redactPicture(picture);
+				addRegion(picture);
 			}
 		}
-		if (!redacted) return;
 	}
+	// Redacting twice is harmless, so pictures the closure already redacted need no check.
+	if (unknownRegion) for (const picture of pictures) redactPicture(picture);
+	for (const node of nodes)
+		if (isConfirmedReadable(node)) node.text = node.text.filter((text) => !mustDropBox(node, text));
+}
+
+/** Whether `box` sits inside `owner`'s rect under the unreadable `region` ancestor (Linux own-value text). */
+function isOwnValueText(owner: OutlineNode, box: OutlineRect, region: OutlineNode): boolean {
+	return hasArea(owner.rect) && isAncestor(region, owner) && encloses(owner.rect, box);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -301,20 +320,35 @@ function parseRect(raw: unknown): OutlineRect {
 	};
 }
 
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
+ * Read an outline or text rect, or `undefined` when any of its four fields is missing or not a finite number.
+ * Never invent an origin: a placed-looking region at a made-up position would let OCR text over a protected node
+ * escape the overlap check (#1263). A negative size reads as zero, which has no area.
+ */
+function readRect(raw: unknown): OutlineRect | undefined {
+	if (!isRecord(raw) || ![raw.x, raw.y, raw.w, raw.h].every(isFiniteNumber)) return undefined;
+	const { x, y, w, h } = raw as Record<keyof OutlineRect, number>;
+	return { x, y, w: Math.max(0, w), h: Math.max(0, h) };
+}
+
+/** Read one text box; its rect is kept only when complete. */
+function readText(item: unknown): OutlineText | undefined {
+	if (!isRecord(item)) return undefined;
+	const string = toString(item.string);
+	if (!string) return undefined;
+	const text: OutlineText = { string, confidence: Math.max(0, Math.min(1, toNumber(item.confidence))) };
+	const rect = readRect(item.rect);
+	if (rect) text.rect = rect;
+	return text;
+}
+
 function parseText(raw: unknown): OutlineText[] {
 	if (!Array.isArray(raw)) return [];
-	return raw
-		.map((item): OutlineText | undefined => {
-			if (!isRecord(item)) return undefined;
-			const string = toString(item.string);
-			if (!string) return undefined;
-			return {
-				string,
-				confidence: Math.max(0, Math.min(1, toNumber(item.confidence))),
-				rect: parseRect(item.rect),
-			};
-		})
-		.filter((item): item is OutlineText => Boolean(item));
+	return raw.map(readText).filter((item): item is OutlineText => Boolean(item));
 }
 
 /** How a backend's look payload is read. */
@@ -349,7 +383,7 @@ function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode
 		canIncrement: toBoolean(record.canIncrement),
 		canDecrement: toBoolean(record.canDecrement),
 		isTextInput: toBoolean(record.isTextInput),
-		rect: parseRect(record.rect),
+		rect: readRect(record.rect),
 		focused: toBoolean(record.focused),
 		offscreen: toBoolean(record.offscreen),
 		pictureOnly: toBoolean(record.pictureOnly),
@@ -365,6 +399,7 @@ function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode
 		children: [],
 		parent,
 	};
+	if (!node.rect) delete node.rect;
 	node.children = (Array.isArray(record.children) ? record.children : []).map((child) =>
 		parseNode(child, options, node),
 	);
@@ -865,10 +900,12 @@ function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): Ou
 		actions: Array.isArray(record.actions)
 			? record.actions.filter((value): value is string => typeof value === "string")
 			: [],
-		text: Array.isArray(record.text) ? record.text.filter((item) => typeof item?.string === "string") : [],
+		rect: readRect(record.rect),
+		text: Array.isArray(record.text) ? record.text.map(readText).filter((item) => item !== undefined) : [],
 		children: [],
 		parent,
 	};
+	if (!node.rect) delete node.rect;
 	if (record.unconfirmed === true) redactRetained(node);
 	else delete node.unconfirmed;
 	return node;

@@ -136,7 +136,7 @@ describe("parseLookResponse fallbacks", () => {
 			children: [null, 3, { ref: "c", role: "AXButton" }],
 		}).outline;
 		assert.equal(root.title, "", "non-string title becomes empty");
-		assert.deepEqual(root.rect, { x: 1, y: 0, w: 0, h: 0 });
+		assert.equal(root.rect, undefined, "an incomplete rect is unknown geometry, never a made-up origin (#1263)");
 		assert.deepEqual(root.scrollExtent, { seen: 3, total: 0 });
 		assert.deepEqual(root.actions, ["AXPress", "AXShowMenu"]);
 		assert.equal(root.canPress, false, "only literal true is truthy");
@@ -153,7 +153,7 @@ describe("parseLookResponse fallbacks", () => {
 		}).outline;
 		assert.deepEqual(childless.text, [
 			{ string: "hi", confidence: 1, rect: { x: 1, y: 2, w: 3, h: 4 } },
-			{ string: "lo", confidence: 0, rect: { x: 0, y: 0, w: 0, h: 0 } },
+			{ string: "lo", confidence: 0 },
 		]);
 		assert.equal(root.children.length, 3, "malformed children still occupy a slot as empty nodes");
 		assert.equal(root.children[2].wireRef, "c");

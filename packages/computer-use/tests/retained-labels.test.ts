@@ -6,6 +6,7 @@ import {
 	foldToBudget,
 	graftScopedOutline,
 	isProtectedNode,
+	type ParseLookOptions,
 	PROTECTED_LABEL,
 	parseLookResponse,
 	REDACTED_LABEL,
@@ -606,11 +607,16 @@ describe("OCR text over a protected node (#1263)", () => {
 		pictureOnly: true,
 		rect,
 	});
-	const window = (children: object[], extra = {}) =>
-		parsed({
-			lookId: "l",
-			outline: { ref: "w", role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, children, ...extra },
-		});
+	const window = (children: object[], extra = {}, options: ParseLookOptions = {}) =>
+		present(
+			parseLookResponse(
+				{
+					lookId: "l",
+					outline: { ref: "w", role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, children, ...extra },
+				},
+				options,
+			).parsedOutline,
+		);
 	const byWire = (outline: ReturnType<typeof parsed>, wireRef: string) =>
 		present(outline.nodes.find((node) => node.wireRef === wireRef));
 	const texts = (outline: ReturnType<typeof parsed>, wireRef: string) =>
@@ -763,6 +769,100 @@ describe("OCR text over a protected node (#1263)", () => {
 		assert.deepEqual(present(outline.nodes.find((node) => node.ref === "@e3")).text, []);
 		assert.equal(present(outline.nodes.find((node) => node.ref === "@e4")).title, PROTECTED_LABEL);
 		assert.ok(!JSON.stringify(serializeOutline(outline)).includes(SECRET));
+	});
+
+	/** A readable box well away from `field`, so only the unknown-geometry rule can drop it. */
+	const far = { x: 10, y: 150, w: 30, h: 10 };
+	const farText = (extra = {}) => ({ ref: "t", role: "AXStaticText", rect: far, text: [box(SECRET, far)], ...extra });
+	/** A restored outline: `children` under a readable window that holds a box at `far`. */
+	const restored = (children: object[]) =>
+		restoreOutline({
+			lookId: "l",
+			root: {
+				...outlineNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, text: [box(SECRET, far)] }),
+				children: children as never,
+			},
+		});
+	const restoredNode = (ref: string, over: object, children: object[] = []) => ({
+		...outlineNode(ref, over),
+		children,
+	});
+
+	for (const [name, rect] of Object.entries({
+		"protected rect missing its origin": { w: 80, h: 20 },
+		"protected rect with a NaN origin": { x: Number.NaN, y: 50, w: 80, h: 20 },
+		"protected rect with a string origin": { x: "100", y: 50, w: 80, h: 20 },
+		"null protected rect": null,
+	})) {
+		test(`parse: a ${name} is unknown geometry and drops every OCR box`, () => {
+			const outline = window([secure({ rect }), farText()], { text: [box(SECRET, far)] });
+			assert.deepEqual([texts(outline, "w"), texts(outline, "t")], [[], []]);
+			assert.equal(byWire(outline, "s").rect, undefined, "no origin is invented");
+		});
+
+		test(`restore: a legacy ${name} is unknown geometry and drops every OCR box`, () => {
+			const outline = restored([
+				restoredNode("@e2", { role: "AXSecureTextField", rect }),
+				restoredNode("@e3", farText()),
+			]);
+			assert.deepEqual([outline.root.text, present(outline.nodes[2]).text], [[], []]);
+			assert.equal(present(outline.nodes[1]).rect, undefined);
+		});
+	}
+
+	for (const [name, rect] of Object.entries({
+		"box rect missing its origin": { w: 30, h: 10 },
+		"null box rect": null,
+		"box rect with an infinite size": { x: 10, y: 150, w: Number.POSITIVE_INFINITY, h: 10 },
+	})) {
+		test(`parse and restore: a ${name} is unplaced and dropped beside a protected node`, () => {
+			const outline = window([secure(), farText({ text: [box(SECRET, rect as object), box("Shown", far)] })]);
+			assert.deepEqual(texts(outline, "t"), ["Shown"]);
+			const legacy = restored([
+				restoredNode("@e2", { role: "AXSecureTextField", rect: field }),
+				restoredNode("@e3", farText({ text: [{ string: SECRET, confidence: 1, rect }, box("Shown", far)] })),
+			]);
+			assert.deepEqual(
+				present(legacy.nodes[2]).text.map((item) => item.string),
+				["Shown"],
+			);
+		});
+	}
+
+	test("restore keeps a well-formed rect and drops a malformed one on a readable node", () => {
+		const outline = restored([
+			restoredNode("@e2", { role: "AXButton", rect: { x: 1, y: 2, w: 3, h: 4 } }),
+			restoredNode("@e3", { role: "AXButton", rect: { x: 1, w: 3, h: 4 } }),
+		]);
+		assert.deepEqual([outline.nodes[1].rect, outline.nodes[2].rect], [{ x: 1, y: 2, w: 3, h: 4 }, undefined]);
+		assert.deepEqual(outline.root.text, [{ string: SECRET, confidence: 0.9, rect: far }]);
+	});
+
+	const underProtected = (child: object) => [
+		{ ref: "u", role: "unknown", title: PROTECTED_LABEL, rect: { x: 10, y: 10, w: 200, h: 100 }, children: [child] },
+	];
+	const childRect = { x: 20, y: 20, w: 50, h: 20 };
+
+	test("an unconfirmed node alone filters OCR on restore and graft", () => {
+		const outline = restored([
+			restoredNode("@e2", { role: "AXGroup", wireRef: "old", unconfirmed: true, rect: { x: 0, y: 140, w: 60, h: 30 } }),
+			restoredNode("@e3", { role: "AXGroup", wireRef: "g", rect: { x: 200, y: 10, w: 50, h: 50 } }),
+			restoredNode("@e4", {
+				role: "AXGroup",
+				wireRef: "k",
+				rect: { x: 250, y: 150, w: 30, h: 10 },
+				text: [box("Kept", { x: 250, y: 150, w: 30, h: 10 })],
+			}),
+		]);
+		assert.deepEqual(outline.root.text, [], "the box at `far` overlaps the unconfirmed node");
+		assert.deepEqual(
+			outline.nodes[3].text.map((item) => item.string),
+			["Kept"],
+		);
+		outline.root.text = [box(SECRET, far) as never];
+		graftScopedOutline(outline, "@e3", outlineOf(outlineNode("g", { wireRef: "g", role: "AXGroup" })));
+		assert.ok(!outline.nodes.some(isProtectedNode), "no protected node anywhere");
+		assert.deepEqual([outline.root.text, outline.nodes[3].text.map((item) => item.string)], [[], ["Kept"]]);
 	});
 
 	test("observe_ui and search_ui never echo OCR read over a secure field", async () => {
