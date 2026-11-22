@@ -1793,7 +1793,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// Joined, completion callbacks included, while the outbox is still open: an
 		// aborted run settles once its worker is down, and its Stopped notice is then
 		// spooled below on a switch or dropped with the outbox on quit (#1257).
-		await Promise.allSettled(workflowRuns);
+		await Promise.allSettled(pendingWorkflowRuns);
 		const switching = event?.reason !== "quit" && sessionFile !== undefined;
 		if (switching) {
 			// A group may still be held, or not registered until the parent's turn
@@ -3384,16 +3384,19 @@ Terse command-style prompts produce shallow, generic work.
 	const workflowTasks = new Map<string, WorkflowTask>();
 
 	/**
-	 * Detached runs, each through its completion callback. `session_shutdown`
-	 * aborts the runs and joins these before disposing the outbox, widget and
-	 * fleet: a callback that ran afterwards armed its notice timer on the closed
-	 * outbox (#1257). Kept for the activation's lifetime, like the tasks above.
+	 * Detached runs still going, each through its completion callback; a run
+	 * leaves once that callback has run. `session_shutdown` aborts the runs and
+	 * joins these before disposing the outbox, widget and fleet: a callback that
+	 * ran afterwards armed its notice timer on the closed outbox (#1257).
 	 */
-	const workflowRuns: Promise<void>[] = [];
+	const pendingWorkflowRuns = new Set<Promise<void>>();
 
 	/** Run a task in the background, then `settled`, for `session_shutdown` to join. */
 	function detachWorkflowRun(ctx: ExtensionContext, task: WorkflowTask, settled: () => void): void {
-		workflowRuns.push(runWorkflowTask(ctx, task).then(settled));
+		const run = runWorkflowTask(ctx, task)
+			.then(settled)
+			.finally(() => pendingWorkflowRuns.delete(run));
+		pendingWorkflowRuns.add(run);
 	}
 
 	/**
