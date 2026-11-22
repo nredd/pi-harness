@@ -224,8 +224,9 @@ no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, 
 Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. Look IDs are scoped to one helper lifetime: after a restart, observe again before reading text.
 The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
 On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
-poll and report `root_stale` instead of polling a replacement. These checks are not atomic with the
-subsequent UIA call.
+poll. A closed HWND, or one now owned by a different PID, fails the next poll with `root_stale`.
+A replacement that reuses the exact numeric HWND and PID pair is indistinguishable, and these checks
+are not atomic with the subsequent UIA call.
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
