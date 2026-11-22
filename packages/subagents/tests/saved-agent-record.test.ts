@@ -49,6 +49,15 @@ describe("saved agent lookup notes", () => {
 		},
 	);
 
+	it("labels a possibly running refusal as a snapshot from session start", () => {
+		const note = savedAgentNote({ ...base, status: "running" })!;
+		const refusal =
+			"may still be running in another process (last write 3s ago; retry in 117 s): /synthetic/child.jsonl";
+		expect(describeEvicted({ ...note, possiblyRunning: true, reopenRefusal: refusal })).toBe(
+			`Agent "${base.id}" (${base.description}) last recorded status: running, recovered from saved parent session (no live registry record); as of session start: ${refusal}`,
+		);
+	});
+
 	it("does not append undefined when a possibly running note lacks a refusal", () => {
 		const note = savedAgentNote({ ...base, status: "running" })!;
 		expect(describeEvicted({ ...note, possiblyRunning: true })).toBe(

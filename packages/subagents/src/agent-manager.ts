@@ -313,7 +313,8 @@ export function describeEvicted(note: EvictedNote): string {
 			? "interrupted by a process restart (no live registry record)"
 			: `last recorded status: ${note.status}, recovered from saved parent session (no live registry record)`
 		: `${note.status}, evicted after ${note.evictedAfterMin} min`;
-	const caution = note.possiblyRunning && note.reopenRefusal ? `; ${note.reopenRefusal}` : "";
+	// A snapshot: a resume or steer rechecks the write age, so its countdown is not live.
+	const caution = note.possiblyRunning && note.reopenRefusal ? `; as of session start: ${note.reopenRefusal}` : "";
 	return `Agent "${note.id}" (${note.description}) ${state}${where}${caution}${fallback}`;
 }
 
