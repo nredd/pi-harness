@@ -600,7 +600,7 @@ CLI results:
   recorded"]`, when the snapshot is out but `export-state.json` could not be written (the next
   export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
-  state, or a refused narrower harness set. (A harness cache that cannot be written is a failed
+  state, a refused narrower harness set, or a clock behind the last published export. (A harness cache that cannot be written is a failed
   harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits
   nonzero, retaining every failed machine's last-good snapshot; one that only finds stale harnesses
   exits 0 and lists them in `stale`.
@@ -713,6 +713,11 @@ revisions of one another. Legacy events without an `entryId` retain tuple matchi
 counters or timestamps cannot be identified and can append beside the old row in a sealed month.
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
+Sealing follows the wall clock, so an export whose clock is behind the readable published
+`exportedAt` is refused before anything is written: it would reopen sealed months as the active one,
+replace them with the scan and prune their archived calls. Fix the clock, or pass
+`--replace-harnesses` to publish anyway (e.g. after a clock that ran ahead; viewers keep the newer
+snapshot until the clock passes it).
 
 New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
 that limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte

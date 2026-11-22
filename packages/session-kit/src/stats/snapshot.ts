@@ -1077,6 +1077,15 @@ async function publishStats(
 	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
 	const exportedAt = Date.now();
+	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
+	// the active month, be replaced by the scan and pruned. Refuse before anything is written.
+	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
+	if (exportedAt < publishedAt && !options.replaceHarnesses)
+		throw new Error(
+			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ` +
+				`${new Date(publishedAt).toISOString()}); refusing to reopen sealed months. Fix the clock, ` +
+				"or pass --replace-harnesses to publish anyway",
+		);
 	const scans = await loadHarnesses({
 		now: exportedAt,
 		harnesses: external,

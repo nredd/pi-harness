@@ -1027,6 +1027,32 @@ it("keeps unidentified legacy events stable across repeated sealed-month exports
 	expect((await loadCombined(viewer)).calls).toHaveLength(1);
 });
 
+it("clock rollback preserves sealed history", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
+	sessionFile(path, {
+		startMs: at("2026-10-20"),
+		lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out);
+	// November seals October; the archived call then exists only in published history.
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+	await exportStats(agent, out);
+	const sealed = readFileSync(join(first.snapshotDir, "manifest.json"));
+	const files = readdirSync(first.snapshotDir).sort();
+	rmSync(path);
+	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+	vi.mocked(Date.now).mockReturnValue(at("2026-10-25"));
+	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
+	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(sealed);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
+	// An explicit replacement is the owner's way past a clock that ran ahead.
+	await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-10-25"));
+});
+
 it("atomically repairs corrupt bytes at an existing content-addressed filename", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
 		startMs: at("2026-10-01"),

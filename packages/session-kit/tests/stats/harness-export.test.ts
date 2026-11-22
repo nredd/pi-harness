@@ -997,12 +997,10 @@ describe("exportStats with harnesses", () => {
 				join(repo, "machines", base.machineId, "manifest.json"),
 				JSON.stringify({ ...base, exportedAt: ahead, lastGoodAt: { opencode: ahead } }),
 			);
-			const result = await exportStats(agent, repo, undefined, {
-				harnesses: ["pi", "opencode"],
-				roots,
-				home,
-				loadSqlite: busyDb(roots),
-			});
+			const options = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
+			// A clock behind the published export would reopen sealed months: only explicit replacement proceeds.
+			await expect(exportStats(agent, repo, undefined, options)).rejects.toThrow("Clock is behind");
+			const result = await exportStats(agent, repo, undefined, { ...options, replaceHarnesses: true });
 			const m = manifestOf(result.snapshotDir);
 			expect(m.exportedAt).toBeLessThan(ahead);
 			expect(m.lastGoodAt?.opencode).toBe(m.exportedAt);
