@@ -991,8 +991,17 @@ export async function exportStats(
 	// crashed writer; never infer that another writer is dead from the age of the lock.
 	await mkdir(lock).catch(async (error: NodeJS.ErrnoException) => {
 		if (error.code !== "EEXIST") throw error;
-		// A winner can release the lock before stat. Still reject this attempt; retry from scratch.
-		const info = await lstat(lock).catch(() => undefined);
+		// A winner can release the lock before stat (ENOENT). Still reject this attempt; retry from scratch.
+		const info = await lstat(lock).catch((cause: NodeJS.ErrnoException) => {
+			if (cause.code === "ENOENT") return undefined;
+			throw Object.assign(
+				new Error(
+					`Export lock exists at ${JSON.stringify(lock)} but could not be inspected (${cause.code}); verify no export is running before removing the lock directory`,
+					{ cause },
+				),
+				{ code: cause.code, path: lock },
+			);
+		});
 		const age = info && Math.max(0, Math.floor((Date.now() - info.mtimeMs) / 1000));
 		const details = `${JSON.stringify(lock)} (age ${age === undefined ? "unknown" : `${age}s`})`;
 		const message =
@@ -1001,23 +1010,25 @@ export async function exportStats(
 				: `Export lock is held at ${details}; retry after the other export finishes. If this persists, verify no export is running before removing the lock directory`;
 		throw Object.assign(new Error(message, { cause: error }), { code: error.code, path: lock });
 	});
-	let result: ExportResult | undefined;
+	let outcome: { ok: true; result: ExportResult } | { ok: false; error: unknown };
 	try {
-		result = await publishStats(dir, snapshotDir, root, options, identity);
-		return result;
-	} finally {
-		try {
-			await rmdir(lock);
-		} catch {
-			// Do not mask a publication error, or turn an already-visible publish into a failure.
-			if (result) {
-				result.warnings ??= [];
-				result.warnings.push(
-					`could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
-				);
-			}
-		}
+		outcome = { ok: true, result: await publishStats(dir, snapshotDir, root, options, identity) };
+	} catch (error) {
+		outcome = { ok: false, error };
 	}
+	try {
+		await rmdir(lock);
+	} catch (unlockError) {
+		const warning = `could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`;
+		// Never turn an already-visible publish into a failure, nor hide the primary publication error.
+		if (!outcome.ok)
+			throw new AggregateError([outcome.error, unlockError], `${String(outcome.error)}\n${warning}`, {
+				cause: outcome.error,
+			});
+		outcome.result.warnings = [...(outcome.result.warnings ?? []), warning];
+	}
+	if (!outcome.ok) throw outcome.error;
+	return outcome.result;
 }
 
 async function publishStats(

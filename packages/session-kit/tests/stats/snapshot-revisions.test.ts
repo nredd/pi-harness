@@ -916,6 +916,24 @@ it("fails closed when a racing writer releases its lock before the age check", a
 	await expect(exportStats(agent, out)).resolves.toMatchObject({ snapshotDir });
 });
 
+it("surfaces a lock inspection failure other than a release race", async () => {
+	const { snapshotDir } = await exportStats(agent, out);
+	const lock = join(snapshotDir, ".export.lock");
+	mkdirSync(lock);
+	const denied = Object.assign(new Error("stat denied"), { code: "EACCES" });
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(lstat).mockImplementation(async (path, options) => {
+		if (path === lock) throw denied;
+		return actual.lstat(path, options);
+	});
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		code: "EACCES",
+		path: lock,
+		cause: denied,
+		message: `Export lock exists at ${JSON.stringify(lock)} but could not be inspected (EACCES); verify no export is running before removing the lock directory`,
+	});
+});
+
 it("preserves non-contention errors when acquiring the lock", async () => {
 	const { snapshotDir } = await exportStats(agent, out);
 	const lock = join(snapshotDir, ".export.lock");
@@ -936,8 +954,10 @@ it.each(["published", "failed"])("keeps the %s export outcome when unlocking fai
 	});
 	const denied = Object.assign(new Error("unlock denied"), { code: "EACCES" });
 	let shardsAtUnlock: number | undefined;
-	vi.mocked(rmdir).mockImplementationOnce(async (lock) => {
-		if (outcome === "published") shardsAtUnlock = manifest(dirname(String(lock))).shards.length;
+	let lock = "";
+	vi.mocked(rmdir).mockImplementationOnce(async (path) => {
+		lock = String(path);
+		if (outcome === "published") shardsAtUnlock = manifest(dirname(lock)).shards.length;
 		throw denied;
 	});
 	if (outcome === "failed") {
@@ -947,7 +967,16 @@ it.each(["published", "failed"])("keeps the %s export outcome when unlocking fai
 			if (basename(String(to)) === "manifest.json") throw failure;
 			await actual.rename(from, to);
 		});
-		await expect(exportStats(agent, out)).rejects.toBe(failure);
+		const error = await exportStats(agent, out).then(
+			() => undefined,
+			(reason: unknown) => reason,
+		);
+		// The primary failure stays first; the unlock failure is a named secondary diagnostic.
+		expect(error).toBeInstanceOf(AggregateError);
+		expect(error).toMatchObject({ errors: [failure, denied], cause: failure });
+		expect((error as Error).message).toBe(
+			`Error: manifest rename failed\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
+		);
 	} else {
 		const result = await exportStats(agent, out);
 		expect(shardsAtUnlock).toBe(1);

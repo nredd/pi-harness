@@ -522,7 +522,11 @@ path and age. At one hour it reports a *suspected* stale lock, not proof that th
 A crash can leave `.export.lock` behind. Stop scheduled writers, verify no export is running,
 then run `rmdir` on the reported lock directory and retry the export. No export reclaims a lock
 by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
-with the lock path. A failed publication still reports the original error. `pi-usage-sync`
+with the lock path. A failed publication still reports the original error; if releasing the lock
+also fails, it is an `AggregateError` whose message is the original error followed by the same lock
+warning, with `errors` `[original, unlock]` and the original as `cause`. A lock that vanishes before
+its age is read is still contention; any other failure to inspect it is reported with its code.
+`pi-usage-sync`
 separately serializes whole sync runs.
 
 `--agent-dir` defaults to `PI_CODING_AGENT_DIR`, then `~/.pi/agent`. The session root defaults to
