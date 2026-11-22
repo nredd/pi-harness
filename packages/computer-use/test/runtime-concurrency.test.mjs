@@ -168,12 +168,12 @@ test("runtime concurrency and isolation", async () => {
 	const preparedType = prepareAction({ action: "typeText", text: "hello" }, { currentFocus: true }, actionEnv);
 	assert.equal(preparedType.usesCurrentFocus, true, "focused typing did not preserve click-established focus");
 	assert.equal(
-		canRetryInForeground(preparedType, "didnt", false),
+		canRetryInForeground(preparedType, { outcome: "didnt", evidence: { postedUnits: 0 } }, false),
 		true,
 		"side-effect-free failed typing should retry in the foreground",
 	);
 	assert.equal(
-		canRetryInForeground(preparedClick, "unknown", false),
+		canRetryInForeground(preparedClick, { outcome: "unknown" }, false),
 		false,
 		"ambiguous pointer actions must not be replayed",
 	);

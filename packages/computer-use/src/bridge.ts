@@ -1475,7 +1475,7 @@ async function helperAct(
 				.act(helperActRequest(target, action, initialPolicy), { signal, timeoutMs })
 				.catch(timedOut),
 		);
-		if (canRetryInForeground(action, result.outcome, headless)) {
+		if (canRetryInForeground(action, result, headless)) {
 			const foreground = checked(await actInForeground());
 			const trace = executionTraceFromAct(foreground, "foreground");
 			trace.backgroundFirst = true;
@@ -1483,7 +1483,7 @@ async function helperAct(
 			trace.escalationReason = "side_effect_free_didnt";
 			trace.backgroundAttempt = {
 				outcome: "didnt",
-				reason: "Background input produced no observable value change; a foreground retry was safe.",
+				reason: "Background input posted nothing; a foreground retry was safe.",
 			};
 			return trace;
 		}

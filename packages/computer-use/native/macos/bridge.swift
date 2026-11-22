@@ -598,6 +598,13 @@ func secondaryActionRetryIsSafe(axError: Int32) -> Bool {
 	axError == AXError.invalidUIElement.rawValue
 }
 
+/// A failed `AXPress` establishes non-delivery only for a dead element or an action the element, API or app refused.
+/// `cannotComplete` (the app did not answer in time), `failure` and anything else may have pressed, so `press` never
+/// re-presses on a refreshed element or falls back to a pointer click after them: that could press twice (#1240).
+func axPressNotDelivered(axError: Int32) -> Bool {
+	[AXError.invalidUIElement, .actionUnsupported, .illegalArgument, .apiDisabled, .notImplemented].map(\.rawValue).contains(axError)
+}
+
 /// A failed `secondaryAction`: `cannotComplete` (the app did not answer in time) may have run it anyway.
 func secondaryActionFailureOutcome(axError: Int32) -> String {
 	axError == AXError.cannotComplete.rawValue ? "unknown" : "didnt"
@@ -3018,15 +3025,20 @@ final class Bridge {
 			} else if world.supportsAction(element, kAXPressAction as CFString) {
 				let cursorPoint = try? coordinatePoint()
 				var status = world.performAction(element, kAXPressAction as CFString)
-				if status != .success, let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
+				if status != .success, axPressNotDelivered(axError: status.rawValue), let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
 					status = world.performAction(refreshed, kAXPressAction as CFString)
 				}
 				if status == .success {
 					performed["grounding"] = "description"
 					performed["delivery"] = "ax"
 					if let cursorPoint { animateCursor(at: cursorPoint) }
-				} else {
+				} else if axPressNotDelivered(axError: status.rawValue) {
 					try executeCoordinates(coordinatePoint())
+				} else {
+					// The press may have landed: report it unknown instead of pressing or clicking again.
+					performed["grounding"] = "description"
+					performed["delivery"] = "ax"
+					return finish(["outcome": "unknown", "performed": performed, "error": ["code": "ax_delivery_unknown", "message": "AXPress failed (AXError \(status.rawValue)) and may have been delivered; it was not retried"]])
 				}
 			} else {
 				try executeCoordinates(coordinatePoint())
@@ -3094,7 +3106,8 @@ final class Bridge {
 				world.sleep(30_000)
 				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
 				let changed = afterValue != (beforeValue ?? "")
-				return finish(["outcome": changed ? "worked" : "didnt", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
+				// The text was posted: an unchanged or stale readback is unknown, never didnt, which would invite a resend (#1241).
+				return finish(["outcome": changed ? "worked" : "unknown", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
 			}
 		} else if let element, action == "secondaryAction" {
 			// AX-only: runs one action the element itself advertises, checked live against its current action list.

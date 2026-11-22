@@ -245,6 +245,7 @@ private func runPointerAssertions() throws {
     let pressed = try press.act("press", policy: "background")
     expect(pressed["outcome"] as? String == "worked", "AX press sees value change")
     expect(press.trace == ["begin:1234", "ax:AXPress:cached", "refind:ref:1234:8", "ax:AXPress:refound", "cursor:8", "finish"], "AX press refinds once and never posts input")
+    try runIndeterminatePressAssertions()
 
     let fg = ActFixture()
     fg.web = true
@@ -278,7 +279,36 @@ private func runPointerAssertions() throws {
     try actionFailure("coordinate_unavailable_for_root") { try drag.act("click", coords: true) }
 }
 
+/// An AX press failure that does not establish non-delivery is reported unknown: never re-pressed, never clicked (#1240).
+private func runIndeterminatePressAssertions() throws {
+    for status in [AXError.cannotComplete, .failure] {
+        for policy in ["background", "foreground"] {
+            let press = ActFixture()
+            press.statuses = [status, .success]
+            let result = try press.act("press", policy: policy)
+            let error = result["error"] as? [String: String]
+            expect(result["outcome"] as? String == "unknown" && error?["code"] == "ax_delivery_unknown", "\(policy) AXError \(status.rawValue) press reports unknown delivery")
+            expect(press.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "\(policy) AXError \(status.rawValue) press is delivered once: no refound press, no pointer click")
+        }
+    }
+    let refound = ActFixture()
+    refound.statuses = [.invalidUIElement, .cannotComplete]
+    let second = try refound.act("press", policy: "foreground")
+    expect(second["outcome"] as? String == "unknown" && !refound.trace.contains { $0.hasPrefix("click:") }, "an indeterminate refound press never falls back to a click")
+    let dead = ActFixture()
+    dead.statuses = [.actionUnsupported]
+    dead.refind = false
+    _ = try dead.act("press", policy: "background")
+    expect(dead.trace.filter { $0.hasPrefix("click:") } == ["click:1234:0:1:pid"], "a press the element refused falls back to one pointer click")
+    expect(!axPressNotDelivered(axError: AXError.cannotComplete.rawValue) && !axPressNotDelivered(axError: AXError.failure.rawValue), "cannotComplete and failure may have pressed")
+    expect(axPressNotDelivered(axError: AXError.invalidUIElement.rawValue) && axPressNotDelivered(axError: AXError.actionUnsupported.rawValue), "a dead element or unsupported action was not pressed")
+}
+
 private func runKeyboardActionAssertions() throws {
+    // A stale or failed readback after posted text is unknown, never didnt: didnt invites a resend (#1241).
+    let stale = ActFixture()
+    let unconfirmed = try stale.act("typeText", policy: "background", params: ["text": "before"])
+    expect(unconfirmed["outcome"] as? String == "unknown" && stale.trace.filter { $0.hasPrefix("type:") } == ["type:before:1234:pid"], "posted text with an unchanged readback is unknown and typed once")
     let keys = ActFixture()
     keys.blocked = true
     try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd", "a"]]) }
