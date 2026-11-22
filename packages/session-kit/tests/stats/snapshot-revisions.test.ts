@@ -664,6 +664,40 @@ it("preserves equal-timestamp call order and totals across compaction", async ()
 	expect(after).toEqual(before);
 });
 
+it("does not publish if preserving quota winners would exceed the cap", async () => {
+	const { before, snapshotDir } = await sealedFixture([
+		{},
+		...Array.from({ length: 32 }, (_, i) => ({ quota: [quotaRow(i, at("2026-12-01") - i)] })),
+	]);
+	await expect(exportStats(agent, out)).rejects.toThrow("Sealed month quota history exceeds shard limit");
+	expect(manifest(snapshotDir)).toEqual(before);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+});
+
+it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", async (reset) => {
+	// Run compaction both before and after the newer observation expires.
+	const earlyReset = at(reset);
+	const lateReset = at("2026-12-01");
+	const { snapshotDir } = await sealedFixture([
+		{ quota: [quotaRow(99, earlyReset, "base")], sessions: [session(101)] },
+		{ quota: [quotaRow(99, earlyReset, "base")], sessions: [session(101), session(102)] },
+		{ quota: [quotaRow(1, lateReset)] },
+		{ quota: [quotaRow(2, earlyReset)] },
+		{ quota: [{ ...quotaRow(2, earlyReset), usedPercent: 0 }] },
+		...filler,
+	]);
+	const times = [at("2026-10-02"), earlyReset - 1, earlyReset, lateReset - 1, lateReset, lateReset + 1];
+	const read = (dir: string) => Promise.all(times.map(async (now) => (await loadCombined(dir, undefined, now)).quota));
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const before = await read(viewer);
+	expect(before.map((q) => q.find((row) => row.limitId === "fixture")?.usedPercent)).toEqual([2, 2, 1, 1, 2, 2]);
+	await exportStats(agent, out);
+	expect(manifest(snapshotDir).shards).toHaveLength(3);
+	const fresh = join(root, "fresh");
+	expect(await importStats(fresh, out)).toMatchObject({ imported: 1, problems: [] });
+	expect(await read(fresh)).toEqual(before);
+});
+
 it("appends a delta when distinct sessions share a preserved entry identity", async () => {
 	const a = join(agent, "sessions", "a.jsonl");
 	const b = join(agent, "sessions", "b.jsonl");

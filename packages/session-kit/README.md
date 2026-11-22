@@ -692,16 +692,14 @@ counters or timestamps cannot be identified and can append beside the old row in
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 
-A sealed v3 month retains at most 32 manifest references. When a late update would exceed that
-limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte
-and compacts all later shards into one new shard. Compaction uses the previous published rows plus
-any new delta, so it keeps calls and session metadata even after their transcripts leave the local
-scan. It keeps the maximum session end and selects one quota reading per window from the compacted
-deltas using the normal quota rules at export time. The base is unchanged, but a growing late-update
-shard may be rewritten at each compaction. No format change is required; readers still accept the
-older, larger manifests. The machine expansion budget still applies.
-
-The viewer orders equal-time imported calls within a session by event ID regardless of shard boundaries.
+New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
+that limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte
+and compacts later shards and any new delta. It keeps archived calls and the maximum session end
+even after transcripts leave the scan. The viewer orders equal-time imported calls within a session
+by event ID regardless of shard boundaries. Compaction keeps quota readings that can win as windows
+reset, using separate shards for readings of the same key. If the quota history cannot fit the cap
+or the candidate exceeds the reader's cumulative expansion budget, export fails without publishing
+or pruning. No format change is required; readers still accept older, larger manifests.
 
 The manifest switches to the new references before obsolete files are pruned. A failed compaction
 leaves the previous manifest readable, and frozen recovery copies are still protected. Usage data

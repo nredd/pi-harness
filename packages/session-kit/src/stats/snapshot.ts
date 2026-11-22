@@ -75,6 +75,8 @@ export interface Shard {
 	/** v2 only; each reading lives in the UTC month of its `observedAt`. */
 	quota?: SnapshotQuota[];
 }
+type CompactShard = Shard & { version: 3; quota: SnapshotQuota[] };
+
 export interface Manifest extends Identity {
 	version: number;
 	exportedAt: number;
@@ -309,10 +311,10 @@ export function makeSnapshot(
 	exportedAt = Date.now(),
 	quota: readonly QuotaObservation[] = [],
 	lastGoodAt: Manifest["lastGoodAt"] = {},
-): MachineSnapshot {
+): Omit<MachineSnapshot, "shards"> & { shards: CompactShard[] } {
 	checkEntryIds(loaded.calls);
-	const shards = new Map<string, Shard>();
-	const shard = (month: string): Shard => {
+	const shards = new Map<string, CompactShard>();
+	const shard = (month: string): CompactShard => {
 		let s = shards.get(month);
 		if (!s) {
 			s = { version: SNAPSHOT_VERSION, machineId: identity.machineId, month, events: [], sessions: [], quota: [] };
@@ -338,7 +340,7 @@ export function makeSnapshot(
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
 	for (const q of mergeQuota(quota, exportedAt))
-		shard(monthOf(q.observedAt)).quota?.push({
+		shard(monthOf(q.observedAt)).quota.push({
 			harness: q.harness,
 			provider: q.provider,
 			limitId: q.limitId,
@@ -849,37 +851,66 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 }
 
 /** Compact late updates without rewriting the base or consulting the current transcript scan. */
-function compactDeltas(base: Shard, deltas: readonly Shard[], exportedAt: number): Shard {
-	const sessions = new Map<string, SnapshotSession>();
+function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
+	const baseSessions = new Map(base.sessions.map((session) => [session.id, session]));
+	const sessions = new Map(baseSessions);
 	for (const delta of deltas)
 		for (const session of delta.sessions) {
 			const prior = sessions.get(session.id);
 			if (!prior || prior.endMs < session.endMs) sessions.set(session.id, session);
 		}
-	return {
-		...base,
-		events: deltas.flatMap((delta) => delta.events),
-		sessions: [...sessions.values()],
-		quota: mergeQuota(
-			deltas.flatMap((delta) => delta.quota as SnapshotQuota[]),
-			exportedAt,
-		),
-	};
+	const byKey = new Map<string, SnapshotQuota[]>();
+	const baseRows = new Set(base.quota.map((q) => JSON.stringify(q)));
+	for (const { quota } of deltas)
+		for (const q of quota) {
+			if (baseRows.has(JSON.stringify(q))) continue;
+			const key = quotaKey(q);
+			const rows = byKey.get(key) ?? [];
+			rows.push(q);
+			byKey.set(key, rows);
+		}
+	const compacted: CompactShard[] = [
+		{
+			...base,
+			events: deltas.flatMap((delta) => delta.events),
+			sessions: [...sessions.values()].filter((session) => session !== baseSessions.get(session.id)),
+			quota: [],
+		},
+	];
+	for (const rows of byKey.values()) {
+		// The freshest row wins once all are expired. Before then, every less fresh row
+		// is dominated unless it stays active beyond all higher-ranked rows.
+		rows.sort((a, b) => b.observedAt - a.observedAt || codeUnits(JSON.stringify(b), JSON.stringify(a)));
+		let latestReset = 0;
+		let slot = 0;
+		for (const q of rows) {
+			if (q.resetAt <= latestReset) continue;
+			latestReset = q.resetAt;
+			const shard = compacted[slot] ?? { ...base, events: [], sessions: [], quota: [] };
+			shard.quota.push(q);
+			compacted[slot++] = shard;
+		}
+	}
+	// Do not silently throw away a candidate just to fit the cap.
+	if (compacted.length >= MAX_SEALED_SHARDS) throw new Error("Sealed month quota history exceeds shard limit");
+	return compacted.filter(nonempty);
 }
 
-function monthDelta(full: Shard, old: readonly Shard[]): Shard | undefined {
+const nonempty = (shard: CompactShard): boolean => shard.events.length + shard.sessions.length + shard.quota.length > 0;
+
+function monthDelta(full: CompactShard, old: readonly CompactShard[]): CompactShard | undefined {
 	const events = new Set(old.flatMap((shard) => shard.events.map((event) => event.id)));
 	const ends = new Map<string, number>();
 	for (const shard of old)
 		for (const session of shard.sessions) ends.set(session.id, Math.max(ends.get(session.id) ?? 0, session.endMs));
-	const quotas = new Set(old.flatMap((shard) => (shard.quota as SnapshotQuota[]).map((q) => JSON.stringify(q))));
+	const quotas = new Set(old.flatMap((shard) => shard.quota.map((q) => JSON.stringify(q))));
 	const delta = {
 		...full,
 		events: full.events.filter((event) => !events.has(event.id)),
 		sessions: full.sessions.filter((session) => session.endMs > (ends.get(session.id) ?? 0)),
-		quota: (full.quota as SnapshotQuota[]).filter((q) => !quotas.has(JSON.stringify(q))),
+		quota: full.quota.filter((q) => !quotas.has(JSON.stringify(q))),
 	};
-	return delta.events.length || delta.sessions.length || delta.quota.length ? delta : undefined;
+	return nonempty(delta) ? delta : undefined;
 }
 
 /** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
@@ -1070,42 +1101,54 @@ async function publishStats(
 			: null;
 	const current = monthOf(exportedAt);
 	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
-	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: Shard }[]>();
+	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard }[]>();
 	if (sealed)
 		for (const [i, shard] of sealed.shards.entries()) {
 			if (shard.month >= current || revised.has(shard.month)) continue;
 			const refs = prior.get(shard.month) ?? [];
-			refs.push({ ref: nth(sealed.manifest.shards, i), shard });
+			// loadPrevious authenticated and validated every shard against this v3 manifest.
+			refs.push({
+				ref: nth(sealed.manifest.shards, i),
+				shard: shard as CompactShard,
+			});
 			prior.set(shard.month, refs);
 		}
 	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
-	const publishedShards: Shard[] = [];
+	const publishedShards: CompactShard[] = [];
+	const writes: { file: string; bytes: Buffer }[] = [];
 	for (const month of [...new Set([...prior.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
-		let delta =
+		const delta =
 			full &&
 			monthDelta(
 				full,
 				old.map(({ shard }) => shard),
 			);
-		if (old.length + Number(delta !== undefined) > MAX_SEALED_SHARDS) {
+		let deltas = delta ? [delta] : [];
+		if (old.length + deltas.length > MAX_SEALED_SHARDS) {
 			const base = nth(old, 0);
-			const deltas = old.slice(1).map(({ shard }) => shard);
-			if (delta) deltas.push(delta);
-			delta = monthDelta(compactDeltas(base.shard, deltas, exportedAt), [base.shard]);
+			deltas = compactDeltas(base.shard, [...old.slice(1).map(({ shard }) => shard), ...deltas]);
 			old = [base];
 		}
 		for (const { ref, shard } of old) {
 			snapshot.manifest.shards.push(ref);
 			publishedShards.push(shard);
 		}
-		if (!delta) continue;
-		validateShard(delta, snapshot.manifest, month);
-		const bytes = encodeShard(delta);
-		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-		const sha256 = digest(bytes);
-		const file = `${month}-${sha256}.json.gz`;
+		for (const shard of deltas) {
+			validateShard(shard, snapshot.manifest, month);
+			const bytes = encodeShard(shard);
+			if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+			const sha256 = digest(bytes);
+			const file = `${month}-${sha256}.json.gz`;
+			writes.push({ file, bytes });
+			snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
+			publishedShards.push(shard);
+		}
+	}
+	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
+	validateManifest(snapshot.manifest);
+	for (const { file, bytes } of writes) {
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {
 			await writeFile(join(snapshotDir, file), bytes, { flag: "wx", mode: 0o600 });
@@ -1114,11 +1157,8 @@ async function publishStats(
 			if (!(await readFile(join(snapshotDir, file))).equals(bytes))
 				await atomicContents(join(snapshotDir, file), bytes);
 		}
-		snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
-		publishedShards.push(delta);
 	}
-	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
-	await atomicJson(join(snapshotDir, "manifest.json"), validateManifest(snapshot.manifest));
+	await atomicJson(join(snapshotDir, "manifest.json"), snapshot.manifest);
 	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
@@ -1139,9 +1179,7 @@ async function publishStats(
 		lostHarnesses,
 		historyHarnesses: HARNESSES.filter((h) =>
 			publishedShards.some(
-				(shard) =>
-					shard.events.some((event) => event.harness === h) ||
-					(shard.quota as SnapshotQuota[]).some((q) => q.harness === h),
+				(shard) => shard.events.some((event) => event.harness === h) || shard.quota.some((q) => q.harness === h),
 			),
 		),
 	}).then(
