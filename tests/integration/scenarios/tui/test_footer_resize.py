@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pi_release.stack import find_package
 
-from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, install_usage_fixture, view
+from harness.quota import USAGE_FIXTURE_EXTENSION, fixture_env, google_rpd_view, install_usage_fixture
 from harness.sessions import write_session
 
 if TYPE_CHECKING:
@@ -206,24 +206,7 @@ def test_google_meter_reaches_the_quota_footer(sandbox: Sandbox, tui: Callable[.
     if "const QUOTA_PROVIDERS" in (preset / "src/footer-quota.ts").read_text():
         pytest.skip("#1178 slice 9 must remove the legacy footer's provider allowlist")
     usage = install_usage_fixture(sandbox)
-    google = view(
-        "google",
-        "Google",
-        "Goog",
-        access="metered",
-        meters=[
-            {
-                "name": "rpd",
-                "scope": "model",
-                "families": ["faux-fast"],
-                "kind": "calendar",
-                "basis": "observed",
-                "quantity": {"unit": "requests", "used": 37, "limit": 250},
-                "resetRule": {"at": "00:00", "timeZone": "America/Los_Angeles", "every": "day"},
-            },
-        ],
-    )
-    usage.set(views=[google])
+    usage.set(views=[google_rpd_view()])
     screen = tui(
         {"providers": {"google": {"models": ["faux-fast"], "steps": []}}},
         model="google/faux-fast",

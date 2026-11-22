@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from harness import quota
-from harness.paths import REPO_ROOT
 from harness.sandbox import Sandbox, build_sandbox
 
 if TYPE_CHECKING:
@@ -134,10 +133,17 @@ def test_view_matches_shared_contract(fixture_name: str) -> None:
     Parameters:
         fixture_name (str): shared view scenario.
     """
-    path = REPO_ROOT.parents[1] / "packages/subscription-router/tests/fixtures/views.json"
-    cases = json.loads(path.read_text())["views"]
-    case = next(case for case in cases if case["name"] == fixture_name)
-    for expected in case["usage"]["views"]:
+    rows = quota.shared_views(fixture_name)
+    assert rows, f"'{fixture_name}' has no provider views"
+    if fixture_name == "metered":
+        assert any(
+            row["provider"] == "google"
+            and any(
+                meter["name"] == "rpd" and meter["quantity"]["unit"] == "requests" for meter in row["meters"]
+            )
+            for row in rows
+        ), "'metered' must include Google's request meter"
+    for expected in rows:
         display = expected["display"]
         assert (
             quota.view(
@@ -162,16 +168,10 @@ def test_set_writes_views_without_widening_legacy_snapshots(tmp_path: Path) -> N
         tmp_path (Path): private state and log files.
     """
     fixture = quota.UsageFixture(tmp_path / "state.json", tmp_path / "log.jsonl")
-    meter: quota.UsageMeter = {
-        "name": "rpd",
-        "scope": "model",
-        "families": ["faux-fast"],
-        "kind": "calendar",
-        "basis": "observed",
-        "quantity": {"unit": "requests", "used": 37, "limit": 250},
-    }
-    google = quota.view("google", "Google", "Goog", access="metered", meters=[meter])
-    fixture.set(anthropic=(20, 40), views=[google])
+    shared_google = next(row for row in quota.shared_views("metered") if row["provider"] == "google")
+    shared_meter = next(meter for meter in shared_google["meters"] if meter["name"] == "rpd")
+    expected_meter = {key: value for key, value in shared_meter.items() if key != "resetAt"}
+    fixture.set(anthropic=(20, 40), views=[quota.google_rpd_view()])
     state = json.loads(fixture.state_path.read_text())
     assert [s["provider"] for s in state["snapshots"]] == ["anthropic"]
     assert state["views"] == [
@@ -179,7 +179,7 @@ def test_set_writes_views_without_widening_legacy_snapshots(tmp_path: Path) -> N
             "provider": "google",
             "display": {"full": "Google", "compact": "Goog"},
             "access": "metered",
-            "meters": [meter],
+            "meters": [expected_meter],
             "pools": [],
             "marks": [],
         }

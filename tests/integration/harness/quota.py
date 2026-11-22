@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from pi_release.stack import find_package, package_directory
 
-from harness.paths import PROVIDERS_DIR
+from harness.paths import PROVIDERS_DIR, REPO_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -27,6 +27,7 @@ USAGE_FIXTURE_EXTENSION = PROVIDERS_DIR / "usage_fixture.ts"
 # `expiresAt` offset of a fresh snapshot; long, so the footer's wall-clock expiry never fires mid-test.
 FRESH_FOR_MS = 3_600_000
 ROUTER_PACKAGE = "pi-subscription-router"
+VIEW_CASES_PATH = REPO_ROOT.parents[1] / "packages/subscription-router/tests/fixtures/views.json"
 # Span of the 5h and weekly windows, as the router reports them.
 SPANS_MS = (18_000_000, 604_800_000)
 # Provider-native window names the router reports, keyed by provider.
@@ -223,6 +224,39 @@ def view(
     if reading is not None:
         result["snapshot"] = reading
     return result
+
+
+def shared_views(case_name: str) -> list[ProviderView]:
+    """Read provider views from the router's schema-tested fixture.
+
+    Parameters:
+        case_name (str): named fixture case.
+
+    Returns:
+        list[ProviderView]: fresh views decoded from that case.
+
+    Raises:
+        KeyError: the named case is missing.
+    """
+    cases = json.loads(VIEW_CASES_PATH.read_text())["views"]
+    return {case["name"]: case["usage"]["views"] for case in cases}[case_name]
+
+
+def google_rpd_view() -> ProviderView:
+    """Project the shared Google case used for the faux stack, without a snapshot, pool or mark.
+
+    Returns:
+        ProviderView: Google view with just the request meter and no fixed-date `resetAt`.
+
+    Raises:
+        KeyError: the shared Google view or its named request meter is missing.
+    """
+    google = {row["provider"]: row for row in shared_views("metered")}["google"]
+    meter = {entry["name"]: entry for entry in google["meters"]}["rpd"]
+    # Keep the calendar rule, not the contract fixture's historical absolute timestamp.
+    meter.pop("resetAt", None)
+    display = google["display"]
+    return view("google", display["full"], display["compact"], access=google["access"], meters=[meter])
 
 
 @dataclass(frozen=True)
