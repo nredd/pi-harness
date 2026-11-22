@@ -305,14 +305,16 @@ in usage errors. These bounds do not prove live OAuth refresh or revocation beha
 ### Collector extensions
 
 Trusted extensions can call `registerCollector` from `src/collectors.ts` in the installed package.
-Register by Pi provider ID before or after the router loads; the process-global registry is shared
-across extension copies. Keep the returned cleanup function to unregister. Registration replaces the
-previous adapter for that ID; cleanup removes only that registration and does not restore the one it replaced.
-The live `COLLECTED_PROVIDERS` export in `src/usage.ts` is retained for compatibility; new callers should
-use `collectedProviders()` to get an array snapshot.
-Without an import, initialize or reuse `globalThis[Symbol.for("pi-subscription-router.collectors")]`
-as a `Map` and set the provider ID to a unique `{ collector }` entry. On cleanup, delete the ID
-only if its entry is still yours.
+Register before or after the router extension loads. The built-in IDs `anthropic` and
+`openai-codex` are reserved; registering either throws. For external IDs the last registration wins.
+Only the returned unregister function owns that registration; old cleanup cannot remove a replacement
+or restore a previous registration. `collectorFor(id)` returns the frozen adapter.
+
+Extensions can also use `globalThis[Symbol.for("pi-subscription-router.collectors")]` once any copy
+of `src/collectors.ts` has initialized it, even before the router extension loads. The frozen
+protocol object has `version: 1` and `register(adapter) -> unregister()`, not a mutable map. Check
+the version before using it; router copies reject incompatible versions without changing the object.
+The live `COLLECTED_PROVIDERS` export is retained; use `collectedProviders()` for an array snapshot.
 
 A collector receives the provider credential from Pi, so register only code you trust with that
 credential. A `kind: "http"` adapter defines `request(token)` and `parse(payload)`; a `kind: "custom"`

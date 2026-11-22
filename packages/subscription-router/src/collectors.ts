@@ -1,3 +1,4 @@
+import { BUILTIN_COLLECTORS } from "./builtin-collectors.ts";
 import type { CreditPool, UsageMeter, UsageSnapshot, UsageWindow } from "./usage.ts";
 import type { ProviderDisplay } from "./view.ts";
 
@@ -26,32 +27,77 @@ export type Collector = {
 );
 
 const COLLECTORS_KEY = Symbol.for("pi-subscription-router.collectors");
-type Registration = { collector: Collector };
-const host = globalThis as typeof globalThis & { [COLLECTORS_KEY]?: Map<string, Registration> };
-host[COLLECTORS_KEY] ??= new Map();
+
+/** Identity and lifetime of one installation, not of the supplied adapter. */
+export interface CollectorRegistration {
+	readonly collector: Readonly<Collector>;
+	readonly signal: AbortSignal;
+}
+
+interface CollectorRegistry {
+	readonly version: 1;
+	register(collector: Collector): () => void;
+	registrationFor(id: string): CollectorRegistration | undefined;
+	collectorFor(id: string): Readonly<Collector> | undefined;
+	collectedProviders(): string[];
+}
+
+const builtins = new Map(
+	BUILTIN_COLLECTORS.map((collector) => [
+		collector.provider,
+		Object.freeze({ collector, signal: new AbortController().signal }),
+	]),
+);
+
+function createRegistry(): CollectorRegistry {
+	const entries = new Map<string, CollectorRegistration>();
+	const controllers = new WeakMap<CollectorRegistration, AbortController>();
+	return Object.freeze({
+		version: 1 as const,
+		register(collector: Collector) {
+			const { provider } = collector;
+			if (builtins.has(provider))
+				throw new Error(`Cannot register collector "${provider}": ID is reserved for a built-in.`);
+			const old = entries.get(provider);
+			const lifetime = new AbortController();
+			const entry = Object.freeze({ collector: Object.freeze({ ...collector }), signal: lifetime.signal });
+			controllers.set(entry, lifetime);
+			entries.set(provider, entry);
+			if (old) controllers.get(old)?.abort();
+			return () => {
+				if (entries.get(provider) !== entry) return;
+				entries.delete(provider);
+				lifetime.abort();
+			};
+		},
+		registrationFor: (id: string) => entries.get(id),
+		collectorFor: (id: string) => registrationFor(id)?.collector,
+		collectedProviders: () => [...entries.keys()],
+	});
+}
+
+const host = globalThis as typeof globalThis & { [COLLECTORS_KEY]?: CollectorRegistry };
+if (host[COLLECTORS_KEY] !== undefined && host[COLLECTORS_KEY]?.version !== 1) {
+	throw new Error("Unsupported pi-subscription-router.collectors registry version (expected 1).");
+}
+host[COLLECTORS_KEY] ??= createRegistry();
 const registry = host[COLLECTORS_KEY];
 
-/** Register or replace a collector. Cleanup never removes a later registration. */
+/** Register or replace an external collector. Cleanup never removes a later registration. */
 export function registerCollector(collector: Collector): () => void {
-	const { provider } = collector;
-	const entry = { collector };
-	registry.set(provider, entry);
-	return () => {
-		if (registry.get(provider) === entry) registry.delete(provider);
-	};
+	return registry.register(collector);
 }
 
-/** Loading another copy of the router must not clobber an existing registration. */
-export function registerDefaultCollector(collector: Collector): void {
-	if (!registry.has(collector.provider)) registerCollector(collector);
+export function registrationFor(id: string): CollectorRegistration | undefined {
+	return builtins.get(id) ?? registry.registrationFor(id);
 }
 
-export function collectorFor(provider: string): Collector | undefined {
-	return registry.get(provider)?.collector;
+export function collectorFor(id: string): Readonly<Collector> | undefined {
+	return registrationFor(id)?.collector;
 }
 
 export function collectedProviders(): string[] {
-	return [...registry.keys()];
+	return [...new Set([...builtins.keys(), ...registry.collectedProviders()])];
 }
 
 /** @deprecated Use collectedProviders() for an ordinary array snapshot. */
