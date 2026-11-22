@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test, vi } from "vitest";
-import * as q from "../src/footer-quota.ts";
+import * as footer from "../src/footer-quota.ts";
 
 const NOW = 1_000_000;
 const win = (name: string, usedPercent: number, scope = "provider") => ({
@@ -20,6 +20,102 @@ const snap = (provider: string, windows: unknown[], extra: Record<string, unknow
 	expiresAt: NOW + 1,
 	...extra,
 });
+// Keep the original legacy assertions (especially exact row text) readable while testing cell-backed state.
+interface LegacyQuota {
+	fiveHourReported?: boolean;
+	fiveHour?: number;
+	fiveHourResetAt?: number;
+	weekly?: number;
+	weeklyResetAt?: number;
+	weeklyUnknown?: boolean;
+	stale: boolean;
+	expiresAt?: number;
+}
+type LegacyState = Record<string, LegacyQuota>;
+
+const originals = new WeakMap<LegacyState, footer.QuotaState>();
+
+function legacyInput(state: LegacyState): footer.QuotaState {
+	const original = originals.get(state);
+	if (original) return original;
+	const snapshots = Object.entries(state).map(([provider, quota]) => {
+		const anth = provider === "anthropic";
+		const windows = [
+			{
+				name: anth ? "seven_day" : "7d",
+				usedPercent: 100 - (quota.weekly ?? NaN),
+				resetAt: quota.weeklyResetAt,
+				scope: "provider",
+				spanSource: quota.weeklyUnknown ? "assumed" : undefined,
+			},
+		];
+		if (quota.fiveHourReported)
+			windows.push({
+				name: "five_hour",
+				scope: "provider",
+				usedPercent: 100 - (quota.fiveHour ?? NaN),
+				resetAt: quota.fiveHourResetAt,
+				spanSource: undefined,
+			});
+		return snap(provider, windows);
+	});
+	const parsed = present(footer.parseUsageReply(reply(snapshots), NOW));
+	// Parsed state is frozen, so overlay the legacy staleness on copies.
+	return Object.fromEntries(
+		Object.entries(parsed).map(([id, quota]) => {
+			const legacy = state[id];
+			return [id, legacy ? { ...quota, stale: legacy.stale, expiresAt: legacy.expiresAt } : quota];
+		}),
+	);
+}
+
+function legacyOutput(state: footer.QuotaState): LegacyState {
+	const projected = Object.fromEntries(
+		Object.entries(state).map(([id, quota]) => {
+			const out: LegacyQuota = { stale: quota.stale, expiresAt: quota.expiresAt };
+			for (const cell of quota.cells) {
+				if (cell.kind !== "percent" || cell.placeholder) continue;
+				if (id === "anthropic" && cell.name === "five_hour") {
+					out.fiveHourReported = true;
+					out.fiveHour = cell.remaining;
+					if (cell.resetAt !== undefined) out.fiveHourResetAt = cell.resetAt;
+				} else {
+					out.weekly = cell.remaining;
+					if (cell.resetAt !== undefined) out.weeklyResetAt = cell.resetAt;
+					if (cell.unidentified) out.weeklyUnknown = true;
+				}
+			}
+			return [id, out];
+		}),
+	);
+	originals.set(projected, state);
+	return projected;
+}
+
+const q = {
+	...footer,
+	parseUsageReply(value: unknown, now: number, previous?: LegacyState): LegacyState | undefined {
+		const state = footer.parseUsageReply(value, now, previous && legacyInput(previous));
+		return state && legacyOutput(state);
+	},
+	markStale: (state: LegacyState) => legacyOutput(footer.markStale(legacyInput(state))),
+	formatQuotaRow: (state: LegacyState, ...args: Tail<Parameters<typeof footer.formatQuotaRow>>) =>
+		footer.formatQuotaRow(legacyInput(state), ...args),
+	fitQuotaRows: (state: LegacyState, ...args: Tail<Parameters<typeof footer.fitQuotaRows>>) =>
+		footer.fitQuotaRows(legacyInput(state), ...args),
+	createQuotaPoller(deps: footer.PollerDeps) {
+		const poller = footer.createQuotaPoller(deps);
+		return {
+			...poller,
+			getState() {
+				const state = poller.getState();
+				return state && legacyOutput(state);
+			},
+		};
+	},
+};
+type Tail<T> = T extends [unknown, ...infer Rest] ? Rest : never;
+
 const plain = (_c: string, t: string): string => t;
 
 // Share the router's golden data, not its implementation. The router suite checks the projected views.
@@ -38,10 +134,14 @@ const legacyFixtures = fixture.views.flatMap((row) => (row.legacyRows ? [{ ...ro
 
 test.each(legacyFixtures)("preserves the legacy footer bytes for $name", ({ usage, now, timeZone, legacyRows }) => {
 	const snapshots = usage.views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
-	const state = q.parseUsageReply({ success: true, data: { snapshots } }, now);
-	assert.ok(state);
-	for (const tier of ["full", "compact"] as const) {
-		assert.equal(q.formatQuotaRow(state, tier, plain, { now, timeZone }), legacyRows[tier]);
+	// The pre-view footer read only snapshots and ignored blocks. Without an active block the bytes are
+	// pinned; a block adds its claim (asserted in the confirmed-model-block test below).
+	const unblocked = { ...usage, blocks: [], views: usage.views.map((view) => ({ ...view, marks: [] })) };
+	for (const data of [{ snapshots }, unblocked]) {
+		const state = present(footer.parseUsageReply({ success: true, data }, now));
+		for (const tier of ["full", "compact"] as const) {
+			assert.equal(footer.formatQuotaRow(state, tier, plain, { now, timeZone }), legacyRows[tier]);
+		}
 	}
 });
 
@@ -218,7 +318,7 @@ test("parse: provider error/unavailable/empty windows retain last-known values a
 		assert.equal(state?.anthropic?.weekly, 58);
 		// provider missing from reply entirely
 		assert.equal(state?.["openai-codex"]?.stale, true);
-		assert.equal(state?.["openai-codex"]?.fiveHour, 82);
+		assert.equal(state?.["openai-codex"]?.weekly, 63);
 	}
 });
 
@@ -945,9 +1045,9 @@ test("identity: reported 18000s primary plus assumed secondary shows only the un
 
 // --- Anthropic 5h only when reported (#311) ---------------------------------
 
-const anthOf = (windows: unknown[], extra: Record<string, unknown> = {}, previous?: q.QuotaState) =>
+const anthOf = (windows: unknown[], extra: Record<string, unknown> = {}, previous?: LegacyState) =>
 	present(q.parseUsageReply(reply([snap("anthropic", windows, { expiresAt: NOW + 5, ...extra })]), NOW, previous));
-const weeklyOnly = (extra: Record<string, unknown> = {}, previous?: q.QuotaState) =>
+const weeklyOnly = (extra: Record<string, unknown> = {}, previous?: LegacyState) =>
 	anthOf([resetWin("seven_day", 40, at("2026-01-14T09:00:00Z"))], extra, previous);
 
 test("5h: a fresh Anthropic snapshot with only seven_day has no 5h segment in any layout", () => {
@@ -1049,4 +1149,931 @@ test("5h: the no-data placeholder shows only the weekly window", () => {
 		"Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly --",
 	);
 	assert.equal(q.formatQuotaRow({}, "compact", plain, { now: CLOCK }), "Left: Anth (stale) 7d -- | OAI (stale) 7d --");
+});
+const v2 = (views: unknown[]) => ({ success: true, data: { version: 2, views, snapshots: [], blocks: [] } });
+const view = (provider: string, extra: Record<string, unknown> = {}) => ({ provider, ...extra });
+const projected = (views: unknown[], now = CLOCK, previous?: footer.QuotaState) =>
+	present(footer.parseUsageReply(v2(views), now, previous));
+const fixed = { now: CLOCK, timeZone: UTC };
+const hour = 3_600_000;
+const meter = (name: string, used: number, extra = {}) => ({
+	name,
+	scope: "provider",
+	basis: "observed",
+	quantity: { unit: "requests", used },
+	...extra,
+});
+const mark = (until: number, evidence?: string, families?: string[]) => ({ until, evidence, families });
+/** A fresh, empty snapshot: meters, pools and marks are current until it expires. */
+const fresh = (provider: string, extra: Record<string, unknown> = {}) =>
+	snap(provider, [], { expiresAt: CLOCK + hour, ...extra });
+
+test("preset reads the shared metered and inferred-span v2 fixture", () => {
+	const metered = present(fixture.views.find(({ name }) => name === "metered"));
+	const state = present(footer.parseUsageReply({ success: true, data: metered.usage }, metered.now));
+	const opts = { now: metered.now, timeZone: metered.timeZone };
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, opts),
+		"Left: Goog 1d 37/250 req obs @Jan 16 08:00 $1.24/10m obs prepaid-credits 12 credits | faux-fast blocked->Jan 16 08:00 inf",
+	);
+	assert.deepEqual(footer.fitQuotaRows(state, 120, plain, opts).length, 1);
+	const inferred = present(fixture.views.find(({ name }) => name === "inferred-span"));
+	const gauge = present(footer.parseUsageReply({ success: true, data: inferred.usage }, inferred.now));
+	// Deliberately changed from a bare `10m`: an inferred span must never read as a reported one.
+	assert.match(
+		footer.formatQuotaRow(gauge, "compact", plain, { now: inferred.now, timeZone: inferred.timeZone }),
+		/faux-subscription 10m~ 0%/,
+	);
+	assert.match(
+		footer.formatQuotaRow(gauge, "full", plain, { now: inferred.now, timeZone: inferred.timeZone }),
+		/faux-subscription 10m 0% \(span inferred\)/,
+	);
+});
+
+test("Google rows show counts without invented limits and marks in warning color", () => {
+	const now = at("2026-11-21T14:05:00Z");
+	const until = at("2026-11-22T00:00:00Z");
+	const state = projected(
+		[
+			view("google", {
+				display: { full: "Google", compact: "Goog" },
+				snapshot: snap("google", [], { expiresAt: until + hour }),
+				meters: [
+					meter("rpd", 37, {
+						kind: "calendar",
+						resetRule: { every: "day" },
+						scope: "model",
+						families: ["gemini-4-carbon"],
+					}),
+					meter("cost", 1.24, { kind: "rolling", durationMs: 600_000, quantity: { unit: "usd", used: 1.24 } }),
+					meter("other", 25, { scope: "model", families: ["gemini-4-sibling"] }),
+				],
+				marks: [mark(until, "inferred", ["gemini-4-carbon"])],
+			}),
+			view("google-vertex", { meters: [meter("calls", 0)] }),
+		],
+		now,
+	);
+	const opts = { now, timeZone: UTC };
+	const compact = "Left: Goog 1d 37 req obs $1.24/10m obs | carbon blocked->Nov 22 00:00 inf";
+	const full =
+		"Quota left: Google day 37 requests observed; $1.24 last 10m observed; gemini-4-carbon blocked until Nov 22 00:00 (inferred)";
+	const paint: string[] = [];
+	assert.equal(footer.formatQuotaRow(state, "full", plain, opts), full);
+	assert.equal(
+		footer.formatQuotaRow(
+			state,
+			"compact",
+			(color, text) => {
+				paint.push(`${color}:${text}`);
+				return text;
+			},
+			opts,
+		),
+		compact,
+	);
+	assert.deepEqual(
+		paint.filter((text) => !text.startsWith("dim:")),
+		["warning:carbon blocked->Nov 22 00:00 inf"],
+	);
+	assert.match(
+		footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "google", id: "gemini-4-sibling" } }),
+		/other 25 req obs/,
+	);
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, now: until }), "Left: Goog $1.24/10m obs");
+	assert.equal(footer.formatQuotaRow(projected([]), "full", plain, fixed), "");
+});
+
+test("generic width ladder fits, drops meters, caps providers and clips by priority", () => {
+	const window = (name: string, remaining: number, durationMs: number) => ({
+		...win(name, 100 - remaining),
+		durationMs,
+		resetAt: CLOCK + hour,
+	});
+	const provider = (id: string) =>
+		view(id, {
+			display: { full: `${id}-long`, compact: id },
+			snapshot: snap(id, [window("loose", 95, 2 * hour), window("tight", 3, hour)], { expiresAt: CLOCK + hour }),
+			meters: [meter("count", 37)],
+			marks: [mark(CLOCK + hour, "observed")],
+		});
+	const state = projected([provider("A"), provider("B")]);
+	const full = footer.formatQuotaRow(state, "full", plain, fixed);
+	const compact = footer.formatQuotaRow(state, "compact", plain, fixed);
+	const fit = (width: number, input = state) => footer.fitQuotaRows(input, width, plain, fixed);
+	assert.deepEqual(fit(full.length), [full]);
+	assert.deepEqual(fit(compact.length), [compact]);
+	const split = [
+		"Left: A 2h 95% @13:00 1h 3% @13:00 count 37 req obs | provider blocked->13:00 obs",
+		"B 2h 95% @13:00 1h 3% @13:00 count 37 req obs | provider blocked->13:00 obs",
+	];
+	assert.deepEqual(fit(present(split[0]).length), split);
+	const terse = [
+		"Left: A 2h 95% 1h 3% count 37 req obs | provider blocked obs",
+		"B 2h 95% 1h 3% count 37 req obs | provider blocked obs",
+	];
+	assert.deepEqual(fit(present(terse[0]).length), terse);
+	const essential = ["Left: A 2h 95% 1h 3% | provider blocked obs", "B 2h 95% 1h 3% | provider blocked obs"];
+	assert.deepEqual(fit(present(essential[0]).length), essential);
+	assert.deepEqual(fit(41), ["Left: A provider blocked obs 1h 3% 2h 95%", "B provider blocked obs 1h 3% 2h 95%"]);
+	// Narrower, whole low-priority cells give way behind ` ...`, then the mark scope, never the evidence.
+	assert.deepEqual(fit(38), ["Left: A provider blocked obs 1h 3% ...", "B provider blocked obs 1h 3% 2h 95%"]);
+	assert.deepEqual(fit(20), ["Left: A blocked obs", "B blocked obs ..."]);
+	assert.deepEqual(fit(70, projected(["A", "B", "C", "D", "E"].map(provider))), [
+		"Left: A provider blocked obs 1h 3% 2h 95%",
+		"B provider blocked obs 1h 3% 2h 95%",
+		"C provider blocked obs 1h 3% 2h 95%",
+		"D provider blocked obs 1h 3% 2h 95%",
+		"+1 more (1 blocked): /router status",
+	]);
+});
+
+test("custom selectors, scope, provenance and display-only quantities stay distinct", () => {
+	const durationMs = 2 * hour;
+	const windows = [
+		{ ...win("named", 80), durationMs },
+		{ ...win("hourly", 90), durationMs: hour },
+		{ ...win("estimated", 99), durationMs: hour, basis: "observed" },
+		{ ...win("named", 70, "model"), families: ["not-selected"] },
+		{ scope: "provider", usedPercent: 80 },
+		{ ...win("invalid", 80, "model"), families: [] },
+	];
+	const custom = view("custom", {
+		display: {
+			full: "Custom\nDisplay",
+			compact: " ",
+			footer: { show: [null, {}, { name: "named" }, { durationMs: hour }, { name: " " }], placeholder: true },
+		},
+		snapshot: snap("custom", windows, { expiresAt: CLOCK + hour }),
+		meters: [
+			{ ...meter("tok", 1), basis: "inferred", quantity: { unit: "tokens", remaining: 8 } },
+			{ ...meter("cash", 2), basis: "reported", quantity: { unit: "usd", used: 2 } },
+			{ ...meter("invalid", 1), quantity: { unit: "invalid", used: 1 } },
+		],
+		pools: [null, {}, { name: "wallet", unit: "usd", unlimited: true }, { name: "balance", unit: "credits" }],
+		marks: [mark(undefined as unknown as number), mark(CLOCK + hour, undefined, [" "])],
+	});
+	const state = projected([null, view(""), {}, view(" "), custom]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: custom 2h 20% 1h 10% quota -- tok 8 tok left inf cash $2.00 rep wallet unlimited balance -- credits | model blocked->13:00 read",
+	);
+	const stale = projected([{ ...custom, snapshot: undefined }], CLOCK, state);
+	assert.match(footer.formatQuotaRow(stale, "full", plain, fixed), /Custom\?Display \(stale\) 2h 20% 1h 10% quota --/);
+	const metered = view("meter", { meters: [meter("very-long-meter", 10), meter("second", 3)] });
+	assert.deepEqual(footer.fitQuotaRows(projected([metered]), 50, plain, fixed), [
+		// No snapshot vouches for these meters, so they are stale.
+		"Left: meter (stale) very-long-meter 10 req obs ...",
+	]);
+	assert.deepEqual(
+		footer.fitQuotaRows(projected([metered, view("read", { marks: [mark(CLOCK + hour)] })]), 30, plain, fixed),
+		// The label yields so the mark keeps its evidence.
+		["Left: re provider blocked read"],
+	);
+	const narrow = projected([
+		view("custom", {
+			snapshot: snap("custom", [win("unknown", NaN), win("ok", 60)]),
+			marks: [mark(CLOCK + hour, "read")],
+		}),
+	]);
+	assert.deepEqual(footer.fitQuotaRows(narrow, 55, plain, fixed), [
+		"Left: custom provider blocked read | (stale) ok 40% ...",
+	]);
+});
+
+test.each([
+	["opus", true],
+	["Claude-OPUS-4", true],
+	["claude.opus:1", true],
+	["xopus-opus", true],
+	["xopus", false],
+	["opusx", false],
+	["claude-opus4", false],
+])("model %s matches family `opus` at token boundaries: %s", (id, matches) => {
+	const state = projected([
+		view("p", { snapshot: fresh("p"), meters: [meter("calls", 3, { scope: "model", families: ["opus"] })] }),
+	]);
+	const row = footer.formatQuotaRow(state, "compact", plain, { ...fixed, model: { provider: "p", id } });
+	assert.equal(row, matches ? "Left: p calls 3 req obs" : "");
+});
+
+test("an oversized family never throws while matching the selected model", () => {
+	// A regex built from this family is too large for V8; rendering must stay total.
+	const family = "(".repeat(100_000);
+	const state = projected([
+		view("huge", { meters: [meter("calls", 3, { scope: "model", families: [family] })], snapshot: fresh("huge") }),
+	]);
+	const opts = { ...fixed, model: { provider: "huge", id: `x-${family}` } };
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, opts), "Left: huge calls 3 req obs");
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...opts, model: { provider: "huge", id: "x" } }), "");
+});
+
+test("inferred and assumed spans are qualified on windows and meters, whatever the basis", () => {
+	const ten = 600_000;
+	const state = (footerData?: unknown) =>
+		projected([
+			view("faux", {
+				display: { full: "Faux", compact: "F", footer: footerData },
+				snapshot: snap("faux", [{ ...span("short", 100, ten, "inferred", CLOCK + hour), basis: "reported" }], {
+					expiresAt: CLOCK + hour,
+				}),
+				meters: [
+					meter("spend", 2, { durationMs: ten, spanSource: "inferred", quantity: { unit: "usd", used: 2 } }),
+					meter("calls", 3, { durationMs: hour, spanSource: "inferred" }),
+					meter("rpd", 4, { kind: "calendar", resetRule: { every: "day" }, spanSource: "assumed" }),
+					meter("odd", 5, { durationMs: hour, spanSource: "guessed" }),
+				],
+			}),
+		]);
+	assert.equal(
+		footer.formatQuotaRow(state(), "compact", plain, fixed),
+		"Left: F 10m~ 0% @13:00 $2.00/10m~ obs 1h~ 3 req obs rpd? 4 req obs odd? 5 req obs",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state(), "full", plain, fixed),
+		"Quota left: Faux 10m 0% (resets 13:00; span inferred) $2.00 last 10m observed (span inferred) 1h 3 requests observed (span inferred) rpd 4 requests observed (window unknown) odd 5 requests observed (window unknown)",
+	);
+	// An inferred span never satisfies a duration selector as if reported; it stays qualified.
+	assert.match(
+		footer.formatQuotaRow(state({ show: [{ durationMs: ten }] }), "compact", plain, fixed),
+		/^Left: F 10m~ 0% @13:00 /,
+	);
+});
+
+test("the provider cap never hides a blocked provider without saying so", () => {
+	const healthy = (id: string, left: number) =>
+		view(id, { snapshot: snap(id, [{ ...win("q", 100 - left), durationMs: hour }], { expiresAt: CLOCK + hour }) });
+	const blocked = view("E", { marks: [mark(CLOCK + hour, "inferred")] });
+	const fit = (views: unknown[], width = 28) => footer.fitQuotaRows(projected(views), width, plain, fixed);
+	// Blocked first, then lowest remaining; the healthiest provider is the one hidden.
+	assert.deepEqual(fit([healthy("A", 50), healthy("B", 10), healthy("C", 90), healthy("D", 30), blocked]), [
+		"Left: E provider blocked inf",
+		"B 1h 10%",
+		"D 1h 30%",
+		"A 1h 50%",
+		"+1 more: /router status",
+	]);
+	// Too narrow for the pointer: the count still shows.
+	assert.equal(
+		fit([healthy("A", 50), healthy("B", 10), healthy("C", 90), healthy("D", 30), blocked], 20).at(-1),
+		"+1 more",
+	);
+	const marked = (id: string) => view(id, { marks: [mark(CLOCK + hour, "observed")] });
+	assert.deepEqual(fit(["A", "B", "C", "D", "E", "F"].map(marked), 40).at(-1), "+2 more (2 blocked): /router status");
+});
+
+test("freshness covers meters and pools, never marks, and error-only views keep a row", () => {
+	const data = (extra: Record<string, unknown> = {}) =>
+		view("m", {
+			snapshot: fresh("m", extra),
+			meters: [meter("calls", 3)],
+			pools: [{ name: "wallet", unit: "credits", balance: 4 }],
+		});
+	const row = (input: unknown[], now = CLOCK) =>
+		footer.formatQuotaRow(projected(input, now), "compact", plain, { ...fixed, now });
+	// A fresh meter-only snapshot is current; once it expires the meters and pools say stale.
+	assert.equal(row([data()]), "Left: m calls 3 req obs wallet 4 credits");
+	assert.equal(row([data()], CLOCK + hour), "Left: m (stale) calls 3 req obs wallet 4 credits");
+	// Rendering a parsed fresh reading after its expiry also says stale.
+	assert.equal(
+		footer.formatQuotaRow(projected([data()]), "compact", plain, { ...fixed, now: CLOCK + hour }),
+		"Left: m (stale) calls 3 req obs wallet 4 credits",
+	);
+	assert.equal(row([data({ status: "error" })]), "Left: m (stale) calls 3 req obs wallet 4 credits");
+	assert.equal(
+		row([view("p", { pools: [{ name: "wallet", unit: "usd", balance: 1 }] })]),
+		"Left: p (stale) wallet $1.00",
+	);
+	// The poller ages a fresh meter reading with the clock.
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(
+		v2([view("m", { snapshot: snap("m", [], { expiresAt: NOW + 5 }), meters: [meter("calls", 3)] })]),
+	);
+	const polled = () => footer.formatQuotaRow(present(poller.getState()), "compact", plain, { now: env.clock.now });
+	assert.equal(polled(), "Left: m calls 3 req obs");
+	assert.equal(env.live(5).length, 1);
+	env.clock.now += 5;
+	assert.equal(polled(), "Left: m (stale) calls 3 req obs");
+	poller.dispose();
+	// Active marks are current whatever the snapshot: stale data is labelled apart from them.
+	const marked = projected([{ ...data(), marks: [mark(CLOCK + 2 * hour, "observed")] }], CLOCK + hour);
+	const at = { ...fixed, now: CLOCK + hour };
+	assert.equal(
+		footer.formatQuotaRow(marked, "compact", plain, at),
+		"Left: m (stale) calls 3 req obs wallet 4 credits | provider blocked->14:00 obs",
+	);
+	assert.deepEqual(footer.fitQuotaRows(marked, 30, plain, at), ["Left: m provider blocked obs"]);
+	const onlyMark = projected([view("m", { marks: [mark(CLOCK + hour, "observed")] })]);
+	assert.equal(footer.formatQuotaRow(onlyMark, "compact", plain, fixed), "Left: m provider blocked->13:00 obs");
+	// Error, unavailable and stale views with nothing to show still render a row.
+	const status = (value: string) => view("e", { snapshot: snap("e", [], { status: value, expiresAt: CLOCK + hour }) });
+	assert.equal(row([status("error")]), "Left: e quota error");
+	assert.equal(
+		footer.formatQuotaRow(projected([status("unavailable")]), "full", plain, fixed),
+		"Quota left: e quota unavailable",
+	);
+	assert.deepEqual(footer.fitQuotaRows(projected([status("stale")]), 19, plain, fixed), ["Left: e quota stale"]);
+	assert.equal(
+		row([{ ...status("error"), marks: [mark(CLOCK + hour, "inferred")] }]),
+		"Left: e quota error | provider blocked->13:00 inf",
+	);
+	// An available but empty snapshot, or no snapshot at all, still has no row.
+	assert.equal(row([status("available"), view("none")]), "");
+});
+
+test("meters keep their resets and only an observed zero is dropped", () => {
+	const state = projected([
+		view("m", {
+			snapshot: fresh("m"),
+			meters: [
+				meter("rpd", 37, {
+					kind: "calendar",
+					resetRule: { every: "day" },
+					resetAt: CLOCK + hour,
+					spanSource: "inferred",
+				}),
+				meter("past", 1, { resetAt: CLOCK - hour }),
+				meter("idle", 0),
+				meter("granted", 0, { basis: "reported" }),
+				meter("guess", 0, { basis: "inferred" }),
+			],
+		}),
+	]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: m 1d~ 37 req obs @13:00 past 1 req obs granted 0 req rep guess 0 req inf",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, fixed),
+		"Quota left: m day 37 requests observed (resets 13:00; span inferred); past 1 requests observed; granted 0 requests reported; guess 0 requests inferred",
+	);
+	// Layouts without reset times drop the meter reset too.
+	assert.deepEqual(footer.fitQuotaRows(state, 71, plain, fixed), [
+		"Left: m 1d~ 37 req obs past 1 req obs granted 0 req rep guess 0 req inf",
+	]);
+	// The Google rule: no calls and no mark, no row.
+	assert.deepEqual(
+		footer.fitQuotaRows(
+			projected([view("g", { snapshot: fresh("g"), meters: [meter("calls", 0)] })]),
+			80,
+			plain,
+			fixed,
+		),
+		[],
+	);
+});
+
+test("unrecognized meter basis is skipped and unrecognized mark evidence reads unknown, never promoted", () => {
+	const state = projected([
+		view("odd", {
+			snapshot: fresh("odd"),
+			meters: [
+				meter("bogus", 9, { basis: "guessed" }),
+				meter("null", 1, { basis: null }),
+				meter("absent", 2, { basis: undefined }),
+			],
+			marks: [mark(CLOCK + hour, "guessed"), mark(CLOCK + hour, undefined, ["m"])],
+		}),
+	]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: odd absent 2 req rep | provider blocked->13:00 unk m blocked->13:00 read",
+	);
+	assert.match(footer.formatQuotaRow(state, "full", plain, fixed), /provider blocked until Jan 10 13:00 \(unknown\)/);
+});
+
+test("legacy compatibility applies only to legacy footer selections, not to every view with a legacy id", () => {
+	const windows = [
+		span("five_hour", 25, 5 * hour, "reported", CLOCK + hour),
+		span("seven_day", 40, WEEK, "reported", CLOCK + hour),
+		{ ...span("seven_day_opus", 90, WEEK, "reported", CLOCK + hour), scope: "model", families: ["opus"] },
+	];
+	const anthropic = (footerData?: unknown) =>
+		view("anthropic", {
+			display: { full: "Anthropic", compact: "Anth", footer: footerData },
+			snapshot: snap("anthropic", windows, { expiresAt: CLOCK + hour }),
+		});
+	const opus = { ...fixed, model: { provider: "anthropic", id: "claude-opus-4" } };
+	const row = (footerData?: unknown) =>
+		footer.formatQuotaRow(projected([anthropic(footerData)]), "compact", plain, { ...opus, now: CLOCK + 1 });
+	// The built-in legacy selection keeps the legacy row, model buckets hidden.
+	assert.equal(
+		row({ show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true }),
+		"Left: Anth 5h 75% @13:00 7d 60% @Jan 10 13:00",
+	);
+	// A v2 selection that names the model bucket, or no selection at all, shows the selected model's bucket.
+	assert.equal(
+		row({ show: [{ name: "seven_day" }, { name: "seven_day_opus" }] }),
+		"Left: Anth 7d 60% @Jan 10 13:00 7d 10% @Jan 10 13:00",
+	);
+	assert.equal(row(), "Left: Anth 5h 75% @13:00 7d 60% @Jan 10 13:00 7d 10% @Jan 10 13:00");
+	// A Codex snapshot without span provenance is still weekly under a v2 duration selector.
+	const codex = snap("openai-codex", [resetWin("7d", 20, CLOCK + hour)], { expiresAt: CLOCK + hour });
+	const v1 = present(footer.parseUsageReply(reply([codex]), CLOCK));
+	const wrapped = projected([
+		view("openai-codex", {
+			display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }] } },
+			snapshot: codex,
+		}),
+	]);
+	const codexRow = (state: footer.QuotaState) =>
+		footer.formatQuotaRow(state, "compact", plain, fixed).split(" | ").at(-1);
+	assert.equal(codexRow(v1), "OAI 7d 80% @Jan 10 13:00");
+	assert.equal(codexRow(wrapped), "Left: OAI 7d 80% @Jan 10 13:00");
+});
+
+test("poller state is deeply immutable, so a reader cannot corrupt the next render", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(
+		v2([
+			view("custom", {
+				display: { full: "Custom", compact: "C", footer: { show: [{ name: "named" }] } },
+				snapshot: snap("custom", [{ ...win("named", 40, "model"), families: ["opus"] }]),
+			}),
+		]),
+	);
+	const state = present(poller.getState());
+	const quota = present(state.custom);
+	const cell = present(quota.cells[0]);
+	assert.ok(cell.kind === "percent");
+	for (const mutate of [
+		() => (quota.cells as unknown[]).push(cell),
+		() => (cell.families as string[]).push("sonnet"),
+		() => ((quota.display.footer?.show ?? []) as unknown[]).pop(),
+		() => Object.assign(quota.display, { compact: "X" }),
+		() => Object.assign(state, { other: quota }),
+	]) {
+		assert.throws(mutate, TypeError);
+	}
+	assert.deepEqual(present(present(poller.getState()).custom).cells, quota.cells);
+	assert.deepEqual(cell.families, ["opus"]);
+	poller.dispose();
+});
+
+test("mark expiry repaints independently of the snapshot", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(v2([view("metered", { marks: [mark(NOW + 5, "inferred")] })]));
+	const rows = () => footer.fitQuotaRows(present(poller.getState()), 80, plain, { now: env.clock.now, timeZone: UTC });
+	assert.match(present(rows()[0]), /provider blocked/);
+	env.clock.now += 5;
+	present(env.live(5)[0]).fn();
+	assert.equal(env.changes(), 2);
+	assert.deepEqual(rows(), []);
+	poller.dispose();
+});
+
+test("dispose before a mark expires disarms its timer and never repaints", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(v2([view("metered", { marks: [mark(NOW + 5, "inferred")] })]));
+	const expiry = present(env.live(5)[0]);
+	const changes = env.changes();
+	poller.dispose();
+	assert.deepEqual(
+		env.timers.filter((timer) => timer.live),
+		[],
+	);
+	// Even a host that runs a cleared callback late must not repaint a disposed footer.
+	env.clock.now += 5;
+	expiry.fn();
+	assert.equal(env.changes(), changes);
+	assert.deepEqual(
+		env.timers.filter((timer) => timer.live),
+		[],
+	);
+});
+
+const healthyView = (id: string, left: number, extra: Record<string, unknown> = {}) =>
+	view(id, {
+		snapshot: snap(id, [{ ...win("q", 100 - left), durationMs: hour }], { expiresAt: CLOCK + hour }),
+		...extra,
+	});
+
+test("a reply with hundreds of thousands of windows renders the capped fallback without throwing", () => {
+	const windows = Array.from({ length: 300_000 }, (_, i) => ({ ...win(`w${i}`, 50), durationMs: hour }));
+	const huge = view("huge", { snapshot: snap("huge", windows, { expiresAt: CLOCK + hour }) });
+	const state = projected([huge, ...["A", "B", "C", "D"].map((id) => healthyView(id, 90))]);
+	const rows = footer.fitQuotaRows(state, 40, plain, fixed);
+	assert.equal(rows.length, 5);
+	assert.equal(rows.at(-1), "+1 more: /router status");
+});
+
+test("among blocked providers the cap keeps the lowest remaining quota", () => {
+	const blocked = (id: string, left: number) => healthyView(id, left, { marks: [mark(CLOCK + hour, "inferred")] });
+	const rows = footer.fitQuotaRows(
+		projected([blocked("A", 90), blocked("B", 90), blocked("C", 90), blocked("D", 90), blocked("E", 1)]),
+		40,
+		plain,
+		fixed,
+	);
+	assert.equal(rows[0], "Left: E provider blocked inf 1h 1%");
+	assert.equal(rows.at(-1), "+1 more (1 blocked): /router status");
+});
+
+test("display labels are bounded at normalization while matching keeps the full id", () => {
+	const long = "x".repeat(10_000);
+	const family = `fam-${long}`;
+	const state = projected([
+		view("p", {
+			display: { full: long, compact: long },
+			snapshot: snap("p", [win(long, 40)], { expiresAt: CLOCK + hour }),
+			meters: [meter(long, 3, { scope: "model", families: [family] })],
+			pools: [{ name: long, unit: "credits", balance: 2 }],
+			marks: [
+				mark(
+					CLOCK + hour,
+					"inferred",
+					Array.from({ length: 1_000 }, (_, i) => `${long}${i}`),
+				),
+			],
+		}),
+	]);
+	const label = `${"x".repeat(footer.LABEL_MAX - 3)}...`;
+	const row = footer.formatQuotaRow(state, "full", plain, { ...fixed, model: { provider: "p", id: family } });
+	// The selected model matches its full family id; only the shown text is bounded.
+	assert.match(row, new RegExp(`^Quota left: ${label} ${label} 60%`));
+	assert.match(row, new RegExp(` ${label} 3 requests observed ${label} 2 credits; `));
+	assert.match(
+		row,
+		new RegExp(`(${label},){${footer.FAMILIES_MAX - 1}}${label}\\+${1_000 - footer.FAMILIES_MAX} blocked`),
+	);
+	assert.ok(row.length < 1_000);
+});
+
+test("the capped fallback fits every width it is given and keeps the hidden blocked count", () => {
+	const marked = (id: string) => view(id, { marks: [mark(CLOCK + hour, "observed")] });
+	const blockedState = projected(["A", "B", "C", "D", "E", "F"].map(marked));
+	const healthyState = projected(["A", "B", "C", "D", "E", "F"].map((id) => healthyView(id, 50)));
+	const pointer = (state: footer.QuotaState, width: number) => footer.fitQuotaRows(state, width, plain, fixed).at(-1);
+	// The ladder: full pointer, the count, `+K!` (K blocked hidden), `!`, then nothing at width 0.
+	assert.equal(pointer(blockedState, 40), "+2 more (2 blocked): /router status");
+	assert.equal(pointer(blockedState, 19), "+2 more (2 blocked)");
+	assert.equal(pointer(blockedState, 18), "+2!");
+	assert.equal(pointer(blockedState, 2), "!");
+	assert.equal(pointer(blockedState, 0), "");
+	assert.equal(pointer(healthyState, 7), "+2 more");
+	assert.equal(pointer(healthyState, 6), "+2");
+	assert.equal(pointer(healthyState, 1), "+");
+	for (let width = 0; width <= 60; width++) {
+		for (const state of [blockedState, healthyState]) {
+			const rows = footer.fitQuotaRows(state, width, plain, fixed);
+			for (const row of rows) assert.ok(row.length <= width, `width ${width}: ${JSON.stringify(row)}`);
+		}
+		if (width > 0) assert.match(present(pointer(blockedState, width)), /!|\(2 blocked\)/);
+	}
+	// Below the lead, the label-only row still fits rather than forcing a character past the width.
+	assert.deepEqual(footer.fitQuotaRows(projected([marked("A")]), 4, plain, fixed), ["Left"]);
+});
+
+test("generic assumed and unrecognized percentage spans keep their own name", () => {
+	const state = projected([
+		view("g", {
+			snapshot: snap(
+				"g",
+				[span("rpm", 40, hour, "assumed", CLOCK + hour), span("tpm", 30, hour, "guessed", CLOCK + hour)],
+				{ expiresAt: CLOCK + hour },
+			),
+		}),
+	]);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, fixed),
+		"Left: g rpm? 60% @Jan 10 13:00 tpm? 70% @Jan 10 13:00",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, fixed),
+		"Quota left: g rpm 60% (resets Jan 10 13:00; window unknown) tpm 70% (resets Jan 10 13:00; window unknown)",
+	);
+});
+
+test("a duration selector never lends its duration to a qualified reading", () => {
+	const row = (spanSource: string, tier: footer.Tier = "compact") =>
+		footer.formatQuotaRow(
+			projected([
+				view("g", {
+					display: { full: "G", compact: "G", footer: { show: [{ durationMs: WEEK }] } },
+					snapshot: snap("g", [{ ...win("est", 10), spanSource }], { expiresAt: CLOCK + hour }),
+				}),
+			]),
+			tier,
+			plain,
+			fixed,
+		);
+	assert.equal(row("inferred"), "Left: G est~ 90%");
+	assert.equal(row("inferred", "full"), "Quota left: G est 90% (span inferred)");
+	assert.equal(row("assumed"), "Left: G est? 90%");
+});
+
+test("a failed view says so unless a cached value is actually rendered", () => {
+	const failed = (extra: Record<string, unknown>, status = "error") =>
+		view("e", { snapshot: snap("e", [], { status, expiresAt: CLOCK + hour }), ...extra });
+	const row = (input: unknown, opts: footer.FormatOptions = fixed) =>
+		footer.formatQuotaRow(projected([input]), "compact", plain, opts);
+	const placeholder = {
+		display: { full: "e", compact: "e", footer: { show: [{ durationMs: hour }], placeholder: true } },
+	};
+	const unknownPool = { pools: [{ name: "wallet", unit: "credits" }] };
+	const offModel = { meters: [meter("calls", 3, { scope: "model", families: ["opus"] })] };
+	// Nothing cached is visible: a placeholder, an unknown-only pool or another model's meter.
+	assert.equal(row(failed(placeholder)), "Left: e quota error");
+	assert.equal(row(failed(unknownPool, "unavailable")), "Left: e quota unavailable");
+	assert.equal(row(failed(offModel)), "Left: e quota error");
+	assert.equal(
+		row(failed({ ...offModel, marks: [mark(CLOCK + hour, "inferred")] })),
+		"Left: e quota error | provider blocked->13:00 inf",
+	);
+	// The selected model's meter is a visible cached value, so it reads stale instead.
+	assert.equal(
+		row(failed(offModel), { ...fixed, model: { provider: "e", id: "claude-opus" } }),
+		"Left: e (stale) calls 3 req obs",
+	);
+	// An available snapshot with only a placeholder has nothing to report as failed.
+	assert.equal(row(failed(placeholder, "available")), "Left: e 1h --");
+});
+
+const LEGACY_ANTHROPIC = {
+	full: "Anthropic",
+	compact: "Anth",
+	footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true },
+};
+
+test("legacy-selection freshness follows the snapshot expiry for meters and pools", () => {
+	const anthropic = (expiresAt: number) =>
+		view("anthropic", {
+			display: LEGACY_ANTHROPIC,
+			snapshot: snap("anthropic", [], { expiresAt }),
+			meters: [meter("calls", 3)],
+			pools: [{ name: "wallet", unit: "credits", balance: 4 }],
+		});
+	const row = (expiresAt: number) => footer.formatQuotaRow(projected([anthropic(expiresAt)]), "compact", plain, fixed);
+	assert.equal(row(CLOCK + hour), "Left: Anth 7d -- calls 3 req obs wallet 4 credits");
+	assert.equal(row(CLOCK - 1), "Left: Anth (stale) 7d -- calls 3 req obs wallet 4 credits");
+});
+
+test("an all-legacy-selection reply still budgets its marks: whole with evidence or left out", () => {
+	const state = projected([
+		view("anthropic", {
+			display: LEGACY_ANTHROPIC,
+			snapshot: snap("anthropic", [resetWin("five_hour", 30, CLOCK + hour), resetWin("seven_day", 60, CLOCK + hour)], {
+				expiresAt: CLOCK + hour,
+			}),
+			marks: [mark(CLOCK + hour, "inferred", ["claude-opus"])],
+		}),
+		view("openai-codex", {
+			display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }], placeholder: true } },
+			snapshot: snap("openai-codex", [resetWin("7d", 20, CLOCK + hour)], { expiresAt: CLOCK + hour }),
+		}),
+	]);
+	const fit = (width: number) => footer.fitQuotaRows(state, width, plain, fixed);
+	// The marked row is budgeted with its percentages in legacy order and bytes; the unmarked one stays pinned.
+	assert.deepEqual(fit(48), ["Left: Anth claude-opus blocked inf 5h 70% 7d 40%", "OAI 7d 80%"]);
+	assert.deepEqual(fit(45), ["Left: Anth claude-opus blocked inf 5h 70% ...", "OAI 7d 80%"]);
+	for (let width = 0; width <= 80; width++) {
+		const [marked] = fit(width);
+		assert.ok(present(marked).length <= width, `width ${width}: ${marked}`);
+		assert.ok(
+			!present(marked).includes("blocked") || /blocked(->\S+)? inf/.test(present(marked)),
+			`width ${width}: ${marked}`,
+		);
+	}
+});
+
+test("getState reuses its state until effective freshness changes", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(
+		v2([view("m", { snapshot: snap("m", [], { expiresAt: NOW + 5 }), meters: [meter("calls", 3)] })]),
+	);
+	const first = present(poller.getState());
+	assert.equal(poller.getState(), first);
+	env.clock.now += 5;
+	const expired = present(poller.getState());
+	assert.notEqual(expired, first);
+	assert.equal(present(expired.m).stale, true);
+	assert.equal(poller.getState(), expired);
+	poller.dispose();
+});
+
+test("overflowPointer always fits the width it is given", () => {
+	for (let width = 0; width <= 40; width++) {
+		for (const [more, blocked] of [
+			[3, 0],
+			[3, 2],
+			[120, 120],
+		] as const) {
+			const text = footer.overflowPointer(more, blocked, width);
+			assert.ok(text.length <= width, `${width}: ${text}`);
+			if (blocked && width > 0) assert.match(text, /!|blocked/);
+		}
+	}
+	assert.equal(footer.overflowPointer(120, 120, 4), "!");
+	assert.equal(footer.overflowPointer(120, 120, 5), "+120!");
+});
+
+test("every cell kind together: rows fit, blocks keep evidence and every blocked provider is accounted for", () => {
+	const generic = (id: string, extra: Record<string, unknown>) =>
+		view(id, { display: { full: `${id}-full`, compact: id }, ...extra });
+	const views = [
+		view("anthropic", {
+			display: LEGACY_ANTHROPIC,
+			snapshot: snap("anthropic", [resetWin("five_hour", 30, CLOCK + hour), resetWin("seven_day", 60, CLOCK + hour)], {
+				expiresAt: CLOCK + hour,
+			}),
+			marks: [mark(CLOCK + hour, "observed", ["claude-opus"])],
+		}),
+		view("openai-codex", {
+			display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }], placeholder: true } },
+			snapshot: snap("openai-codex", [span("x", 40, hour, "assumed", CLOCK + hour)], { expiresAt: CLOCK + hour }),
+		}),
+		generic("pct", {
+			display: { full: "pct", compact: "pct", footer: { show: [{ durationMs: WEEK }], placeholder: true } },
+			snapshot: snap("pct", [span("est", 10, hour, "inferred", CLOCK + hour)], { expiresAt: CLOCK + hour }),
+			marks: [mark(CLOCK + hour, "inferred")],
+		}),
+		generic("met", {
+			snapshot: snap("met", [], { expiresAt: CLOCK - 1 }),
+			meters: [meter("calls", 7, { spanSource: "inferred", durationMs: hour })],
+		}),
+		generic("pool", { snapshot: fresh("pool"), pools: [{ name: "wallet", unit: "usd", balance: 3 }] }),
+		generic("err", { snapshot: snap("err", [], { status: "error" }), marks: [mark(CLOCK + hour, "guessed")] }),
+		generic("una", { snapshot: snap("una", [], { status: "unavailable" }) }),
+	];
+	const state = projected(views);
+	const blockedIds = ["Anth", "pct", "err"];
+	for (let width = 0; width <= 160; width++) {
+		const rows = footer.fitQuotaRows(state, width, plain, fixed);
+		for (const row of rows) {
+			// Unmarked legacy rows keep pinned bytes and the caller clips them; every other row fits.
+			const legacy = /^(Left: )?OAI /.test(row);
+			if (!legacy) assert.ok(row.length <= width, `width ${width}: ${row}`);
+			if (row.includes("blocked")) assert.match(row, /blocked(->\S+)? (obs|inf|unk)\b/, `width ${width}`);
+			// Only the legacy Codex row may name an unknown span `quota?`; nothing lends `7d` to an estimate.
+			assert.doesNotMatch(row, legacy ? /7d~/ : /7d~|quota\?/, `width ${width}: ${row}`);
+		}
+		const pointer = rows.at(-1) ?? "";
+		const hidden = Number(/\((\d+) blocked\)|^\+(\d+)!$/.exec(pointer)?.slice(1).find(Boolean) ?? 0);
+		const shown = rows.filter((row) => row.includes("blocked") && !row.startsWith("+")).length;
+		if (width >= 60) assert.equal(shown + hidden, blockedIds.length, `width ${width}: ${JSON.stringify(rows)}`);
+	}
+	assert.match(footer.formatQuotaRow(state, "compact", plain, fixed), /OAI quota\? 60%/);
+});
+
+test("a confirmed model block is visible beside healthy legacy quota, from v1 blocks or v2 marks", () => {
+	const opts = { now: 50, timeZone: UTC };
+	const opus = { families: ["opus"], until: 100, provider: "anthropic" };
+	const v1 = present(footer.parseUsageReply({ success: true, data: { snapshots: [], blocks: [opus] } }, 50));
+	const legacyView = present(
+		footer.parseUsageReply(
+			{
+				success: true,
+				data: {
+					views: [
+						{
+							provider: "anthropic",
+							display: { footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true } },
+							marks: [{ families: ["opus"], until: 100 }],
+						},
+					],
+				},
+			},
+			50,
+		),
+	);
+	// A tracker mark carries no `evidence`: it is a confirmed read and says so.
+	assert.equal(
+		footer.formatQuotaRow(v1, "compact", plain, opts),
+		"Left: Anth (stale) 7d -- | opus blocked->00:00 read | OAI (stale) 7d --",
+	);
+	assert.match(footer.formatQuotaRow(legacyView, "compact", plain, opts), /opus blocked->00:00 read/);
+	for (const state of [v1, legacyView]) {
+		// `Left: A opus blocked read` is the narrowest whole claim.
+		for (let width = 25; width <= 120; width++) {
+			const rows = footer.fitQuotaRows(state, width, plain, opts).join("\n");
+			assert.match(rows, /(opus|model) blocked( until .+ \(|->\S+ | )read/, `width ${width}: ${rows}`);
+		}
+	}
+	// A block for a provider the v1 reply has no row for still gets one; its evidence is never promoted.
+	const other = { families: [], until: 100, provider: "google", evidence: "inferred" };
+	const extra = present(footer.parseUsageReply({ success: true, data: { snapshots: [], blocks: [other, opus] } }, 50));
+	assert.match(footer.formatQuotaRow(extra, "compact", plain, opts), /\| google provider blocked->00:00 inf$/);
+	// Malformed providers are skipped; several blocks for one provider all show.
+	const sonnet = { ...opus, families: ["sonnet"] };
+	const many = present(
+		footer.parseUsageReply(
+			{
+				success: true,
+				data: { snapshots: [], blocks: [{ ...opus, provider: 1 }, { ...opus, provider: "" }, opus, sonnet] },
+			},
+			50,
+		),
+	);
+	assert.equal(
+		footer.formatQuotaRow(many, "compact", plain, opts),
+		"Left: Anth (stale) 7d -- | opus blocked->00:00 read sonnet blocked->00:00 read | OAI (stale) 7d --",
+	);
+	// The shared golden reply: its live Opus block is shown beside the pinned percentages.
+	const golden = present(fixture.views.find(({ name }) => name === "legacy-reported"));
+	const at = { now: golden.now, timeZone: golden.timeZone };
+	const state = present(footer.parseUsageReply({ success: true, data: golden.usage }, golden.now));
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, at),
+		"Quota left: Anthropic 5h 75% (resets 14:00) weekly 60% (resets Jan 18 12:00); opus blocked until Jan 18 12:00 (read) | OpenAI weekly 35% (resets Jan 18 12:00)",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, at),
+		"Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | opus blocked->Jan 18 12:00 read | OAI 7d 35% @Jan 18 12:00",
+	);
+});
+
+test("a fallback row searches every block for one that fits whole and counts the blocks it drops", () => {
+	const opus = mark(CLOCK + hour, "inferred", ["claude-opus-extended-family"]);
+	const wide = mark(CLOCK + hour, "inferred");
+	const fit = (marks: unknown[], width: number) =>
+		footer.fitQuotaRows(projected([view("A", { marks })]), width, plain, fixed);
+	// The provider-wide block outranks a model block, whichever comes first.
+	for (const marks of [
+		[opus, wide],
+		[wide, opus],
+	]) {
+		assert.deepEqual(fit(marks, 19), ["Left: A blocked inf"]);
+		assert.deepEqual(fit(marks, 23), ["Left: A blocked inf +1!"]);
+		// The pointer outranks the scope word: a terse head that counts the drop beats a silent one.
+		assert.deepEqual(fit(marks, 31), ["Left: A blocked inf +1!"]);
+		assert.deepEqual(fit(marks, 32), ["Left: A provider blocked inf +1!"]);
+	}
+	// Among model blocks, the first one that fits whole is shown, not the label alone.
+	const short = mark(CLOCK + hour, "inferred", ["m"]);
+	assert.deepEqual(fit([opus, short], 22), ["Left: A m blocked inf"]);
+	assert.deepEqual(fit([opus, short], 25), ["Left: A m blocked inf +1!"]);
+	// A dropped block is worth a shorter label.
+	assert.deepEqual(footer.fitQuotaRows(projected([view("Alpha", { marks: [wide, opus] })]), 23, plain, fixed), [
+		"Left: A blocked inf +1!",
+	]);
+});
+
+test("a layout that drops a failed view's cached value reports the failure instead", () => {
+	const state = projected([
+		view("A", {
+			snapshot: snap("A", [], { status: "error", expiresAt: CLOCK + hour }),
+			pools: [{ name: "wallet", unit: "usd", balance: 4 }],
+		}),
+		view("B", { snapshot: snap("B", [{ ...win("w", 50), durationMs: hour }], { expiresAt: CLOCK + hour }) }),
+	]);
+	// The cached balance is shown while it fits, so the row reads stale rather than failed.
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, fixed), "Left: A (stale) wallet $4.00 | B 1h 50%");
+	assert.deepEqual(footer.fitQuotaRows(state, 22, plain, fixed), ["Left: A quota error", "B 1h 50%"]);
+	for (let width = 19; width <= 60; width++) {
+		const rows = footer.fitQuotaRows(state, width, plain, fixed).join("\n");
+		assert.match(rows, /A (quota error|\(stale\) wallet \$4\.00)/, `width ${width}: ${rows}`);
+	}
+});
+
+test("providers whose labels collide get a stable distinguishing tag, kept when the label shortens", () => {
+	const stem = `provider-${"x".repeat(40)}`;
+	const healthy = (id: string, extra: Record<string, unknown> = {}) =>
+		view(id, { snapshot: snap(id, [{ ...win("w", 50), durationMs: hour }], { expiresAt: CLOCK + hour }), ...extra });
+	const labelsOf = (row: string) => row.split(" | ").map((part) => part.replace(/^Left: /, "").split(" ")[0]);
+	const pair = [healthy(`${stem}-alpha`), healthy(`${stem}-beta`)];
+	const [alpha, beta] = labelsOf(footer.formatQuotaRow(projected(pair), "compact", plain, fixed));
+	assert.notEqual(alpha, beta);
+	assert.match(present(alpha), /^provider-x+\.\.\.#[0-9a-z]{2}$/);
+	// Stable: a provider's tag is its own, whatever else is shown or in which order.
+	assert.deepEqual(labelsOf(footer.formatQuotaRow(projected([...pair].reverse()), "compact", plain, fixed)), [
+		beta,
+		alpha,
+	]);
+	// Shortened for width, every row keeps its tag.
+	const narrow = footer.fitQuotaRows(projected(pair), 20, plain, fixed);
+	assert.deepEqual(narrow, [
+		`Left: p...${present(alpha).slice(-3)} 1h 50%`,
+		`provide...${present(beta).slice(-3)} 1h 50%`,
+	]);
+	// Identical explicit labels collide too; a legacy row keeps its pinned label and the other is tagged.
+	const named = { display: { full: "Anthropic", compact: "Anth" } };
+	const legacy = healthy("anthropic", { display: LEGACY_ANTHROPIC });
+	const [anth, other] = labelsOf(
+		footer.formatQuotaRow(projected([legacy, healthy("lookalike", named)]), "compact", plain, fixed),
+	);
+	assert.equal(anth, "Anth");
+	assert.match(present(other), /^Anth#[0-9a-z]{2}$/);
+	// Ids whose hashes collide in full still get distinct tags.
+	const twins = projected([healthy("p2039599", named), healthy("p2222382", named)]);
+	const tags = labelsOf(footer.formatQuotaRow(twins, "compact", plain, fixed));
+	assert.equal(new Set(tags).size, 2, tags.join());
+	// Without a collision nothing is tagged.
+	assert.equal(footer.formatQuotaRow(projected([healthy("solo")]), "compact", plain, fixed), "Left: solo 1h 50%");
+});
+
+test("a compact block keeps the expiry day when it lifts on another day", () => {
+	const row = (until: number) =>
+		footer.formatQuotaRow(projected([view("A", { marks: [mark(until, "inferred")] })]), "compact", plain, fixed);
+	assert.equal(row(CLOCK + hour), "Left: A provider blocked->13:00 inf");
+	assert.equal(row(CLOCK + 25 * hour), "Left: A provider blocked->Jan 11 13:00 inf");
 });
