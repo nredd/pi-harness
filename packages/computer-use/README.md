@@ -166,7 +166,7 @@ All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `insp
 `read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
 macOS additionally registers `desktop_screenshot` and `desktop_input` (including app activation and
 plain-text clipboard access). Desktop tools require `desktop_control: true` and `headless: false`.
-Password managers, Keychain Access, terminals and system authentication agents are blocked by default (`app_blocked`, config `blocked_apps`), and the macOS helper refuses UI commands while the session is locked (`screen_locked`); see the [configuration reference](#preserved-configuration).
+Common terminals, password managers and system authentication agents are blocked by default on macOS and Windows (`app_blocked`, config `blocked_apps`). Linux matching is disabled pending trusted identity (#1180); `/computer-use` lists configured entries but reports the Linux blocklist as inactive (including WSLg). The macOS helper refuses UI commands while the session is locked (`screen_locked`); see the [configuration reference](#preserved-configuration).
 They share a scoped physical-input lock with `act_ui`; background semantic work stays independent.
 
 The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.
@@ -185,6 +185,64 @@ On CDP browser states, `act_ui` `moveMouse` requires explicit `x`/`y` coordinate
 target fails with `invalid_args` rather than sending absent coordinates. Browser `keypress` requires
 a non-empty `keys` array (`invalid_args`). Both checks run before any batch step is delivered or
 the observation epoch advances. Desktop ref movement is unchanged.
+
+## Input delivery safety contract
+
+These rules apply to every OS and transport. They describe required behavior, not current parity.
+
+1. Admit at effect. Before each logical unit (e.g. a keystroke or drag step), verify pinned delivery still reaches the selected target and global delivery cannot reach a blocked target. No slow work between check and post.
+2. Stop on refusal or cancellation before the next unit. Admission is not a lease for the rest of the action.
+3. On every exit, release any owed button or modifier through a cleanup path admission cannot refuse, and restore temporary clipboard contents.
+4. If delivery stops after any unit was posted, report `unknown`, never `didnt`, with `evidence.deliveredUnits` and the refusal code. A post alone does not prove success.
+5. Never automatically retry refused, partial or uncertain delivery.
+6. Strict headless (`ax_only`) never posts synthesized input, focuses a window or moves the cursor. An action that needs those effects fails with `foreground_required`.
+7. Refuse a known blocked app root with `app_blocked` in TypeScript before any helper call. Match the single `blocked_apps` list by host identity: macOS bundle id, Windows or Linux executable basename (case-insensitive), plus `WM_CLASS` on Linux X11. Never match an app-supplied display name.
+8. PID-targeted delivery reaches only the selected process. Global delivery additionally needs a helper-side blocklist at effect. Forward and enforce it before adding any global-input tool or the Windows transport for WSL (#981). Linux and Windows helpers do not receive the list today; selection-time refusal alone does not guard global input.
+9. Use `app_blocked` for blocked identity, `foreground_required` for policy requiring foreground, `focus_not_acquired` for unconfirmed target focus, `occluded_target` for a covered target, `coordinate_blocked` for refused coordinates, `stale_ref` for an expired element ref, and `stale_look` for an expired helper observation.
+
+Current implementation:
+
+| Rules | macOS native desktop delivery | Windows native desktop delivery | Linux native desktop delivery |
+| --- | --- | --- | --- |
+| 1, 2, 8: admission, stop and routing | PID delivery targets the selected process. HID checks focus and blocked apps, but web text fallback and multi-key input have stale-check gaps (#1173). | UIA and HWND delivery resolve the selected root; foreground `SendInput` uses target/focus guards but has no helper blocklist. | AT-SPI is target-scoped; X11 XTEST is global and checks the active window, not the blocklist. Per-unit conformance is unproven; #1183 tracks the test seam. |
+| 3, 4: cleanup and partial delivery | Paste restores the previous pasteboard contents only if no newer write intervenes. Drag reserves mouse-up. Release timestamps and unmatched-release coverage are open (#1174); no general partial-delivery count guarantee. | The helper attempts to release buttons after interrupted clicks and drags and keys after interrupted chords. Unicode typing sends down/up pairs in a single batch and does not attempt a release after partial insertion. No clipboard handling or general partial-delivery count guarantee. | X11 can leave held inputs on error (#1181) and report partial delivery as `didnt` (#1182). |
+| 5: retry | The bridge still retries some foreground refusals and checked `didnt` results outside strict headless; uncertain delivery is not blindly replayed. | Shared fallback; no conformance guarantee. | Shared fallback; #1182 means `didnt` does not always prove no input posted. |
+| 6: strict headless | Prohibits synthesized input, focus and cursor movement; input requiring foreground returns `foreground_required`. | Prohibits raw input and forced focus; raw-input refusal can be `coordinate_blocked`. | Prohibits XTEST and EWMH focus. Physical fallback refusal can be `coordinate_blocked` (X11 or no graphical session) or `capability_deferred` (Wayland). |
+| 7: root selection | Enforced by bundle id. | Enforced by executable basename. Unidentified roots are listed as blocked and refused with `app_blocked`. | Disabled: helper `processName` is the app-supplied AT-SPI accessible Name, not an executable basename or `WM_CLASS` (#1180). |
+| 9: codes | Uses contract codes where applicable. | Platform-specific codes remain, including the strict-headless divergence above. | Platform-specific codes remain, including the strict-headless divergence above. |
+
+| Separate transport | Current delivery |
+| --- | --- |
+| CDP/browser | Browser-state `act_ui` uses page-scoped DOM methods and CDP `Input` commands, not native desktop input. It dispatches synthesized page mouse and key events even with `headless: true`: the desktop `ax_only` gate does not apply. Native app selection policy does not apply to CDP pages. Press/release commands are paired on success, but there is no general owed-release or partial-delivery count guarantee. |
+
+On Windows, `blocked_apps` matches the **window owner process**, not a shell, launch alias, or
+hosted app. Match the exact executable basename, case-insensitively: `powershell.exe` matches
+`POWERSHELL.EXE`; `powershell` and `C:\Windows\System32\powershell.exe` do not. Entries are opaque:
+no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, `OpenConsole.exe`,
+`wt.exe`, and `wsl.exe` when those processes own a root.
+
+Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. The Windows helper checks the owning look's PID before a live UIA text read; this does not make TypeScript admission atomic with native delivery.
+
+Windows helper limits:
+
+- After a helper restart, look IDs and element-ref counters start over. `uiaReadText` receives
+  neither the admitted PID nor HWND. A restored state for window A can read window B's look if B
+  was observed after the restart and got the same look ID and ref. B was admitted on its own
+  observation, so this is a wrong-window read, not a blocklist bypass. The Rust helper needs a
+  per-helper generation in look IDs and PID and HWND supplied to `uiaReadText`.
+- Windows `wait_for` and `act_ui` postcondition polling query the admitted HWND by number without
+  revalidating its PID between polls. If that window closes and another process reuses its HWND
+  during the wait, a poll can read the replacement. Bind waits to HWND and PID and revalidate
+  ownership before each poll.
+
+Known blocked desktop roots fail before helper readiness for live operations, including
+`search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
+state's `@r`, this check covers both the saved owner and the latest root record.
+On macOS this is an intentional ordering change:
+`app_blocked` wins even if helper readiness would also fail. The macOS lists, matching, and
+helper payloads are unchanged. Cached searches and expansions that need no new look remain available.
+
+The cross-OS conformance suite and Linux keyboard-at-coordinate refusal are separate work.
 
 ## Documentation
 
@@ -774,7 +832,7 @@ One action is represented by an array of length one. A multi-action transaction 
 
 The bridge resolves model intent; the backend/helper owns grounding, preflight, delivery, and evidence. Accessibility capabilities choose an initial strategy but are not treated as proof that the intended result occurred. Editable-region clicks establish foreground focus for following unscoped keyboard steps in the same transaction. Raw coordinates are tied to the image-bearing state that produced them. Web-backed editable controls use atomic keyboard events and web-backed buttons use pointer events so application state receives normal input events rather than only a changed AX value. A helper result reports `worked`, `didnt`, or `unknown`, including evidence and shallow root changes where available. The [macOS implementation reference](../reference/platforms/macos/actions.mdx) documents that backend's exact Accessibility, web-control, and synthesized-event paths.
 
-With `headless: true`, the background boundary is strict: Pi must never activate or raise an application, change the user's focused window, move the global cursor, post synthesized input, or display the agent cursor or activity glow. On macOS, the helper rejects any action that would need synthesized pointer or keyboard input with `foreground_required`, and the bridge returns that error instead of retrying in the foreground ([macOS actions reference](../reference/platforms/macos/actions.mdx#headless-policy)). With `headless: false` (the default), credible semantic activation may begin in the background, editable clicks preserve the focus they establish for following unscoped keyboard input, and keyboard input with a checked `didnt` result may retry in the foreground because the first attempt proved side-effect-free. Focus-preserving native keyboard requests do not raise or re-focus the outer window between semantic activation and event delivery; canvas editors such as PowerPoint otherwise collapse an inner text editor back to placeholder selection. Ambiguous pointer outcomes are never replayed. On macOS, `cursor_overlay` schedules a visual, noninteractive overlay separately from action delivery for non-headless background pointer actions; foreground HID actions use only the physical cursor, and the overlay is currently main-display-only ([macOS implementation reference](../reference/platforms/macos/actions.mdx#agent-cursor-overlay)). With `activity_glow: true` (default `false`), non-headless macOS sessions hold a persistent helper connection that owns a click-through border on each screen until the agent run ends. The helper combines active connections and removes their state on disconnect.
+With `headless: true`, native desktop delivery must not activate or raise an application, change the user's focused window, move the global cursor, post synthesized input, or display the agent cursor or activity glow. See the [CDP exception](#input-delivery-safety-contract) for synthesized page events. On macOS, the helper rejects any action that would need synthesized pointer or keyboard input with `foreground_required`, and the bridge returns that error instead of retrying in the foreground ([macOS actions reference](../reference/platforms/macos/actions.mdx#headless-policy)). With `headless: false` (the default), credible semantic activation may begin in the background, editable clicks preserve the focus they establish for following unscoped keyboard input, and keyboard input with a checked `didnt` result may retry in the foreground because the first attempt proved side-effect-free. Focus-preserving native keyboard requests do not raise or re-focus the outer window between semantic activation and event delivery; canvas editors such as PowerPoint otherwise collapse an inner text editor back to placeholder selection. Ambiguous pointer outcomes are never replayed. On macOS, `cursor_overlay` schedules a visual, noninteractive overlay separately from action delivery for non-headless background pointer actions; foreground HID actions use only the physical cursor, and the overlay is currently main-display-only ([macOS implementation reference](../reference/platforms/macos/actions.mdx#agent-cursor-overlay)). With `activity_glow: true` (default `false`), non-headless macOS sessions hold a persistent helper connection that owns a click-through border on each screen until the agent run ends. The helper combines active connections and removes their state on disconnect.
 
 The `headless` configuration option determines whether foreground execution is prohibited. Fallback-capable multi-action calls execute one checked action at a time, retain click-established focus, and stop on a checked `didnt`; strict-headless calls retain native transactional batching.
 
@@ -2223,13 +2281,15 @@ The activity glow appears in user screen recordings. Single-window `observe_ui` 
 
 ### `blocked_apps`
 
-Default: the list below. System authentication agents are blocked in addition, always.
+Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename and X11 `WM_CLASS` once #1180 lands. Never use a display name, path, glob or regex. An unidentified root cannot match.
 
-A list of macOS bundle ids that Pi refuses to observe or control. The default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
+Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux presets cover common terminals, password managers, pinentry executables and polkit agents, but **Linux blocklist matching is disabled** until #1180 supplies a trusted identity. The helper's current `processName` is an app-controlled AT-SPI accessible name.
+
+The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 
 The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent` and `com.apple.ScreenSaver.Engine` are always blocked and cannot be removed by this option.
 
-A blocked target fails with the coded error `app_blocked`. This is a guard against mistakes, not a sandbox: focus can change between a check and delivery, and keyboard delivery checks the frontmost app on every unit but probes AX key focus only on a bounded cadence, so an app that takes key focus without becoming frontmost can receive a few units (up to eight) before the next probe. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
+On macOS and Windows, `find_roots` marks matching roots `blocked`, and a known blocked root fails with `app_blocked` before helper calls. This is a guard against mistakes, not a sandbox: focus can change between a check and delivery. The helper-side checks below are macOS-only: keyboard delivery checks the frontmost app on every unit but probes AX key focus only on a bounded cadence, so an app that takes key focus without becoming frontmost can receive a few units (up to eight) before the next probe. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
 
 - `observe_ui`, `act_ui` and every tool that resolves a root (e.g. `read_text`, `wait_for`) refuse a root owned by a blocked app. `act_ui` re-checks on every call, so adding an app to the list stops a state observed earlier.
 - `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost or holds key focus, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or any drag path vertex) lands on a blocked app's window. Keyboard delivery checks the frontmost app and the request deadline before each key-down. It probes AX key focus at the start, after keyboard layout or activation waits, when focus is ambiguous, or after eight units or 64 ms, whichever comes first. It samples frontmost again after an AX probe. An already posted key-down still gets its matching key-up without another check or activation. On a blocked-app or deadline stop, `evidence.postedUnits` counts key pairs posted in the interrupted action, not text insertion; `act_ui` keeps preceding transaction steps. Do not replay the sequence automatically. A non-frontmost app that takes key focus can receive keys between AX probes, and focus can also change in the short gap between admission and the HID post. This is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
@@ -2239,12 +2299,12 @@ A blocked target fails with the coded error `app_blocked`. This is a guard again
 
 Only the user-global file can replace the list. A project `.pi/computer-use.json` is writable by the repository and by the agent itself, so its `blocked_apps` is only unioned into the effective list: it can add ids, never remove one, and `[]` there changes nothing. The environment is treated the same way, because a repository can set it too (`.envrc`, direnv, a launch script). The user-global list replaces the default, it does not extend it, so the explicit opt-out is a literal `"blocked_apps": []` in `~/.pi/agent/extensions/pi-computer-use.json`; copy the defaults and append to extend them.
 
-A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. Bundle ids compare case-insensitively. A root without a bundle id (e.g. an unbundled process) cannot be matched. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` takes a comma-separated list of ids that are added to the effective list; it never removes one, a blank value (empty, whitespace, only commas) is treated as unset, and there is no environment opt-out (`none` is just an id that matches nothing). Trust model: the environment and project config are additive only; the user-global file is the only place that can opt out, and `PI_CODING_AGENT_DIR` selects which file that is, so it must be controlled by the operator, not by a repository.
+A `blocked_apps` value that is not an array of non-blank strings (e.g. `[{"id": "..."}]`, `[123]`, `[" "]`) is a configuration error, not an opt-out: the previous list stays in force and `/computer-use` prints the error. Nonblank Windows JSON entries preserve whitespace; only case is ignored when matching. The environment variable `PI_COMPUTER_USE_BLOCKED_APPS` trims each comma-separated entry before adding ids to the effective list; it never removes one, a blank value (empty, whitespace, only commas) is treated as unset, and there is no environment opt-out (`none` is just an id that matches nothing). Trust model: the environment and project config are additive only; the user-global file is the only place that can opt out, and `PI_CODING_AGENT_DIR` selects which file that is, so it must be controlled by the operator, not by a repository.
 
 Known limits. This is a guard against mistakes, not a sandbox:
 
 - Terminals embedded in an IDE (e.g. VS Code, JetBrains) belong to the IDE's bundle id, so they are not blocked unless you add the IDE.
-- Password managers that run inside a browser (extensions, web vaults) belong to the browser's bundle id and are not blocked. Add the browser, or set `browser_use` to `false`.
+- Password managers inside browsers (extensions, web vaults) do not get their own native identity. Blocking the browser in `blocked_apps` only affects native roots, not CDP. Set `browser_use` to `false` to disable CDP, including access via previously saved browser roots and states.
 - The clipboard is not guarded: `desktop_input` `readClipboard` and `writeClipboard` work regardless of the list, and secrets copied from a blocked app stay readable.
 - Outlines cached by an earlier `observe_ui` (`search_ui`, `expand_ui`, `inspect_ui` read the stored state) are not re-checked against a list that grew afterwards; `act_ui` and `read_text` are.
 - Pointer input is checked against the window list and an accessibility hit test immediately before delivery; a window that appears or moves in the middle of delivery is not re-checked.

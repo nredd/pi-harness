@@ -1,4 +1,5 @@
-import { parseLookResponse, type LookResponse } from "../../outline.ts";
+import { type LookResponse, parseLookResponse } from "../../outline.ts";
+import { assertPlatformArchitecture } from "../architecture.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
 	ComputerUsePlatformBackend,
@@ -20,7 +21,6 @@ import type {
 	PlatformWaitForResponse,
 } from "../types.ts";
 import { WINDOWS_HELPER_PROTOCOL_VERSION, windowsHelper } from "./helper.ts";
-import { assertPlatformArchitecture } from "../architecture.ts";
 
 function normalizedProcessName(appName: string): string {
 	return appName.toLowerCase().replace(/\.exe$/i, "");
@@ -74,7 +74,7 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
 			pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
 			appName: toOptionalString(raw?.appName ?? raw?.processName),
-			bundleId: toOptionalString(raw?.bundleId),
+			appId: toOptionalString(raw?.processName),
 			title: toOptionalString(raw?.title) ?? "",
 			role: toOptionalString(raw?.role),
 			subrole: toOptionalString(raw?.subrole),
@@ -96,9 +96,7 @@ function appsFromRoots(roots: PlatformRoot[]): PlatformApp[] {
 	return roots.flatMap((root) => {
 		if (!root.pid || seen.has(root.pid)) return [];
 		seen.add(root.pid);
-		return [
-			{ appName: root.appName ?? "Unknown", bundleId: root.bundleId, pid: root.pid, isFrontmost: root.isFocused },
-		];
+		return [{ appName: root.appName ?? "Unknown", appId: root.appId, pid: root.pid, isFrontmost: root.isFocused }];
 	});
 }
 
@@ -147,7 +145,7 @@ export const windowsBackend: ComputerUsePlatformBackend = {
 		if (!focused?.pid) throw new Error("No frontmost window was available.");
 		return {
 			appName: focused.appName ?? "Unknown",
-			bundleId: focused.bundleId,
+			appId: focused.appId,
 			pid: focused.pid,
 			windowTitle: focused.title,
 			windowId: focused.windowId,

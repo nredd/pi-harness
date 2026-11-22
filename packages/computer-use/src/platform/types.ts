@@ -40,9 +40,15 @@ export interface PlatformRootQuery {
 	title?: string;
 }
 
-export interface PlatformApp {
-	appName: string;
+interface PlatformAppIdentity {
+	/** Host app identifier. Linux currently reports an untrusted AT-SPI name (#1180). */
+	appId?: string;
+	/** macOS alias for the bundle identifier. */
 	bundleId?: string;
+}
+
+export interface PlatformApp extends PlatformAppIdentity {
+	appName: string;
 	pid: number;
 	isFrontmost?: boolean;
 }
@@ -54,14 +60,13 @@ export interface FramePoints {
 	h: number;
 }
 
-export interface PlatformRoot {
+export interface PlatformRoot extends PlatformAppIdentity {
 	kind: PlatformRootKind;
 	rootRef?: string;
 	windowRef?: string;
 	windowId?: number;
 	pid?: number;
 	appName?: string;
-	bundleId?: string;
 	title: string;
 	role?: string;
 	subrole?: string;
@@ -78,9 +83,8 @@ export interface PlatformRoot {
 	metadata?: Record<string, unknown>;
 }
 
-export interface PlatformFrontmostResult {
+export interface PlatformFrontmostResult extends PlatformAppIdentity {
 	appName: string;
-	bundleId?: string;
 	pid: number;
 	windowTitle?: string;
 	windowId?: number;

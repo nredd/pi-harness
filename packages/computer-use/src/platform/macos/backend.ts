@@ -1,5 +1,5 @@
 import { effectiveBlockedBundleIds, getComputerUseConfig } from "../../config.ts";
-import { parseLookResponse, type LookResponse } from "../../outline.ts";
+import { type LookResponse, parseLookResponse } from "../../outline.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
 	ComputerUsePlatformBackend,
@@ -32,6 +32,7 @@ function parseApps(result: unknown): PlatformApp[] {
 			const appName = toOptionalString((raw as any)?.appName) ?? "Unknown App";
 			return {
 				appName,
+				appId: toOptionalString((raw as any)?.bundleId),
 				bundleId: toOptionalString((raw as any)?.bundleId),
 				pid,
 				isFrontmost: toBoolean((raw as any)?.isFrontmost),
@@ -69,6 +70,7 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			windowId: Number.isFinite((raw as any)?.windowId) ? Math.trunc((raw as any).windowId) : undefined,
 			pid: Number.isFinite((raw as any)?.pid) ? Math.trunc((raw as any).pid) : undefined,
 			appName: toOptionalString((raw as any)?.appName),
+			appId: toOptionalString((raw as any)?.bundleId),
 			bundleId: toOptionalString((raw as any)?.bundleId),
 			title: toOptionalString((raw as any)?.title) ?? "",
 			role: toOptionalString((raw as any)?.role),
@@ -155,6 +157,7 @@ export const macosBackend: Pick<
 		}
 		return {
 			appName: toOptionalString(result?.appName) ?? "Unknown App",
+			appId: toOptionalString(result?.bundleId),
 			bundleId: toOptionalString(result?.bundleId),
 			pid,
 			windowTitle: toOptionalString(result?.windowTitle),

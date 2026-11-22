@@ -1,10 +1,10 @@
 // `src/bridge.ts` setup, root discovery, target resolution (selector/current/frontmost) and look, via the public tool executors (nredd/pi-harness#709, Refs #645).
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
-import { cdpTabForWindow, listCdpPageContexts } from "../src/cdp.ts";
 import * as bridge from "../src/bridge.ts";
-import { currentPlatformBackend } from "../src/platform/index.ts";
+import { cdpTabForWindow, listCdpPageContexts } from "../src/cdp.ts";
 import { parseLookResponse, serializeOutline } from "../src/outline.ts";
+import { currentPlatformBackend } from "../src/platform/index.ts";
 import { desktopRoot, installFakeDesktop, lookPayload, wireButton } from "./support/fake-desktop.mjs";
 
 vi.mock("../src/cdp.ts", async (importOriginal) => ({
@@ -41,7 +41,7 @@ const textOf = (result) => fake.text(result);
 const makeCtx = () => fake.ctx;
 
 beforeEach(async ({ onTestFinished }) => {
-	fake = await installFakeDesktop(onTestFinished, { roots: [makeRoot()] });
+	fake = await installFakeDesktop(onTestFinished, { platform: "macos", roots: [makeRoot()] });
 	fake.frontmost = { appName: "App", bundleId: "com.example.app", pid: 7 };
 	fake.tree = ["a", "b", "c"].map((ref) => makeNode(ref));
 	fake.image = { jpegBase64: "AAAA", mimeType: "image/jpeg", width: 300, height: 200 };

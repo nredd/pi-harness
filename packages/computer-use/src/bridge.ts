@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, lstatSync, mkdirSync, rmdirSync, rmSync, type Stats } from "node:fs";
 import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
@@ -8,16 +8,18 @@ import path from "node:path";
 import { debuglog } from "node:util";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	type ActionState,
 	canRetryInForeground,
 	outcomeAfterCheck,
 	outcomeAfterObservedValues,
+	type PreparedAction,
 	prepareAction,
 	strictHeadlessRejection,
 	unsupportedActionRejection,
-	type ActionState,
-	type PreparedAction,
 } from "./actions.ts";
 import {
+	type CdpConsoleEntry,
+	type CdpPageSnapshot,
 	cdpClickForContext,
 	cdpDragForContext,
 	cdpEvaluateForContext,
@@ -31,61 +33,24 @@ import {
 	cdpTypeForContext,
 	disconnectCdp,
 	listCdpPageContexts,
-	type CdpConsoleEntry,
-	type CdpPageSnapshot,
 } from "./cdp.ts";
 import {
+	blockedAppId,
 	type ComputerUseConfig,
 	getComputerUseConfig,
-	isBlockedBundleId,
 	isBrowserUseEnabled,
 	isHeadlessMode,
 	loadComputerUseConfig,
 } from "./config.ts";
-import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
-import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
 import {
-	controlLine,
-	foldToBudget,
-	graftScopedOutline,
-	nodeByRef,
-	outlineNodeLabel,
-	outlineNodePath,
-	rankedTextMatch,
-	renderInteractiveControls,
-	restoreOutline,
-	searchOutline,
-	searchOutlineRanked,
-	serializeOutline,
-	serializeOutlineNodeShallow,
-	serializeOutlineSearchMatch,
-	type LookResponse,
-	type Outline,
-	type OutlineChange,
-	type OutlineDiff,
-	type OutlineNode,
-	type OutlineSearchMatch,
-	type SerializedOutline,
-	type SerializedOutlineNode,
-	type SerializedOutlineSearchMatch,
-} from "./outline.ts";
-import {
-	applyOutputEnvelope,
-	boundToolError,
-	clearStoredOutputs,
-	readStoredOutput,
-	UI_TEXT_PAGE_CHARS,
-} from "./output.ts";
-import {
-	AGENT_TOOL_NAMES,
 	type ActParams,
+	AGENT_TOOL_NAMES,
 	type EvaluateBrowserParams,
 	type ExpandUiParams,
+	type FindParams,
 	type ImageMode,
 	type InspectUiParams,
 	type LaunchBrowserParams,
-	type FindParams,
 	type NavigateBrowserParams,
 	type ObserveDetail,
 	type ObserveParams,
@@ -96,34 +61,70 @@ import {
 	type UiAction,
 	type WaitForParams,
 } from "./contract.ts";
+import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
+import { normalizeFindParams } from "./find-params.ts";
+import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import {
+	controlLine,
+	foldToBudget,
+	graftScopedOutline,
+	type LookResponse,
+	nodeByRef,
+	type Outline,
+	type OutlineChange,
+	type OutlineDiff,
+	type OutlineNode,
+	type OutlineSearchMatch,
+	outlineNodeLabel,
+	outlineNodePath,
+	rankedTextMatch,
+	renderInteractiveControls,
+	restoreOutline,
+	type SerializedOutline,
+	type SerializedOutlineNode,
+	type SerializedOutlineSearchMatch,
+	searchOutline,
+	searchOutlineRanked,
+	serializeOutline,
+	serializeOutlineNodeShallow,
+	serializeOutlineSearchMatch,
+} from "./outline.ts";
+import { loadStoredOutline, saveStoredOutline } from "./outline-store.ts";
+import {
+	applyOutputEnvelope,
+	boundToolError,
+	clearStoredOutputs,
+	readStoredOutput,
+	UI_TEXT_PAGE_CHARS,
+} from "./output.ts";
+import type { PermissionStatus } from "./permissions.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import type {
 	FramePoints,
+	PlatformFrontmostResult as FrontmostResult,
 	HelperActPerformed,
 	HelperActResult,
+	PlatformApp as HelperApp,
+	PlatformRoot as HelperWindow,
 	NativeInputDelivery,
 	PlatformActRequest,
-	PlatformApp as HelperApp,
 	PlatformDiagnostics,
-	PlatformFrontmostResult as FrontmostResult,
-	PlatformRoot as HelperWindow,
+	PlatformRoot,
 } from "./platform/types.ts";
-import type { PermissionStatus } from "./permissions.ts";
-import { ResourceScheduler } from "./runtime.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
-import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
-import type { PlatformRoot } from "./platform/types.ts";
-import { SavedStates, type CurrentCapture, type CurrentTarget, type OperationState } from "./state.ts";
+import { ResourceScheduler } from "./runtime.ts";
+import { type CurrentCapture, type CurrentTarget, type OperationState, SavedStates } from "./state.ts";
 import { changesBetween, renderChanges, stabilizeRefs } from "./view.ts";
+
 export type {
 	ActParams,
 	EvaluateBrowserParams,
 	ExpandUiParams,
+	FindParams,
 	ImageMode,
 	InspectUiParams,
 	LaunchBrowserParams,
-	FindParams,
 	MouseButtonName,
 	NavigateBrowserParams,
 	ObserveParams,
@@ -180,6 +181,7 @@ interface ComputerUseDetails {
 	tool: string;
 	target: {
 		app: string;
+		appId?: string;
 		bundleId?: string;
 		pid: number;
 		windowTitle: string;
@@ -258,6 +260,7 @@ interface ListWindowsDetails {
 	hasMore?: boolean;
 	windows: Array<{
 		app: string;
+		appId?: string;
 		bundleId?: string;
 		pid: number;
 		kind: string;
@@ -279,6 +282,7 @@ interface ListWindowsDetails {
 		zOrder: number;
 		browserUseAllowed: boolean;
 		blocked: boolean;
+		identityUnresolved?: true;
 		score: number;
 		url?: string;
 	}>;
@@ -370,6 +374,8 @@ interface ResolvedTarget extends CurrentTarget {
 interface WindowRefRecord {
 	ref: string;
 	appName: string;
+	appId?: string;
+	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
 	windowTitle: string;
@@ -680,8 +686,9 @@ function emptyActivation(): ActivationFlags {
 	return { activated: false, unminimized: false, raised: false };
 }
 
-async function ensureReady(ctx: ExtensionContext, signal?: AbortSignal): Promise<void> {
-	loadComputerUseConfig(ctx.cwd);
+async function ensureReady(ctx: ExtensionContext, signal?: AbortSignal, preflight?: () => void): Promise<void> {
+	loadComputerUseConfig(ctx.cwd, currentPlatformBackend.name);
+	preflight?.();
 
 	throwIfAborted(signal);
 	const ready = await currentPlatformBackend.ensureReady(
@@ -752,6 +759,7 @@ function formatWindowLine(window: ListWindowsDetails["windows"][number]): string
 		window.isMinimized ? "minimized" : undefined,
 		window.browserUseAllowed ? undefined : "browser_use_disabled",
 		window.blocked ? "blocked" : undefined,
+		window.identityUnresolved ? "unidentified" : undefined,
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -788,13 +796,39 @@ class ComputerUseError extends Error {
 	}
 }
 
-/** Fail closed with `app_blocked` for password managers, credential UIs, terminals and system auth agents. */
-function assertAppNotBlocked(target: { appName: string; bundleId?: string }): void {
-	if (!isBlockedBundleId(target.bundleId)) return;
-	throw new ComputerUseError(
+type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId">;
+
+function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: true } | undefined {
+	if (currentPlatformBackend.name === "windows" && !target.appId) return { identityUnresolved: true };
+	return blockedAppId(currentPlatformBackend.name, target);
+}
+
+type AdmissionIdentity = Pick<HelperApp, "appName"> & PolicyIdentity & { legacyIdentity?: true };
+
+function appPolicyRefusal(target: AdmissionIdentity): ComputerUseError | undefined {
+	if (currentPlatformBackend.name === "windows" && target.legacyIdentity) {
+		return new ComputerUseError(
+			"root_stale",
+			"Saved Windows root has no owner identity. Rediscover it with find_roots and observe it again.",
+		);
+	}
+	const id = appBlockReason(target);
+	if (typeof id === "object") {
+		return new ComputerUseError(
+			"app_blocked",
+			`app_blocked: Cannot observe or control '${target.appName}': application identity could not be determined.`,
+		);
+	}
+	if (!id) return undefined;
+	return new ComputerUseError(
 		"app_blocked",
-		`app_blocked: '${target.appName}' (${target.bundleId}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
+		`app_blocked: '${target.appName}' (${id}) is blocked by pi-computer-use policy, so it cannot be observed or controlled. Adjust blocked_apps in ~/.pi/agent/extensions/pi-computer-use.json (system authentication agents are always blocked).`,
 	);
+}
+
+function assertAppNotBlocked(target: AdmissionIdentity): void {
+	const refusal = appPolicyRefusal(target);
+	if (refusal) throw refusal;
 }
 
 function windowRecordIdentity(
@@ -836,9 +870,15 @@ function storeBrowserRootRef(contextId: string): string {
 	return ref;
 }
 
+function windowAppId(app: HelperApp, window: HelperWindow): string | undefined {
+	// Windows resolves the owner on each root lookup. Never mask a failed lookup with a saved identity.
+	return currentPlatformBackend.name === "windows" ? window.appId : (window.appId ?? app.appId);
+}
+
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
 	return storeWindowRef({
 		appName: app.appName,
+		appId: windowAppId(app, window),
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -887,8 +927,10 @@ function chooseRankedWindowOrUndefined(windows: HelperWindow[]): HelperWindow | 
 }
 
 function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget {
+	const storedRef = storeWindowRefForAppWindow(app, window);
 	const baseTarget = {
 		appName: app.appName,
+		appId: storedRef.appId,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -901,7 +943,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 		isMain: window.isMain,
 		isFocused: window.isFocused,
 	};
-	return { ...baseTarget, windowRef: storeWindowRefForAppWindow(app, window).ref };
+	return { ...baseTarget, windowRef: storedRef.ref };
 }
 
 /** Platform target for a resolved root: `windowId` only when real (> 0), the native ref under both spellings. */
@@ -923,6 +965,7 @@ function setCurrentTarget(target: ResolvedTarget): void {
 	assertAppNotBlocked(target);
 	operationState().currentTarget = {
 		appName: target.appName,
+		appId: target.appId,
 		bundleId: target.bundleId,
 		pid: target.pid,
 		windowTitle: target.windowTitle,
@@ -936,6 +979,36 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 	return trimOrUndefined(selector);
 }
 
+/** A Windows look is bound to its original owner and native root, not a matching title. */
+async function resolveWindowsRoot(
+	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
+	signal?: AbortSignal,
+): Promise<ResolvedTarget> {
+	const windows = await listWindows(saved.pid, signal);
+	const match = windows.find(
+		(window) =>
+			window.pid === saved.pid &&
+			(saved.windowId
+				? window.windowId === saved.windowId
+				: saved.nativeWindowRef && window.windowRef === saved.nativeWindowRef),
+	);
+	if (!match)
+		throw new ComputerUseError(
+			"root_stale",
+			"Saved Windows root is no longer available for its original owner. Rediscover it with find_roots.",
+		);
+	assertAppNotBlocked({ appName: saved.appName, appId: match.appId });
+	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
+		throw new ComputerUseError(
+			"app_blocked",
+			"Windows root owner identity changed. Rediscover it with find_roots and observe it again.",
+		);
+	}
+	const target = toResolvedTarget(saved, match);
+	setCurrentTarget(target);
+	return target;
+}
+
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {
 	const current = operationState().currentTarget;
@@ -947,7 +1020,9 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 	if (!fromRef) {
 		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
-	const app: HelperApp = { appName: fromRef.appName, bundleId: fromRef.bundleId, pid: fromRef.pid };
+	assertAppNotBlocked(fromRef);
+	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
+	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
 	const match =
 		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
@@ -972,6 +1047,8 @@ async function resolveCurrentTarget(
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
+	assertAppNotBlocked(current);
+	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
 	if (!windows.length) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
@@ -1022,6 +1099,7 @@ async function resolveCurrentTarget(
 
 	const app: HelperApp = {
 		appName: current.appName,
+		appId: current.appId,
 		bundleId: current.bundleId,
 		pid: current.pid,
 	};
@@ -1033,12 +1111,15 @@ async function resolveCurrentTarget(
 
 async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTarget> {
 	const frontmost = await getFrontmost(signal);
+	assertAppNotBlocked(frontmost);
 	const apps = await listApps(signal);
 	const app = apps.find((candidate) => candidate.pid === frontmost.pid) ?? {
 		appName: frontmost.appName,
+		appId: frontmost.appId,
 		bundleId: frontmost.bundleId,
 		pid: frontmost.pid,
 	};
+	assertAppNotBlocked(app);
 
 	const windows = await listWindows(frontmost.pid, signal);
 	if (!windows.length) {
@@ -1229,6 +1310,7 @@ async function buildToolResult(
 		tool,
 		target: {
 			app: result.target.appName,
+			appId: result.target.appId,
 			bundleId: result.target.bundleId,
 			pid: result.target.pid,
 			windowTitle: result.target.windowTitle,
@@ -1461,8 +1543,10 @@ function windowDetails(
 	config: ReturnType<typeof getComputerUseConfig>,
 ): ListWindowsDetails["windows"][number] {
 	const storedRef = storeWindowRefForAppWindow(app, window);
+	const blockReason = appBlockReason(storedRef);
 	return {
 		app: app.appName,
+		appId: storedRef.appId,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		kind: window.kind,
@@ -1483,7 +1567,8 @@ function windowDetails(
 		pairing: platformRootPairing(window),
 		zOrder: window.zOrder,
 		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
-		blocked: isBlockedBundleId(app.bundleId),
+		blocked: blockReason !== undefined,
+		...(typeof blockReason === "object" ? blockReason : {}),
 		score: scoreWindow(window),
 	};
 }
@@ -1762,8 +1847,6 @@ async function performReadText(
 	}
 
 	currentCaptureOrThrow();
-	// A hydrated state restores its target without resolving it, so re-check the policy before the live read.
-	assertAppNotBlocked(operationState().currentTarget!);
 	if (!ref)
 		throw new Error(
 			"read_text requires ref for desktop contexts. Call observe_ui/inspect_ui and use a text-bearing outline ref.",
@@ -1771,20 +1854,18 @@ async function performReadText(
 	const node = outlineNodeByRef(ref);
 	const state = operationState();
 	const raw = (
-		await resourceScheduler.readAt(
-			state.resourceKey!,
-			state.epoch!,
-			async () =>
-				await currentPlatformBackend.readText(
-					{
-						lookId: state.currentOutline!.lookId,
-						elementRef: wireRefForNode(node),
-						offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),
-						limit: UI_TEXT_PAGE_CHARS,
-					},
-					{ signal, timeoutMs: COMMAND_TIMEOUT_MS },
-				),
-		)
+		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
+			if (currentPlatformBackend.name === "windows") await resolveCurrentTarget(signal);
+			return await currentPlatformBackend.readText(
+				{
+					lookId: state.currentOutline!.lookId,
+					elementRef: wireRefForNode(node),
+					offset: Math.max(0, Math.trunc(toFiniteNumber(params.offset, 0))),
+					limit: UI_TEXT_PAGE_CHARS,
+				},
+				{ signal, timeoutMs: COMMAND_TIMEOUT_MS },
+			);
+		})
 	).value;
 	const text = raw.text;
 	const details: ReadTextDetails = {
@@ -2114,8 +2195,28 @@ function matchIsNonActionableStatic(match: OutlineSearchMatch): boolean {
 	return !node.canPress && !node.canFocus && !node.canSetValue && node.actions.length === 0 && !node.pictureOnly;
 }
 
-function shouldEscalateSearchOCR(matches: OutlineSearchMatch[], _text?: string): boolean {
-	return matches.length === 0 || matches.every(matchIsNonActionableStatic);
+const SEARCH_UI_LIMIT = 12;
+
+function searchUiFilters(params: SearchUiParams) {
+	return {
+		text: trimOrUndefined(params.text),
+		role: trimOrUndefined(params.role),
+		capability: trimOrUndefined(params.capability),
+	};
+}
+
+function canEscalateSearchOCR(): boolean {
+	const { contextId, currentLook } = operationState();
+	return Boolean(
+		!isBrowserContextId(contextId) &&
+			currentLook &&
+			currentLook.readText?.requested !== "never" &&
+			!currentLook.readText?.executed,
+	);
+}
+
+function shouldEscalateSearchOCR(matches: OutlineSearchMatch[]): boolean {
+	return canEscalateSearchOCR() && matches.every(matchIsNonActionableStatic);
 }
 
 /** Pure outline query unless a window selector is supplied, in which case current target selection may change. */
@@ -2125,24 +2226,13 @@ async function performSearchUi(
 ): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
 	let outline = currentOutlineOrThrow();
-	const text = trimOrUndefined(params.text);
-	const role = trimOrUndefined(params.role);
-	const capability = trimOrUndefined(params.capability);
+	const { text, role, capability } = searchUiFilters(params);
 	if (!text && !role && !capability)
 		throw new Error("search_ui requires text, role, or capability. Use observe_ui for a bounded overview.");
-	const limit = 12;
-	let ranked = searchOutlineRanked(outline, text, role, capability, limit);
+	let ranked = searchOutlineRanked(outline, text, role, capability, SEARCH_UI_LIMIT);
 	let matches = ranked.matches;
 	let escalatedOCR = false;
-	const look = state.currentLook;
-	// A browser state has no desktop window to re-capture; report the outline matches as they are.
-	if (
-		!isBrowserContextId(state.contextId) &&
-		shouldEscalateSearchOCR(matches, text) &&
-		look &&
-		look.readText?.requested !== "never" &&
-		!look.readText?.executed
-	) {
+	if (shouldEscalateSearchOCR(matches)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		// captureCurrentTarget adopts the new look/outline/capture into
 		// runtimeState, so refs in these matches stay actable. Keep the image
@@ -2156,7 +2246,7 @@ async function performSearchUi(
 			)
 		).value;
 		outline = captureResult.outline;
-		ranked = searchOutlineRanked(outline, text, role, capability, limit);
+		ranked = searchOutlineRanked(outline, text, role, capability, SEARCH_UI_LIMIT);
 		matches = ranked.matches;
 		escalatedOCR = true;
 	}
@@ -2197,25 +2287,32 @@ async function performSearchUi(
 	};
 }
 
+function needsScopedLook(outline: Outline, target: OutlineNode): boolean {
+	const state = operationState();
+	if (isBrowserContextId(state.contextId)) return false;
+	const regionKey = noteRegionKeyForRef(outline, target.ref);
+	return (
+		target.truncated ||
+		Boolean(
+			regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"),
+		)
+	);
+}
+
 /** Reads cached outline; truncated refs trigger a scoped look. */
 async function performExpandUi(
 	params: ExpandUiParams,
 	signal?: AbortSignal,
 ): Promise<AgentToolResult<OutlineToolDetails>> {
 	const state = operationState();
-	let outline = currentOutlineOrThrow();
+	const outline = currentOutlineOrThrow();
 	const ref = trimOrUndefined(params.ref);
 	if (!ref) throw new Error("expand_ui.ref is required.");
 	const initialTarget = nodeByRef(outline, ref);
 	if (!initialTarget) throw new Error(`Outline ref '${ref}' is not available in the current outline.`);
 	let target: OutlineNode = initialTarget;
 	const depth = Math.max(1, Math.min(8, Math.trunc(toFiniteNumber(params.depth, 3))));
-	const regionKey = noteRegionKeyForRef(outline, ref);
-	const regionChanged = Boolean(
-		regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"),
-	);
-	// A browser state has no desktop window to scope a look into; render the cached subtree as is.
-	if (!isBrowserContextId(state.contextId) && (target.truncated || regionChanged)) {
+	if (needsScopedLook(outline, target)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
 		const scoped = (
@@ -2461,7 +2558,7 @@ function extensionRefForNative(pid: number, nativeRef: string): string | undefin
  */
 export async function normalizeRootDeltaRefs(
 	execution: ExecutionTrace,
-	target: Pick<ResolvedTarget, "pid" | "appName" | "bundleId">,
+	target: Pick<ResolvedTarget, "pid" | "appName" | "appId" | "bundleId">,
 ): Promise<void> {
 	if (!execution.rootDelta?.length) return;
 	const rootsByPid = new Map<number, PlatformRoot[]>();
@@ -2482,6 +2579,7 @@ export async function normalizeRootDeltaRefs(
 				const sameApp = delta.pid === target.pid;
 				const app: HelperApp = {
 					appName: sameApp ? target.appName : (root.appName ?? "Unknown App"),
+					appId: sameApp ? target.appId : root.appId,
 					bundleId: sameApp ? target.bundleId : root.bundleId,
 					pid: delta.pid,
 				};
@@ -3593,7 +3691,61 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 	});
 }
 
+type PolicyPreflightParams = SearchUiParams & { root?: unknown; ref?: string };
+
+function assertCdpUseAllowed(tool: string, params: PolicyPreflightParams): void {
+	const root = params?.root;
+	const contextId =
+		tool === "observe_ui" && typeof root === "string"
+			? runtimeState.browserContextByRoot.get(root)
+			: operationState().contextId;
+	if ((tool === "launch_browser" || isBrowserContextId(contextId)) && !isBrowserUseEnabled()) {
+		throw new Error("Browser use is disabled by pi-computer-use config. Enable browser_use to use CDP.");
+	}
+}
+
+/** A known blocked root must not even reach helper readiness for a live operation. */
+function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, outputRef: boolean): void {
+	const root = params?.root;
+	const { currentTarget } = operationState();
+	if (tool === "observe_ui" && root !== undefined) {
+		const known = typeof root === "string" ? runtimeState.windowRefs.get(root) : undefined;
+		if (known) assertAppNotBlocked(known);
+		if (currentTarget && currentTarget.windowRef === root) assertAppNotBlocked(currentTarget);
+		return;
+	}
+	if (!currentTarget) return;
+	const refusalForState = () => {
+		const savedRef = currentTarget.windowRef;
+		const latest =
+			currentPlatformBackend.name === "windows" && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
+		return appPolicyRefusal(currentTarget) ?? (latest && appPolicyRefusal(latest));
+	};
+	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {
+		const refusal = refusalForState();
+		if (refusal) throw refusal;
+	} else if (tool === "search_ui" || tool === "expand_ui") {
+		// Reuse the live-path predicates; cached queries do not require policy admission.
+		const refusal = refusalForState();
+		if (!refusal) return;
+		const currentOutline = currentOutlineOrThrow();
+		if (tool === "search_ui") {
+			const { text, role, capability } = searchUiFilters(params);
+			if (
+				(text || role || capability) &&
+				shouldEscalateSearchOCR(searchOutlineRanked(currentOutline, text, role, capability, SEARCH_UI_LIMIT).matches)
+			)
+				throw refusal;
+		} else {
+			const ref = trimOrUndefined(params.ref);
+			const node = ref ? nodeByRef(currentOutline, ref) : undefined;
+			if (node && needsScopedLook(currentOutline, node)) throw refusal;
+		}
+	}
+}
+
 async function executeTool<P, T>(
+	tool: string,
 	ctx: ExtensionContext,
 	params: P,
 	signal: AbortSignal | undefined,
@@ -3610,7 +3762,10 @@ async function executeTool<P, T>(
 	const operation = savedStates.hydrate(stateRecord);
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
-			await ensureReady(ctx, signal);
+			await ensureReady(ctx, signal, () => {
+				assertCdpUseAllowed(tool, params as PolicyPreflightParams);
+				assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef);
+			});
 			throwIfAborted(signal);
 			// Start the tool before releasing readiness: launch_browser joins its lifecycle
 			// synchronously, so shutdown cannot drain readiness and overtake that launch.
@@ -3637,7 +3792,7 @@ function makeToolExecutor<P, D>(
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
 		try {
-			return applyOutputEnvelope(tool, await executeTool(ctx, params, signal, () => perform(params, signal)));
+			return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)));
 		} catch (error) {
 			throw boundToolError(tool, error);
 		}
@@ -3677,9 +3832,13 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 		if (rawDetails?.tool === "find_roots" && Array.isArray(rawDetails.windows)) {
 			for (const window of rawDetails.windows) {
 				if (typeof window?.windowRef !== "string" || !Number.isFinite(window?.pid)) continue;
+				// Results are newest first; older discoveries must not overwrite a more recent refusal.
+				if (runtimeState.windowRefs.has(window.windowRef)) continue;
 				const record: WindowRefRecord = {
 					ref: window.windowRef,
 					appName: typeof window.app === "string" ? window.app : "Unknown App",
+					appId: typeof window.appId === "string" ? window.appId : undefined,
+					legacyIdentity: !window.appId && window.identityUnresolved !== true ? true : undefined,
 					bundleId: typeof window.bundleId === "string" ? window.bundleId : undefined,
 					pid: Math.trunc(window.pid),
 					windowTitle: typeof window.windowTitle === "string" ? window.windowTitle : "(untitled)",
@@ -3716,6 +3875,8 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 
 		const target: CurrentTarget = {
 			appName: app,
+			appId: details.target.appId,
+			legacyIdentity: !details.target.appId ? true : undefined,
 			bundleId: details.target.bundleId,
 			pid: Math.trunc(details.target.pid),
 			windowTitle: details.target.windowTitle ?? "(untitled)",
