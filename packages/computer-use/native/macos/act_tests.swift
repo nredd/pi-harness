@@ -290,6 +290,7 @@ private func runIndeterminatePressAssertions() throws {
             let result = try press.act("press", policy: policy)
             let error = result["error"] as? [String: String]
             expect(result["outcome"] as? String == "unknown" && error?["code"] == "ax_delivery_unknown", "\(policy) AXError \(status.rawValue) press reports unknown delivery")
+            expect((result["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true, "\(policy) AXError \(status.rawValue) press is flagged deliveryUnknown")
             expect(press.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "\(policy) AXError \(status.rawValue) press is delivered once: no refound press, no pointer click")
         }
     }
@@ -502,6 +503,21 @@ private func runBatchAssertions() throws {
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [press, press.merging(["lookId": "unrelated"]) { _, new in new }]], world: fixture.world, supportsAgentCursor: false) }
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": Array(repeating: press, count: 21)], world: fixture.world, supportsAgentCursor: false) }
     expect(fixture.trace.isEmpty, "invalid batches have no root or input side effects")
+    // An indeterminate press stops the batch: a later step must not run on, or hide, an unknown delivery (#1240).
+    let uncertain = ActFixture()
+    uncertain.statuses = [.cannotComplete]
+    let pair = uncertain.request("press", policy: "ax_only")
+    let stopped = try uncertain.bridge.actBatch(["actions": [pair, pair]], world: uncertain.world, supportsAgentCursor: false)
+    let stoppedSteps = stopped["steps"] as? [[String: Any]]
+    expect(stopped["outcome"] as? String == "unknown" && stopped["stoppedAt"] as? Int == 0 && stoppedSteps?.count == 1, "an indeterminate press stops the batch at its step: \(stopped)")
+    expect((stoppedSteps?.first?["error"] as? [String: String])?["code"] == "ax_delivery_unknown", "the stopped step keeps its ax_delivery_unknown error")
+    expect(uncertain.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "the second press is never dispatched: \(uncertain.trace)")
+    let generic = ActFixture()
+    generic.scrollPositions = ["same", "same"]
+    generic.scrollResult = ["scrolled": true]
+    let scroll = generic.request("scroll", policy: "ax_only", params: ["scrollY": 1])
+    let continued = try generic.bridge.actBatch(["actions": [scroll, generic.request("press", policy: "ax_only")]], world: generic.world, supportsAgentCursor: false)
+    expect(continued["stoppedAt"] == nil && (continued["steps"] as? [[String: Any]])?.count == 2, "a generic unknown does not stop the batch: \(continued)")
 }
 
 private func runRootPIDAssertions() throws {

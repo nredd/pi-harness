@@ -605,6 +605,12 @@ func axPressNotDelivered(axError: Int32) -> Bool {
 	[AXError.invalidUIElement, .actionUnsupported, .illegalArgument, .apiDisabled, .notImplemented].map(\.rawValue).contains(axError)
 }
 
+/// A step that may have delivered its input without proof (`evidence.deliveryUnknown`): a batch must stop there, so a
+/// later step neither runs on an unknown state nor hides it (#1240). A generic `unknown` does not stop the batch.
+func stepDeliveryUnknown(_ step: [String: Any]) -> Bool {
+	(step["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true
+}
+
 /// A failed `secondaryAction`: `cannotComplete` (the app did not answer in time) may have run it anyway.
 func secondaryActionFailureOutcome(axError: Int32) -> String {
 	axError == AXError.cannotComplete.rawValue ? "unknown" : "didnt"
@@ -3038,7 +3044,8 @@ final class Bridge {
 					// The press may have landed: report it unknown instead of pressing or clicking again.
 					performed["grounding"] = "description"
 					performed["delivery"] = "ax"
-					return finish(["outcome": "unknown", "performed": performed, "error": ["code": "ax_delivery_unknown", "message": "AXPress failed (AXError \(status.rawValue)) and may have been delivered; it was not retried"]])
+					return finish(["outcome": "unknown", "performed": performed, "evidence": ["deliveryUnknown": true],
+						"error": ["code": "ax_delivery_unknown", "message": "AXPress failed (AXError \(status.rawValue)) and may have been delivered; it was not retried"]])
 				}
 			} else {
 				try executeCoordinates(coordinatePoint())
@@ -3393,7 +3400,7 @@ final class Bridge {
 			do {
 				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
-				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
+				if (step["outcome"] as? String) == "didnt" || stepDeliveryUnknown(step) { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {
 				var step: [String: Any] = ["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]]
 				if let evidence = failure.evidence { step["evidence"] = evidence }
