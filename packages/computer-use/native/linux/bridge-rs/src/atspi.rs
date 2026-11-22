@@ -206,13 +206,12 @@ impl AtspiClient {
         self.request(member, proxy.call(member, &())).await
     }
 
-    async fn role_id(&self, accessible: &AccessibleRef) -> Option<u32> {
-        let proxy = self.proxy(accessible, ACCESSIBLE).await.ok()?;
+    async fn role_access(&self, accessible: &AccessibleRef) -> RoleAccess {
+        let Ok(proxy) = self.proxy(accessible, ACCESSIBLE).await else {
+            return RoleAccess::Unclassified;
+        };
         let member = "GetRole";
-        self.request(member, proxy.call(member, &()))
-            .await
-            .ok()
-            .filter(|id| matches!(id, 1..=66 | 68..=69 | 71..=130))
+        classify_role(self.request(member, proxy.call(member, &())).await.ok())
     }
 
     async fn interfaces(
@@ -274,15 +273,15 @@ impl AtspiClient {
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
-            let app_name = if permits_text(self.role_id(&app).await) {
+            let app_name = if self.role_access(&app).await.readable().is_some() {
                 self.string_property(&app, "Name").await.unwrap_or_default()
             } else {
                 PROTECTED_LABEL.to_owned()
             };
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let role_id = self.role_id(&window).await;
-                let (role, name) = if permits_text(role_id) {
+                let access = self.role_access(&window).await;
+                let (role, name) = if access.readable().is_some() {
                     (
                         self.role_name(&window).await.unwrap_or_default(),
                         self.string_property(&window, "Name")
@@ -291,7 +290,7 @@ impl AtspiClient {
                     )
                 } else {
                     (
-                        protected_role_name(role_id).to_owned(),
+                        access.protected_name().to_owned(),
                         PROTECTED_LABEL.to_owned(),
                     )
                 };
@@ -347,11 +346,11 @@ impl AtspiClient {
                 continue;
             }
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
-            let role_id = self.role_id(&accessible).await;
-            incomplete |= role_id.is_none();
-            let mut confirmed_role = role_id;
+            let access = self.role_access(&accessible).await;
+            incomplete |= access == RoleAccess::Unclassified;
+            let mut readable = access.readable();
             let mut value = String::new();
-            let (mut role, mut name, mut description) = if permits_text(role_id) {
+            let (mut role, mut name, mut description) = if readable.is_some() {
                 (
                     field_or_default(self.role_name(&accessible).await, &mut incomplete),
                     field_or_default(
@@ -364,10 +363,10 @@ impl AtspiClient {
                     ),
                 )
             } else {
-                let protected = protected_role_name(role_id).to_owned();
+                let protected = access.protected_name().to_owned();
                 (protected, PROTECTED_LABEL.to_owned(), String::new())
             };
-            if let Some(id) = role_id.filter(|&id| id != PASSWORD_TEXT_ROLE) {
+            if let Some(id) = readable {
                 let result = if interfaces.contains(TEXT) {
                     self.read_checked_text(&accessible, id).await
                 } else {
@@ -377,9 +376,9 @@ impl AtspiClient {
                 };
                 match result {
                     Err(error) if error.code == ErrorCode::SecureTextUnreadable => {
-                        confirmed_role = None;
+                        readable = None;
                         incomplete = true;
-                        role = protected_role_name(None).to_owned();
+                        role = RoleAccess::Unclassified.protected_name().to_owned();
                         name = PROTECTED_LABEL.to_owned();
                         description.clear();
                     }
@@ -406,7 +405,7 @@ impl AtspiClient {
                 description,
                 value,
                 interfaces,
-                is_secure: !permits_text(confirmed_role),
+                is_secure: readable.is_none(),
                 depth,
             });
         }
@@ -423,9 +422,9 @@ impl AtspiClient {
         accessible: &AccessibleRef,
     ) -> Result<String, ProtocolError> {
         let id = self
-            .role_id(accessible)
+            .role_access(accessible)
             .await
-            .filter(|&id| id != PASSWORD_TEXT_ROLE)
+            .readable()
             .ok_or_else(unconfirmed_role)?;
         self.read_checked_text(accessible, id).await
     }
@@ -450,7 +449,7 @@ impl AtspiClient {
         accessible: &AccessibleRef,
         expected: u32,
     ) -> Result<(), ProtocolError> {
-        if self.role_id(accessible).await != Some(expected) {
+        if self.role_access(accessible).await != RoleAccess::Readable(expected) {
             return Err(unconfirmed_role());
         }
         Ok(())
@@ -699,17 +698,41 @@ async fn accessibility_bus_address(
     address.parse().map_err(unavailable)
 }
 
-/// Allow text only for a validated non-password role ID.
-fn permits_text(role_id: Option<u32>) -> bool {
-    matches!(role_id, Some(id) if id != PASSWORD_TEXT_ROLE)
+/// Whether a live `GetRole` reply permits reading provider names, descriptions and text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RoleAccess {
+    /// A recognized, non-password role ID.
+    Readable(u32),
+    /// The password text role.
+    Password,
+    /// An unavailable, invalid, unknown, extended or unrecognized role.
+    Unclassified,
 }
 
-/// Use a fixed role label rather than provider strings for a protected node.
-fn protected_role_name(role_id: Option<u32>) -> &'static str {
-    if role_id == Some(PASSWORD_TEXT_ROLE) {
-        "password text"
-    } else {
-        "unknown"
+impl RoleAccess {
+    /// Return the role ID that authorizes a read, if any.
+    fn readable(self) -> Option<u32> {
+        match self {
+            Self::Readable(id) => Some(id),
+            Self::Password | Self::Unclassified => None,
+        }
+    }
+
+    /// Use a fixed role label rather than provider strings for a protected node.
+    fn protected_name(self) -> &'static str {
+        match self {
+            Self::Password => "password text",
+            Self::Readable(_) | Self::Unclassified => "unknown",
+        }
+    }
+}
+
+/// The single readable-role rule for root discovery, snapshots and explicit reads.
+fn classify_role(role_id: Option<u32>) -> RoleAccess {
+    match role_id {
+        Some(PASSWORD_TEXT_ROLE) => RoleAccess::Password,
+        Some(id @ (1..=66 | 68..=69 | 71..=130)) => RoleAccess::Readable(id),
+        _ => RoleAccess::Unclassified,
     }
 }
 
