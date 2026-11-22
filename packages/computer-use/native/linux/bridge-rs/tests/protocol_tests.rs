@@ -218,6 +218,19 @@ fn typing(id: &str, text: &str, sink: Value) -> Value {
     })
 }
 
+fn request(id: &str, cmd: &str, args: Value) -> Value {
+    json!({"protocolVersion": PROTOCOL_VERSION, "id": id, "cmd": cmd, "args": args})
+}
+
+/// A semantic `act` on an element ref; it never reaches XTEST.
+fn semantic_press(id: &str) -> Value {
+    request(
+        id,
+        "act",
+        json!({"lookId": "l1", "action": "press", "target": {"ref": "e1"}, "policy": "ax_only"}),
+    )
+}
+
 /// Read `count` replies, keyed by request id.
 fn replies(helper: &Helper, count: usize) -> HashMap<String, Value> {
     (0..count)
@@ -238,9 +251,16 @@ fn shutdown_with_full_request_queue() {
         helper.send(&typing("hold", &"A".repeat(200), json!({"delayMs": 25})));
         helper.ready("locked hold");
         // Seven requests take the remaining workers and wait for the action lock; the
-        // eighth waits for a worker in the reader, which saturates the queue.
+        // eighth waits for a worker in the reader, which saturates the queue. One of the
+        // seven is a semantic (AT-SPI) action, and the eighth needs no lock at all:
+        // none of them may start once shutdown began.
         for n in 0..8 {
-            helper.send(&typing(&format!("queued-{n}"), "a", json!({})));
+            let id = format!("queued-{n}");
+            helper.send(&match n {
+                3 => semantic_press(&id),
+                7 => request(&id, "listRoots", json!({})),
+                _ => typing(&id, "a", json!({})),
+            });
         }
         for n in 0..7 {
             helper.ready(&format!("waiting queued-{n}"));

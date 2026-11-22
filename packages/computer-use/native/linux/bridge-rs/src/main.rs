@@ -71,7 +71,8 @@ async fn main() {
                 continue;
             }
         };
-        if semaphore.available_permits() == 0 {
+        let saturated = semaphore.available_permits() == 0;
+        if saturated {
             testing_ready("saturated", &request.id);
         }
         // Every worker may be busy behind a long action: a signal must still cancel it
@@ -86,6 +87,12 @@ async fn main() {
         let Ok(permit) = permit else {
             break;
         };
+        // Shutdown, e.g. stdin EOF, may have begun while this request waited for a
+        // worker: it never started, so it does not start now.
+        if saturated && InputState::shared().is_cancelled() {
+            let _ = output.send(Response::err(&request.id, shutting_down()));
+            continue;
+        }
         let state = Arc::clone(&state);
         let output = output.clone();
         requests.spawn(async move {
@@ -189,12 +196,19 @@ fn action_lock() -> &'static tokio::sync::Mutex<()> {
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
-/// Wait for the action lock: actions and batches run one at a time.
-async fn begin_transaction(id: &str) -> tokio::sync::MutexGuard<'static, ()> {
+/// Wait for the action lock: actions and batches run one at a time. Shutdown may
+/// begin while a request waits, so it is refused with `cancelled` before it starts,
+/// semantic (AT-SPI) actions included.
+async fn begin_transaction(
+    id: &str,
+) -> Result<tokio::sync::MutexGuard<'static, ()>, ProtocolError> {
     testing_ready("waiting", id);
     let guard = action_lock().lock().await;
     testing_ready("locked", id);
-    guard
+    if InputState::shared().is_cancelled() {
+        return Err(shutting_down());
+    }
+    Ok(guard)
 }
 
 /// Report a scheduling point on stderr, so process tests establish their preconditions
@@ -239,19 +253,26 @@ async fn handle_request_with(
         "look" | "screenshot" => {
             look_with(state, &request.args, &connect, x11::capture_window).await
         }
-        "act" => {
-            let _transaction = begin_transaction(&request.id).await;
-            act(state, &request.args, &connect, physical).await
-        }
-        "actBatch" => {
-            let _transaction = begin_transaction(&request.id).await;
-            act_batch_with(&request.args, |args| act(state, args, &connect, physical)).await
-        }
+        "act" => match begin_transaction(&request.id).await {
+            Ok(_transaction) => act(state, &request.args, &connect, physical).await,
+            Err(error) => Err(error),
+        },
+        "actBatch" => match begin_transaction(&request.id).await {
+            Ok(_transaction) => {
+                act_batch_with(
+                    &request.args,
+                    || InputState::shared().is_cancelled(),
+                    |args| act(state, args, &connect, physical),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        },
         #[cfg(feature = "testing")]
-        "testingAct" => {
-            let _transaction = begin_transaction(&request.id).await;
-            testing_act(&request.args)
-        }
+        "testingAct" => match begin_transaction(&request.id).await {
+            Ok(_transaction) => testing_act(&request.args),
+            Err(error) => Err(error),
+        },
         "atspiReadText" | "uiaReadText" | "axReadText" => {
             read_text_with(state, &request.args, async |accessible| {
                 connect().await?.read_live_text(accessible).await
@@ -925,9 +946,11 @@ fn drive_physical<S: InputSink>(
     Ok(())
 }
 
-/// Validate the entire batch before executing any step, then stop at the first failure.
+/// Validate the entire batch before executing any step, then stop at the first failure
+/// or, once `cancelled`, before the next step: steps already run keep their outcomes.
 async fn act_batch_with<'args, F>(
     args: &'args Value,
+    cancelled: impl Fn() -> bool,
     mut perform: impl FnMut(&'args Value) -> F,
 ) -> Result<Value, ProtocolError>
 where
@@ -951,6 +974,12 @@ where
     let mut stopped_at = None;
     let mut timed_out = false;
     for (index, action) in actions.iter().enumerate() {
+        if cancelled() {
+            let error = shutting_down();
+            steps.push(json!({"outcome":"didnt","error":{"code":error.code.to_string(),"message":error.message}}));
+            stopped_at = Some(index);
+            break;
+        }
         match perform(action).await {
             Ok(step) => {
                 // A step that reports an error stopped partway: nothing after it may run.
@@ -1415,9 +1444,11 @@ mod tests {
             json!({"actions":[{"lookId":"one"},{"lookId":"two"}]}),
             json!({"actions":vec![json!({"lookId":"one"}); 21]}),
         ] {
-            let error = act_batch_with(&invalid_batch, |_| async {
-                panic!("invalid batch performed an action")
-            })
+            let error = act_batch_with(
+                &invalid_batch,
+                || false,
+                |_| async { panic!("invalid batch performed an action") },
+            )
             .await
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidRequest);
@@ -1425,16 +1456,20 @@ mod tests {
         let batch = json!({"actions":[{"lookId":"one","value":0},{"lookId":"one","value":1},{"lookId":"one","value":2}]});
         for failure in [false, true] {
             let mut seen = Vec::new();
-            let result = act_batch_with(&batch, |action| {
-                let value = action["value"].as_u64().unwrap();
-                seen.push(value);
-                std::future::ready(match value {
-                    0 => Ok(json!({"outcome":"unknown"})),
-                    1 if failure => Err(invalid("step failed")),
-                    1 => Ok(json!({"outcome":"didnt"})),
-                    _ => panic!("ran an action after failure"),
-                })
-            })
+            let result = act_batch_with(
+                &batch,
+                || false,
+                |action| {
+                    let value = action["value"].as_u64().unwrap();
+                    seen.push(value);
+                    std::future::ready(match value {
+                        0 => Ok(json!({"outcome":"unknown"})),
+                        1 if failure => Err(invalid("step failed")),
+                        1 => Ok(json!({"outcome":"didnt"})),
+                        _ => panic!("ran an action after failure"),
+                    })
+                },
+            )
             .await
             .unwrap();
             assert_eq!(seen, [0, 1]);
@@ -1451,14 +1486,39 @@ mod tests {
                 );
             }
         }
-        let result = act_batch_with(&batch, |action| async move {
-            Ok(json!({"outcome":if action["value"] == 1 {"unknown"} else {"worked"}}))
-        })
+        let result = act_batch_with(
+            &batch,
+            || false,
+            |action| async move {
+                Ok(json!({"outcome":if action["value"] == 1 {"unknown"} else {"worked"}}))
+            },
+        )
         .await
         .unwrap();
         assert_eq!(result["outcome"], "unknown");
         assert!(result.get("stoppedAt").is_none());
         assert_eq!(result["performed"]["actionCount"], 3);
+
+        // Shutdown after a semantic step: it keeps its outcome and nothing later starts.
+        let ran = std::cell::Cell::new(0);
+        let result = act_batch_with(
+            &batch,
+            || ran.get() >= 1,
+            |_| {
+                ran.set(ran.get() + 1);
+                std::future::ready(Ok(
+                    json!({"outcome":"worked","performed":{"delivery":"ax"}}),
+                ))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ran.get(), 1);
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["stoppedAt"], 1);
+        assert_eq!(result["steps"][0]["outcome"], "worked");
+        assert_eq!(result["steps"][1]["outcome"], "didnt");
+        assert_eq!(result["steps"][1]["error"]["code"], "cancelled");
     }
 
     #[test]
@@ -2529,17 +2589,21 @@ mod tests {
     #[tokio::test]
     async fn a_partially_delivered_step_stops_the_batch_as_unknown() {
         let batch = json!({"actions":[{"lookId":"one","value":0},{"lookId":"one","value":1},{"lookId":"one","value":2}]});
-        let result = act_batch_with(&batch, |action| {
-            std::future::ready(match action["value"].as_u64().unwrap() {
-                0 => Ok(json!({"outcome":"worked"})),
-                1 => Ok(json!({
-                    "outcome":"unknown",
-                    "evidence":{"deliveredUnits":3},
-                    "error":{"code":"foreground_required","message":"focus moved"}
-                })),
-                _ => panic!("ran an action after a partial delivery"),
-            })
-        })
+        let result = act_batch_with(
+            &batch,
+            || false,
+            |action| {
+                std::future::ready(match action["value"].as_u64().unwrap() {
+                    0 => Ok(json!({"outcome":"worked"})),
+                    1 => Ok(json!({
+                        "outcome":"unknown",
+                        "evidence":{"deliveredUnits":3},
+                        "error":{"code":"foreground_required","message":"focus moved"}
+                    })),
+                    _ => panic!("ran an action after a partial delivery"),
+                })
+            },
+        )
         .await
         .unwrap();
         assert_eq!(result["outcome"], "unknown");
