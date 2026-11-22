@@ -14,6 +14,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 - Validate numeric AT-SPI roles and suppress Linux text, titles and descriptions for protected, unclassified or unavailable roles; discard text or root names if the live role changes during a read (#1189).
 - Scope Windows look IDs to one helper lifetime and require `read_text` to match the owning window and PID (#1206).
 - Recheck the Windows window owner before every `wait_for` or `act_ui` postcondition poll and report `root_stale` when ownership is lost. Text reads and wait polls also recheck it after acquiring the UIA root and after the walk, and a scoped wait refuses a look from another root (#1207).
+- Bind saved Windows roots and looks to a window instance (owning PID, process creation time and a helper window-property tag) so a replacement window reusing the exact HWND and PID fails reads, waits, looks and ref actions with `root_stale`; refuse roots whose instance cannot be verified (#1231).
 - Bump the Windows helper protocol to `5` so a client and helper from before owner-bound reads and waits fail the version check instead of silently ignoring the owner fields (#1206, #1207).
 - Reject invalid macOS PIDs before discovery, look lookup or capture, and refuse observations whose supplied PID disagrees with the native root owner (#1209).
 - Mark blocked Windows apps in `find_roots` and refuse their roots by executable basename before observation or control; document the cross-OS input contract and the pending Linux identity fix (#1179).

@@ -92,7 +92,7 @@ use std::{thread, time::Duration};
 use windows::core::PWSTR;
 #[cfg(windows)]
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, ERROR_INSUFFICIENT_BUFFER, HWND, LPARAM, RECT, TRUE,
+    CloseHandle, BOOL, ERROR_INSUFFICIENT_BUFFER, HANDLE, HWND, LPARAM, RECT, TRUE,
 };
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
@@ -104,9 +104,9 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW, GetWindow,
+    EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetMessageW, GetPropW, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindowVisible, SetForegroundWindow, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+    IsWindowVisible, SetForegroundWindow, SetPropW, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
     EVENT_OBJECT_HIDE, EVENT_SYSTEM_FOREGROUND, GA_ROOT, GWL_EXSTYLE, GW_OWNER, MSG,
     WINEVENT_OUTOFCONTEXT, WS_EX_DLGMODALFRAME,
 };
@@ -514,6 +514,146 @@ pub fn owner_pid(hwnd: isize) -> Option<u64> {
     }
 }
 
+/// Window property naming the helper's instance tag on a discovered window.
+///
+/// Windows frees a window's properties when it is destroyed, so a replacement window
+/// that reuses the exact HWND value never carries the tag of the window it replaced.
+#[cfg(windows)]
+pub const INSTANCE_PROPERTY: windows::core::PCWSTR =
+    windows::core::w!("PiComputerUseWindowInstance-v1");
+
+/// One live window instance: its owning PID, that process's creation time and the
+/// helper's instance tag. Equal HWND and PID values with a different tag or process
+/// creation time are a different window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowInstance {
+    pub pid: u64,
+    pub process_started: u64,
+    pub token: usize,
+}
+
+/// Return the live instance of `hwnd` without tagging it, or `None` when the owner,
+/// its creation time or the instance tag cannot be verified.
+pub fn window_instance(hwnd: isize) -> Option<WindowInstance> {
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        None
+    }
+    #[cfg(windows)]
+    {
+        sample_instance(|| owner_pid(hwnd), process_started, || instance_token(hwnd))
+    }
+}
+
+/// Tag `hwnd` with an instance token unless it already carries one, then return its
+/// instance. `None` when the tag cannot be written and confirmed, so the caller must
+/// refuse the window rather than admit it unbound.
+pub fn admit_window_instance(hwnd: isize) -> Option<WindowInstance> {
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        None
+    }
+    #[cfg(windows)]
+    {
+        use std::hash::BuildHasher;
+        static MINTED: AtomicU64 = AtomicU64::new(0);
+        let nonce = std::collections::hash_map::RandomState::new()
+            .hash_one(MINTED.fetch_add(1, Ordering::Relaxed)) as usize;
+        ensure_instance_token(
+            || instance_token(hwnd),
+            // SAFETY: SetPropW validates the borrowed HWND; the tag is an opaque value, never dereferenced.
+            |token| unsafe {
+                SetPropW(
+                    HWND(hwnd as *mut _),
+                    INSTANCE_PROPERTY,
+                    HANDLE(token as *mut _),
+                )
+                .is_ok()
+            },
+            nonce.max(1),
+        )?;
+        window_instance(hwnd)
+    }
+}
+
+/// Refuse with `root_stale` unless `hwnd` is still exactly the `admitted` instance.
+pub fn ensure_instance(hwnd: isize, admitted: WindowInstance) -> Result<(), ProtocolError> {
+    if window_instance(hwnd) == Some(admitted) {
+        Ok(())
+    } else {
+        Err(unverified_instance())
+    }
+}
+
+/// The refusal for a window that is gone, replaced or not provably the admitted instance.
+pub fn unverified_instance() -> ProtocolError {
+    ProtocolError::new(
+        "Target window is no longer the admitted instance; rediscover it with find_roots",
+        ErrorCode::RootStale,
+    )
+}
+
+/// Read an instance, requiring the same owner before and after the process and tag reads.
+#[cfg(any(windows, test))]
+fn sample_instance(
+    mut owner: impl FnMut() -> Option<u64>,
+    started: impl FnOnce(u64) -> Option<u64>,
+    token: impl FnOnce() -> Option<usize>,
+) -> Option<WindowInstance> {
+    let pid = owner()?;
+    let instance = WindowInstance {
+        pid,
+        process_started: started(pid)?,
+        token: token()?,
+    };
+    (owner()? == pid).then_some(instance)
+}
+
+/// Keep an existing tag, or write `minted` and return the tag read back afterwards.
+#[cfg(any(windows, test))]
+fn ensure_instance_token(
+    mut read: impl FnMut() -> Option<usize>,
+    write: impl FnOnce(usize) -> bool,
+    minted: usize,
+) -> Option<usize> {
+    if let Some(token) = read() {
+        return Some(token);
+    }
+    // A concurrent helper may win the write; its tag still names this instance.
+    write(minted).then(read)?
+}
+
+/// Read this window's instance tag; zero means untagged, closed or unreadable.
+#[cfg(windows)]
+fn instance_token(hwnd: isize) -> Option<usize> {
+    // SAFETY: GetPropW validates the borrowed HWND and returns an opaque value.
+    let token = unsafe { GetPropW(HWND(hwnd as *mut _), INSTANCE_PROPERTY) }.0 as usize;
+    (token != 0).then_some(token)
+}
+
+/// Return the creation time of process `pid`, which changes when the PID is reused.
+#[cfg(windows)]
+fn process_started(pid: u64) -> Option<u64> {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::GetProcessTimes;
+    let pid = u32::try_from(pid).ok()?;
+    // SAFETY: the handle stays open for the query and is closed on every path; the
+    // FILETIME outputs are local.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut times = [FILETIME::default(); 4];
+        let [created, exited, kernel, user] = &mut times;
+        let queried = GetProcessTimes(process, created, exited, kernel, user);
+        let _ = CloseHandle(process);
+        queried.ok()?;
+        let started =
+            (u64::from(times[0].dwHighDateTime) << 32) | u64::from(times[0].dwLowDateTime);
+        (started != 0).then_some(started)
+    }
+}
+
 pub fn foreground_pid() -> Option<u64> {
     #[cfg(not(windows))]
     {
@@ -776,6 +916,150 @@ mod unit_tests {
     use super::*;
     #[cfg(not(windows))]
     use crate::error::ErrorCode;
+
+    // -- Window instance identity (cross-platform seams) ---------------------
+
+    #[test]
+    fn instance_samples_require_every_part_and_a_stable_owner() {
+        let sample = |owners: [Option<u64>; 2], started: Option<u64>, token: Option<usize>| {
+            let mut owners = owners.into_iter();
+            let mut queried = Vec::new();
+            let instance = sample_instance(
+                || owners.next().unwrap(),
+                |pid| {
+                    queried.push(pid);
+                    started
+                },
+                || token,
+            );
+            (instance, queried)
+        };
+        let instance = WindowInstance {
+            pid: 7,
+            process_started: 70,
+            token: 700,
+        };
+        assert_eq!(
+            sample([Some(7), Some(7)], Some(70), Some(700)),
+            (Some(instance), vec![7])
+        );
+        assert_eq!(sample([None, Some(7)], Some(70), Some(700)), (None, vec![]));
+        for (owners, started, token) in [
+            ([Some(7), Some(7)], None, Some(700)),
+            ([Some(7), Some(7)], Some(70), None),
+            ([Some(7), Some(8)], Some(70), Some(700)),
+            ([Some(7), None], Some(70), Some(700)),
+        ] {
+            assert_eq!(sample(owners, started, token), (None, vec![7]));
+        }
+    }
+
+    #[test]
+    fn instance_tags_are_kept_or_written_and_confirmed() {
+        let tag = |reads: &[Option<usize>], written: bool| {
+            let mut reads = reads.iter().copied();
+            let mut writes = Vec::new();
+            let token = ensure_instance_token(
+                || reads.next().unwrap(),
+                |minted| {
+                    writes.push(minted);
+                    written
+                },
+                42,
+            );
+            (token, writes)
+        };
+        assert_eq!(tag(&[Some(9)], true), (Some(9), vec![]), "keep a tag");
+        assert_eq!(tag(&[None, Some(42)], true), (Some(42), vec![42]));
+        // A concurrent helper's tag still names this instance.
+        assert_eq!(tag(&[None, Some(43)], true), (Some(43), vec![42]));
+        assert_eq!(tag(&[None], false), (None, vec![42]), "write refused");
+        assert_eq!(tag(&[None, None], true), (None, vec![42]), "not confirmed");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn window_instances_are_never_verified_off_windows() {
+        assert_eq!(window_instance(1), None);
+        assert_eq!(admit_window_instance(1), None);
+        let admitted = WindowInstance {
+            pid: 1,
+            process_started: 1,
+            token: 1,
+        };
+        assert_eq!(
+            ensure_instance(1, admitted).unwrap_err().code,
+            ErrorCode::RootStale
+        );
+    }
+
+    /// Real Win32 instance tags on a message-only window owned by this test process.
+    #[test]
+    #[cfg(windows)]
+    fn window_instances_tag_live_windows_and_refuse_destroyed_ones() {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, RemovePropW, HWND_MESSAGE, WINDOW_EX_STYLE,
+            WINDOW_STYLE,
+        };
+        // SAFETY: the predefined STATIC class needs no registration; the window is
+        // owned by this thread and destroyed below.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("instance tag fixture"),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                HWND_MESSAGE,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("create a message-only window");
+        let raw = hwnd.0 as isize;
+        assert_eq!(
+            window_instance(raw),
+            None,
+            "untagged windows are unverified"
+        );
+        let admitted = admit_window_instance(raw).expect("tag an owned window");
+        assert_eq!(admitted.pid, u64::from(std::process::id()));
+        assert_ne!(admitted.process_started, 0);
+        assert_eq!(window_instance(raw), Some(admitted));
+        assert_eq!(admit_window_instance(raw), Some(admitted), "keep the tag");
+        assert!(ensure_instance(raw, admitted).is_ok());
+        let replaced = WindowInstance {
+            token: admitted.token.wrapping_add(1),
+            ..admitted
+        };
+        assert_eq!(
+            ensure_instance(raw, replaced).unwrap_err().code,
+            ErrorCode::RootStale
+        );
+        assert_eq!(process_started(u64::from(u32::MAX) + 1), None);
+        // SAFETY: this thread owns the window; the removed value is an opaque tag.
+        unsafe {
+            RemovePropW(hwnd, INSTANCE_PROPERTY).expect("remove the instance tag");
+        }
+        assert_eq!(
+            ensure_instance(raw, admitted).unwrap_err().code,
+            ErrorCode::RootStale,
+            "same HWND and PID without the tag is a different instance"
+        );
+        // SAFETY: this thread created the window and destroys it exactly once.
+        unsafe { DestroyWindow(hwnd) }.expect("destroy the fixture window");
+        assert_eq!(window_instance(raw), None);
+        assert_eq!(
+            admit_window_instance(raw),
+            None,
+            "closed windows refuse tags"
+        );
+    }
 
     // -- Browser classification (cross-platform) ----------------------------
 

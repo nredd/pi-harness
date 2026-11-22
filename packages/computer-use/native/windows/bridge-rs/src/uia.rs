@@ -203,27 +203,28 @@ pub fn annotation_can_set_text(signals: &ElementAnnotationSignals) -> bool {
 /// Why an owner-bound UIA walk produced no usable result.
 #[derive(Debug, PartialEq, Eq)]
 pub enum OwnedWalkError {
-    /// The HWND stopped belonging to the admitted PID at one of the checks.
+    /// The HWND stopped being the admitted owner at one of the checks.
     RootStale,
-    /// UIA failed while the admitted PID still owned the HWND.
+    /// UIA failed while the admitted owner still held the HWND.
     Uia(String),
 }
 
-/// Acquire and walk the UIA root of `hwnd` only while `owner_pid` reports `pid`.
+/// Acquire and walk the UIA root of `hwnd` only while `owner` reports `admitted`.
 ///
 /// The owner is checked before acquisition, after acquisition but before any
 /// traversal, and after the walk; a result or error seen across an owner change
-/// is discarded as [`OwnedWalkError::RootStale`]. Reuse of the exact numeric
-/// HWND and PID pair between checks is indistinguishable.
-pub fn walk_owned_root<R, T>(
+/// is discarded as [`OwnedWalkError::RootStale`]. The helper passes a
+/// [`crate::window::WindowInstance`], so a replacement window that reuses the
+/// exact HWND and PID still differs by its instance tag.
+pub fn walk_owned_root<O: PartialEq, R, T>(
     hwnd: isize,
-    pid: u64,
-    mut owner_pid: impl FnMut(isize) -> Option<u64>,
+    admitted: O,
+    mut owner: impl FnMut(isize) -> Option<O>,
     acquire: impl FnOnce(isize) -> Result<R, String>,
     walk: impl FnOnce(R) -> Result<T, String>,
 ) -> Result<T, OwnedWalkError> {
     let mut owned = || {
-        (owner_pid(hwnd) == Some(pid))
+        (owner(hwnd).as_ref() == Some(&admitted))
             .then_some(())
             .ok_or(OwnedWalkError::RootStale)
     };

@@ -427,7 +427,39 @@ mod native {
         scoped_wait["lookId"] = look["lookId"].clone();
         scoped_wait["scopeRef"] = json!(actual_ref);
         scoped_wait["scopeExact"] = json!(true);
-        assert_eq!(helper.success("uiaWaitFor", scoped_wait)["found"], true);
+        assert_eq!(
+            helper.success("uiaWaitFor", scoped_wait.clone())["found"],
+            true
+        );
+        // A replacement window reusing this exact HWND in this process carries no tag
+        // from the admitted instance. Swap the tag to stand in for it: reads, waits and
+        // ref actions must refuse it, then the restored tag admits the original again.
+        let fixture_hwnd = HWND(fixture.hwnd as *mut _);
+        let instance_property = windows_bridge::window::INSTANCE_PROPERTY;
+        let admitted_tag = unsafe { GetPropW(fixture_hwnd, instance_property) };
+        assert!(
+            !admitted_tag.0.is_null(),
+            "discovery tags the admitted root"
+        );
+        let replacement_tag =
+            windows::Win32::Foundation::HANDLE((admitted_tag.0 as usize ^ 1) as *mut _);
+        unsafe { SetPropW(fixture_hwnd, instance_property, replacement_tag) }
+            .expect("tag the stand-in replacement");
+        let replacement_act = json!({"lookId":look["lookId"],"action":"click","policy":"foreground","target":{"ref":actual_ref},"params":{}});
+        for (cmd, args) in [
+            ("uiaReadText", read_args.clone()),
+            ("uiaWaitFor", wait_args.clone()),
+            ("uiaWaitFor", scoped_wait),
+            ("act", replacement_act),
+        ] {
+            let refused = helper.request(cmd, args);
+            assert_eq!(refused["ok"], false, "{cmd} on a replacement: {refused}");
+            assert_eq!(refused["error"]["code"], "root_stale", "{cmd}: {refused}");
+        }
+        assert_eq!(CLICKS.load(Ordering::SeqCst), 0, "replacement got no click");
+        unsafe { SetPropW(fixture_hwnd, instance_property, admitted_tag) }
+            .expect("restore the admitted tag");
+        helper.success("uiaReadText", read_args.clone());
         let act_args = json!({"lookId":look["lookId"],"action":"click","policy":"foreground","target":{"ref":actual_ref},"params":{}});
         let click = helper.success("act", act_args.clone());
         assert_eq!(
