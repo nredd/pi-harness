@@ -375,6 +375,8 @@ interface OutlineToolDetails {
 }
 
 interface ResolvedTarget extends CurrentTarget {
+	/** Block-only names from this live root lookup; see `PlatformAppIdentity.blockAliases`. */
+	blockAliases?: string[];
 	windowRef: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
@@ -388,6 +390,7 @@ interface WindowRefRecord {
 	ref: string;
 	appName: string;
 	appId?: string;
+	blockAliases?: string[];
 	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
@@ -811,7 +814,7 @@ class ComputerUseError extends Error {
 	}
 }
 
-type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId">;
+type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId" | "blockAliases">;
 
 /** Windows and Linux resolve an executable identity per root; a root without one is refused. */
 function requiresLiveIdentity(): boolean {
@@ -901,6 +904,8 @@ function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): Windo
 	return storeWindowRef({
 		appName: app.appName,
 		appId: windowAppId(app, window),
+		// Block-only names come from this root lookup alone, like a live identity.
+		blockAliases: window.blockAliases,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -953,6 +958,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 	const baseTarget = {
 		appName: app.appName,
 		appId: storedRef.appId,
+		blockAliases: storedRef.blockAliases,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
@@ -1027,7 +1033,7 @@ async function resolveWindowsRoot(
 			"root_stale",
 			"Windows root could not be admitted: its owner or window instance is unverifiable, so it cannot be observed or controlled.",
 		);
-	assertAppNotBlocked({ appName: saved.appName, appId: match.appId });
+	assertAppNotBlocked({ appName: saved.appName, appId: match.appId, blockAliases: match.blockAliases });
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
 		throw new ComputerUseError(
 			"app_blocked",

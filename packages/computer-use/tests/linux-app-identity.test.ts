@@ -10,7 +10,7 @@ import { linuxHelper } from "../src/platform/linux/helper.ts";
 type Root = Record<string, unknown> & { pid: number; rootRef: string };
 
 /** A Linux helper root: `appName` is the app-supplied AT-SPI name, `appId` the executable basename. */
-function linuxRoot(pid: number, appName: string, appId?: string): Root {
+function linuxRoot(pid: number, appName: string, appId?: string, extra: Record<string, unknown> = {}): Root {
 	return {
 		kind: "window",
 		rootRef: `@w${pid}`,
@@ -20,6 +20,7 @@ function linuxRoot(pid: number, appName: string, appId?: string): Root {
 		processName: appId ?? null,
 		appId: appId ?? null,
 		isFocused: pid === 101,
+		...extra,
 	};
 }
 
@@ -94,11 +95,14 @@ test("Linux blocks roots by executable basename, never by the accessible app nam
 		return root.windowRef;
 	};
 	for (const pid of [102, 103]) {
-		await expect(observe(refOf(pid))).rejects.toMatchObject({ code: "app_blocked", message: /is blocked/ });
+		await expect(observe(refOf(pid))).rejects.toMatchObject({
+			code: "app_blocked",
+			message: expect.stringMatching(/is blocked/),
+		});
 	}
 	await expect(observe(refOf(104))).rejects.toMatchObject({
 		code: "app_blocked",
-		message: /identity could not be determined/,
+		message: expect.stringMatching(/identity could not be determined/),
 	});
 	expect(looks()).toBe(0);
 	await observe(refOf(101));
@@ -119,21 +123,32 @@ test("Linux blocks roots by executable basename, never by the accessible app nam
 });
 
 test("A saved Linux identity never stands in for a live lookup that failed", async ({ onTestFinished }) => {
-	const { state, find, observe, looks } = useLinuxRoots(onTestFinished, [linuxRoot(101, "Editor", "fixture-editor")]);
+	const admitted = linuxRoot(101, "Editor", "fixture-editor");
+	const { state, find, observe, looks } = useLinuxRoots(onTestFinished, [admitted]);
 	const [{ windowRef }] = await find();
-	await observe(windowRef);
-	expect(looks()).toBe(1);
-
-	// The same window, PID and title, but the helper can no longer attribute its executable.
-	state.roots = [linuxRoot(101, "Editor")];
-	await expect(observe(windowRef)).rejects.toMatchObject({
-		code: "app_blocked",
-		message: /identity could not be determined/,
-	});
-	// The live executable changed under the same PID (e.g. exec): the new identity is checked.
-	state.roots = [linuxRoot(101, "Editor", "kitty")];
-	await expect(observe(windowRef)).rejects.toMatchObject({ code: "app_blocked", message: /\(kitty\)/ });
-	expect(looks()).toBe(1);
+	for (const [roots, message] of [
+		// The same window, PID and title, but the helper can no longer attribute its executable.
+		[[linuxRoot(101, "Editor")], /identity could not be determined/],
+		// A WM_CLASS that only the live lookup reports is checked.
+		[
+			[linuxRoot(101, "Editor", "fixture-editor", { metadata: { wmClass: { instance: "x", class: "kitty" } } })],
+			/\(kitty\)/,
+		],
+		// The live executable changed under the same PID (e.g. exec): the new identity is checked.
+		[[linuxRoot(101, "Editor", "kitty")], /\(kitty\)/],
+	] as const) {
+		// Rediscover and admit the root, then change only what the next live lookup reports.
+		state.roots = [admitted];
+		await find();
+		await observe(windowRef);
+		const admittedLooks = looks();
+		state.roots = [...roots];
+		await expect(observe(windowRef), String(message)).rejects.toMatchObject({
+			code: "app_blocked",
+			message: expect.stringMatching(message),
+		});
+		expect(looks()).toBe(admittedLooks);
+	}
 });
 
 test("The Linux backend reads appId only from the helper's executable field", async ({ onTestFinished }) => {
@@ -150,4 +165,68 @@ test("The Linux backend reads appId only from the helper's executable field", as
 		{ appName: "Editor", appId: "fixture-editor" },
 		{ appName: "Editor", appId: undefined },
 	]);
+});
+
+test("Linux WM_CLASS and an ambiguous exe link name can only add a block", async ({ onTestFinished }) => {
+	const wmClass = (instance: string | null, cls: string) => ({ metadata: { wmClass: { instance, class: cls } } });
+	const { userFile, find, observe, looks } = useLinuxRoots(onTestFinished, [
+		linuxRoot(201, "Editor", "fixture-editor", wmClass("KeePassXC", "KeePassXC")),
+		linuxRoot(202, "Editor", "fixture-editor", wmClass("fixture", "KEEPASSXC")),
+		// WM_CLASS never unblocks an executable the policy blocks.
+		linuxRoot(203, "Editor", "kitty", wmClass("fixture", "Fixture")),
+		linuxRoot(204, "Editor", "fixture-editor"),
+		linuxRoot(205, "Editor", "editor", { blockAliases: ["editor (deleted)"] }),
+		// An alias never identifies a root.
+		linuxRoot(206, "Editor", undefined, wmClass("fixture", "Fixture")),
+	]);
+	const byPid = async () =>
+		Object.fromEntries(
+			(await find()).map((root) => [root.pid, { blocked: root.blocked, unresolved: root.identityUnresolved }]),
+		);
+	expect(await byPid()).toEqual({
+		201: { blocked: true, unresolved: undefined },
+		202: { blocked: true, unresolved: undefined },
+		203: { blocked: true, unresolved: undefined },
+		204: { blocked: false, unresolved: undefined },
+		205: { blocked: false, unresolved: undefined },
+		206: { blocked: true, unresolved: true },
+	});
+	const windows = await find();
+	const refOf = (pid: number) => windows.find((root) => root.pid === pid)!.windowRef;
+	await expect(observe(refOf(201))).rejects.toMatchObject({
+		code: "app_blocked",
+		message: expect.stringMatching(/\(KeePassXC\)/),
+	});
+	expect(looks()).toBe(0);
+
+	// The literal ` (deleted)` link name blocks; so does the stripped identity.
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["EDITOR (DELETED)"] }));
+	expect(await byPid()).toMatchObject({ 204: { blocked: false }, 205: { blocked: true } });
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["editor"] }));
+	expect(await byPid()).toMatchObject({ 204: { blocked: false }, 205: { blocked: true } });
+	// The user list replaced the defaults: a WM_CLASS alias then has nothing to match.
+	expect(await byPid()).toMatchObject({ 201: { blocked: false }, 202: { blocked: false }, 203: { blocked: false } });
+});
+
+test("The Linux backend collects block-only aliases from the helper and X11 WM_CLASS", async ({ onTestFinished }) => {
+	onTestFinished(() => vi.restoreAllMocks());
+	vi.spyOn(linuxHelper, "command").mockResolvedValue({
+		roots: [
+			{
+				pid: 1,
+				appId: "editor",
+				blockAliases: ["editor (deleted)", 7, ""],
+				metadata: { wmClass: { instance: "editor", class: "Editor" } },
+			},
+			{ pid: 2, appId: "editor", blockAliases: "editor (deleted)", metadata: { wmClass: null } },
+			{ pid: 3, appId: "editor", metadata: { wmClass: { instance: "", class: "Editor" } } },
+		],
+	});
+	const roots = await linuxBackend.listRoots({});
+	expect(roots.map((root) => root.blockAliases)).toEqual([
+		["editor (deleted)", "editor", "Editor"],
+		undefined,
+		["Editor"],
+	]);
+	expect("blockAliases" in roots[1]).toBe(false);
 });

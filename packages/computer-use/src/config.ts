@@ -275,13 +275,19 @@ export function effectiveBlockedBundleIds(): string[] {
 	return [...new Set([...ALWAYS_BLOCKED_BUNDLE_IDS, ...activeConfig.blocked_apps])];
 }
 
-/** Compare only the host's policy identity, never the presentation name. */
-export function blockedAppId(platform: PlatformName, app: Pick<PlatformApp, "appId" | "bundleId">): string | undefined {
+/**
+ * Compare only the host's policy identity, never the presentation name. Block-only aliases (Linux
+ * `WM_CLASS`, an ambiguous `exe` link name) can add a block but never stand in for a missing identity.
+ */
+export function blockedAppId(
+	platform: PlatformName,
+	app: Pick<PlatformApp, "appId" | "bundleId" | "blockAliases">,
+): string | undefined {
 	const id = app.appId ?? (platform === "macos" ? app.bundleId : undefined);
 	if (!id) return undefined;
-	const wanted = id.toLowerCase();
 	const { always } = BLOCKED_APPS_BY_PLATFORM[platform];
-	return [...always, ...activeConfig.blocked_apps].some((blocked) => blocked.toLowerCase() === wanted) ? id : undefined;
+	const blocked = new Set([...always, ...activeConfig.blocked_apps].map((entry) => entry.toLowerCase()));
+	return [id, ...(app.blockAliases ?? [])].find((candidate) => blocked.has(candidate.toLowerCase()));
 }
 
 /** macOS bundle-id policy alias. */
