@@ -722,29 +722,30 @@ def ratchet_fixture(tmp_path: Path) -> tuple[Policy, Policy, MappedFile]:
 
 
 @pytest.mark.parametrize(
-    ("change", "unchanged_source", "needs_entry"),
+    ("change", "source", "needs_entry"),
     [
-        ("none", True, False),
-        ("grow", True, False),
-        ("lower-lines", True, True),
-        ("lower-functions", True, True),
-        ("drop", True, True),
-        ("drop-os", True, True),
-        ("rehash", True, True),
-        ("lower-lines", False, False),
-        ("drop", False, False),
-        ("rehash", False, False),
+        ("none", "same", False),
+        ("grow", "same", False),
+        ("lower-lines", "same", True),
+        ("lower-functions", "same", True),
+        ("drop", "same", True),
+        ("drop-os", "same", True),
+        ("rehash", "same", True),
+        ("lower-lines", "edited", False),
+        ("drop", "edited", False),
+        ("rehash", "edited", False),
+        ("drop", "deleted", False),
     ],
 )
 def test_lowering_recorded_totals_needs_a_reviewed_remeasurement(
-    tmp_path: Path, change: str, unchanged_source: bool, needs_entry: bool
+    tmp_path: Path, change: str, source: str, needs_entry: bool
 ) -> None:
     """Treat lowering, dropping or rehashing a still-current record as a remeasurement.
 
     Parameters:
         tmp_path (Path): Disposable checkout.
         change (str): Edit to the current `main.rs` record or its OS.
-        unchanged_source (bool): Whether `main.rs` still matches the base record's hash.
+        source (str): Whether `main.rs` is the same as recorded in the base, edited or deleted.
         needs_entry (bool): Whether the change requires a new `remeasurements` entry.
     Returns:
         None.
@@ -754,8 +755,10 @@ def test_lowering_recorded_totals_needs_a_reviewed_remeasurement(
     current, base, before = ratchet_fixture(tmp_path)
     signal = current.packages["windows"].signals["primary"]
     records = signal.mapped_totals["win32"]
-    if not unchanged_source:
+    if source == "edited":
         (tmp_path / "packages/computer-use" / MAIN_RS).write_text("fn main() { work(); }\n")
+    if source == "deleted":
+        (tmp_path / "packages/computer-use" / MAIN_RS).unlink()
     if change == "grow":
         records[MAIN_RS] = before.model_copy(update={"lines": 4})
     if change == "lower-lines":
