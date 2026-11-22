@@ -28,6 +28,8 @@ private final class ActFixture {
     var web = false
     var supported = true
     var value = "before"
+    /// Scripted `AXValue` reads, consumed first: `nil` is a failed read. Falls back to `value` once empty.
+    var valueReads: [String?] = []
     var hits: [AXUIElement] = []
     var statuses: [AXError] = []
     var refind = true
@@ -67,7 +69,7 @@ private final class ActFixture {
                 case kAXRoleAttribute: return "AXButton"
                 case kAXValueAttribute:
                     self.onValueRead()
-                    return self.value
+                    return self.valueReads.isEmpty ? self.value : self.valueReads.removeFirst()
                 default: return nil
                 }
             },
@@ -245,6 +247,7 @@ private func runPointerAssertions() throws {
     let pressed = try press.act("press", policy: "background")
     expect(pressed["outcome"] as? String == "worked", "AX press sees value change")
     expect(press.trace == ["begin:1234", "ax:AXPress:cached", "refind:ref:1234:8", "ax:AXPress:refound", "cursor:8", "finish"], "AX press refinds once and never posts input")
+    try runIndeterminatePressAssertions()
 
     let fg = ActFixture()
     fg.web = true
@@ -278,7 +281,51 @@ private func runPointerAssertions() throws {
     try actionFailure("coordinate_unavailable_for_root") { try drag.act("click", coords: true) }
 }
 
+/// An AX press failure that does not establish non-delivery is reported unknown: never re-pressed, never clicked (#1240).
+private func runIndeterminatePressAssertions() throws {
+    for status in [AXError.cannotComplete, .failure] {
+        for policy in ["background", "foreground"] {
+            let press = ActFixture()
+            press.statuses = [status, .success]
+            let result = try press.act("press", policy: policy)
+            let error = result["error"] as? [String: String]
+            expect(result["outcome"] as? String == "unknown" && error?["code"] == "ax_delivery_unknown", "\(policy) AXError \(status.rawValue) press reports unknown delivery")
+            expect((result["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true, "\(policy) AXError \(status.rawValue) press is flagged deliveryUnknown")
+            expect(press.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "\(policy) AXError \(status.rawValue) press is delivered once: no refound press, no pointer click")
+        }
+    }
+    let refound = ActFixture()
+    refound.statuses = [.invalidUIElement, .cannotComplete]
+    let second = try refound.act("press", policy: "foreground")
+    expect(second["outcome"] as? String == "unknown" && !refound.trace.contains { $0.hasPrefix("click:") }, "an indeterminate refound press never falls back to a click")
+    let dead = ActFixture()
+    dead.statuses = [.actionUnsupported]
+    dead.refind = false
+    _ = try dead.act("press", policy: "background")
+    expect(dead.trace.filter { $0.hasPrefix("click:") } == ["click:1234:0:1:pid"], "a press the element refused falls back to one pointer click")
+    expect(!axPressNotDelivered(axError: AXError.cannotComplete.rawValue) && !axPressNotDelivered(axError: AXError.failure.rawValue), "cannotComplete and failure may have pressed")
+    expect(axPressNotDelivered(axError: AXError.invalidUIElement.rawValue) && axPressNotDelivered(axError: AXError.actionUnsupported.rawValue), "a dead element or unsupported action was not pressed")
+}
+
 private func runKeyboardActionAssertions() throws {
+    // A stale or failed readback after posted text is unknown, never didnt: didnt invites a resend (#1241).
+    let stale = ActFixture()
+    let unconfirmed = try stale.act("typeText", policy: "background", params: ["text": "before"])
+    expect(unconfirmed["outcome"] as? String == "unknown" && stale.trace.filter { $0.hasPrefix("type:") } == ["type:before:1234:pid"], "posted text with an unchanged readback is unknown and typed once")
+    expect((unconfirmed["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true, "an unconfirmed posted text is flagged deliveryUnknown")
+    // Only two successful, different reads confirm posted text; a failed read never fabricates a value (#1241).
+    for (reads, label) in [(["before", nil], "failed post-read"), ([nil, "hi"], "failed pre-read"), ([nil, nil], "two failed reads")] as [([String?], String)] {
+        let fixture = ActFixture()
+        fixture.valueReads = reads
+        let result = try fixture.act("typeText", policy: "background", params: ["text": "hi"])
+        let evidence = result["evidence"] as? [String: Any]
+        expect(result["outcome"] as? String == "unknown" && evidence?["deliveryUnknown"] as? Bool == true && evidence?["valueChanged"] as? Bool == false, "\(label) after posted text is unknown: \(result)")
+        expect((evidence?["value"] as? String) == reads[1], "\(label) reports only a value it actually read")
+    }
+    let typer = ActFixture()
+    let confirmed = try typer.act("typeText", policy: "background", params: ["text": "hi"])
+    let typedEvidence = confirmed["evidence"] as? [String: Any]
+    expect(confirmed["outcome"] as? String == "worked" && typedEvidence?["value"] as? String == "hi" && typedEvidence?["deliveryUnknown"] == nil, "two different successful reads confirm posted text")
     let keys = ActFixture()
     keys.blocked = true
     try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd", "a"]]) }
@@ -456,6 +503,21 @@ private func runBatchAssertions() throws {
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [press, press.merging(["lookId": "unrelated"]) { _, new in new }]], world: fixture.world, supportsAgentCursor: false) }
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": Array(repeating: press, count: 21)], world: fixture.world, supportsAgentCursor: false) }
     expect(fixture.trace.isEmpty, "invalid batches have no root or input side effects")
+    // An indeterminate press stops the batch: a later step must not run on, or hide, an unknown delivery (#1240).
+    let uncertain = ActFixture()
+    uncertain.statuses = [.cannotComplete]
+    let pair = uncertain.request("press", policy: "ax_only")
+    let stopped = try uncertain.bridge.actBatch(["actions": [pair, pair]], world: uncertain.world, supportsAgentCursor: false)
+    let stoppedSteps = stopped["steps"] as? [[String: Any]]
+    expect(stopped["outcome"] as? String == "unknown" && stopped["stoppedAt"] as? Int == 0 && stoppedSteps?.count == 1, "an indeterminate press stops the batch at its step: \(stopped)")
+    expect((stoppedSteps?.first?["error"] as? [String: String])?["code"] == "ax_delivery_unknown", "the stopped step keeps its ax_delivery_unknown error")
+    expect(uncertain.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "the second press is never dispatched: \(uncertain.trace)")
+    let generic = ActFixture()
+    generic.scrollPositions = ["same", "same"]
+    generic.scrollResult = ["scrolled": true]
+    let scroll = generic.request("scroll", policy: "ax_only", params: ["scrollY": 1])
+    let continued = try generic.bridge.actBatch(["actions": [scroll, generic.request("press", policy: "ax_only")]], world: generic.world, supportsAgentCursor: false)
+    expect(continued["stoppedAt"] == nil && (continued["steps"] as? [[String: Any]])?.count == 2, "a generic unknown does not stop the batch: \(continued)")
 }
 
 private func runRootPIDAssertions() throws {

@@ -355,7 +355,7 @@ test("a batch result without an outcome is treated as unknown, with or without a
 	assert.equal(terminal.details.execution.outcome, "worked");
 });
 
-test("a native batch that reports a timed-out step without stopping stays unknown after a verified postcondition", async ({
+test("a native batch that reports a timed-out step without stopping skips the postcondition and stays unknown", async ({
 	onTestFinished,
 }) => {
 	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
@@ -372,8 +372,9 @@ test("a native batch that reports a timed-out step without stopping stays unknow
 	const { execution } = result.details;
 	assert.equal(execution.stoppedAt, undefined, "the helper reported no stop");
 	assert.equal(execution.error, undefined, "the helper reported no batch error");
-	assert.equal(execution.verification.status, "verified");
-	assert.equal(execution.outcome, "unknown", "neither the check nor observed values prove the timed-out delivery");
+	assert.equal(fake.waits.length, 0, "no postcondition settles an indeterminate step");
+	assert.equal(execution.verification, undefined);
+	assert.equal(execution.outcome, "unknown", "observed values cannot prove the timed-out delivery");
 	assert.ok(fake.text(result).startsWith("Action 1 timed out; whether it was delivered is unknown."));
 });
 
