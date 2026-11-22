@@ -162,12 +162,13 @@ describe("daemon commands over the socket", () => {
 		await assert.doesNotReject(client.command("diagnostics"), "the daemon stays usable after command errors");
 	});
 
-	test("a malformed reply rejects with the parse error and marks the daemon unavailable", async () => {
+	test("a malformed or non-object reply is a transport error and marks the daemon unavailable", async () => {
 		const fake = await fakeOn({ handlers: { look: malformed(), nul: raw("null\n") } });
 		const { MacosHelperClient } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
-		await assert.rejects(client.command("look"), SyntaxError);
-		await assert.rejects(client.command("nul"), TypeError);
+		const malformedReply = { name: "HelperTransportError", code: "helper_malformed" };
+		await assert.rejects(client.command("look"), malformedReply);
+		await assert.rejects(client.command("nul"), malformedReply);
 		assert.equal(client.daemonAvailable, false);
 	});
 
@@ -621,7 +622,7 @@ describe("install, launch and runProcess", () => {
 		await new MacosHelperClient().ensureInstalled();
 		const [call] = spawn.calls;
 		assert.equal(call.command, process.execPath);
-		assert.deepEqual(call.args.slice(1), ["--runtime", "--automatic"]);
+		assert.deepEqual(call.args.slice(1), ["--runtime"]);
 		assert.match(call.args[0], /scripts[\\/]setup-helper\.mjs$/);
 		assert.equal(call.options.env.ELECTRON_RUN_AS_NODE, "1");
 		assert.equal(call.options.env.BUN_BE_BUN, "1");
@@ -641,7 +642,7 @@ describe("install, launch and runProcess", () => {
 		route = { exitCode: 2, stderr: "swiftc missing\n", stdout: "partial\n" };
 		await assert.rejects(
 			client.ensureInstalled(),
-			/Command failed \(2\): .*setup-helper\.mjs --runtime --automatic\nswiftc missing\npartial$/,
+			/Command failed \(2\): .*setup-helper\.mjs --runtime\nswiftc missing\npartial$/,
 		);
 	});
 
@@ -780,9 +781,9 @@ describe("activity glow connection", () => {
 		);
 	});
 
-	test("a malformed reply rejects with the parse error", async () => {
+	test("a malformed reply is a transport error", async () => {
 		const { macosActivityGlow } = await glowRig({ handlers: { setActivityGlow: malformed() } });
-		await assert.rejects(macosActivityGlow.setActive(true), SyntaxError);
+		await assert.rejects(macosActivityGlow.setActive(true), { code: "helper_malformed" });
 	});
 
 	test(

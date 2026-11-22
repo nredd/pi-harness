@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { PlatformDiagnostics } from "../types.ts";
-import { macosHelperBuild, macosSigningRefusal, withDirectoryLock } from "./helper-build.mjs";
+import { MACOS_HELPER_BUILD_PATTERN, macosHelperBuild } from "./helper-build.mjs";
 import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
@@ -24,10 +24,6 @@ const READ_ONLY_PROBE_BUDGET_MS = 8_000;
 /** Polls, `LAUNCH_POLL_MS` apart, for a launched daemon to start listening. */
 const LAUNCH_POLLS = 30;
 const LAUNCH_POLL_MS = 100;
-/** Bound on waiting for another client's launch or setup; above `HELPER_SETUP_TIMEOUT_MS`. */
-const LIFECYCLE_LOCK_WAIT_MS = 75_000;
-/** A lifecycle lock older than this belongs to a client that died mid-launch or mid-setup. */
-const LIFECYCLE_LOCK_STALE_MS = 120_000;
 
 export const HELPER_BUNDLE_ID = "com.injaneity.pi-computer-use";
 export const HELPER_APP_PATH = resolveMacosHelperAppPath();
@@ -92,18 +88,37 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
 let expectedBuild: string | undefined;
 
-/**
- * Serialize launch and runtime setup across every client of the managed socket. Beside the daemon's own
- * `<socket>.lock`, which the daemon holds for its lifetime, so the two never contend.
- */
-async function withLifecycleLock<T>(callback: () => Promise<T>): Promise<T> {
-	await mkdir(path.dirname(HELPER_SOCKET_PATH), { recursive: true });
-	return await withDirectoryLock(`${HELPER_SOCKET_PATH}.lifecycle.lock`, callback, {
-		waitMs: LIFECYCLE_LOCK_WAIT_MS,
-		staleMs: LIFECYCLE_LOCK_STALE_MS,
-		label: "pi-computer-use helper lifecycle",
-	});
+/** A reported build safe to display: a well-formed build ID, `none` when absent, otherwise `unrecognized`. */
+function displayBuild(value: unknown): string {
+	if (value === undefined || value === null) return "none";
+	return typeof value === "string" && MACOS_HELPER_BUILD_PATTERN.test(value) ? value : "unrecognized";
 }
+
+interface HelperReply {
+	id?: unknown;
+	ok?: unknown;
+	/** Unvalidated; read only through optional chaining. */
+	result?: Record<string, unknown>;
+	error?: { message?: string; code?: string; evidence?: Record<string, unknown> };
+}
+
+/** Parse one reply line; anything but a JSON object is a malformed reply, never a `TypeError` later. */
+function parseReply(line: string): HelperReply {
+	let reply: unknown;
+	try {
+		reply = JSON.parse(line);
+	} catch {
+		throw new HelperTransportError("Malformed helper reply.", "helper_malformed");
+	}
+	if (typeof reply !== "object" || reply === null || Array.isArray(reply)) {
+		throw new HelperTransportError("Malformed helper reply.", "helper_malformed");
+	}
+	return reply as HelperReply;
+}
+
+/** The operator's repair for a stale managed helper. The client never replaces, restarts or stops one. */
+export const STALE_HELPER_REPAIR =
+	"from the package root, run `node scripts/setup-helper.mjs --runtime`. For a source checkout, rebuild first with `npm run build:native`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper";
 
 export class HelperTransportError extends Error {
 	readonly code?: string;
@@ -269,8 +284,10 @@ export class MacosHelperClient {
 	private daemonAvailable = false;
 	private requestSequence = 0;
 	private diagnosticsCache?: PlatformDiagnostics;
+	/** Last reported build, safe to display (see `displayBuild`). */
 	helperBuild?: string;
-	staleBuildMessage?: string;
+	/** Reported and expected build of the last refused managed helper. */
+	staleBuild?: { reported: string; expected: string };
 
 	/**
 	 * Check one connection's diagnostics before anything else is sent on it. A managed helper must report
@@ -281,8 +298,8 @@ export class MacosHelperClient {
 		result: { buildIdentity?: unknown; executablePath?: unknown; protocolVersion?: unknown } | undefined,
 		managed = connectionIsManaged(),
 	): void {
-		this.staleBuildMessage = undefined;
-		this.helperBuild = toOptionalString(result?.buildIdentity) ?? "unknown";
+		this.staleBuild = undefined;
+		this.helperBuild = displayBuild(result?.buildIdentity);
 		if (!managed) {
 			const protocol = Math.trunc(toFiniteNumber(result?.protocolVersion, 0));
 			if (protocol === HELPER_PROTOCOL_VERSION) return;
@@ -292,14 +309,11 @@ export class MacosHelperClient {
 			);
 		}
 		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
-		if (this.helperBuild !== expectedBuild) {
-			const builds = `helper build ${this.helperBuild}, expected ${expectedBuild}`;
-			const repair = `: from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper${macosSigningRefusal(HELPER_APP_PATH, expectedBuild)}`;
-			// Status shows the build IDs and the repair; the daemon-reported executable path stays in the error.
-			this.staleBuildMessage = `${builds}${repair}`;
+		if (result?.buildIdentity !== expectedBuild) {
+			this.staleBuild = { reported: this.helperBuild, expected: expectedBuild };
 			const executable = toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH;
 			throw new HelperCommandError(
-				`pi-computer-use helper at ${executable} is stale (${builds})${repair}`,
+				`pi-computer-use helper at ${executable} is stale (helper build ${this.helperBuild}, expected ${expectedBuild}): ${STALE_HELPER_REPAIR}`,
 				"stale_helper",
 			);
 		}
@@ -323,23 +337,15 @@ export class MacosHelperClient {
 			);
 		}
 
-		// Setup can replace the app, so it runs only on positive absence, rechecked under the lifecycle lock
-		// so a daemon another client started meanwhile is used, not replaced. `--automatic` makes setup
-		// refuse, never stop, any helper it still finds running.
+		// Setup can replace the app and stop a running helper, so it runs only on positive absence: a resident
+		// that answers is used as is, and an inconclusive probe throws.
 		if (await this.probeResident(signal)) return;
-		const installed = await withLifecycleLock(async () => {
-			if (await this.probeResident(signal)) return true;
-			// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
-			await runProcess(
-				process.execPath,
-				[SETUP_HELPER_SCRIPT, "--runtime", "--automatic"],
-				HELPER_SETUP_TIMEOUT_MS,
-				signal,
-				{ ...process.env, ELECTRON_RUN_AS_NODE: "1", BUN_BE_BUN: "1" },
-			);
-			return false;
+		// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
+		await runProcess(process.execPath, [SETUP_HELPER_SCRIPT, "--runtime"], HELPER_SETUP_TIMEOUT_MS, signal, {
+			...process.env,
+			ELECTRON_RUN_AS_NODE: "1",
+			BUN_BE_BUN: "1",
 		});
-		if (installed) return;
 
 		if ((await helperExecutableState()) !== "ready") {
 			throw new Error(`Failed to install pi-computer-use helper app at ${HELPER_APP_PATH}.`);
@@ -418,7 +424,7 @@ export class MacosHelperClient {
 				if (newline < 0) return;
 				if (checkingBuild) {
 					try {
-						const probe = JSON.parse(buffer.slice(0, newline));
+						const probe = parseReply(buffer.slice(0, newline));
 						if (probe.id !== probeId || probe.ok !== true) {
 							throw new HelperTransportError("Invalid helper build probe reply.");
 						}
@@ -437,7 +443,7 @@ export class MacosHelperClient {
 				settle(() => {
 					socket.end();
 					try {
-						const parsed = JSON.parse(buffer.slice(0, newline));
+						const parsed = parseReply(buffer.slice(0, newline));
 						if (cmd === "diagnostics" && parsed.id !== id) {
 							throw new HelperTransportError("Invalid helper diagnostics reply ID.");
 						}
@@ -494,9 +500,9 @@ export class MacosHelperClient {
 				await this.daemonCommand("diagnostics", {}, Math.min(DIAGNOSTICS_PROBE_TIMEOUT_MS, remaining), signal);
 				return true;
 			} catch (error) {
-				if (!(error instanceof HelperTransportError || error instanceof SyntaxError)) throw error;
-				if (error instanceof HelperTransportError && error.code === "helper_not_listening") return false;
-				if (error instanceof HelperTransportError && error.code === "helper_timeout" && Date.now() < deadline) continue;
+				if (!(error instanceof HelperTransportError)) throw error;
+				if (error.code === "helper_not_listening") return false;
+				if (error.code === "helper_timeout" && Date.now() < deadline) continue;
 				throw new HelperTransportError(
 					`Cannot verify the pi-computer-use helper at ${HELPER_SOCKET_PATH}; it was not launched and setup was not run: ${String(error)}`,
 					"helper_inconclusive",
@@ -508,14 +514,9 @@ export class MacosHelperClient {
 	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
 		if (this.daemonAvailable) return true;
 		if (!(await this.probeResident(signal))) {
-			if (usingExternalHelperSocket) return await this.awaitListener(signal);
-			// Launch only on positive absence, rechecked under the lifecycle lock, and hold the lock until the
-			// daemon listens so a concurrent client neither launches a second one nor runs setup under it.
-			return await withLifecycleLock(async () => {
-				if (await this.probeResident(signal)) return this.markAvailable();
-				await this.launchDaemon(signal).catch(() => undefined);
-				return await this.awaitListener(signal);
-			});
+			// Launch only on positive absence; an external helper is its operator's to launch.
+			if (!usingExternalHelperSocket) await this.launchDaemon(signal).catch(() => undefined);
+			return await this.awaitListener(signal);
 		}
 		return this.markAvailable();
 	}
@@ -709,7 +710,7 @@ class MacosActivityGlowConnection {
 				if (newline < 0) return;
 				cleanup();
 				try {
-					const response = JSON.parse(buffer.slice(0, newline));
+					const response = parseReply(buffer.slice(0, newline));
 					if (response.id === id && response.ok === true) resolve(response.result);
 					else
 						reject(

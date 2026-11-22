@@ -19,7 +19,7 @@ import {
 } from "./bridge.ts";
 import { getComputerUseConfig, getLoadedComputerUseConfig, hostPlatform, loadComputerUseConfig } from "./config.ts";
 import { executeDesktopInput, executeDesktopScreenshot } from "./desktop.ts";
-import { macosHelper } from "./platform/macos/helper.ts";
+import { macosHelper, STALE_HELPER_REPAIR } from "./platform/macos/helper.ts";
 
 const stateId = Type.String({ description: "Required state id owning every @e ref used by this operation" });
 const point = { x: Type.Number(), y: Type.Number() };
@@ -290,7 +290,11 @@ function formatConfigStatus(): string {
 		`cursor_overlay: ${loaded.config.cursor_overlay ? "enabled" : "disabled"}`,
 		`activity_glow: ${loaded.config.activity_glow ? "enabled" : "disabled"}`,
 		...(hostPlatform() === "macos"
-			? [`helper build: ${macosHelper.staleBuildMessage ? `stale -- ${macosHelper.staleBuildMessage}` : (macosHelper.helperBuild ?? "not checked")}`]
+			? [
+					macosHelper.staleBuild
+						? `helper build: stale (reported ${macosHelper.staleBuild.reported}, expected ${macosHelper.staleBuild.expected}): ${STALE_HELPER_REPAIR}`
+						: `helper build: ${macosHelper.helperBuild ?? "not checked"}`,
+				]
 			: []),
 		...blocklistStatus,
 		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),

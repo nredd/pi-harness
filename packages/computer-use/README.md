@@ -424,10 +424,10 @@ Measured, not assumed:
 ### Helper lifecycle
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
-- `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever an operator's run replaces the bundle. The runtime's own setup (`--runtime --automatic`) never stops one: it refuses while the managed socket has a listener, the daemon holds `<socket>.lock` (checked with `lockf -t 0`), a `<bridge> serve` process runs, or any of these cannot be checked
-- The client launches the daemon or runs that setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. Both run under `<socket>.lifecycle.lock` in the helper cache directory, which rechecks absence first, so a daemon another client started meanwhile is used. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched. A timeout past that budget, a malformed reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched, installed or stopped
-- The macOS client checks the daemon build on each managed socket before sending commands. The helper reports its compiled package version and SHA-256 of the production Swift sources. A different or missing build is refused without reinstalling or restarting the helper. Re-run this package’s setup to update it. `/computer-use` shows the last reported build.
-- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked. Only its operator can install, launch or restart it. Aliases of the default socket are still managed: each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias that resolves later, a hard link, or a default pathname that links to the override all get the build check. An override that cannot be inspected also gets it.
+- `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
+- The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the production Swift sources (line endings normalized). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
+- The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. An override that cannot be inspected also gets it
 - After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
 
 ### Whole-desktop control
@@ -1445,13 +1445,15 @@ The normal runtime requires this executable inside the resolved helper app:
 
 Existing writable system-wide installs remain at `/Applications/pi-computer-use.app`. Set `PI_COMPUTER_USE_HELPER_APP_PATH` only when an explicit location is needed for development or testing.
 
-A stale or unstamped managed helper is refused before desktop commands run. `/computer-use` shows the reported and expected build after a refusal; only the error names the daemon-reported executable path. The client does not replace or restart a stale helper. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run. A connection whose diagnostics fail is `helper_inconclusive`: setup is not run.
+A stale or unstamped managed helper is refused before desktop commands run; the client does not replace, restart or stop it. If the executable is missing (`ENOENT`), runtime startup runs setup only when nothing listens on the socket. An executable that exists but is not a runnable regular file (not executable, a directory, a dangling symlink, or behind `EACCES`) is refused, and setup is not run.
 
 From the installed package root, explicitly repair a missing or stale helper with:
 
 ```bash
 node scripts/setup-helper.mjs --runtime
 ```
+
+Setup stops the old daemon only when it replaces the bundle. If it reports the app already current but the refusal persists, e.g. a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
 
 For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 

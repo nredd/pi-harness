@@ -23,7 +23,7 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 assert.ok(platformDescriptor);
 const current = macosHelperBuild(fileURLToPath(new URL("../", import.meta.url)));
 const older = `0.0.0+${"0".repeat(64)}`;
-const staleMessage = (executable: string, build = "unknown") =>
+const staleMessage = (executable: string, build = "none") =>
 	`pi-computer-use helper at ${executable} is stale (helper build ${build}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`;
 
 afterEach(() => {
@@ -33,7 +33,6 @@ afterEach(() => {
 	vi.doUnmock("node:net");
 	vi.doUnmock("node:os");
 	vi.doUnmock("node:child_process");
-	vi.doUnmock("../src/platform/macos/helper-build.mjs");
 	vi.resetModules();
 });
 
@@ -109,25 +108,11 @@ async function rig(
 		throw new Error("Unexpected helper process launch");
 	});
 	vi.doMock("node:child_process", async (original) => ({ ...(await original<object>()), spawn }));
-	// `before` runs as a client takes the lifecycle lock: another client's daemon binding in between.
-	const lock = { paths: [] as string[], before: undefined as (() => Promise<void>) | undefined };
-	vi.doMock("../src/platform/macos/helper-build.mjs", async (original) => {
-		const real = await original<typeof import("../src/platform/macos/helper-build.mjs")>();
-		return {
-			...real,
-			withDirectoryLock: async (...args: Parameters<typeof real.withDirectoryLock>) => {
-				lock.paths.push(args[0]);
-				await lock.before?.();
-				return await real.withDirectoryLock(...args);
-			},
-		};
-	});
 	const { macosHelper, macosActivityGlow } = await import("../src/platform/macos/helper.ts");
 	onTestFinished(() => macosActivityGlow.close());
 	return {
 		client: macosHelper,
 		connect,
-		lock,
 		home,
 		glow: macosActivityGlow,
 		fake,
@@ -247,7 +232,7 @@ test("refuses a stale resident daemon before setup when the executable is missin
 	assert.equal(spawn.mock.calls.length, 0);
 });
 
-test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}\n')])(
+test.each([silent(), drop(), raw("{malformed}\n"), raw("null\n"), raw('{"id":"wrong","ok":true}\n')])(
 	"refuses setup after a resident accepts the socket but diagnostics returns $kind",
 	async (reply) => {
 		const { client, fake, spawn, commands } = await rig(current, { installed: false });
@@ -259,10 +244,10 @@ test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}
 	30_000,
 );
 
-test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}\n'), "EACCES"])(
+test.each([silent(), drop(), raw("{malformed}\n"), raw("null\n"), raw('{"id":"wrong","ok":true}\n'), "EACCES"])(
 	"never launches after an inconclusive probe: %o",
 	async (outcome) => {
-		const { client, fake, connect, spawn, lock } = await rig(current);
+		const { client, fake, connect, spawn } = await rig(current);
 		if (typeof outcome === "string") connect.failWith = outcome;
 		else fake.script("diagnostics", outcome);
 		const launch = vi.spyOn(client, "launchDaemon");
@@ -272,55 +257,26 @@ test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}
 			message: /was not launched and setup was not run/,
 		});
 		assert.equal(launch.mock.calls.length, 0);
-		assert.deepEqual(lock.paths, []);
 		assert.equal(spawn.mock.calls.length, 0);
 		assert.ok(!fake.requests.some((request: { cmd: string }) => request.cmd === "listApps"));
 	},
 	30_000,
 );
 
-test.each(["ENOENT", "ECONNREFUSED"])(
-	"runs automatic setup only after %s before connecting, under the lifecycle lock",
-	async (code) => {
-		const { client, connect, spawn, lock, executable, home } = await rig(current, { installed: false });
-		connect.failWith = code;
-		spawn.mockImplementation(() => {
-			mkdirSync(path.dirname(executable), { recursive: true });
-			writeFileSync(executable, "installed\n", { mode: 0o755 });
-			return createFakeChild({ exitCode: 0 });
-		});
-		await client.ensureInstalled();
-		assert.equal(spawn.mock.calls.length, 1);
-		assert.deepEqual((spawn.mock.calls[0] as unknown[])[1], [
-			fileURLToPath(new URL("../scripts/setup-helper.mjs", import.meta.url)),
-			"--runtime",
-			"--automatic",
-		]);
-		const socket = path.join(home, "Library", "Caches", "pi-computer-use", "bridge.sock");
-		assert.deepEqual(lock.paths, [`${socket}.lifecycle.lock`]);
-	},
-);
-
-test("a daemon that binds between the probe and setup is used, not replaced", async () => {
-	const { client, fake, spawn, lock, commands } = await rig(current, { installed: false });
-	await fake.stop();
-	lock.before = () => fake.start();
+test.each(["ENOENT", "ECONNREFUSED"])("runs setup only after %s before connecting", async (code) => {
+	const { client, connect, spawn, executable } = await rig(current, { installed: false });
+	connect.failWith = code;
+	spawn.mockImplementation(() => {
+		mkdirSync(path.dirname(executable), { recursive: true });
+		writeFileSync(executable, "installed\n", { mode: 0o755 });
+		return createFakeChild({ exitCode: 0 });
+	});
 	await client.ensureInstalled();
-	assert.equal(lock.paths.length, 1);
-	assert.deepEqual(commands(), ["diagnostics"]);
-	assert.equal(spawn.mock.calls.length, 0);
-});
-
-test("a daemon that binds between the probe and launch is used, not launched again", async () => {
-	const { client, fake, spawn, lock, commands } = await rig(current);
-	await fake.stop();
-	lock.before = () => fake.start();
-	const launch = vi.spyOn(client, "launchDaemon");
-	assert.equal(await client.ensureDaemon(), true);
-	assert.equal(lock.paths.length, 1);
-	assert.equal(launch.mock.calls.length, 0);
-	assert.deepEqual(commands(), ["diagnostics"]);
-	assert.equal(spawn.mock.calls.length, 0);
+	assert.equal(spawn.mock.calls.length, 1);
+	assert.deepEqual((spawn.mock.calls[0] as unknown[])[1], [
+		fileURLToPath(new URL("../scripts/setup-helper.mjs", import.meta.url)),
+		"--runtime",
+	]);
 });
 
 test.each([
@@ -331,13 +287,12 @@ test.each([
 ])(
 	"a healthy resident whose diagnostics take %i ms is used, not launched or reinstalled (installed: %s)",
 	async (ms, installed) => {
-		const { client, fake, spawn, lock, commands } = await rig(current, { installed });
+		const { client, fake, spawn, commands } = await rig(current, { installed });
 		fake.script("diagnostics", slow(ms, ok({ protocolVersion: 7, pid: 0, buildIdentity: current })));
 		const launch = vi.spyOn(client, "launchDaemon");
 		if (installed) assert.deepEqual(await client.command("listApps"), []);
 		else await client.ensureInstalled();
 		assert.equal(launch.mock.calls.length, 0);
-		assert.deepEqual(lock.paths, []);
 		assert.equal(spawn.mock.calls.length, 0);
 		assert.ok(commands().every((cmd: string) => cmd === "diagnostics" || cmd === "listApps"));
 	},
@@ -358,7 +313,7 @@ test.each([
 	["a dangling symlink", "ENOENT", (exe: string) => symlinkSync(`${exe}-gone`, exe)],
 	["behind an unreadable directory", "EACCES", (exe: string) => chmodSync(path.dirname(exe), 0o000)],
 ])("never runs setup over an existing helper executable that is %s", async (_name, reason, make) => {
-	const { client, fake, spawn, lock, executable } = await rig(current, { installed: false });
+	const { client, fake, spawn, executable } = await rig(current, { installed: false });
 	await fake.stop();
 	mkdirSync(path.dirname(executable), { recursive: true });
 	make(executable);
@@ -369,7 +324,6 @@ test.each([
 	} finally {
 		chmodSync(path.dirname(executable), 0o755);
 	}
-	assert.deepEqual(lock.paths, []);
 	assert.equal(spawn.mock.calls.length, 0);
 });
 
@@ -423,10 +377,11 @@ test("restart refuses, never shuts down, a daemon replaced by a stale build", as
 test("an invalid build probe never sends the tool command", async () => {
 	const { client, commands, fake } = await rig(current);
 	await client.ensureProtocol();
-	fake.script("diagnostics", [raw('{"id":"wrong","ok":true}\n'), raw("{malformed}\n")]);
+	fake.script("diagnostics", [raw('{"id":"wrong","ok":true}\n'), raw("{malformed}\n"), raw("null\n")]);
 	await assert.rejects(client.command("listApps"), /Invalid helper build probe reply/);
-	// Probe and actual command use the same framing path, including JSON decode errors.
-	await assert.rejects(client.daemonCommand("listApps", {}, 1_000), SyntaxError);
+	// Probe and actual command use the same framing path, including JSON decode errors and non-objects.
+	await assert.rejects(client.daemonCommand("listApps", {}, 1_000), { code: "helper_malformed" });
+	await assert.rejects(client.daemonCommand("listApps", {}, 1_000), { code: "helper_malformed" });
 	assert.ok(commands().every((cmd: string) => cmd === "diagnostics"));
 });
 
@@ -531,12 +486,12 @@ test("macOS status shows unchecked, then stale with the expected build, then the
 	assert.match(await status(), /^helper build: not checked$/m);
 	await assert.rejects(client.ensureProtocol(), { code: "stale_helper", message: staleMessage(reportedPath, older) });
 	const stale = await status();
-	assert.match(
-		stale,
-		new RegExp(
-			`^helper build: stale -- helper build ${older.replace("+", "\\+")}, expected ${current.replace("+", "\\+")}: from the package root, run `,
-			"m",
-		),
+	assert.ok(
+		stale
+			.split("\n")
+			.includes(
+				`helper build: stale (reported ${older}, expected ${current}): from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper`,
+			),
 	);
 	assert.ok(!stale.includes(reportedPath), "status never shows the daemon-reported executable path");
 	assert.ok(!stale.includes(executable));
@@ -544,6 +499,26 @@ test("macOS status shows unchecked, then stale with the expected build, then the
 	fake.diagnostics.executablePath = undefined;
 	await client.ensureProtocol();
 	assert.ok((await status()).split("\n").includes(`helper build: ${current}`));
+});
+
+test.each([
+	["/Users/someone/bridge", "unrecognized"],
+	[`0.7.0+${"A".repeat(64)}\nhelper build: ${current}`, "unrecognized"],
+	[42, "unrecognized"],
+	[undefined, "none"],
+])("macOS status and the refusal never echo a malformed build %j", async (reported, shown) => {
+	Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
+	const { client, fake, executable } = await rig(undefined);
+	Object.assign(fake.diagnostics, { buildIdentity: reported });
+	const { default: extension } = await import("../src/index.ts");
+	const pi = createRecordingPi();
+	extension(pi.pi);
+	await assert.rejects(client.ensureProtocol(), { code: "stale_helper", message: staleMessage(executable, shown) });
+	const notify = vi.fn();
+	await pi.commands.get("computer-use")?.handler("status", { cwd: process.cwd(), ui: { notify } });
+	const status = notify.mock.calls[0][0] as string;
+	assert.ok(status.includes(`helper build: stale (reported ${shown}, expected ${current}): `));
+	if (typeof reported === "string") assert.ok(!status.includes(reported.split("\n")[0]));
 });
 
 test("passes a version and production source hash to swiftc", async () => {
