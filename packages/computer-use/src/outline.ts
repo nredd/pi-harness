@@ -194,7 +194,7 @@ function redactRetained(node: OutlineNode): void {
 	node.unconfirmed = true;
 }
 
-/** Whether a cached query may echo `node`'s text: it is readable and no later look revoked it. */
+/** Whether a cached query may echo `node`'s text: it is readable and no scoped graft redacted it. */
 export function isConfirmedReadable(node: OutlineNode): boolean {
 	return !node.unconfirmed && !isProtectedNode(node);
 }

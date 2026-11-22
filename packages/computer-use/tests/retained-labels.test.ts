@@ -500,6 +500,14 @@ describe("note retention", () => {
 		});
 	});
 
+	test("an unconfirmed node is never keyed by an identifier it still carries", () => {
+		const node = outlineNode("@e2", { role: "AXGroup", title: REDACTED_LABEL, identifier: SECRET });
+		node.unconfirmed = true;
+		const note = noteFromLook(undefined, look("a", [node]), window);
+		assert.equal(note.regions[0].key, `AXGroup:${REDACTED_LABEL.toLowerCase()}`);
+		assert.ok(!JSON.stringify(note).includes(SECRET), JSON.stringify(note));
+	});
+
 	test("a real region of role window is reclassified by provenance, not exempted by its key", () => {
 		const readable = look("a", [outlineNode("@e2", { role: "window", title: SECRET })]);
 		const note = noteFromLook(undefined, readable, window);
