@@ -8,7 +8,7 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, onTestFinished, test, vi } from "vitest";
 import { main } from "../scripts/build-native.mjs";
 import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
-import { drop, ok, raw, shortSocketPath, startFakeHelper } from "../test/support/fake-helper.mjs";
+import { drop, ok, raw, shortSocketPath, silent, startFakeHelper } from "../test/support/fake-helper.mjs";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 assert.ok(platformDescriptor);
@@ -79,6 +79,24 @@ test.each([older, undefined])(
 test("refuses a stale resident daemon before setup when the executable is missing", async () => {
 	const { client, spawn, commands } = await rig(older, { installed: false });
 	await assert.rejects(client.ensureInstalled(), { code: "stale_helper" });
+	assert.deepEqual(commands(), ["diagnostics"]);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test.each([silent(), drop(), raw("{malformed}\n"), raw('{"id":"wrong","ok":true}\n')])(
+	"refuses setup after a resident accepts the socket but diagnostics returns $kind",
+	async (reply) => {
+		const { client, fake, spawn, commands } = await rig(current, { installed: false });
+		fake.script("diagnostics", reply);
+		await assert.rejects(client.ensureInstalled(), /setup was not run/);
+		assert.deepEqual(commands(), ["diagnostics"]);
+		assert.equal(spawn.mock.calls.length, 0);
+	},
+);
+
+test("keeps a matching resident when its executable is missing", async () => {
+	const { client, spawn, commands } = await rig(current, { installed: false });
+	await client.ensureInstalled();
 	assert.deepEqual(commands(), ["diagnostics"]);
 	assert.equal(spawn.mock.calls.length, 0);
 });

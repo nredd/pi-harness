@@ -208,8 +208,20 @@ export class MacosHelperClient {
 			return;
 		}
 
-		// Check any resident daemon before setup, even if its executable was removed.
-		await this.daemonCommand("diagnostics", {}, 1_000, signal).catch(rethrowStaleHelper);
+		// Never run setup (which can replace the app and kill the daemon) unless the
+		// connection itself proved that the managed socket had no listener.
+		try {
+			await this.daemonCommand("diagnostics", {}, 1_000, signal);
+			return;
+		} catch (error) {
+			rethrowStaleHelper(error);
+			if (!(error instanceof HelperTransportError && error.code === "helper_not_listening")) {
+				throw new Error(
+					`Cannot verify that no pi-computer-use helper is listening at ${HELPER_SOCKET_PATH}; setup was not run: ${String(error)}`,
+					{ cause: error },
+				);
+			}
+		}
 
 		// Re-enter Electron and Bun standalone hosts as their JavaScript runtimes.
 		await runProcess(process.execPath, [SETUP_HELPER_SCRIPT, "--runtime"], HELPER_SETUP_TIMEOUT_MS, signal, {
@@ -252,6 +264,7 @@ export class MacosHelperClient {
 			let buffer = "";
 			let checkingBuild = !usingExternalHelperSocket && cmd !== "diagnostics";
 			let settled = false;
+			let connected = false;
 			// First outcome wins: the `close` that follows a reply, timeout, abort or error must not settle again.
 			// Socket listeners die with the socket; the timer and the abort listener are released here.
 			const settle = (finish: () => void) => {
@@ -279,6 +292,7 @@ export class MacosHelperClient {
 				cmd === "desktopInput" || cmd === "act" || cmd === "actBatch" ? Date.now() + timeoutMs - 250 : undefined;
 			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
 			const onConnect = () => {
+				connected = true;
 				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
 				else sendCommand();
 			};
@@ -308,6 +322,9 @@ export class MacosHelperClient {
 					socket.end();
 					try {
 						const parsed = JSON.parse(buffer.slice(0, newline));
+						if (cmd === "diagnostics" && parsed.id !== id) {
+							throw new HelperTransportError("Invalid helper diagnostics reply ID.");
+						}
 						if (parsed.ok === true) {
 							if (cmd === "diagnostics") this.verifyBuild(parsed.result);
 							resolve(parsed.result as T);
@@ -324,7 +341,11 @@ export class MacosHelperClient {
 					}
 				});
 			};
-			const onError = (error: Error) => settle(() => reject(new HelperTransportError(error.message)));
+			const onError = (error: NodeJS.ErrnoException) =>
+				settle(() => {
+					const absent = !connected && ["ENOENT", "ECONNREFUSED"].includes(error.code ?? "");
+					reject(new HelperTransportError(error.message, absent ? "helper_not_listening" : undefined));
+				});
 			// The helper crashed or dropped the socket before a full reply line: fail now, not at the timeout.
 			const onDisconnect = () =>
 				settle(() => {

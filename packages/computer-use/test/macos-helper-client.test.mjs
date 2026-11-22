@@ -590,6 +590,7 @@ describe("install, launch and runProcess", () => {
 
 	test("runs the setup script in runtime mode when missing, then verifies the install", async () => {
 		const fake = await fakeOn();
+		await fake.stop();
 		const spawn = createFakeSpawn({
 			[path.basename(process.execPath)]: () => {
 				installExecutable();
@@ -608,6 +609,7 @@ describe("install, launch and runProcess", () => {
 
 	test("fails when setup succeeds but installs nothing, or exits non-zero", async () => {
 		const fake = await fakeOn();
+		await fake.stop();
 		let route = { exitCode: 0 };
 		const spawn = createFakeSpawn({ [path.basename(process.execPath)]: () => route });
 		const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: false, fake, spawn });
