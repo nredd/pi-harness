@@ -1532,10 +1532,35 @@ fn read_text_element(
 }
 
 fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
+    handle_read_text_with(
+        args,
+        helper_state(),
+        window::owner_pid,
+        |hwnd, pid| windows_bridge::desktop::validated_bounds(hwnd, Some(pid)).map(drop),
+        windows_bridge::uia::acquire_root,
+        |root, element| {
+            windows_bridge::uia::read_text_in_root(
+                root,
+                &element.runtime_id,
+                &element.automation_id,
+            )
+        },
+    )
+}
+
+/// Read text through the owner-bound walk, with Win32 and UIA access injected.
+fn handle_read_text_with<Root>(
+    args: &Value,
+    state: &Mutex<HelperState>,
+    mut owner_pid: impl FnMut(isize) -> Option<u64>,
+    desktop_preflight: impl FnOnce(isize, u64) -> Result<(), ProtocolError>,
+    acquire_root: impl FnOnce(isize) -> Result<Root, String>,
+    read_in_root: impl FnOnce(Root, &ElementRecord) -> Result<String, String>,
+) -> Result<Value, ProtocolError> {
     let offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(4096) as usize;
     let (element, pid) = {
-        let state = helper_state()
+        let state = state
             .lock()
             .map_err(|_| internal("helper state lock poisoned"))?;
         read_text_element(args, &state)?
@@ -1546,13 +1571,25 @@ fn handle_read_text(args: &Value) -> Result<Value, ProtocolError> {
             ErrorCode::SecureTextUnreadable,
         ));
     }
-    // A recycled HWND must not read from an owner other than the one that issued this look.
-    windows_bridge::desktop::validated_bounds(element.hwnd, Some(pid))?;
-    let text = windows_bridge::uia::read_live_text(
+    // The preflight also refuses a closed or reassigned HWND; report that as owner
+    // loss, keeping `coordinate_blocked` for a refusal while the owner still matches.
+    if let Err(refused) = desktop_preflight(element.hwnd, pid) {
+        return Err(if owner_pid(element.hwnd) == Some(pid) {
+            refused
+        } else {
+            owned_walk_error(
+                windows_bridge::uia::OwnedWalkError::RootStale,
+                "Read",
+                stale_ref_from_uia,
+            )
+        });
+    }
+    let text = windows_bridge::uia::walk_owned_root(
         element.hwnd,
         pid,
-        &element.runtime_id,
-        &element.automation_id,
+        &mut owner_pid,
+        acquire_root,
+        |root| read_in_root(root, &element),
     )
     .map_err(|error| owned_walk_error(error, "Read", stale_ref_from_uia))?;
     let characters = text.chars().collect::<Vec<_>>();
@@ -2103,10 +2140,109 @@ mod tests {
             &json!({"lookId": look_id, "elementRef": "same-ref", "pid": 1, "windowId": 1}),
         )
         .unwrap_err();
-        #[cfg(windows)]
-        assert_eq!(error.code, ErrorCode::CoordinateBlocked);
-        #[cfg(not(windows))]
-        assert_eq!(error.code, ErrorCode::UnsupportedPlatform);
+        // No live window owns HWND 0 on any platform, so the refusal is owner loss.
+        assert_eq!(error.code, ErrorCode::RootStale);
+    }
+
+    /// Run one owner-bound text read with scripted owner answers and fake UIA access.
+    fn scripted_read(
+        owners: &[Option<u64>],
+        preflight: Result<(), ProtocolError>,
+        read: impl FnOnce() -> Result<String, String>,
+    ) -> (Result<Value, ProtocolError>, usize) {
+        let mut state = HelperState::new(1);
+        let mut look = look_with_element(1.0);
+        look.pid = 7;
+        look.hwnd = 22;
+        look.elements.get_mut("same-ref").unwrap().hwnd = 22;
+        state.insert_look("look".to_owned(), look);
+        let mut owners = owners.iter().copied();
+        let mut reads = 0;
+        let result = handle_read_text_with(
+            &json!({"lookId": "look", "elementRef": "same-ref", "pid": 7, "windowId": 22, "offset": 1, "limit": 3}),
+            &Mutex::new(state),
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                owners.next().expect("unexpected additional owner check")
+            },
+            |hwnd, pid| {
+                assert_eq!((hwnd, pid), (22, 7));
+                preflight
+            },
+            |hwnd| {
+                assert_eq!(hwnd, 22);
+                Ok(())
+            },
+            |(), element| {
+                assert_eq!(element.runtime_id, vec![1]);
+                reads += 1;
+                read()
+            },
+        );
+        (result, reads)
+    }
+
+    fn desktop_refusal() -> Result<(), ProtocolError> {
+        Err(ProtocolError::new(
+            "Target is not on the interactive desktop",
+            ErrorCode::CoordinateBlocked,
+        ))
+    }
+
+    #[test]
+    fn read_reports_owner_loss_behind_a_desktop_refusal_as_root_stale() {
+        // The preflight refuses a closed or reassigned HWND before any UIA access.
+        for owner in [None, Some(8)] {
+            let (result, reads) = scripted_read(&[owner], desktop_refusal(), || {
+                panic!("must not read a lost root")
+            });
+            assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+            assert_eq!(reads, 0);
+        }
+    }
+
+    #[test]
+    fn read_keeps_a_desktop_refusal_while_the_owner_holds() {
+        let (result, reads) = scripted_read(&[Some(7)], desktop_refusal(), || {
+            panic!("must not read a refused desktop")
+        });
+        assert_eq!(result.unwrap_err().code, ErrorCode::CoordinateBlocked);
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn read_refuses_a_replacement_root_before_reading_it() {
+        // Owned at the pre-check, replaced by the time ElementFromHandle returned.
+        let (result, reads) = scripted_read(&[Some(7), Some(8)], Ok(()), || {
+            panic!("must not read a replacement root")
+        });
+        assert_eq!(result.unwrap_err().code, ErrorCode::RootStale);
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn read_discards_text_when_ownership_changed_during_it() {
+        for after in [Some(8), None] {
+            let (result, reads) = scripted_read(&[Some(7), Some(7), after], Ok(()), || {
+                Ok("replacement secret".to_owned())
+            });
+            let error = result.unwrap_err();
+            assert_eq!(error.code, ErrorCode::RootStale);
+            assert!(!error.message.contains("secret"));
+            assert_eq!(reads, 1);
+        }
+    }
+
+    #[test]
+    fn read_returns_text_while_the_owner_holds() {
+        let (result, reads) = scripted_read(&[Some(7), Some(7), Some(7)], Ok(()), || {
+            Ok("Ready".to_owned())
+        });
+        let result = result.unwrap();
+        assert_eq!(result["text"], "ead");
+        assert_eq!(result["totalChars"], 5);
+        assert_eq!(result["hasMore"], true);
+        assert_eq!(reads, 1);
     }
 
     #[test]

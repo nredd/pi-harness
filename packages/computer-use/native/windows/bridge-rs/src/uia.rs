@@ -659,23 +659,22 @@ mod native {
         }))
     }
 
-    pub fn read_live_text(
-        hwnd: isize,
-        pid: u64,
+    /// Read the observed element's text inside an acquired root. Callers bind the
+    /// root to its owner with [`super::walk_owned_root`].
+    pub fn read_text_in_root(
+        root: UiaRoot,
         runtime_id_target: &[i32],
         automation_id: &str,
-    ) -> Result<String, super::OwnedWalkError> {
-        super::walk_owned_root(hwnd, pid, crate::window::owner_pid, acquire_root, |root| {
-            let element = find_in_root(&root, runtime_id_target, automation_id)?;
-            // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
-            if unsafe { element.CurrentIsPassword() }
-                .map_err(|e| format!("CurrentIsPassword: {e}"))?
-                .as_bool()
-            {
-                return Err("Secure text is unreadable".to_owned());
-            }
-            Ok(read_text_from_element(&element))
-        })
+    ) -> Result<String, String> {
+        let element = find_in_root(&root, runtime_id_target, automation_id)?;
+        // SAFETY: owned live COM interface on this COM-initialized thread; every HRESULT is propagated or refused.
+        if unsafe { element.CurrentIsPassword() }
+            .map_err(|e| format!("CurrentIsPassword: {e}"))?
+            .as_bool()
+        {
+            return Err("Secure text is unreadable".to_owned());
+        }
+        Ok(read_text_from_element(&element))
     }
 
     pub fn live_elements(hwnd: isize) -> Result<Vec<Value>, String> {
@@ -1190,7 +1189,7 @@ mod native {
 
 #[cfg(windows)]
 pub use native::{
-    acquire_root, focus, focus_for_input, live_elements, occlusion_ok, press, read_live_text,
+    acquire_root, focus, focus_for_input, live_elements, occlusion_ok, press, read_text_in_root,
     root_elements, scroll, set_text, snapshot, uia_extract, ElementSnapshot, PressResult,
     ScrollResult, SetTextResult, UiaRoot,
 };
@@ -1221,15 +1220,12 @@ pub enum ScrollResult {
     NoPattern,
 }
 #[cfg(not(windows))]
-pub fn read_live_text(
-    _hwnd: isize,
-    _pid: u64,
+pub fn read_text_in_root(
+    root: UiaRoot,
     _runtime_id: &[i32],
     _automation_id: &str,
-) -> Result<String, OwnedWalkError> {
-    Err(OwnedWalkError::Uia(
-        "UIA is only supported on Windows".to_owned(),
-    ))
+) -> Result<String, String> {
+    match root {}
 }
 /// Uninhabited off Windows: no UIA root can be acquired.
 #[cfg(not(windows))]
@@ -1346,6 +1342,36 @@ mod unit_tests {
         let mut store = RefStore::new();
         let result = extract_elements(&mut store, 0);
         assert!(result.is_empty());
+    }
+
+    // -- Owner-bound walk ----------------------------------------------------
+
+    #[test]
+    fn owned_walk_reports_an_acquire_refusal_across_owner_loss_as_root_stale() {
+        // `acquire_root` refuses a closed HWND through its own desktop check.
+        for after in [None, Some(8)] {
+            let mut owners = [Some(7), after].into_iter();
+            let result = walk_owned_root(
+                22,
+                7,
+                |_| owners.next().expect("unexpected owner check"),
+                |_| -> Result<(), String> { Err("coordinate_blocked".to_owned()) },
+                |()| -> Result<(), String> { panic!("must not walk a refused root") },
+            );
+            assert_eq!(result, Err(OwnedWalkError::RootStale));
+        }
+        let mut owners = [Some(7), Some(7)].into_iter();
+        let result = walk_owned_root(
+            22,
+            7,
+            |_| owners.next().expect("unexpected owner check"),
+            |_| -> Result<(), String> { Err("coordinate_blocked".to_owned()) },
+            |()| -> Result<(), String> { panic!("must not walk a refused root") },
+        );
+        assert_eq!(
+            result,
+            Err(OwnedWalkError::Uia("coordinate_blocked".to_owned()))
+        );
     }
 
     // -- Role mapping (cross-platform) --------------------------------------
