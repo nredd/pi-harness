@@ -696,6 +696,7 @@ export function createQuotaPoller(deps: PollerDeps): QuotaPoller {
 		expiryTimer = setT(
 			() => {
 				expiryTimer = undefined;
+				if (disposed) return;
 				deps.onChange();
 				if (!disposed) scheduleExpiry(current);
 			},

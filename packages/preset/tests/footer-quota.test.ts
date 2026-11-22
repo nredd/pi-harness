@@ -1381,3 +1381,25 @@ test("mark expiry repaints independently of the snapshot", () => {
 	assert.deepEqual(rows(), []);
 	poller.dispose();
 });
+
+test("dispose before a mark expires disarms its timer and never repaints", () => {
+	const env = fakeEnv();
+	const poller = footer.createQuotaPoller(env.deps);
+	poller.start();
+	env.handlers.require("router:rpc:usage:reply:id1")(v2([view("metered", { marks: [mark(NOW + 5, "inferred")] })]));
+	const expiry = present(env.live(5)[0]);
+	const changes = env.changes();
+	poller.dispose();
+	assert.deepEqual(
+		env.timers.filter((timer) => timer.live),
+		[],
+	);
+	// Even a host that runs a cleared callback late must not repaint a disposed footer.
+	env.clock.now += 5;
+	expiry.fn();
+	assert.equal(env.changes(), changes);
+	assert.deepEqual(
+		env.timers.filter((timer) => timer.live),
+		[],
+	);
+});
