@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import { outcomeAfterCheck } from "../src/actions.ts";
-import { desktopRoot, installFakeDesktop, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
+import { desktopRoot, installFakeDesktop, lookPayload, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -345,4 +345,117 @@ test("act_ui leaves a failed absent check failed without a successor corroborati
 	assert.equal(execution.verification.status, "failed");
 	assert.equal(execution.outcome, "didnt");
 	assert.equal(execution.error.code, "postcondition_failed");
+});
+
+test("wait_for corroborates on the exact root it waited on, not a modal that opened meanwhile", async ({
+	onTestFinished,
+}) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.tree = [wireButton("go", "Go")];
+	const { stateId } = await fake.observe();
+	const modal = desktopRoot({
+		kind: "dialog",
+		rootRef: "ax:modal",
+		windowRef: "ax:modal",
+		windowId: 200,
+		title: "Modal",
+		zOrder: 0,
+		isFocused: true,
+		isModal: true,
+	});
+	fake.lookPayload = (request: { target: { windowId?: number } }) =>
+		lookPayload({
+			lookId: `look-${request.target.windowId}`,
+			// The modal's complete outline lacks the condition; the waited root still shows it.
+			children: request.target.windowId === 200 ? [wireButton("ok", "OK")] : [wireButton("go", "Go")],
+			window: { windowId: request.target.windowId ?? 0 },
+		});
+	fake.waitFor = async () => {
+		fake.roots = [{ ...fake.roots[0], isFocused: false }, modal];
+		return { found: true, gone: true, complete: true, nodeCount: 2 };
+	};
+	const result = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", until: "absent" });
+	assert.equal(fake.looks.at(-1).target.windowId, 100, "the successor observes the waited root");
+	assert.deepEqual([result.details.found, result.details.gone, result.details.inconclusive], [false, undefined, true]);
+	assert.match(fake.text(result), /the successor observation still shows the condition/);
+});
+
+test("wait_for keeps a claimed absence inconclusive when its root cannot be observed afterward", async ({
+	onTestFinished,
+}) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.tree = [wireButton("go", "Go")];
+	const { stateId } = await fake.observe();
+	for (const reply of [
+		{ found: true, gone: true, complete: true, nodeCount: 2 },
+		{ found: false, timedOut: true, incomplete: true, nodeCount: 2000 },
+	]) {
+		fake.lookPayload = () => {
+			throw new Error("capture failed");
+		};
+		fake.waitFor = async () => reply;
+		const result = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", until: "absent" });
+		assert.deepEqual(
+			[result.details.found, result.details.gone, result.details.inconclusive, result.details.observationError],
+			[false, undefined, true, "capture failed"],
+		);
+		assert.equal(result.details.stateId, stateId, "no successor state is created");
+		assert.equal(result.details.timedOut, reply.timedOut);
+		assert.equal(result.details.nodeCount, reply.nodeCount);
+		assert.equal(
+			fake.text(result),
+			`Inconclusive: the condition is not proven gone: its root could not be observed afterward (capture failed). No successor state was created; state ${stateId} is unchanged. Call find_roots, then observe_ui before treating it as gone.`,
+		);
+	}
+	// A decisive timeout or a presence wait has no absence to keep: the failed observation is the error.
+	for (const [params, reply] of [
+		[{ until: "absent" }, { found: false, timedOut: true, nodeCount: 2 }],
+		[{}, { found: true, nodeCount: 2 }],
+	] as const) {
+		fake.waitFor = async () => reply;
+		await assert.rejects(fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", ...params }), /capture failed/);
+	}
+});
+
+test("a helper's incomplete gone names the unread successor nodes", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.tree = [wireButton("go", "Go")];
+	const { stateId } = await fake.observe();
+	fake.waitFor = async () => {
+		fake.tree = [wireNode("panel", "AXGroup", "Panel", UNREAD)];
+		return { found: false, timedOut: true, incomplete: true, nodeCount: 2000 };
+	};
+	const result = await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", until: "absent", timeoutMs: 250 });
+	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e3"]]);
+	assert.match(fake.text(result), /could not be read completely within 250ms/);
+});
+
+test("a scope that moved under fresh wire refs is not read as gone", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.tree = [
+		wireNode("outer", "AXGroup", "Outer", {
+			children: [wireNode("inner", "AXGroup", "Inner", { children: [wireButton("t", "Target")] })],
+		}),
+	];
+	const { stateId } = await fake.observe();
+	fake.waitFor = async () => {
+		// Look-local wire refs: the same scope comes back reparented, so its ancestry key and public ref change.
+		fake.tree = [
+			wireNode("x1", "AXGroup", "Side", {
+				children: [wireNode("x2", "AXGroup", "Inner", { children: [wireButton("x3", "Target")] })],
+			}),
+		];
+		return { found: true, gone: true, complete: true, nodeCount: 2 };
+	};
+	const result = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		text: "Target",
+		until: "absent",
+		scopeRef: "@e3",
+	});
+	assert.deepEqual([result.details.found, result.details.gone, result.details.inconclusive], [false, undefined, true]);
+	assert.match(
+		fake.text(result),
+		/^Inconclusive: the condition is not proven gone: its scope could not be matched in the successor observation, which shows the condition elsewhere\./,
+	);
 });
