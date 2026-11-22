@@ -403,6 +403,9 @@ export class MacosHelperClient {
 	}
 
 	async restart(signal?: AbortSignal): Promise<void> {
+		if (usingExternalHelperSocket) {
+			throw new HelperTransportError(`External helper at ${HELPER_SOCKET_PATH} must be restarted by its operator.`);
+		}
 		await this.command("shutdown", {}, { signal, timeoutMs: 2_000 }).catch(rethrowStaleHelper);
 		this.daemonAvailable = false;
 		await sleep(400, signal);
@@ -436,6 +439,14 @@ export class MacosHelperClient {
 
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
 		let diagnostics = await this.diagnosticsCommand(signal);
+		if (usingExternalHelperSocket) {
+			if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION) {
+				throw new HelperTransportError(
+					`External helper at ${HELPER_SOCKET_PATH} reports protocol ${diagnostics.protocolVersion}; expected ${HELPER_PROTOCOL_VERSION}. Its operator must update and restart it.`,
+				);
+			}
+			return diagnostics;
+		}
 		const executableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
 		if (
 			diagnostics.protocolVersion === HELPER_PROTOCOL_VERSION &&

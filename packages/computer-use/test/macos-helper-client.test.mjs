@@ -324,15 +324,15 @@ describe("daemon availability", () => {
 		"restart shuts the daemon down, waits and reconnects; failure to come back throws",
 		async () => {
 			const fake = await fakeOn();
-			const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: true, fake });
+			const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: false, fake, spawn: createFakeSpawn({}) });
 			const client = new MacosHelperClient();
 			fake.relaunchAfterExit();
 			await client.restart();
 			assert.deepEqual(
 				fake.requests.map((request) => request.cmd),
-				["diagnostics", "shutdown", "diagnostics"],
+				["diagnostics", "diagnostics", "shutdown", "diagnostics"],
 			);
-			assert.equal(fake.requests[1].raw.id.startsWith("req_"), true);
+			assert.equal(fake.requests[2].raw.id.startsWith("req_"), true);
 
 			// The default shutdown exits the fake; with no relaunch it stays down.
 			fake.relaunchAfterExit(false);
@@ -351,11 +351,11 @@ describe("daemon availability", () => {
 		"restart ignores a failing shutdown and reconnects to the surviving daemon",
 		async () => {
 			const fake = await fakeOn({ handlers: { shutdown: fail("cannot stop", "internal_error") } });
-			const { MacosHelperClient } = await load({ external: true, fake });
+			const { MacosHelperClient } = await load({ external: false, fake });
 			await new MacosHelperClient().restart();
 			assert.deepEqual(
 				fake.requests.map((request) => request.cmd),
-				["diagnostics", "shutdown", "diagnostics"],
+				["diagnostics", "diagnostics", "shutdown", "diagnostics"],
 			);
 		},
 		SLOW_MS,
@@ -428,6 +428,18 @@ describe("diagnostics", () => {
 	});
 });
 
+test.each([7, 6])("external daemon from another executable with protocol %s is never restarted", async (protocol) => {
+	const fake = await fakeOn({ protocol, diagnostics: { executablePath: path.join(tmp, "other", "bridge") } });
+	const spawn = createFakeSpawn({});
+	const { MacosHelperClient } = await load({ external: true, fake, spawn });
+	const client = new MacosHelperClient();
+	if (protocol === 7) assert.equal((await client.ensureProtocol()).protocolVersion, 7);
+	else await assert.rejects(client.ensureProtocol(), /reports protocol 6; expected 7.*operator/);
+	await assert.rejects(client.restart(), /restarted by its operator/);
+	assert.deepEqual(fake.requests.map(({ cmd }) => cmd), ["diagnostics", "diagnostics"]);
+	assert.deepEqual(spawn.calls, []);
+});
+
 describe("ensureProtocol", () => {
 	const psFor = (etime) => ({ ps: { stdout: `${etime}\n`, exitCode: 0 } });
 
@@ -435,7 +447,7 @@ describe("ensureProtocol", () => {
 		if (install) installExecutable();
 		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...diagnostics } });
 		const spawn = createFakeSpawn(ps ?? psFor(etime));
-		const mod = await load({ external: true, fake, spawn });
+		const mod = await load({ external: false, fake, spawn });
 		fake.relaunchAfterExit({ diagnostics: afterRestart });
 		return { fake, spawn, ...mod, client: new mod.MacosHelperClient() };
 	}
