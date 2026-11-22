@@ -294,7 +294,7 @@ function unitOf(value: unknown): Unit | undefined {
 	return typeof value === "string" && Object.hasOwn(UNITS, value) ? (value as Unit) : undefined;
 }
 
-function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): StoredCell[] {
+function auxiliaryCells(view: Record<string, unknown>): StoredCell[] {
 	const counts = buckets(view.meters).flatMap<StoredCell>(({ raw, label, families }) => {
 		const quantity = asRecord(raw.quantity);
 		const unit = unitOf(quantity?.unit);
@@ -334,10 +334,11 @@ function auxiliaryCells(view: Record<string, unknown>, legacy: boolean): StoredC
 				: mark.evidence === "read" || mark.evidence === "observed" || mark.evidence === "inferred"
 					? mark.evidence
 					: "unknown";
-		// Legacy reported rows already summarize collected quota. Do not add legacy read marks to them.
+		// Every active mark is shown, legacy rows included: their percentages omit model buckets, so a
+		// confirmed model block would otherwise be invisible while the provider-wide quota looks healthy.
 		const families = familiesOf(mark.families);
 		const names = families.slice(0, FAMILIES_MAX).map((id) => labelOf(id) ?? "model");
-		return until !== undefined && !(legacy && evidence === "read")
+		return until !== undefined
 			? [{ kind: "mark", families, names, extra: families.length - names.length, until, evidence }]
 			: [];
 	});
@@ -372,13 +373,25 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 	const views = data?.views;
 	const snapshots = data?.snapshots;
 	if (!Array.isArray(views) && !Array.isArray(snapshots)) return undefined;
-	const entries = Array.isArray(views)
+	// V1 carries active marks only in `blocks`; v2 also copies them into each provider's view.
+	const blocks = new Map<string, Record<string, unknown>[]>();
+	for (const block of records(data?.blocks)) {
+		if (typeof block.provider !== "string" || !block.provider) continue;
+		const list = blocks.get(block.provider);
+		if (list) list.push(block);
+		else blocks.set(block.provider, [block]);
+	}
+	const entries: Record<string, unknown>[] = Array.isArray(views)
 		? records(views)
 		: Object.entries(LEGACY_DISPLAY).map(([provider, display]) => ({
 				provider,
 				display,
 				snapshot: records(snapshots).find((snapshot) => snapshot.provider === provider),
+				marks: blocks.get(provider),
 			}));
+	// A block for a provider without a row (not shown by v1, or omitted from the views) still gets one.
+	const listed = new Set(entries.map((view) => view.provider));
+	for (const [provider, marks] of blocks) if (!listed.has(provider)) entries.push({ provider, marks });
 	const state: Record<string, QuotaFields> = Object.create(null);
 	for (const view of entries) {
 		if (typeof view.provider !== "string" || !view.provider) continue;
@@ -392,7 +405,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
-		const aux = auxiliaryCells(view, legacy);
+		const aux = auxiliaryCells(view);
 		// Freshness is the snapshot's status and expiry against the clock. Only a legacy row with no
 		// counts or pools also needs a percentage window, which keeps its pinned retained readings.
 		const fresh =

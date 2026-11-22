@@ -134,7 +134,10 @@ const legacyFixtures = fixture.views.flatMap((row) => (row.legacyRows ? [{ ...ro
 
 test.each(legacyFixtures)("preserves the legacy footer bytes for $name", ({ usage, now, timeZone, legacyRows }) => {
 	const snapshots = usage.views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
-	for (const data of [{ snapshots }, usage]) {
+	// The pre-view footer read only snapshots and ignored blocks. Without an active block the bytes are
+	// pinned; a block adds its claim (asserted in the confirmed-model-block test below).
+	const unblocked = { ...usage, blocks: [], views: usage.views.map((view) => ({ ...view, marks: [] })) };
+	for (const data of [{ snapshots }, unblocked]) {
 		const state = present(footer.parseUsageReply({ success: true, data }, now));
 		for (const tier of ["full", "compact"] as const) {
 			assert.equal(footer.formatQuotaRow(state, tier, plain, { now, timeZone }), legacyRows[tier]);
@@ -1920,4 +1923,56 @@ test("every cell kind together: rows fit, blocks keep evidence and every blocked
 		if (width >= 60) assert.equal(shown + hidden, blockedIds.length, `width ${width}: ${JSON.stringify(rows)}`);
 	}
 	assert.match(footer.formatQuotaRow(state, "compact", plain, fixed), /OAI quota\? 60%/);
+});
+
+test("a confirmed model block is visible beside healthy legacy quota, from v1 blocks or v2 marks", () => {
+	const opts = { now: 50, timeZone: UTC };
+	const opus = { families: ["opus"], until: 100, provider: "anthropic" };
+	const v1 = present(footer.parseUsageReply({ success: true, data: { snapshots: [], blocks: [opus] } }, 50));
+	const legacyView = present(
+		footer.parseUsageReply(
+			{
+				success: true,
+				data: {
+					views: [
+						{
+							provider: "anthropic",
+							display: { footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true } },
+							marks: [{ families: ["opus"], until: 100 }],
+						},
+					],
+				},
+			},
+			50,
+		),
+	);
+	// A tracker mark carries no `evidence`: it is a confirmed read and says so.
+	assert.equal(
+		footer.formatQuotaRow(v1, "compact", plain, opts),
+		"Left: Anth (stale) 7d -- | opus blocked->00:00 read | OAI (stale) 7d --",
+	);
+	assert.match(footer.formatQuotaRow(legacyView, "compact", plain, opts), /opus blocked->00:00 read/);
+	for (const state of [v1, legacyView]) {
+		// `Left: A opus blocked read` is the narrowest whole claim.
+		for (let width = 25; width <= 120; width++) {
+			const rows = footer.fitQuotaRows(state, width, plain, opts).join("\n");
+			assert.match(rows, /(opus|model) blocked( until .+ \(|->\S+ | )read/, `width ${width}: ${rows}`);
+		}
+	}
+	// A block for a provider the v1 reply has no row for still gets one; its evidence is never promoted.
+	const other = { families: [], until: 100, provider: "google", evidence: "inferred" };
+	const extra = present(footer.parseUsageReply({ success: true, data: { snapshots: [], blocks: [other, opus] } }, 50));
+	assert.match(footer.formatQuotaRow(extra, "compact", plain, opts), /\| google provider blocked->00:00 inf$/);
+	// The shared golden reply: its live Opus block is shown beside the pinned percentages.
+	const golden = present(fixture.views.find(({ name }) => name === "legacy-reported"));
+	const at = { now: golden.now, timeZone: golden.timeZone };
+	const state = present(footer.parseUsageReply({ success: true, data: golden.usage }, golden.now));
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, at),
+		"Quota left: Anthropic 5h 75% (resets 14:00) weekly 60% (resets Jan 18 12:00); opus blocked until Jan 18 12:00 (read) | OpenAI weekly 35% (resets Jan 18 12:00)",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, at),
+		"Left: Anth 5h 75% @14:00 7d 60% @Jan 18 12:00 | opus blocked->12:00 read | OAI 7d 35% @Jan 18 12:00",
+	);
 });
