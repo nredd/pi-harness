@@ -1,6 +1,6 @@
 /** Saved history is diagnostic data, not a live record or a request to run a child. */
 
-import { mkdirSync, realpathSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { describe, expect, it, onTestFinished } from "vitest";
@@ -10,7 +10,7 @@ import {
 	canonicalChildPath,
 	canonicalPaths,
 	checkSavedChild,
-	FUTURE_WRITE_TOLERANCE_MS,
+	FUTURE_WRITE_WAIT_CAP_SECONDS,
 	RECENT_CHILD_WRITE_SECONDS,
 	sameSavedChild,
 } from "../src/saved-child-session.ts";
@@ -173,19 +173,34 @@ describe("saved child validation", () => {
 		});
 	});
 
-	it("treats a transcript written in the future as skew, not a live writer", () => {
+	it("refuses a transcript written in the future as possibly running, with a finite wait", () => {
 		const { directory, parentFile, file } = child();
-		const mtime = statSync(file).mtimeMs;
+		const mtime = 1_700_000_000_000;
+		utimesSync(file, new Date(mtime), new Date(mtime));
 		const check = (now: number) =>
 			checkSavedChild({ file, directories: [directory], parentFile, status: "running", now });
-		// Within the tolerance the write counts as just now.
-		expect(check(mtime - FUTURE_WRITE_TOLERANCE_MS)).toMatchObject({
+		const refused = (why: string) => ({
+			file: realpathSync(file),
 			recent: true,
-			refusal: expect.stringContaining("last write 0s ago; retry in 120 s"),
+			refusal: `may still be running in another process (${why}): ${file}`,
 		});
-		expect(check(mtime - FUTURE_WRITE_TOLERANCE_MS - 1)).toEqual({ file: realpathSync(file) });
-		expect(check(mtime - 3_600_000)).toEqual({ file: realpathSync(file) });
-		expect(check(mtime + 30_000)).toMatchObject({ recent: true, refusal: expect.stringContaining("30s ago") });
+		// Skew and a live writer on a clock ahead of ours look the same: wait the skew out too.
+		expect(check(mtime - 500)).toEqual(refused("last write 1s in the future, possibly clock skew; retry in 121 s"));
+		expect(check(mtime - 6_000)).toEqual(refused("last write 6s in the future, possibly clock skew; retry in 126 s"));
+		expect(check(mtime - 3_600_000)).toEqual(
+			refused("last write 3600s in the future, possibly clock skew; retry in 3720 s"),
+		);
+		const cap = FUTURE_WRITE_WAIT_CAP_SECONDS;
+		expect(check(mtime - (cap - RECENT_CHILD_WRITE_SECONDS) * 1000)).toEqual(
+			refused(`last write ${cap - RECENT_CHILD_WRITE_SECONDS}s in the future, possibly clock skew; retry in ${cap} s`),
+		);
+		expect(check(mtime - cap * 1000)).toEqual(
+			refused(
+				`last write ${cap}s in the future, possibly clock skew; retry in more than ${cap} s, or reset its timestamp once no process writes it`,
+			),
+		);
+		expect(check(mtime)).toEqual(refused("last write 0s ago; retry in 120 s"));
+		expect(check(mtime + 30_000)).toEqual(refused("last write 30s ago; retry in 90 s"));
 		expect(check(mtime + RECENT_CHILD_WRITE_SECONDS * 1000)).toEqual({ file: realpathSync(file) });
 	});
 

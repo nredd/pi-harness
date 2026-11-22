@@ -338,7 +338,7 @@ it.each([
 		expect(existsSync(childFile)).toBe(true);
 		if (mode === "deleted") unlinkSync(childFile);
 		else {
-			// A future timestamp (clock skew, a synced volume) is not evidence of a live writer.
+			// A future timestamp (clock skew, a synced volume) cannot rule out a live writer.
 			const age = mode === "recent" ? 23_000 : mode === "future" ? -3_600_000 : 121_000;
 			const written = new Date(fixture.clock.now() - age);
 			utimesSync(childFile, written, written);
@@ -388,13 +388,15 @@ it.each([
 		expect(diagnostic?.isError).toBe(true);
 		expect(diagnostic?.text).toContain(`Agent "${id}"`);
 		expect(diagnostic?.text).toContain(
-			mode === "recent" ? "may still be running in another process" : "interrupted by a process restart",
+			mode === "recent" || mode === "future"
+				? "may still be running in another process"
+				: "interrupted by a process restart",
 		);
 		expect(diagnostic?.text).toContain(`transcript: ${childFile}`);
 		expect(child.state.callCount).toBe(chain ? 2 : 1);
 
-		if (mode === "deleted" || mode === "recent") {
-			if (mode === "recent") expect(diagnostic?.text).not.toContain("interrupted");
+		if (mode === "deleted" || mode === "recent" || mode === "future") {
+			if (mode !== "deleted") expect(diagnostic?.text).not.toContain("interrupted");
 			await call(reopened, resume(id), steer(id));
 			for (const tool of ["Agent", "steer_subagent"]) {
 				const failure = outcomes(reopened, tool).at(-1);
@@ -403,7 +405,9 @@ it.each([
 				expect(failure?.text).toContain(
 					mode === "recent"
 						? "may still be running in another process (last write 23s ago; retry in 97 s)"
-						: "only historical metadata is available",
+						: mode === "future"
+							? "may still be running in another process (last write 3600s in the future, possibly clock skew; retry in 3720 s)"
+							: "only historical metadata is available",
 				);
 			}
 			expect(child.state.callCount).toBe(1);

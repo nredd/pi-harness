@@ -3,8 +3,14 @@ import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import type { AgentRecord } from "./types.ts";
 
 export const RECENT_CHILD_WRITE_SECONDS = 120;
-/** A write this far ahead of the clock is skew (NFS, a synced volume, a restore), not a live writer. */
-export const FUTURE_WRITE_TOLERANCE_MS = 5_000;
+/**
+ * A transcript dated in the future (clock skew, NFS, a synced or restored
+ * volume) is indistinguishable from a live writer on a clock ahead of ours, so
+ * it stays possibly running until our clock passes it by
+ * `RECENT_CHILD_WRITE_SECONDS`. Past this wait the refusal stops counting down
+ * and says to reset the timestamp instead.
+ */
+export const FUTURE_WRITE_WAIT_CAP_SECONDS = 24 * 60 * 60;
 const MAX_HEADER_BYTES = 64 * 1024;
 /** Header lines are short; read this much per step so a row costs one small read, not 64 KiB. */
 const HEADER_CHUNK_BYTES = 4 * 1024;
@@ -101,6 +107,26 @@ function readHeaderLine(fd: number): string | undefined {
 	return undefined;
 }
 
+/**
+ * When a transcript was written too recently (or in the future) to rule out a
+ * live writer: the write's age and how long to wait. Undefined once it is old enough.
+ */
+function lastWrite(mtimeMs: number, now: number): string | undefined {
+	if (mtimeMs > now) {
+		const skew = Math.ceil((mtimeMs - now) / 1000);
+		const wait = skew + RECENT_CHILD_WRITE_SECONDS;
+		const retry =
+			wait <= FUTURE_WRITE_WAIT_CAP_SECONDS
+				? `retry in ${wait} s`
+				: `retry in more than ${FUTURE_WRITE_WAIT_CAP_SECONDS} s, or reset its timestamp once no process writes it`;
+		return `last write ${skew}s in the future, possibly clock skew; ${retry}`;
+	}
+	const age = Math.floor((now - mtimeMs) / 1000);
+	return age < RECENT_CHILD_WRITE_SECONDS
+		? `last write ${age}s ago; retry in ${RECENT_CHILD_WRITE_SECONDS - age} s`
+		: undefined;
+}
+
 /** Check the saved file without opening a writable SessionManager on untrusted history. */
 export function checkSavedChild(options: SavedChildCheckOptions): SavedChildCheck {
 	const { file, parentFile, status, now, savedCwd, canonical = realpathSync } = options;
@@ -144,15 +170,14 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 		if (savedCwd !== undefined && header.cwd !== savedCwd) {
 			return { refusal: `child session does not match its saved working directory: ${file}` };
 		}
-		if (status === "running" && stats.mtimeMs - now <= FUTURE_WRITE_TOLERANCE_MS) {
-			const age = Math.max(0, Math.floor((now - stats.mtimeMs) / 1000));
-			if (age < RECENT_CHILD_WRITE_SECONDS) {
+		if (status === "running") {
+			const write = lastWrite(stats.mtimeMs, now);
+			if (write)
 				return {
 					file: canonicalFile,
 					recent: true,
-					refusal: `may still be running in another process (last write ${age}s ago; retry in ${RECENT_CHILD_WRITE_SECONDS - age} s): ${file}`,
+					refusal: `may still be running in another process (${write}): ${file}`,
 				};
-			}
 		}
 		return { file: canonicalFile };
 	} catch {
