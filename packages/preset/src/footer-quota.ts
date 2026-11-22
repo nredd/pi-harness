@@ -695,8 +695,10 @@ function providerRows(segments: Segment[], layout: Layout, colorize: Colorize, o
 				.join(full && group.every((cell) => cell.kind !== "percent") ? dim("; ") : " ");
 		const name = full ? quota.display.full : quota.display.compact;
 		const budget = layout.budget;
-		if (budget !== undefined) {
-			const ranked = data.sort((a, b) => priority(a) - priority(b));
+		// Budget every generic row, and a legacy row only when it carries a mark: its percentages keep
+		// their legacy order and bytes, but the mark is never left for the caller's clip to cut.
+		if (budget !== undefined && (!quota.legacy || marks.length)) {
+			const ranked = quota.legacy ? data : data.sort((a, b) => priority(a) - priority(b));
 			// Marks lead; stale data follows them behind its own label.
 			const pieces = [...marks, ...ranked].map((cell, i) => ({
 				cell,
@@ -833,11 +835,10 @@ export function fitQuotaRows(state: QuotaState, width: number, colorize: Coloriz
 			return providerRows(segments, layout, colorize, resolved);
 		}
 	}
-	const allLegacy = Object.values(state).every((quota) => quota.legacy);
 	// Never erase the footer altogether when only meters or pools are available.
 	const fallback = hasEssential ? ESSENTIAL : NO_RESETS;
-	// Legacy rows keep their pinned bytes; generic rows are budgeted so the caller's clip never cuts a cell.
-	const layout = { ...fallback, cap: { rows: 4, width }, ...(allLegacy ? {} : { budget: width }) };
+	// Unmarked legacy rows keep their pinned bytes; other rows are budgeted so the caller's clip never cuts a cell.
+	const layout = { ...fallback, cap: { rows: 4, width }, budget: width };
 	return providerRows(segments, layout, colorize, resolved);
 }
 

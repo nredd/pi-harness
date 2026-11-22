@@ -1812,3 +1812,31 @@ test("legacy-selection freshness follows the snapshot expiry for meters and pool
 	assert.equal(row(CLOCK + hour), "Left: Anth 7d -- calls 3 req obs wallet 4 credits");
 	assert.equal(row(CLOCK - 1), "Left: Anth (stale) 7d -- calls 3 req obs wallet 4 credits");
 });
+
+test("an all-legacy-selection reply still budgets its marks: whole with evidence or left out", () => {
+	const state = projected([
+		view("anthropic", {
+			display: LEGACY_ANTHROPIC,
+			snapshot: snap("anthropic", [resetWin("five_hour", 30, CLOCK + hour), resetWin("seven_day", 60, CLOCK + hour)], {
+				expiresAt: CLOCK + hour,
+			}),
+			marks: [mark(CLOCK + hour, "inferred", ["claude-opus"])],
+		}),
+		view("openai-codex", {
+			display: { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: WEEK }], placeholder: true } },
+			snapshot: snap("openai-codex", [resetWin("7d", 20, CLOCK + hour)], { expiresAt: CLOCK + hour }),
+		}),
+	]);
+	const fit = (width: number) => footer.fitQuotaRows(state, width, plain, fixed);
+	// The marked row is budgeted with its percentages in legacy order and bytes; the unmarked one stays pinned.
+	assert.deepEqual(fit(48), ["Left: Anth claude-opus blocked inf 5h 70% 7d 40%", "OAI 7d 80%"]);
+	assert.deepEqual(fit(45), ["Left: Anth claude-opus blocked inf 5h 70% ...", "OAI 7d 80%"]);
+	for (let width = 0; width <= 80; width++) {
+		const [marked] = fit(width);
+		assert.ok(present(marked).length <= width, `width ${width}: ${marked}`);
+		assert.ok(
+			!present(marked).includes("blocked") || /blocked(->\S+)? inf/.test(present(marked)),
+			`width ${width}: ${marked}`,
+		);
+	}
+});

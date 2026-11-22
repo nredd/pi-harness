@@ -203,6 +203,39 @@ it("the final viewport keeps the hidden blocked count however narrow", async () 
 	}
 });
 
+it("the final viewport never clips a legacy-selection mark from its evidence", async () => {
+	const f = await mount();
+	try {
+		f.component.render(240);
+		f.clock.advance(1);
+		const now = f.clock.now();
+		const anthropic = {
+			provider: "anthropic",
+			display: {
+				full: "Anthropic",
+				compact: "Anth",
+				footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true },
+			},
+			snapshot: {
+				provider: "anthropic",
+				status: "available",
+				expiresAt: now + 3_600_000,
+				windows: [{ name: "seven_day", scope: "provider", usedPercent: 60 }],
+			},
+			marks: [{ until: now + 3_600_000, evidence: "inferred", families: ["claude-opus"] }],
+		};
+		f.reply()?.({ success: true, data: { version: 2, snapshots: [], blocks: [], views: [anthropic] } });
+		for (let width = 1; width <= 60; width++) {
+			const row = f.component.render(width)[2] ?? "";
+			expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+			if (row.includes("blocked")) expect(row).toMatch(/blocked(->\S+)? inf/);
+		}
+		expect(f.component.render(36)[2]).toBe("Left: Anth claude-opus blocked inf");
+	} finally {
+		f.component.dispose?.();
+	}
+});
+
 it("totals include every live usage entry type, not custom messages", async () => {
 	const f = await mount();
 	try {
