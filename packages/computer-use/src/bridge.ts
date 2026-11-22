@@ -489,8 +489,8 @@ export async function setComputerUseActivity(active: boolean): Promise<void> {
 	await currentPlatformBackend.setActivity?.(active);
 }
 
-/** Release handles and state owned by the current Pi session. */
-export async function shutdownComputerUseSession(): Promise<void> {
+/** Release handles and state owned by the current Pi session; `warn` receives a platform shutdown warning. */
+export async function shutdownComputerUseSession(warn?: (message: string) => void): Promise<void> {
 	await resourceScheduler.close();
 	resourceScheduler = new ResourceScheduler();
 	disconnectCdp();
@@ -514,7 +514,8 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	runtimeState.permissionStatus = undefined;
 	runtimeState.helperDiagnostics = undefined;
 	runtimeState.lastPermissionCheckAt = 0;
-	await currentPlatformBackend.shutdown?.();
+	const warning = await currentPlatformBackend.shutdown?.();
+	if (warning) warn?.(warning);
 	if (browserStopError) throw browserStopError;
 }
 
@@ -2515,10 +2516,17 @@ async function dispatchUiTransaction(
 			helperActRequest(target, prepareUiAction(action, actionState, look, true), "ax_only"),
 		);
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
-		const result = await currentPlatformBackend.actBatch(requests, {
-			signal,
-			timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
-		});
+		let result: Awaited<ReturnType<NonNullable<typeof currentPlatformBackend.actBatch>>>;
+		try {
+			result = await currentPlatformBackend.actBatch(requests, {
+				signal,
+				timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
+			});
+		} catch (error) {
+			// Any step may have run, so no step index is known: the whole batch is unknown.
+			if (!isReplyLost(error)) throw error;
+			return { ...aggregateExecutions([]), outcome: "unknown", ...replyLostStop(error) };
+		}
 		if (!result.steps || result.steps.length === 0)
 			throw new Error("Native action transaction returned no checked steps.");
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
@@ -2541,10 +2549,21 @@ async function dispatchUiTransaction(
 			steps.push(step);
 			// A later action would run on an unknown state and its outcome would mask the timeout.
 			if (isTimedOutStep(step)) return stoppedTransaction(steps);
-			if (step.outcome === "didnt") break;
+			// The stop index is recorded whether or not the refusal carries an error.
+			if (step.outcome === "didnt") return { ...aggregateExecutions(steps), stoppedAt: steps.length - 1 };
+			// A helper that stopped after posting part of the action reports the count; never run the next action.
+			if (step.error && typeof step.evidence?.deliveredUnits === "number") return stoppedTransaction(steps);
 		} catch (error) {
 			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
-			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
+			// The request reached the helper but its reply was lost: the action may have run, in part or in full.
+			if (isReplyLost(failure)) {
+				const step = executionTraceFromAct({ outcome: "unknown", ...replyLostStop(failure) }, "foreground");
+				steps.push(step);
+				return stoppedTransaction(steps);
+			}
+			// A refusal thrown after an earlier step ran, e.g. sticky `input_unsafe` or a helper shutting down,
+			// keeps that checked prefix and its stop index: the transaction is `unknown`, never a bare error.
+			if (!isStopRefusal(failure)) throw error;
 			if (!failure.evidence && steps.length === 0) throw error;
 			steps.push(
 				executionTraceFromAct(
@@ -2558,6 +2577,22 @@ async function dispatchUiTransaction(
 	return aggregateExecutions(steps);
 }
 
+/** Refusals a per-action dispatch records as a `didnt` stop instead of throwing, once a step ran or with evidence. */
+const STOP_REFUSAL_CODES = new Set(["app_blocked", "input_deadline_expired", "input_unsafe", "cancelled"]);
+
+function isStopRefusal(error: unknown): error is Error & { code: string; evidence?: Record<string, unknown> } {
+	return STOP_REFUSAL_CODES.has((error as { code?: string } | undefined)?.code ?? "");
+}
+
+function isReplyLost(error: unknown): error is Error & { code: "reply_lost" } {
+	return (error as { code?: string } | undefined)?.code === "reply_lost";
+}
+
+/** The error and evidence of a stop whose request reached the helper but whose reply was lost. */
+function replyLostStop(error: Error & { code: "reply_lost" }): Pick<ExecutionTrace, "error" | "evidence"> {
+	return { error: { code: error.code, message: error.message }, evidence: { deliveryUncertain: true } };
+}
+
 /** The serial transaction stopped at its last step: carry that step's error and its index. */
 function stoppedTransaction(steps: ExecutionTrace[]): ExecutionTrace {
 	const step = steps.at(-1)!;
@@ -2568,13 +2603,14 @@ function isTimedOutStep(step: ExecutionTrace): boolean {
 	return step.outcome === "unknown" && step.error?.code === "timeout";
 }
 
+/**
+ * A transaction is `didnt` only when its first step stopped as `didnt`: any step before a stop ran and
+ * may have delivered input, so a later refusal leaves it `unknown`, never `didnt`.
+ */
 function aggregateExecutions(steps: ExecutionTrace[]): ExecutionTrace {
 	const outcomes = steps.map((step) => step.outcome);
-	const outcome: ActOutcome = outcomes.includes("didnt")
-		? "didnt"
-		: outcomes.includes("unknown")
-			? "unknown"
-			: "worked";
+	const stop = outcomes.indexOf("didnt");
+	const outcome: ActOutcome = stop === 0 ? "didnt" : stop > 0 || outcomes.includes("unknown") ? "unknown" : "worked";
 	const fallback = steps.find((step) => step.escalatedToForeground);
 	return executionTrace("act", steps.every((step) => step.variant === "stealth") ? "stealth" : "default", {
 		outcome,
@@ -2732,11 +2768,15 @@ export async function terminalDesktopActionResult(
 			gone: condition.gone || undefined,
 			timeoutMs: condition.timeoutMs,
 		};
-		execution.outcome = settledOutcome(
-			execution,
-			outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus),
-		);
-		if (verificationStatus === "failed" && timedOutIndex < 0) {
+		// A transaction that already stopped, a timed-out step included, keeps its outcome and original error;
+		// the check is recorded beside it.
+		const stopped = execution.error !== undefined || execution.stoppedAt !== undefined || timedOutIndex >= 0;
+		if (!stopped)
+			execution.outcome = settledOutcome(
+				execution,
+				outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus),
+			);
+		if (!stopped && verificationStatus === "failed") {
 			execution.error = {
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
@@ -2816,11 +2856,22 @@ export async function terminalDesktopActionResult(
 
 function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
 	const code = execution.error?.code;
-	if (code !== "app_blocked" && code !== "input_deadline_expired") return undefined;
+	const delivered = execution.evidence?.deliveredUnits;
+	const uncertain = execution.evidence?.deliveryUncertain === true;
+	const partial = code !== undefined && (typeof delivered === "number" || uncertain);
+	if (code !== "app_blocked" && code !== "input_deadline_expired" && !partial) return undefined;
 	const units = execution.evidence?.postedUnits;
-	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
+	const posted =
+		typeof units === "number"
+			? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.`
+			: typeof delivered === "number"
+				? ` ${delivered} input ${delivered === 1 ? "event" : "events"} posted.`
+				: "";
+	const unknown = uncertain ? " More input may have been delivered." : "";
+	const held = execution.evidence?.unconfirmedReleases;
+	const stuck = Array.isArray(held) && held.length > 0 ? ` Release of ${held.join(", ")} is unconfirmed.` : "";
 	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
-	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
+	return `Stopped${atAction} (${code}).${posted}${unknown}${stuck} Do not replay the transaction.`;
 }
 
 /** Index of the step that timed out, or -1: its delivery stays unknown whatever is observed afterward. */
@@ -2867,8 +2918,10 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
+			// Any stop, even an errorless first-step `didnt`, or an error: neither `expect` nor observed values upgrade it.
+			const partial = execution.error !== undefined || execution.stoppedAt !== undefined;
 			try {
-				if (condition && !execution.error) {
+				if (condition && !partial) {
 					const {
 						text: expectedText,
 						role: expectedRole,
@@ -2922,15 +2975,19 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
-				execution.outcome = settledOutcome(
-					execution,
-					outcomeAfterObservedValues(
-						execution.outcome ?? "unknown",
-						executedActions,
-						(ref) => nodeByRef(capture.outline, ref)?.value,
-						execution.error,
-					),
-				);
+				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
+				// A timed-out step is always a stop; `settledOutcome` keeps it unknown should one ever arrive unstopped.
+				// An explicit delivery error also blocks the observed-value upgrade.
+				if (!partial)
+					execution.outcome = settledOutcome(
+						execution,
+						outcomeAfterObservedValues(
+							execution.outcome ?? "unknown",
+							executedActions,
+							(ref) => nodeByRef(capture.outline, ref)?.value,
+							execution.error,
+						),
+					);
 				const timedOutIndex = timedOutStepIndex(execution);
 				for (const [index, action] of executedActions.entries()) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {
@@ -2958,6 +3015,14 @@ async function performDesktopTransaction(
 			} catch (error) {
 				if (signal?.aborted) {
 					clearDesktopOperationState(state);
+					// The abort ends only the follow-up observation: a stopped transaction keeps its unknown outcome.
+					const code = execution.error?.code;
+					const stop = keyboardStopSummary(execution);
+					if (code && stop)
+						throw Object.assign(new ComputerUseError(code, `${stop} The follow-up observation was aborted.`), {
+							execution,
+							cause: error,
+						});
 					throw error;
 				}
 				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);

@@ -9,13 +9,22 @@ use linux_bridge::atspi::{
 use linux_bridge::protocol::PROTOCOL_VERSION;
 use linux_bridge::state::{fresh_state_id, HelperState};
 use linux_bridge::wayland::{PortalCapabilities, PortalClient, PortalError};
-use linux_bridge::x11::{self, PhysicalPolicy, SessionKind};
+use linux_bridge::x11::{self, Input, InputSink, InputState, PhysicalPolicy, SessionKind};
 use linux_bridge::{ErrorCode, ProtocolError, Request, Response};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 const REQUEST_WORKERS: usize = 8;
+/// How long an exiting helper tries to settle owed releases on a fresh connection; the
+/// client allows 750 ms between SIGTERM and SIGKILL.
+const EXIT_SETTLE_LIMIT: Duration = Duration::from_millis(300);
+/// Exit status when releases stay unconfirmed at exit.
+const EXIT_RELEASE_DEBT: i32 = 3;
+/// How long an exiting helper waits for in-flight requests after shutdown began. One
+/// stuck on an X11 reply that never comes cannot unwind, so the helper names what it may
+/// hold and exits within the client's 750 ms SIGTERM-to-SIGKILL grace instead.
+const EXIT_JOIN_LIMIT: Duration = Duration::from_millis(300);
 const DEFAULT_MAX_NODES: usize = 512;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
@@ -35,10 +44,20 @@ async fn main() {
         }
     });
 
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(REQUEST_WORKERS));
     let mut requests = tokio::task::JoinSet::new();
-    while let Ok(Some(line)) = lines.next_line().await {
+    // Registered before the first read, so a SIGTERM or SIGINT from then on drains
+    // instead of killing the helper between a press and its release.
+    let mut shutdown = shutdown_signals();
+    let mut lines = stdin_lines();
+    loop {
+        let line = tokio::select! {
+            () = shutdown.recv() => break,
+            line = lines.recv() => line,
+        };
+        let Some(line) = line else {
+            break;
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -56,9 +75,28 @@ async fn main() {
                 continue;
             }
         };
-        let Ok(permit) = semaphore.clone().acquire_owned().await else {
+        let saturated = semaphore.available_permits() == 0;
+        if saturated {
+            testing_ready("saturated", &request.id);
+        }
+        // Every worker may be busy behind a long action: a signal must still cancel it
+        // now, not once a worker frees up.
+        let permit = tokio::select! {
+            () = shutdown.recv() => {
+                let _ = output.send(Response::err(&request.id, shutting_down()));
+                break;
+            }
+            permit = semaphore.clone().acquire_owned() => permit,
+        };
+        let Ok(permit) = permit else {
             break;
         };
+        // Shutdown, e.g. stdin EOF, may have begun while this request waited for a
+        // worker: it never started, so it does not start now.
+        if saturated && InputState::shared().is_cancelled() {
+            let _ = output.send(Response::err(&request.id, shutting_down()));
+            continue;
+        }
         let state = Arc::clone(&state);
         let output = output.clone();
         requests.spawn(async move {
@@ -67,14 +105,146 @@ async fn main() {
             let _ = output.send(response);
         });
     }
-    while requests.join_next().await.is_some() {}
+    // Stdin EOF, a read error or a signal: stop physical input before its next unit.
+    // An in-flight action runs its owed releases and replies; then the helper exits.
+    InputState::shared().cancel();
+    // Requests read but never started are answered, not dropped: none of them ran.
+    while let Ok(line) = lines.try_recv() {
+        if let Some(id) = extract_id(&line) {
+            let _ = output.send(Response::err(&id, shutting_down()));
+        }
+    }
+    let joined = tokio::time::timeout(EXIT_JOIN_LIMIT, async {
+        while requests.join_next().await.is_some() {}
+    })
+    .await
+    .is_ok();
+    if !joined {
+        // A stuck request still holds whatever it pressed: its press was registered
+        // before submission, so name it and every owed release, then leave.
+        std::process::exit(exit_status(InputState::shared().possibly_held()));
+    }
     drop(output);
     let _ = writer.await;
+    // Tokio's stdin reads on a blocking thread that runtime shutdown would wait on
+    // until EOF; every reply is written, so leave now.
+    std::process::exit(settle_before_exit().await);
+}
+
+/// Try once, bounded, to confirm owed releases on a fresh X11 connection. Returns the
+/// exit status: nonzero, with the releases named on stderr, while any stay owed. Nothing
+/// records them past this exit, so the client must refuse physical input from then on.
+async fn settle_before_exit() -> i32 {
+    let left = tokio::task::spawn_blocking(|| {
+        x11::exit_settlement(InputState::shared(), EXIT_SETTLE_LIMIT)
+    })
+    .await
+    // The settlement catches its own panics; a join failure leaves the debt as it was.
+    .unwrap_or_else(|_| InputState::shared().unconfirmed_releases());
+    exit_status(left)
+}
+
+/// The exit status for inputs that may stay held: 0 for none, else
+/// `EXIT_RELEASE_DEBT` with them named on stderr for the client.
+fn exit_status(held: Vec<String>) -> i32 {
+    if held.is_empty() {
+        return 0;
+    }
+    eprintln!(
+        "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",
+        held.join(", ")
+    );
+    EXIT_RELEASE_DEBT
+}
+
+/// Read stdin lines on their own task, so EOF is seen even while every worker is busy
+/// and the request loop waits for one. EOF or a read error cancels physical input at
+/// once; lines already read stay queued and are still answered.
+fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(tokio::io::stdin()).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if sender.send(line).is_err() {
+                return;
+            }
+        }
+        InputState::shared().cancel();
+    });
+    receiver
+}
+
+fn shutting_down() -> ProtocolError {
+    ProtocolError::new(
+        "Helper is shutting down; the request did not run",
+        ErrorCode::Cancelled,
+    )
+}
+
+/// SIGTERM and SIGINT, merged. A signal that cannot be registered keeps its default.
+struct ShutdownSignals {
+    terminate: Option<tokio::signal::unix::Signal>,
+    interrupt: Option<tokio::signal::unix::Signal>,
+}
+impl ShutdownSignals {
+    async fn recv(&mut self) {
+        async fn next(signal: &mut Option<tokio::signal::unix::Signal>) {
+            match signal {
+                Some(signal) => {
+                    signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        }
+        tokio::select! {
+            () = next(&mut self.terminate) => {}
+            () = next(&mut self.interrupt) => {}
+        }
+    }
+}
+fn shutdown_signals() -> ShutdownSignals {
+    use tokio::signal::unix::{signal, SignalKind};
+    ShutdownSignals {
+        terminate: signal(SignalKind::terminate()).ok(),
+        interrupt: signal(SignalKind::interrupt()).ok(),
+    }
 }
 
 fn action_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Wait for the action lock: actions and batches run one at a time. Any request that
+/// holds the lock once shutdown began answers `cancelled` without starting, whether it
+/// waited or got the lock at once, semantic (AT-SPI) actions included: nothing admitted
+/// after cancellation began may mutate the desktop.
+async fn begin_transaction(
+    id: &str,
+    input: &InputState,
+) -> Result<tokio::sync::MutexGuard<'static, ()>, ProtocolError> {
+    testing_ready("waiting", id);
+    let guard = action_lock().lock().await;
+    testing_ready("locked", id);
+    admit_mutation(input)?;
+    Ok(guard)
+}
+
+/// Refuse a desktop mutation (action, focus, browser launch) once shutdown began.
+fn admit_mutation(input: &InputState) -> Result<(), ProtocolError> {
+    if input.is_cancelled() {
+        return Err(shutting_down());
+    }
+    Ok(())
+}
+
+/// Report a scheduling point on stderr, so process tests establish their preconditions
+/// (lock held, queue saturated) instead of sleeping. Only in the dev-only `testing`
+/// build; a no-op in the release helper.
+fn testing_ready(event: &str, id: &str) {
+    if cfg!(feature = "testing") {
+        eprintln!("linux-bridge testing: {event} {id}");
+    }
 }
 
 fn extract_id(line: &str) -> Option<String> {
@@ -86,12 +256,21 @@ fn extract_id(line: &str) -> Option<String> {
 }
 
 async fn handle_request(state: &Arc<Mutex<HelperState>>, request: &Request) -> Response {
-    handle_request_with(state, request, AtspiClient::connect, physical_act).await
+    handle_request_with(
+        state,
+        request,
+        &InputState::shared(),
+        AtspiClient::connect,
+        physical_act,
+    )
+    .await
 }
 
+/// Answer `request`; `input` carries the shutdown flag mutations are admitted against.
 async fn handle_request_with(
     state: &Arc<Mutex<HelperState>>,
     request: &Request,
+    input: &InputState,
     connect: impl AsyncFn() -> Result<AtspiClient, ProtocolError>,
     physical: PhysicalAct,
 ) -> Response {
@@ -110,14 +289,26 @@ async fn handle_request_with(
         "look" | "screenshot" => {
             look_with(state, &request.args, &connect, x11::capture_window).await
         }
-        "act" => {
-            let _transaction = action_lock().lock().await;
-            act(state, &request.args, &connect, physical).await
-        }
-        "actBatch" => {
-            let _transaction = action_lock().lock().await;
-            act_batch_with(&request.args, |args| act(state, args, &connect, physical)).await
-        }
+        "act" => match begin_transaction(&request.id, input).await {
+            Ok(_transaction) => act(state, &request.args, &connect, physical).await,
+            Err(error) => Err(error),
+        },
+        "actBatch" => match begin_transaction(&request.id, input).await {
+            Ok(_transaction) => {
+                act_batch_with(
+                    &request.args,
+                    || input.is_cancelled(),
+                    |args| act(state, args, &connect, physical),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        },
+        #[cfg(feature = "testing")]
+        "testingAct" => match begin_transaction(&request.id, input).await {
+            Ok(_transaction) => testing_act(&request.args),
+            Err(error) => Err(error),
+        },
         "atspiReadText" | "uiaReadText" | "axReadText" => {
             read_text_with(state, &request.args, async |accessible| {
                 connect().await?.read_live_text(accessible).await
@@ -127,8 +318,10 @@ async fn handle_request_with(
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
-        "focusWindow" => focus_window(state, &request.args),
-        "openBrowserLocation" => open_browser_location(&request.args),
+        "focusWindow" => admit_mutation(input).and_then(|()| focus_window(state, &request.args)),
+        "openBrowserLocation" => {
+            admit_mutation(input).and_then(|()| open_browser_location(&request.args))
+        }
         other => Err(ProtocolError::new(
             format!("Unknown command '{other}'"),
             ErrorCode::UnsupportedCommand,
@@ -507,6 +700,8 @@ async fn act(
                 }
                 return Ok(result);
             }
+            // Shutdown began before the mutation: nothing ran, and nothing may fall back.
+            Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
             Some(Err(error)) if error.code == ErrorCode::Timeout => {
                 return Err(ProtocolError::new(
                     format!("{}; semantic action outcome is unknown", error.message),
@@ -644,8 +839,83 @@ fn physical_act(
     point: (i32, i32),
     geometry: ActionGeometry,
 ) -> Result<Value, ProtocolError> {
+    let input = Input::connect(policy, owning_window)?;
+    deliver_physical(&input, action, params, owning_window, point, &geometry)
+}
+
+/// Drive one physical action through a scripted `RecordingSink` that shares the
+/// helper-wide input state, so process tests exercise shutdown and release debt with no
+/// display. Compiled only with the dev-only `testing` feature, never into a release.
+#[cfg(feature = "testing")]
+fn testing_act(args: &Value) -> Result<Value, ProtocolError> {
+    use linux_bridge::testing::RecordingSink;
+    let sink = RecordingSink::scripted(args.get("sink").unwrap_or(&Value::Null));
+    let input = Input::with_state(sink, InputState::shared());
+    input.settle()?;
+    let action = required_str(args, "action", "testingAct requires action")?;
+    let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
+    let geometry = ActionGeometry {
+        frame: Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+        },
+        image_width: 100,
+        image_height: 100,
+    };
+    let mut result = deliver_physical(&input, action, &params, 0, (1, 1), &geometry)?;
+    result["evidence"]["held"] = json!(input.sink().held_inputs());
+    result["evidence"]["events"] = json!(input.sink().events().len());
+    Ok(result)
+}
+
+/// Drive one physical action through `input`. A stop after any posted event, or after
+/// a post whose delivery is unknown, is `unknown` with `evidence.deliveredUnits`
+/// (confirmed posts), `evidence.deliveryUncertain` when a post went unconfirmed,
+/// `evidence.unconfirmedReleases` when cleanup could not confirm a release, and the
+/// refusal code: input may have reached the desktop, so it must never become an error
+/// a batch records as `didnt`.
+fn deliver_physical<S: InputSink>(
+    input: &Input<S>,
+    action: &str,
+    params: &Value,
+    owning_window: u32,
+    point: (i32, i32),
+    geometry: &ActionGeometry,
+) -> Result<Value, ProtocolError> {
+    let result = drive_physical(input, action, params, point, geometry);
+    let mut response = json!({
+        "outcome":"unknown",
+        "performed":{"grounding":"coordinates","delivery":"hid","mechanism":"xtest","deltaSource":"snapshot","windowId":owning_window},
+        "evidence":{"mechanism":"xtest","windowId":owning_window}
+    });
+    match result {
+        Ok(()) => Ok(response),
+        Err(error) if input.delivered_units() == 0 && !input.delivery_uncertain() => Err(error),
+        Err(error) => {
+            response["evidence"]["deliveredUnits"] = json!(input.delivered_units());
+            if input.delivery_uncertain() {
+                response["evidence"]["deliveryUncertain"] = json!(true);
+            }
+            let unconfirmed = input.state().unconfirmed_releases();
+            if !unconfirmed.is_empty() {
+                response["evidence"]["unconfirmedReleases"] = json!(unconfirmed);
+            }
+            response["error"] = json!({"code":error.code.to_string(),"message":error.message});
+            Ok(response)
+        }
+    }
+}
+
+fn drive_physical<S: InputSink>(
+    input: &Input<S>,
+    action: &str,
+    params: &Value,
+    point: (i32, i32),
+    geometry: &ActionGeometry,
+) -> Result<(), ProtocolError> {
     let (x, y) = point;
-    let input = x11::Input::connect(policy, owning_window)?;
     let button = params
         .get("button")
         .and_then(Value::as_str)
@@ -713,14 +983,14 @@ fn physical_act(
             ))
         }
     }
-    Ok(
-        json!({"outcome":"unknown","performed":{"grounding":"coordinates","delivery":"hid","mechanism":"xtest","deltaSource":"snapshot","windowId":owning_window},"evidence":{"mechanism":"xtest","windowId":owning_window}}),
-    )
+    Ok(())
 }
 
-/// Validate the entire batch before executing any step, then stop at the first failure.
+/// Validate the entire batch before executing any step, then stop at the first failure
+/// or, once `cancelled`, before the next step: steps already run keep their outcomes.
 async fn act_batch_with<'args, F>(
     args: &'args Value,
+    cancelled: impl Fn() -> bool,
     mut perform: impl FnMut(&'args Value) -> F,
 ) -> Result<Value, ProtocolError>
 where
@@ -744,9 +1014,17 @@ where
     let mut stopped_at = None;
     let mut timed_out = false;
     for (index, action) in actions.iter().enumerate() {
+        if cancelled() {
+            let error = shutting_down();
+            steps.push(json!({"outcome":"didnt","error":{"code":error.code.to_string(),"message":error.message}}));
+            stopped_at = Some(index);
+            break;
+        }
         match perform(action).await {
             Ok(step) => {
-                let stopped = step.get("outcome").and_then(Value::as_str) == Some("didnt");
+                // A step that reports an error stopped partway: nothing after it may run.
+                let stopped = step.get("outcome").and_then(Value::as_str) == Some("didnt")
+                    || step.get("error").is_some();
                 steps.push(step);
                 if stopped {
                     stopped_at = Some(index);
@@ -778,13 +1056,17 @@ where
     Ok(response)
 }
 
+/// A stopped batch is `didnt` only when its first step checked that nothing happened.
+/// Any step before the stop ran and may have delivered input, and a step that stopped
+/// after posting is `unknown`, so those batches stay `unknown`; the refusal keeps its
+/// own step.
 fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
-    if stopped {
+    fn outcome(step: &Value) -> Option<&str> {
+        step.get("outcome").and_then(Value::as_str)
+    }
+    if stopped && steps.len() == 1 && outcome(&steps[0]) == Some("didnt") {
         "didnt"
-    } else if steps
-        .iter()
-        .any(|step| step.get("outcome").and_then(Value::as_str) == Some("unknown"))
-    {
+    } else if stopped || steps.iter().any(|step| outcome(step) == Some("unknown")) {
         "unknown"
     } else {
         "worked"
@@ -988,6 +1270,7 @@ mod test_peer;
 mod tests {
     use super::test_peer::{with_peer, StalledReply};
     use super::*;
+    use linux_bridge::testing::RecordingSink;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::watch;
@@ -1202,9 +1485,11 @@ mod tests {
             json!({"actions":[{"lookId":"one"},{"lookId":"two"}]}),
             json!({"actions":vec![json!({"lookId":"one"}); 21]}),
         ] {
-            let error = act_batch_with(&invalid_batch, |_| async {
-                panic!("invalid batch performed an action")
-            })
+            let error = act_batch_with(
+                &invalid_batch,
+                || false,
+                |_| async { panic!("invalid batch performed an action") },
+            )
             .await
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::InvalidRequest);
@@ -1212,20 +1497,25 @@ mod tests {
         let batch = json!({"actions":[{"lookId":"one","value":0},{"lookId":"one","value":1},{"lookId":"one","value":2}]});
         for failure in [false, true] {
             let mut seen = Vec::new();
-            let result = act_batch_with(&batch, |action| {
-                let value = action["value"].as_u64().unwrap();
-                seen.push(value);
-                std::future::ready(match value {
-                    0 => Ok(json!({"outcome":"unknown"})),
-                    1 if failure => Err(invalid("step failed")),
-                    1 => Ok(json!({"outcome":"didnt"})),
-                    _ => panic!("ran an action after failure"),
-                })
-            })
+            let result = act_batch_with(
+                &batch,
+                || false,
+                |action| {
+                    let value = action["value"].as_u64().unwrap();
+                    seen.push(value);
+                    std::future::ready(match value {
+                        0 => Ok(json!({"outcome":"unknown"})),
+                        1 if failure => Err(invalid("step failed")),
+                        1 => Ok(json!({"outcome":"didnt"})),
+                        _ => panic!("ran an action after failure"),
+                    })
+                },
+            )
             .await
             .unwrap();
             assert_eq!(seen, [0, 1]);
-            assert_eq!(result["outcome"], "didnt");
+            // Step 0 ran and may have delivered input: the refusal stays on step 1.
+            assert_eq!(result["outcome"], "unknown");
             assert_eq!(result["stoppedAt"], 1);
             assert_eq!(result["performed"]["actionCount"], 2);
             assert_eq!(result["steps"][0]["outcome"], "unknown");
@@ -1237,14 +1527,39 @@ mod tests {
                 );
             }
         }
-        let result = act_batch_with(&batch, |action| async move {
-            Ok(json!({"outcome":if action["value"] == 1 {"unknown"} else {"worked"}}))
-        })
+        let result = act_batch_with(
+            &batch,
+            || false,
+            |action| async move {
+                Ok(json!({"outcome":if action["value"] == 1 {"unknown"} else {"worked"}}))
+            },
+        )
         .await
         .unwrap();
         assert_eq!(result["outcome"], "unknown");
         assert!(result.get("stoppedAt").is_none());
         assert_eq!(result["performed"]["actionCount"], 3);
+
+        // Shutdown after a semantic step: it keeps its outcome and nothing later starts.
+        let ran = std::cell::Cell::new(0);
+        let result = act_batch_with(
+            &batch,
+            || ran.get() >= 1,
+            |_| {
+                ran.set(ran.get() + 1);
+                std::future::ready(Ok(
+                    json!({"outcome":"worked","performed":{"delivery":"ax"}}),
+                ))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(ran.get(), 1);
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["stoppedAt"], 1);
+        assert_eq!(result["steps"][0]["outcome"], "worked");
+        assert_eq!(result["steps"][1]["outcome"], "didnt");
+        assert_eq!(result["steps"][1]["error"]["code"], "cancelled");
     }
 
     #[test]
@@ -1314,6 +1629,7 @@ mod tests {
                 cmd: cmd.into(),
                 args,
             },
+            &InputState::default(),
             async || {
                 Ok(AtspiClient::from_connection(
                     connection.clone(),
@@ -1944,6 +2260,148 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_request_admitted_after_cancellation_never_mutates() {
+        let input = InputState::default();
+        drop(begin_transaction("before", &input).await.unwrap());
+        input.cancel();
+        // The lock is free, so this request does not wait: it is refused all the same.
+        assert_eq!(
+            begin_transaction("after", &input).await.unwrap_err().code,
+            ErrorCode::Cancelled
+        );
+        let (state, root_ref) = peer_root_state();
+        for (cmd, args) in [
+            (
+                "act",
+                json!({"lookId":"l1","action":"press","target":{"x":1,"y":1}}),
+            ),
+            ("actBatch", json!({"actions":[]})),
+            ("focusWindow", json!({"rootRef":root_ref})),
+            (
+                "openBrowserLocation",
+                json!({"url":"https://example.invalid/"}),
+            ),
+        ] {
+            let reply = handle_request_with(
+                &state,
+                &Request {
+                    protocol_version: PROTOCOL_VERSION,
+                    id: "late".into(),
+                    cmd: cmd.into(),
+                    args,
+                },
+                &input,
+                async || -> Result<AtspiClient, ProtocolError> { panic!("{cmd} connected") },
+                |_, _, _, _, _, _| panic!("attempted physical input"),
+            )
+            .await;
+            assert_eq!(
+                reply.error.map(|error| error.code),
+                Some(ErrorCode::Cancelled),
+                "{cmd}"
+            );
+        }
+    }
+
+    /// An Action whose preparatory `NActions` read is where shutdown begins.
+    struct CancelledDuringPreparation {
+        input: Arc<InputState>,
+        mutations: Arc<AtomicUsize>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Action")]
+    impl CancelledDuringPreparation {
+        #[zbus(property, name = "NActions")]
+        async fn n_actions(&self) -> i32 {
+            self.input.cancel();
+            1
+        }
+
+        async fn do_action(&self, _index: i32) -> bool {
+            self.mutations.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+
+    struct CountedEdit(Arc<AtomicUsize>);
+
+    #[zbus::interface(name = "org.a11y.atspi.EditableText")]
+    impl CountedEdit {
+        async fn set_text_contents(&self, _text: &str) -> bool {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_actions_check_shutdown_at_the_mutation() {
+        let input = Arc::new(InputState::default());
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let (state, _) = peer_root_state();
+        let mut target = node();
+        target.interfaces.extend([
+            "org.a11y.atspi.Action".into(),
+            "org.a11y.atspi.EditableText".into(),
+        ]);
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![target.clone()], None);
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/node",
+                    CancelledDuringPreparation {
+                        input: Arc::clone(&input),
+                        mutations: Arc::clone(&mutations),
+                    },
+                )?
+                .serve_at("/node", CountedEdit(Arc::clone(&mutations)))
+            },
+            async |connection| {
+                let client = || {
+                    AtspiClient::from_connection(connection.clone(), Duration::from_millis(250))
+                        .with_input_state(Arc::clone(&input))
+                };
+                // Admitted before shutdown; shutdown begins during the preparatory read.
+                let reply = handle_request_with(
+                    &state,
+                    &Request {
+                        protocol_version: PROTOCOL_VERSION,
+                        id: "press".into(),
+                        cmd: "act".into(),
+                        args: json!({"lookId":look_id,"action":"press","target":{"ref":nodes[0].reference},"policy":"foreground"}),
+                    },
+                    &input,
+                    async || Ok(client()),
+                    |_, _, _, _, _, _| panic!("attempted physical fallback"),
+                )
+                .await;
+                assert_eq!(
+                    reply.error.map(|error| error.code),
+                    Some(ErrorCode::Cancelled)
+                );
+                // The text replacement checks the same boundary.
+                assert_eq!(
+                    client()
+                        .set_text(&target, "replacement")
+                        .await
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::Cancelled
+                );
+                assert_eq!(mutations.load(Ordering::SeqCst), 0, "no semantic mutation");
+                // Before shutdown, the same calls do mutate.
+                let live = AtspiClient::from_connection(connection.clone(), Duration::from_millis(250))
+                    .with_input_state(Arc::new(InputState::default()));
+                assert!(live.set_text(&target, "replacement").await.unwrap());
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn wait_for_gone_rejects_incomplete_snapshot() {
         let (stall, mut requests) = StalledReply::new();
         let (state, root_ref) = peer_root_state();
@@ -2265,6 +2723,169 @@ mod tests {
         );
     }
 
+    fn deliver(sink: RecordingSink, action: &str, params: Value) -> Result<Value, ProtocolError> {
+        let geometry = ActionGeometry {
+            frame: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            image_width: 100,
+            image_height: 100,
+        };
+        deliver_physical(
+            &Input::with_sink(sink),
+            action,
+            &params,
+            7,
+            (5, 5),
+            &geometry,
+        )
+    }
+
+    #[test]
+    fn physical_stop_after_posting_is_unknown_with_delivered_units() {
+        // `abc`: the first two characters (four events) post, then the target loses focus.
+        let result = deliver(
+            RecordingSink::default().refuse_admission_after(4),
+            "typeText",
+            json!({"text":"abc"}),
+        )
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["evidence"]["deliveredUnits"], 4);
+        assert_eq!(result["evidence"]["windowId"], 7);
+        assert_eq!(result["error"]["code"], "foreground_required");
+        // setText: the click posts, then `a` of the select-all chord is refused and the
+        // held control releases: motion, button down/up, control down/up.
+        let result = deliver(
+            RecordingSink::default().refuse_admission_after(5),
+            "setText",
+            json!({"text":"x"}),
+        )
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["evidence"]["deliveredUnits"], 5);
+        // A drag point outside the look fails before anything posts.
+        let error = deliver(
+            RecordingSink::default(),
+            "drag",
+            json!({"path":[{"x":1,"y":1},{"x":500,"y":1}]}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn an_unconfirmed_post_is_unknown_even_with_nothing_confirmed() {
+        // The first press is applied but unacknowledged and its cleanup is rejected.
+        let state = Arc::new(x11::InputState::default());
+        let input = Input::with_state(
+            RecordingSink::default().lose_ack(0, true).fail_post(1),
+            Arc::clone(&state),
+        );
+        let geometry = ActionGeometry {
+            frame: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            image_width: 100,
+            image_height: 100,
+        };
+        let result = deliver_physical(
+            &input,
+            "keypress",
+            &json!({"keys":["control"]}),
+            7,
+            (5, 5),
+            &geometry,
+        )
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["evidence"]["deliveredUnits"], 0);
+        assert_eq!(result["evidence"]["deliveryUncertain"], true);
+        assert_eq!(
+            result["evidence"]["unconfirmedReleases"],
+            json!(["keycode 8"])
+        );
+        assert_eq!(result["error"]["code"], "internal_error");
+        // The held key blocks the next action before it posts anything.
+        let next = Input::with_state(RecordingSink::default(), state);
+        let error = deliver_physical(
+            &next,
+            "typeText",
+            &json!({"text":"a"}),
+            7,
+            (5, 5),
+            &geometry,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+    }
+
+    #[test]
+    fn physical_refusal_before_any_post_stays_an_error() {
+        for (action, params) in [
+            ("press", json!({})),
+            ("moveMouse", json!({})),
+            ("scroll", json!({"scrollY":1})),
+            ("drag", json!({"path":[{"x":1,"y":1},{"x":2,"y":2}]})),
+            ("typeText", json!({"text":"a"})),
+            ("setText", json!({"text":"a"})),
+            ("keypress", json!({"keys":["enter"]})),
+        ] {
+            let refused = RecordingSink::default().refuse_admission_after(0);
+            let error = deliver(refused, action, params.clone()).unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{action}");
+            let result = deliver(RecordingSink::default(), action, params).unwrap();
+            assert_eq!(result["outcome"], "unknown", "{action}");
+            assert!(result.get("error").is_none(), "{action}");
+            assert!(
+                result["evidence"].get("deliveredUnits").is_none(),
+                "{action}"
+            );
+        }
+        for (action, params) in [
+            ("keypress", json!({})),
+            ("drag", json!({})),
+            ("drag", json!({"path":[{"y":1}]})),
+            ("drag", json!({"path":[{"x":1}]})),
+        ] {
+            let error = deliver(RecordingSink::default(), action, params).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidRequest, "{action}");
+        }
+        let error = deliver(RecordingSink::default(), "wiggle", json!({})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedCommand);
+    }
+
+    #[tokio::test]
+    async fn a_partially_delivered_step_stops_the_batch_as_unknown() {
+        let batch = json!({"actions":[{"lookId":"one","value":0},{"lookId":"one","value":1},{"lookId":"one","value":2}]});
+        let result = act_batch_with(
+            &batch,
+            || false,
+            |action| {
+                std::future::ready(match action["value"].as_u64().unwrap() {
+                    0 => Ok(json!({"outcome":"worked"})),
+                    1 => Ok(json!({
+                        "outcome":"unknown",
+                        "evidence":{"deliveredUnits":3},
+                        "error":{"code":"foreground_required","message":"focus moved"}
+                    })),
+                    _ => panic!("ran an action after a partial delivery"),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["outcome"], "unknown");
+        assert_eq!(result["stoppedAt"], 1);
+        assert_eq!(result["steps"][1]["evidence"]["deliveredUnits"], 3);
+    }
+
     #[test]
     fn batch_outcome_preserves_unknown_physical_results() {
         assert_eq!(
@@ -2280,7 +2901,18 @@ mod tests {
         );
         assert_eq!(
             batch_outcome(&[json!({"outcome":"unknown"})], true),
-            "didnt"
+            "unknown"
         );
+        for prefix in ["worked", "unknown"] {
+            assert_eq!(
+                batch_outcome(
+                    &[json!({"outcome":prefix}), json!({"outcome":"didnt"})],
+                    true
+                ),
+                "unknown",
+                "{prefix} prefix"
+            );
+        }
+        assert_eq!(batch_outcome(&[json!({"outcome":"didnt"})], true), "didnt");
     }
 }

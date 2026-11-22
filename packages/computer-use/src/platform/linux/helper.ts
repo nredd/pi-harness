@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
@@ -14,9 +14,27 @@ const HELPER_SETUP_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const HELPER_PROBE_TIMEOUT_MS = 5_000;
 const SETUP_KILL_GRACE_MS = 2_000;
+/**
+ * SIGTERM-to-SIGKILL grace for a discarded helper. On SIGTERM (or stdin EOF) the helper stops admitting
+ * physical input before its next unit, posts the releases it owes and exits; SIGKILL only backstops a
+ * helper that is hung, and skips that cleanup.
+ */
+export const HELPER_TERMINATE_GRACE_MS = 750;
+/**
+ * Helper exit status when key or button releases stay unconfirmed at exit. The helper keeps that debt in
+ * memory only, so a respawned helper would not know about it: the client refuses physical input instead.
+ */
+export const HELPER_EXIT_RELEASE_DEBT = 3;
+/** Stderr bytes kept per helper, newest last: enough for the exit report, bounded against a chatty helper. */
+export const HELPER_STDERR_LIMIT_BYTES = 8_192;
+/**
+ * How long a physical command or `dispose()` waits for a discarded helper's exit status: past the SIGKILL
+ * backstop, so only a helper that cannot be reaped runs it out.
+ */
+export const DISCARDED_EXIT_WAIT_MS = HELPER_TERMINATE_GRACE_MS + 1_000;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
-export const LINUX_HELPER_PROTOCOL_VERSION = 4;
+export const LINUX_HELPER_PROTOCOL_VERSION = 5;
 export const LINUX_HELPER_PATH =
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH ||
 	path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
@@ -95,6 +113,40 @@ async function runProcess(
 const RESTART_HINT = "Restart Pi to use the installed helper.";
 const SESSION_CLOSED_MESSAGE = "Linux helper closed because the Pi session ended.";
 
+/**
+ * A request already written whose reply will never be read: timed out, aborted or orphaned by a helper exit.
+ * The helper may have executed it, or part of it, so callers must treat its effect as unknown, never replay it.
+ */
+function replyLost(error: unknown): Error & { code: string } {
+	const message = error instanceof Error ? error.message : String(error);
+	return Object.assign(new Error(message, { cause: error }), { code: "reply_lost" });
+}
+
+/** Commands that can post XTEST input or move focus: everything but `act`/`actBatch` steps limited to `ax_only`. */
+function isPhysicalCommand(cmd: string, args: Record<string, unknown>): boolean {
+	const semantic = (action: unknown) => (action as { policy?: unknown } | undefined)?.policy === "ax_only";
+	if (cmd === "focusWindow") return true;
+	if (cmd === "act") return !semantic(args);
+	if (cmd === "actBatch") return !Array.isArray(args.actions) || !args.actions.every(semantic);
+	return false;
+}
+
+/** The owed inputs a helper's exit report names, if its stderr tail still holds the report. */
+function owedInputs(stderr: string): string | undefined {
+	return /exiting with the release of (.+?) unconfirmed/.exec(stderr)?.[1];
+}
+
+/** The sticky refusal after a helper exited owing releases. */
+function owedInputMessage(owed = "unknown keys or buttons"): string {
+	return `Refusing physical input: the Linux helper exited with the release of ${owed} unconfirmed; it may still be held. Release it by hand, then restart Pi.`;
+}
+
+/** The sticky refusal after a helper died by a signal, e.g. the SIGKILL backstop, once physical input was sent. */
+const KILLED_AFTER_INPUT_MESSAGE =
+	"Refusing physical input: the Linux helper was killed after physical input; held keys/buttons unknown. Release any held input by hand, then restart Pi.";
+
+const UNSETTLED_EXIT_MESSAGE = `Refusing physical input: a discarded Linux helper did not exit within ${DISCARDED_EXIT_WAIT_MS}ms, so whether it released its keys and buttons is unknown. Release any held input by hand, then restart Pi.`;
+
 function reason(error: unknown): string {
 	return (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
 }
@@ -126,6 +178,12 @@ async function waitForShared<T>(promise: Promise<T>, signal?: AbortSignal): Prom
 export interface LinuxHelperClientOptions {
 	helperPath?: string;
 	setupHelperScript?: string;
+	/**
+	 * The disposal of the client this one replaces, resolving to its refusal: physical commands and this
+	 * client's own `dispose()` wait for it and inherit the refusal, since the input it may have left held is
+	 * still held in this process's desktop.
+	 */
+	predecessor?: Promise<string | undefined>;
 }
 
 export class LinuxHelperClient {
@@ -137,20 +195,71 @@ export class LinuxHelperClient {
 	private disposed = false;
 	private setupAbort?: AbortController;
 	private pending = new Map<string, Pending<unknown>>();
+	/** Set for good once a helper exits owing releases: every later physical command is refused. */
+	private inputUnsafe?: string;
+	/** Whether a physical command was ever written in this client's lifetime. */
+	private physicalSent = false;
+	/** Discarded helpers whose exit status is still unknown: any of them may yet exit owing releases. */
+	private unsettledExits = new Set<Promise<void>>();
+	/** Settles once the predecessor's refusal, if any, is latched here. */
+	private readonly predecessor?: Promise<void>;
 	private readonly helperPath: string;
 	private readonly setupHelperScript: string;
 
 	constructor(options: LinuxHelperClientOptions = {}) {
 		this.helperPath = options.helperPath ?? LINUX_HELPER_PATH;
 		this.setupHelperScript = options.setupHelperScript ?? SETUP_HELPER_SCRIPT;
+		this.predecessor = options.predecessor?.then((refusal) => {
+			if (refusal !== undefined) this.refusePhysicalInput(refusal);
+		});
 	}
 
-	/** Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. */
-	dispose(): void {
+	/**
+	 * Terminal: in-flight work is aborted and every later `command()`/`ensureInstalled()` fails fast. Resolves,
+	 * within `DISCARDED_EXIT_WAIT_MS`, to the physical-input refusal once the helper's exit status is known:
+	 * a helper that exits owing releases leaves keys or buttons possibly held, and the caller must say so.
+	 */
+	async dispose(): Promise<string | undefined> {
 		this.disposed = true;
 		this.installPromise = undefined;
 		this.setupAbort?.abort();
 		this.discardChild(new Error(SESSION_CLOSED_MESSAGE));
+		// A chain of resets: what any predecessor left held is carried down to the newest client.
+		await this.predecessor;
+		await this.awaitDiscardedExits();
+		return this.inputUnsafe;
+	}
+
+	/** Refuse physical input from now on with `message`. */
+	private refusePhysicalInput(message: string): void {
+		this.inputUnsafe ??= message;
+	}
+
+	private refuseUnsafe(physical: boolean): void {
+		if (physical && this.inputUnsafe !== undefined)
+			throw Object.assign(new Error(this.inputUnsafe), { code: "input_unsafe" });
+	}
+
+	/** Latch the refusal for a helper that exited owing releases, keeping a named report over an unnamed one. */
+	private latchOwedInput(stderr: string): void {
+		const owed = owedInputs(stderr);
+		if (owed !== undefined || this.inputUnsafe === undefined) this.inputUnsafe = owedInputMessage(owed);
+	}
+
+	/** Wait, bounded, until every discarded helper's exit status is known; one that never exits is refused. */
+	private async awaitDiscardedExits(signal?: AbortSignal): Promise<void> {
+		if (this.unsettledExits.size === 0) return;
+		let timer: NodeJS.Timeout | undefined;
+		const timedOut = new Promise<boolean>((resolve) => {
+			timer = setTimeout(() => resolve(true), DISCARDED_EXIT_WAIT_MS);
+		});
+		try {
+			const settled = Promise.all(this.unsettledExits).then(() => false);
+			if (await waitForShared(Promise.race([settled, timedOut]), signal))
+				this.refusePhysicalInput(UNSETTLED_EXIT_MESSAGE);
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	/** Reject in-flight commands and kill the current child, if any, so a replaced helper cannot leak. */
@@ -161,18 +270,32 @@ export class LinuxHelperClient {
 		if (!child) return;
 		child.stdin.destroy();
 		child.stdout.destroy();
-		child.stderr.destroy();
+		// Keep reading stderr for the exit report, without holding the event loop open for it.
+		(child.stderr as { unref?: () => void }).unref?.();
 		child.kill("SIGTERM");
+		const backstop = setTimeout(() => {
+			if (child.exitCode === null && !child.signalCode) child.kill("SIGKILL");
+		}, HELPER_TERMINATE_GRACE_MS);
+		backstop.unref();
+		// Its exit status may still say it owes releases: physical commands wait for it (`awaitDiscardedExits`).
+		const exited = new Promise<void>((resolve) =>
+			child.once("exit", () => {
+				clearTimeout(backstop);
+				this.unsettledExits.delete(exited);
+				resolve();
+			}),
+		);
+		this.unsettledExits.add(exited);
 		child.unref();
 	}
 
-	/** Reject in-flight commands: all of them, or only those sent to `child` when it is given. */
+	/** Reject in-flight commands as lost replies: all of them, or only those sent to `child` when it is given. */
 	private rejectPending(error: Error, child?: ChildProcessWithoutNullStreams): void {
 		for (const [id, pending] of this.pending) {
 			if (child && pending.child !== child) continue;
 			this.pending.delete(id);
 			clearTimeout(pending.timer);
-			pending.reject(error);
+			pending.reject(replyLost(error));
 		}
 	}
 
@@ -299,7 +422,13 @@ export class LinuxHelperClient {
 		if (this.disposed) throw new Error(SESSION_CLOSED_MESSAGE);
 		const child = spawn(this.helperPath, [], { stdio: ["pipe", "pipe", "pipe"] });
 		child.stdout.setEncoding("utf8");
-		child.stderr.setEncoding("utf8");
+		// Drained so a chatty helper never blocks on a full pipe; only the last bytes are kept, copied so a large
+		// chunk is not retained through a view.
+		let stderr = Buffer.alloc(0);
+		child.stderr.on("data", (chunk: Buffer) => {
+			const joined = Buffer.concat([stderr, chunk]);
+			stderr = Buffer.from(joined.subarray(Math.max(0, joined.length - HELPER_STDERR_LIMIT_BYTES)));
+		});
 		child.stdin.setDefaultEncoding("utf8");
 		// A failed write invokes its callback and also emits an error on the stream.
 		child.stdin.on("error", (error) => {
@@ -311,11 +440,18 @@ export class LinuxHelperClient {
 			buffer = this.onStdout(buffer, chunk);
 		});
 		// `exit` can fire while stdout still holds a complete reply: only forget the child here so the next
-		// command respawns, and fail what is still pending once `close` says stdout is drained.
-		child.on("exit", () => {
+		// command respawns, and fail what is still pending once `close` says stdout is drained. Owed releases
+		// are latched on `exit` already, so no physical command can reach a respawned helper in between.
+		child.on("exit", (code, signalName) => {
+			if (code === HELPER_EXIT_RELEASE_DEBT) this.latchOwedInput(stderr.toString("utf8"));
+			// Killed by a signal, e.g. the SIGKILL backstop of a stalled helper: it skipped its cleanup and exit
+			// report, so after physical input nothing says what it left held.
+			else if (signalName && this.physicalSent) this.refusePhysicalInput(KILLED_AFTER_INPUT_MESSAGE);
 			if (this.child === child) this.child = undefined;
 		});
 		child.on("close", (code, signalName) => {
+			// Stderr is complete now: name the owed inputs if the report arrived after `exit`.
+			if (code === HELPER_EXIT_RELEASE_DEBT) this.latchOwedInput(stderr.toString("utf8"));
 			this.rejectPending(
 				new Error(`Linux helper exited${signalName ? ` on ${signalName}` : ` with code ${code ?? "unknown"}`}.`),
 				child,
@@ -376,10 +512,25 @@ export class LinuxHelperClient {
 		const signal = options?.signal;
 		// A signal that is already aborted never fires again: refuse before installing, spawning or sending.
 		throwIfAborted(signal);
-		const child = await this.process(signal);
-		// ...and so does one aborted while the install check or helper start was in flight.
-		throwIfAborted(signal);
-		return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
+		// A respawned helper has no record of what an earlier one left held: only non-physical commands go on.
+		const physical = isPhysicalCommand(cmd, args);
+		// A predecessor still being disposed may yet report input left held: learn that before any physical write.
+		if (physical && this.predecessor) await waitForShared(this.predecessor, signal);
+		for (;;) {
+			this.refuseUnsafe(physical);
+			const child = await this.process(signal);
+			// ...and so does one aborted while the install check or helper start was in flight.
+			throwIfAborted(signal);
+			// A discarded helper may still exit owing releases: learn its status before sending physical input.
+			if (physical && this.unsettledExits.size > 0) {
+				await this.awaitDiscardedExits(signal);
+				continue;
+			}
+			// Rechecked right before writing: a helper may have exited owing releases during the awaits above.
+			this.refuseUnsafe(physical);
+			if (physical) this.physicalSent = true;
+			return await this.send<T>(child, cmd, args, options?.timeoutMs, signal);
+		}
 	}
 
 	private async send<T>(
@@ -391,15 +542,16 @@ export class LinuxHelperClient {
 	): Promise<T> {
 		const id = randomUUID();
 		return await new Promise<T>((resolve, reject) => {
+			// The helper protocol has no cancel message: an abort or timeout only stops waiting for the reply.
 			const onAbort = () => {
 				this.pending.delete(id);
 				clearTimeout(timer);
-				reject(new Error("Operation aborted."));
+				reject(replyLost(new Error("Operation aborted.")));
 			};
 			const timer = setTimeout(() => {
 				signal?.removeEventListener("abort", onAbort);
 				this.pending.delete(id);
-				reject(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`));
+				reject(replyLost(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)));
 			}, timeoutMs);
 			this.pending.set(id, {
 				child,
@@ -430,9 +582,15 @@ export class LinuxHelperClient {
 
 export let linuxHelper = new LinuxHelperClient();
 
-/** Session shutdown: dispose the shared client (terminal) and install a fresh one for the next session. */
-export function resetLinuxHelper(): void {
-	const old = linuxHelper;
-	linuxHelper = new LinuxHelperClient();
-	old.dispose();
+/**
+ * Session shutdown: dispose the old client (terminal) and install a fresh one for the next session that
+ * holds every physical write until that disposal settles, then wait, bounded, for the old helper's exit
+ * status. Resolves to the refusal when it may have left input held: the caller must surface it, and the
+ * fresh client inherits it before its first physical write, since the input is still held in this process's
+ * desktop. Concurrent resets chain: each client's disposal waits for its own predecessor's.
+ */
+export async function resetLinuxHelper(): Promise<string | undefined> {
+	const disposal = linuxHelper.dispose();
+	linuxHelper = new LinuxHelperClient({ predecessor: disposal });
+	return await disposal;
 }
