@@ -17,7 +17,7 @@ import {
 	type Shard,
 	type SnapshotQuota,
 } from "../../src/stats/snapshot.ts";
-import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, at, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
 import { CANARY, claudeRow, writeLines } from "../fixtures/stats/harness/fixtures.ts";
 import { seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
@@ -184,7 +184,7 @@ it("preserves recovery files and keeps a vanished harness lost across repeated u
 		expect(manifest(first.snapshotDir).lastGoodAt?.codex).toBe(Date.now());
 		expect(result.warnings).toContain("recovery files retained: explicit replacement required");
 	}
-	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	const statePath = outboxStatePath(agent, first.snapshotDir);
 	const recovery = JSON.parse(readFileSync(statePath, "utf8"));
 	expect(recovery.recoveryPending).toBe(true);
 	expect(recovery.lostHarnesses).toEqual(["claude"]);
@@ -202,7 +202,7 @@ it("clears a lost harness after a clean reappearance before a later absence", as
 	const options = { harnesses: ["pi", "claude"] as const, roots, home, env: {} };
 	const first = await exportStats(agent, out, undefined, options);
 	const manifestPath = join(first.snapshotDir, "manifest.json");
-	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	const statePath = outboxStatePath(agent, first.snapshotDir);
 	writeFileSync(manifestPath, "corrupt");
 	rmSync(roots.claude, { recursive: true });
 	const lost = await exportStats(agent, out, undefined, options);
@@ -268,9 +268,58 @@ it("prunes post-recovery active generations while retaining only the frozen reco
 	const current = manifest(first.snapshotDir);
 	const expected = [...new Set(["manifest.json", original.file, ...current.shards.map((ref) => ref.file)])].sort();
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(expected);
-	const state = JSON.parse(readFileSync(join(agent, "pi-session-kit", "export-state.json"), "utf8"));
+	const state = JSON.parse(readFileSync(outboxStatePath(agent, first.snapshotDir), "utf8"));
 	expect(state.recoveryFiles).toEqual([original.file]);
 	expect(state.lostHarnesses).toEqual([]);
+});
+
+it("prunes post-recovery generations without losing frozen files to another outbox's stale state", async () => {
+	const path = join(agent, "sessions", "active.jsonl");
+	const seed = (input: number) => {
+		const row = JSON.parse(assistantLine({ ms: Date.now(), provider: "physical", model: "fixture", input }));
+		row.id = "active";
+		sessionFile(path, { startMs: Date.now(), lines: [JSON.stringify(row)] });
+	};
+	seed(7);
+	const outB = join(root, "out-b");
+	const first = await exportStats(agent, out);
+	const second = await exportStats(agent, outB);
+	const original = manifest(first.snapshotDir).shards[0];
+	if (!original) throw new Error("Missing shard");
+	writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
+	// Barrier: B has read its export state and waits at its manifest while A freezes recovery.
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	let reached = (): void => {};
+	let release = (): void => {};
+	const paused = new Promise<void>((resolve) => {
+		reached = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let waits = 0;
+	vi.mocked(lstat).mockImplementation(async (target, options) => {
+		if (String(target) === join(second.snapshotDir, "manifest.json") && waits++ === 0) {
+			reached();
+			await gate;
+		}
+		return actual.lstat(target, options);
+	});
+	const stale = exportStats(agent, outB);
+	await paused;
+	await exportStats(agent, out);
+	release();
+	await stale;
+	seed(8);
+	await exportStats(agent, out);
+	const current = manifest(first.snapshotDir);
+	expect(current.shards.map((ref) => ref.file)).not.toContain(original.file);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(
+		["manifest.json", original.file, ...current.shards.map((ref) => ref.file)].sort(),
+	);
+	expect(readdirSync(second.snapshotDir).sort()).toEqual(
+		["manifest.json", ...manifest(second.snapshotDir).shards.map((ref) => ref.file)].sort(),
+	);
 });
 
 it.each(["EACCES", "ENOENT"])(
@@ -291,9 +340,7 @@ it.each(["EACCES", "ENOENT"])(
 		const result = await exportStats(agent, out);
 		expect(result.warnings ?? []).toEqual(code === "ENOENT" ? [] : ["obsolete shard cleanup failed: EACCES=1"]);
 		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-		expect(JSON.parse(readFileSync(join(agent, "pi-session-kit", "export-state.json"), "utf8")).harnesses).toEqual([
-			"pi",
-		]);
+		expect(JSON.parse(readFileSync(outboxStatePath(agent, first.snapshotDir), "utf8")).harnesses).toEqual(["pi"]);
 	},
 );
 
@@ -341,7 +388,7 @@ it("refuses publication when the durable recovery barrier cannot be written", as
 	writeFileSync(manifestPath, "corrupt");
 	const before = readFileSync(manifestPath);
 	rmSync(roots.claude, { recursive: true, force: true });
-	const statePath = join(agent, "pi-session-kit", "export-state.json");
+	const statePath = outboxStatePath(agent, first.snapshotDir);
 	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 	vi.mocked(writeFile).mockImplementation(async (path, data, options) => {
 		if (String(path).startsWith(`${statePath}.`)) throw Object.assign(new Error("barrier denied"), { code: "EACCES" });
@@ -353,12 +400,16 @@ it("refuses publication when the durable recovery barrier cannot be written", as
 });
 
 it("reads legacy export state but rejects malformed recovery markers", async () => {
-	await exportStats(agent, out);
+	const first = await exportStats(agent, out);
 	const path = join(agent, "pi-session-kit", "export-state.json");
+	const outbox = outboxStatePath(agent, first.snapshotDir);
 	const state = JSON.parse(readFileSync(path, "utf8"));
 	for (const key of ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"]) delete state[key];
-	writeFileSync(path, JSON.stringify(state));
+	writeFileSync(path, JSON.stringify({ ...state, harnesses: ["pi"] }));
+	// An outbox without its own bookkeeping inherits the legacy installation-wide fields, then records its own.
+	rmSync(outbox);
 	await exportStats(agent, out);
+	expect(JSON.parse(readFileSync(outbox, "utf8"))).toMatchObject({ harnesses: ["pi"], recoveryPending: false });
 	writeFileSync(path, JSON.stringify({ ...state, recoveryPending: "invalid" }));
 	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
 });
@@ -375,11 +426,13 @@ it.each([
 	["historyHarnesses", ["unknown"]],
 	["historyHarnesses", ["pi", "pi"]],
 ])("rejects invalid scoped recovery state in %s", async (field, value) => {
-	await exportStats(agent, out);
-	const path = join(agent, "pi-session-kit", "export-state.json");
-	const state = JSON.parse(readFileSync(path, "utf8"));
-	writeFileSync(path, JSON.stringify({ ...state, [String(field)]: value }));
-	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+	const first = await exportStats(agent, out);
+	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
+		const state = readFileSync(path, "utf8");
+		writeFileSync(path, JSON.stringify({ ...JSON.parse(state), [String(field)]: value }));
+		await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+		writeFileSync(path, state);
+	}
 });
 
 it("migrates a legacy boolean recovery marker to a frozen file set once", async () => {
@@ -398,13 +451,15 @@ it("migrates a legacy boolean recovery marker to a frozen file set once", async 
 	seed(7);
 	const first = await exportStats(agent, out, undefined, options);
 	const before = manifest(first.snapshotDir).shards;
-	const statePath = join(agent, "pi-session-kit", "export-state.json");
-	const state = JSON.parse(readFileSync(statePath, "utf8"));
+	const legacyPath = join(agent, "pi-session-kit", "export-state.json");
+	const statePath = outboxStatePath(agent, first.snapshotDir);
+	const state = { ...JSON.parse(readFileSync(legacyPath, "utf8")), ...JSON.parse(readFileSync(statePath, "utf8")) };
 	delete state.lostHarnesses;
 	state.recoveryFiles = null;
 	state.historyHarnesses = null;
 	state.recoveryPending = true;
-	writeFileSync(statePath, JSON.stringify(state));
+	writeFileSync(legacyPath, JSON.stringify(state));
+	rmSync(statePath);
 	writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
 	const migrated = await exportStats(agent, out, undefined, options);
 	expect(migrated.harnesses?.codex?.failed).toBeUndefined();
@@ -868,8 +923,7 @@ it.each(["previous manifest read", "manifest rename", "pruning", "state recordin
 		});
 		vi.mocked(rename).mockImplementation(async (from, to) => {
 			if (checkpoint === "manifest rename" && to === path) await barrier();
-			if (checkpoint === "state recording" && to === join(agent, "pi-session-kit", "export-state.json"))
-				await barrier();
+			if (checkpoint === "state recording" && to === outboxStatePath(agent, first.snapshotDir)) await barrier();
 			await actual.rename(from, to);
 		});
 		vi.mocked(unlink).mockImplementation(async (file) => {

@@ -1,6 +1,6 @@
 /** Privacy-only monthly snapshots and offline, atomic last-good imports. Node builtins only. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readdir, readFile, realpath, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { agentDir } from "../agent-dir.ts";
@@ -217,7 +217,12 @@ export async function machineIdentity(dir = agentDir()): Promise<Identity> {
 	);
 }
 
-/** Local export state, never synced: the secret salt and the harness set last published. */
+/**
+ * Local export state, never synced: the installation's secret salt plus one outbox's bookkeeping. The
+ * bookkeeping lives in a per-outbox file written only under that outbox's export lock, so two outboxes
+ * of one agent dir cannot overwrite each other's recovery set; `export-state.json` holds the salt and,
+ * for outboxes without their own file yet, the legacy installation-wide bookkeeping they inherit.
+ */
 export interface ExportState {
 	/** Keys the account discriminators on quota readings. Never leaves the machine. */
 	salt: string;
@@ -240,12 +245,28 @@ const shardFileList = (value: unknown): value is string[] =>
 	Array.isArray(value) &&
 	value.every((file) => typeof file === "string" && SHARD_FILE.test(file)) &&
 	new Set(value).size === value.length;
+/** One outbox's bookkeeping: everything in the export state but the installation's salt. */
+type OutboxState = Omit<ExportState, "salt">;
+const RECOVERY_KEYS = ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"];
 const stateFile = (dir: string): string => join(dir, "pi-session-kit", "export-state.json");
+/** Keyed by the resolved outbox, so aliases of one outbox share its bookkeeping and lock. */
+async function outboxStateFile(dir: string, snapshotDir: string): Promise<string> {
+	const key = createHash("sha256")
+		.update(await realpath(snapshotDir))
+		.digest("hex");
+	return join(dir, "pi-session-kit", "outboxes", `${key}.json`);
+}
 function validateState(value: unknown): ExportState {
-	const optional = ["recoveryPending", "recoveryFiles", "lostHarnesses", "historyHarnesses"].filter(
-		(key) => record(value) && Object.hasOwn(value, key),
-	);
+	const optional = RECOVERY_KEYS.filter((key) => record(value) && Object.hasOwn(value, key));
 	exact(value, ["version", "salt", "harnesses", "failures", ...optional]);
+	if (typeof value.salt !== "string" || !/^[a-f0-9]{32}$/.test(value.salt)) throw new Error("Invalid export state");
+	return { salt: value.salt, ...validateBookkeeping(value) };
+}
+function validateOutbox(value: unknown): OutboxState {
+	exact(value, ["version", "harnesses", "failures", ...RECOVERY_KEYS]);
+	return validateBookkeeping(value);
+}
+function validateBookkeeping(value: Record<string, unknown>): OutboxState {
 	const harnesses = value.harnesses;
 	const failures = value.failures;
 	if (
@@ -254,15 +275,12 @@ function validateState(value: unknown): ExportState {
 		("recoveryFiles" in value && value.recoveryFiles !== null && !shardFileList(value.recoveryFiles)) ||
 		("lostHarnesses" in value && !harnessList(value.lostHarnesses)) ||
 		("historyHarnesses" in value && value.historyHarnesses !== null && !harnessList(value.historyHarnesses)) ||
-		typeof value.salt !== "string" ||
-		!/^[a-f0-9]{32}$/.test(value.salt) ||
 		!(harnesses === null || harnessList(harnesses)) ||
 		!record(failures) ||
 		!Object.entries(failures).every(([h, n]) => HARNESSES.includes(h as Harness) && count(n) && n > 0)
 	)
 		throw new Error("Invalid export state");
 	return {
-		salt: value.salt,
 		harnesses: harnesses as Harness[] | null,
 		failures: failures as ExportState["failures"],
 		recoveryPending: value.recoveryPending === true,
@@ -287,6 +305,16 @@ async function exportState(dir: string): Promise<ExportState> {
 		}),
 		validateState,
 	);
+}
+/** This outbox's own bookkeeping, else the legacy installation-wide fields it inherits. Corrupt fails. */
+async function outboxState(path: string, legacy: ExportState): Promise<OutboxState> {
+	try {
+		return validateOutbox(await jsonFile(path));
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	const { salt: _, ...inherited } = legacy;
+	return inherited;
 }
 
 /**
@@ -1065,7 +1093,11 @@ async function publishStats(
 	identity: Identity,
 ): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
-	const state = await exportState(dir);
+	const installation = await exportState(dir);
+	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
+	// stale recovery state over this one's.
+	const statePath = await outboxStateFile(dir, snapshotDir);
+	const state: ExportState = { ...(await outboxState(statePath, installation)), salt: installation.salt };
 	const previous = intactPrevious(await loadPrevious(snapshotDir), options.replaceHarnesses === true);
 	// The recorded set can lag the snapshot (state not written after a publish) or be missing: check against
 	// both, so neither a lost nor a stale state file can hide a narrowing.
@@ -1186,7 +1218,15 @@ async function publishStats(
 	// Freeze recovery scope BEFORE replacing unreadable history. Ordinary exports never add newly
 	// superseded files to this set, so subsequent active generations still prune automatically.
 	if (recoveryPending && (captureRecovery || !state.recoveryPending))
-		await atomicJson(stateFile(dir), { version: 1, ...state, recoveryPending, recoveryFiles, lostHarnesses });
+		await atomicJson(statePath, {
+			version: 1,
+			harnesses: state.harnesses,
+			failures: state.failures,
+			recoveryPending,
+			recoveryFiles,
+			lostHarnesses,
+			historyHarnesses: state.historyHarnesses,
+		});
 	// Uncorrected past months stay sealed. An explicit replacement drops their old generations.
 	const sealed =
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
@@ -1269,9 +1309,8 @@ async function publishStats(
 	const published = HARNESSES.filter((h) => wanted.has(h));
 	// The snapshot is out by now: failing to record it is a warning, not a failed export. The next run
 	// derives the set from the snapshot itself, so a widening is still protected.
-	const stateWarnings = await atomicJson(stateFile(dir), {
+	const stateWarnings = await atomicJson(statePath, {
 		version: 1,
-		salt: state.salt,
 		harnesses: published,
 		failures,
 		recoveryPending,

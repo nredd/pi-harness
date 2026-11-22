@@ -1,6 +1,13 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Call } from "../../../src/stats/load.ts";
+
+/** Where an export records one outbox's bookkeeping: keyed by the resolved snapshot directory. */
+export function outboxStatePath(agent: string, snapshotDir: string): string {
+	const key = createHash("sha256").update(realpathSync(snapshotDir)).digest("hex");
+	return join(agent, "pi-session-kit", "outboxes", `${key}.json`);
+}
 
 /** Local-time instant for `YYYY-MM-DD` at `hour`. */
 export function at(day: string, hour = 12): number {

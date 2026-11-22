@@ -516,7 +516,7 @@ default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_D
 precedence. A scheduled run with a minimal environment must pass the flags. Without `pi` in the list
 no pi session is read. The export-only flags are rejected on `import`.
 
-The set an export published is recorded (see `export-state.json` below). A later export with a
+The set an export published is recorded per outbox (see `outboxes/` below). A later export with a
 *narrower* set than the last published one is refused before anything is read or written, because
 its snapshot would silently drop the missing harnesses' history (e.g. a scheduled `--harness pi`
 run after a manual `--harness pi,claude`). Widen the set, or pass `--replace-harnesses` to drop
@@ -584,7 +584,7 @@ CLI results:
   manifests do not mark it fresh. A lost harness with no data to carry gets no `lastGoodAt` stamp,
   even if the previous manifest stamped it. A clean scan of a reappearing harness clears its loss
   marker; recovery files still require explicit replacement. Pi itself still fails closed.
-  `consecutiveFailures` counts failed exports of a harness in a row (kept in `export-state.json`,
+  `consecutiveFailures` counts failed exports of a harness in a row (kept in the outbox's state file,
   reset by a clean one). It never changes the exit code (see below): a caller that wants to warn
   about a harness stuck on carried data reads `failed`, `consecutiveFailures` and, on import,
   `stale`.
@@ -598,7 +598,7 @@ CLI results:
   Exit contract: an export that published a snapshot exits 0, however many harnesses `failed`
   (kept or lost) and however many times in a row: those are fields of the JSON result, plus a
   stderr line each, for the caller to record as warnings. So is `warnings: ["export state not
-  recorded"]`, when the snapshot is out but `export-state.json` could not be written (the next
+  recorded"]`, when the snapshot is out but the outbox's state file could not be written (the next
   export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
   state, a refused narrower harness set, a clock behind the last published export, or a readable
@@ -621,19 +621,25 @@ Installation state, never synced:
   Failed stat/parse operations count as incomplete history; a failed reparse retains the last-good
   cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
   child markers apply only to the matching session ID, surviving user-visible renames.
-- `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex) and the harness set
-  the last successful export published (`null` until one is recorded). `failures` holds consecutive failed exports per harness.
+- `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex). The salt keys the
+  quota account discriminators below and never appears in a snapshot; like `machine.json`, it is
+  created exclusively and atomically, a corrupt file fails rather than being replaced, and export
+  never rewrites it. Older kits kept the outbox bookkeeping below here, installation-wide; an outbox
+  without its own state file inherits those legacy fields, then records its own.
+- `DIR/pi-session-kit/outboxes/<sha256>.json`: one outbox's bookkeeping, keyed by the SHA-256 of
+  the resolved `<OUT>/machines/<UUID>` path and written only under that outbox's export lock, so
+  two outboxes of one agent dir cannot record stale state over each other's recovery set. It holds
+  the harness set the last successful export published (`null` until one is recorded), written only
+  after the manifest is published. `failures` holds consecutive failed exports per harness.
   `historyHarnesses` records which harnesses published events or quota, not merely enrolled empty tools.
   Recovery metadata is persisted before publishing over unreadable history: `recoveryFiles` freezes
   the filenames present at that failure, while `lostHarnesses` records only unavailable history.
   `recoveryPending` keeps the recovery warning visible; it does NOT disable normal pruning.
   Old boolean-only recovery state captures its protected files once on upgrade; unknown old data
   coverage does not invent lost harnesses. Explicit `--replace-harnesses` publication clears recovery
-  metadata. Failure to persist the protected set aborts before replacing the manifest.
-  The salt keys the quota
-  account discriminators below and never appears in a snapshot; like `machine.json`, it is created
-  exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
-  written only after the manifest is published.
+  metadata. Failure to persist the protected set aborts before replacing the manifest. A corrupt
+  file fails the export. Moving the sync checkout changes the key, so the moved outbox starts from
+  the legacy fields again: back up frozen recovery files before moving a checkout with recovery pending.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
