@@ -1416,8 +1416,9 @@ final class Bridge {
 	}
 
 	private func pidArg(_ request: [String: Any]) throws -> Int32 {
-		guard let raw = request["pid"] as? Int, let pid = Int32(exactly: raw) else {
-			throw BridgeFailure(message: "pid must be a 32-bit integer", code: "invalid_args")
+		guard let number = request["pid"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+		      let raw = number as? Int, let pid = Int32(exactly: raw), pid > 0 else {
+			throw BridgeFailure(message: "pid must be a positive 32-bit integer", code: "invalid_args")
 		}
 		return pid
 	}

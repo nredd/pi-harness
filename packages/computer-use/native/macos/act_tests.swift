@@ -450,8 +450,10 @@ private func runRootPIDAssertions() throws {
         try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":18446744073709551615}"#)
     }
     _ = try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":2147483647}"#)
-    try actionFailure("invalid_args", message: "pid must be a 32-bit integer") {
-        try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":2147483648}"#)
+    for pid in [2147483648, 0, -1] {
+        try actionFailure("invalid_args", message: "pid must be a positive 32-bit integer") {
+            try listRoots(#"{"cmd":"listRoots","title":"Fixture","pid":\#(pid)}"#)
+        }
     }
     expect(discovered == [nil, nil, nil, 1234, 2147483647], "listRoots discovers unfiltered for null, missing and nonnumeric PIDs, and never discovers for out-of-range PIDs")
 }
@@ -469,13 +471,16 @@ private func runPIDAdmissionAssertions() throws {
             }
         }
     }
-    let pidError = "pid must be a 32-bit integer"
-    for lookId in ["stale", nil] as [String?] {
-        var request = fixture.request("click", policy: "background", coords: true)
-        request["pid"] = 2147483648
-        request["lookId"] = lookId
-        try check(lookId ?? "missing look", message: pidError) {
-            try fixture.bridge.act(request, world: fixture.world, supportsAgentCursor: false)
+    let pidError = "pid must be a positive 32-bit integer"
+    let invalidPids = try JSONSerialization.jsonObject(with: Data(#"[2147483648, 1234.5, "1234", true, 0, -1]"#.utf8)) as! [Any]
+    for pid in invalidPids {
+        for lookId in ["stale", nil] as [String?] {
+            var request = fixture.request("click", policy: "background", coords: true)
+            request["pid"] = pid
+            request["lookId"] = lookId
+            try check("act pid \(String(reflecting: pid)), \(lookId ?? "missing look")", message: pidError) {
+                try fixture.bridge.act(request, world: fixture.world, supportsAgentCursor: false)
+            }
         }
     }
     if !fixture.lookups.isEmpty || !fixture.trace.isEmpty {
@@ -495,7 +500,11 @@ private func runPIDAdmissionAssertions() throws {
             throw BridgeFailure(message: "capture fixture", code: "fixture_capture")
         })
     }
-    try check("overflow look", message: pidError) { try look(pid: 2147483648, readText: "invalid sentinel") }
+    for pid in invalidPids {
+        try check("look pid \(String(reflecting: pid))", message: pidError) {
+            try look(pid: pid, readText: "invalid sentinel")
+        }
+    }
     if !observations.isEmpty { failures.append("invalid look resolved ownership or captured") }
     try check("wrong owner", code: "pid_mismatch", message: "pid does not match the resolved root owner") {
         try look(pid: 4321, readText: "never")
