@@ -39,12 +39,9 @@ cwd repo.
 
 Never work in the user's checkout. One issue, one worktree.
 
-- `git -C <repo> fetch --no-auto-maintenance origin` (auto-gc can prune an unmounted worktree's admin
-  dir). Workers never run `git worktree prune` or sweep worktrees. The parent
-  runs `git worktree prune` only after the `#### Prune guard` in `get-it-merged` passes; otherwise
-  only `git worktree prune --dry-run`
-- Parent: read `/skill:get-it-merged` and apply only its `### Guarded merged-worktree sweep` section
-  at the end of `get-it-merged` step 4. Do not run merge or scratch cleanup when preparing a worktree
+- Fetch with `git -C <repo> fetch --no-auto-maintenance origin`; automatic maintenance may prune
+  worktree metadata. Workers never sweep. The parent follows only the guarded sweep section of
+  `/skill:get-it-merged` here, not its merge or scratch cleanup steps
 - Branch: `<prefix>/issue-<N>`. `<prefix>` is the repo's documented branch-prefix convention
   (check `AGENTS.md` / `CONTRIBUTING.md` and recent branches), else the operator's GitHub login
   (`gh api user --jq .login`). Append a short kebab slug from the title when the bare number is
@@ -56,6 +53,20 @@ Never work in the user's checkout. One issue, one worktree.
 - Do NOT use the `EnterWorktree` tool. It does not honor this layout
 - Every subsequent command runs with `<path>` as cwd. Pass it explicitly (`git -C`, `make -C`,
   absolute paths) rather than relying on shell state
+
+### Worktree sweep verdicts
+
+Run `python3 -I -S <this-skill-dir>/sweep_guard.py <repo-path> <owner/repo>` from outside
+candidates, using a trusted Python installation.
+Git 2.36+ is required to disable fsmonitor safely; older or unparseable versions mean keep.
+Use `<host>/<owner>/<repo>` off GitHub.com. Pass a repeatable `--hold <path>` for each worktree
+with a known active owner or retained claimed directory. The guard emits one JSON line per
+registered worktree with its path, verdict and reasons. It does not mutate anything.
+This rollout is keep-only: the shipped CLI cannot prove a closed borrower scope and never emits
+`eligible`. Use `--worktree <path>` for an exact-path check. Exit `0` means the scan produced
+verdicts, not permission to delete; unreadable inventory or no matching worktree exits `1`.
+Report holds and claimed scratch, and keep the worktree. Do not delete even a single claimed
+scratch file. See the [preset README](../../README.md) for the local holds.
 
 ## 3. Read the repo's rules
 
@@ -173,23 +184,21 @@ spawned by a parent for this issue. Never hand off to yourself.
 - If a PR exists or is planned, do NOT remove its worktree before the PR lands. After merge, use the
   guarded sweep from step 2; a delegated worker leaves its worktree for the parent. Never
   force-remove a worktree or discard another worker's changes
-- Before handback, remove only untracked scratch you created yourself. At creation, record the path, entry type and SHA-256 hash of each regular file's bytes or symlink's raw `readlink` bytes (no added newline). Use the same method as the parent in `get-it-merged`.
-  - Remove only regular files and symlinks listed as `??` in THAT worktree's `git status --porcelain --untracked-files=all`, on an exact type and hash match. Require the real path of a regular file, or the real path of a symlink's parent directory joined with the link name, to be inside the worktree. Never resolve the link itself; unlink only the link and leave its target untouched.
-  - Never remove ignored files or recursively delete contents. Keep and report directories. In the handback, claim only leftover scratch you created, with its path, type, creation hash for files and symlinks, and reason it remains. Report other changes separately; do not claim them
-- For work where no PR will ever exist (abandoned, duplicate, parked or deferred), the parent must
-  pass the no-PR upstream check and every shared check in the guarded sweep from step 2. This
-  includes the ignored-status, claimed-directory, index-flag and scan checks. Only then may the parent use a
-  documented no-PR mode scoped to that exact checked worktree, e.g. `--no-pr --worktree <path>`.
-  Run from outside it, preserve remote branches and report the helper's verdict verbatim. If any
-  check is unknown or fails, or no safe scoped mode is documented, keep the worktree, report it as
-  in step 10, and name its owner
+- Before handback, leave scratch in place. Claim only scratch you created, with its path, type,
+  and reason it remains. Record the creation SHA-256 of regular file bytes or raw symlink
+  `readlink` bytes (no added newline). The record identifies scratch; it does not authorize
+  deletion. Report other changes separately; do not claim them.
+- For work where no PR will ever exist, the parent may request a verdict with
+  `--worktree <path>`. The keep-only guard does not probe upstream; report its verdict and the
+  owner. Leave the worktree and both branches in place
 - Without native monitors, the parent follows `/skill:get-it-merged` step 1's bounded foreground fallback. Workers never poll. Report the next owner and exact resume command rather than claiming a continuation monitor exists
 
 ## 10. Report
 
 Short. Issue -> branch -> PR URL -> gate result -> review outcome -> guarded sweep report. For each
-retained worktree report the path, reason, and actual `git status --porcelain --ignored --untracked-files=all`
-output (or the scan error). No closing summary paragraph, no restating the plan back.
+retained worktree report the path and only the guard's reasons and any status evidence it already
+collected. Never run a standalone `git status` (or `git diff`) on a retained worktree to fill in
+evidence: it can run configured filters. No closing summary paragraph, no restating the plan back.
 
 ## Guardrails
 

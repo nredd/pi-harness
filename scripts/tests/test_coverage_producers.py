@@ -8,13 +8,19 @@ References:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from shlex import quote
+from textwrap import dedent
 from typing import Any
 
+import pytest
 import yaml
+from coverage import CoverageData
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = "node ../../scripts/run-vitest.ts bun"
@@ -32,6 +38,154 @@ BUN_COVERAGE_ARGS = [
     "--coverage.reporter=json-summary",
     "--coverage.reportsDirectory=coverage/bun",
 ]
+
+
+def test_script_lcov_replays_from_a_different_checkout(tmp_path: Path) -> None:
+    """Resolve both split LCOV reports against a different checkout.
+
+    Parameters:
+        tmp_path (Path): Isolated producer and replay checkout roots.
+    Returns:
+        None.
+    Raises:
+        AssertionError: A report does not resolve to its replay source.
+    """
+    producer = tmp_path / "producer"
+    replay = tmp_path / "fan-in"
+    signals = (
+        ("scripts", "example.py", "coverage/python/lcov.info"),
+        ("packages/preset", "skills/ship-issue/sweep_guard.py", "coverage/sweep-guard/lcov.info"),
+    )
+    sources = {}
+    for package, source, _ in signals:
+        path = producer / package / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x = 1\n")
+        sources[str(path)] = [1]
+    data = CoverageData(basename=str(producer / "scripts/.coverage"))
+    data.add_lines(sources)
+    data.write()
+    subprocess.run(
+        [
+            "/usr/bin/make",
+            "-f",
+            str(ROOT / "Makefile"),
+            f"COVERAGE_REPORT={quote(sys.executable)} -m coverage",
+            "report-script-coverage",
+        ],
+        cwd=producer,
+        check=True,
+        timeout=30,
+    )
+    for package, source, artifact in signals:
+        build_root = producer / package
+        replay_root = replay / package
+        for relative in (source, artifact):
+            target = replay_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(build_root / relative, target)
+        report = (replay_root / artifact).read_text().splitlines()
+        files = [line.removeprefix("SF:") for line in report if line.startswith("SF:")]
+        assert files == [source]
+        assert (replay_root / files[0]).resolve(strict=True) == replay_root / source
+
+
+@pytest.mark.parametrize("mode", ["test fails", "threshold fails", "no coverage"])
+def test_script_gate_requires_fresh_reports(tmp_path: Path, mode: str) -> None:
+    """Run miniature scripts gates under shell errexit with stale artifacts present.
+
+    Parameters:
+        tmp_path (Path): Isolated scripts project and report directories.
+        mode (str): Failure mode to exercise in the coverage recipe.
+    Returns:
+        None.
+    Raises:
+        AssertionError: The gate masks a failure or does not handle stale reports correctly.
+    """
+    assertion = mode != "test fails"
+    shutil.copyfile(ROOT / "Makefile", tmp_path / "Makefile")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "example.py").write_text("def example():\n    return 1\ndef uncovered():\n    return 2\n")
+    guard = tmp_path / "packages/preset/skills/ship-issue/sweep_guard.py"
+    guard.parent.mkdir(parents=True)
+    guard.write_text("value = 1\n")
+    tests = scripts / "tests"
+    tests.mkdir()
+    (tests / "test_sample.py").write_text(
+        f"import example, sweep_guard\ndef test_example():\n"
+        f"    assert example.example() == sweep_guard.value and {assertion}\n"
+    )
+    uv = tmp_path / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        + dedent(
+            """\
+            import os
+            import sys
+
+            tool, *args = sys.argv[5:]
+            if tool == "pytest":
+                os.execv(sys.executable, [sys.executable, "-m", tool, *args])
+            assert tool in {"ruff", "ty"}, tool
+            """
+        )
+    )
+    uv.chmod(0o755)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("COVERAGE_", "PYTEST_", "MAKE"))
+    } | {
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "PYTHONPATH": os.pathsep.join(map(str, (scripts, guard.parent))),
+    }
+    reports = (
+        scripts / "coverage/python/lcov.info",
+        tmp_path / "packages/preset/coverage/sweep-guard/lcov.info",
+    )
+    for report in reports:
+        report.parent.mkdir(parents=True)
+        report.write_text("stale")
+    data = CoverageData(basename=str(scripts / ".coverage"))
+    data.add_lines({str(scripts / "example.py"): [1], str(guard): [1]})
+    data.write()
+    stale_worker = scripts / ".coverage.stale-worker"
+    stale_worker.touch()
+    if mode == "no coverage":
+        env["PYTEST_ADDOPTS"] = "--no-cov"
+    # macOS Make 3.81 ignores `.SHELLFLAGS`; enforce errexit on it too.
+    shell = tmp_path / "errexit-sh"
+    shell.write_text('#!/bin/sh\nexec /bin/sh -e "$@"\n')
+    shell.chmod(0o755)
+    done = subprocess.run(
+        [
+            "/usr/bin/make",
+            ".SHELLFLAGS=-ec",
+            f"SHELL={shell}",
+            "check-scripts-python",
+            f"COVERAGE_REPORT={quote(sys.executable)} -m coverage",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=45,
+    )
+    assert done.returncode != 0
+    assert "Error 1" in done.stderr, (done.stdout, done.stderr)
+    assert ("1 passed" if assertion else "1 failed") in done.stdout
+    assert not stale_worker.exists()
+    scripts_report, guard_report = reports
+    if mode == "no coverage":
+        assert "pytest produced no fresh coverage" in done.stderr
+        assert not (scripts / ".coverage").exists()
+        assert not any(report.exists() for report in reports)
+    else:
+        assert "Required test coverage of 100% not reached" in done.stdout
+        assert "SF:example.py\n" in scripts_report.read_text()
+        assert "SF:skills/ship-issue/sweep_guard.py\n" in guard_report.read_text()
 
 
 def launch_bun(tmp_path: Path, *args: str) -> list[str]:
@@ -134,17 +288,28 @@ def test_python_signals_match_the_shared_python_gate() -> None:
     makefile = (ROOT / "Makefile").read_text()
     recipe = makefile[makefile.index("define PY_GATE") : makefile.index("endef")]
     assert "-n 2 --dist loadfile" in recipe
-    sources = dict(re.findall(r"\$\(call PY_GATE,([\w/]+),[^,]*,[^,]*,([^)]+)\)", makefile))
+    sources = dict(re.findall(r"\$\(call PY_GATE,([\w/]+),[^,]*,[^,]*,([^,)]+)", makefile))
     policy = json.loads((ROOT / "coverage/policy.json").read_text())
     python = {name: pkg for name, pkg in policy["packages"].items() if name.startswith("python-")}
     for name, package in python.items():
         primary = package["signals"]["primary"]
         assert f"--cov-report=lcov:{primary['report']}" in recipe, name
-        source = sources[package["root"]]
+        source = sources[package["root"]].split()[0]
         assert {Path(pattern).parent.as_posix() for pattern in package["owned"]} == {source}, name
         assert not primary.get("skip_hosts"), name
         assert primary["producer"] == "coverage.py", name
     assert set(sources) == {"scripts", "tests/integration", "release"}
+    sweep = policy["packages"]["preset-sweep-guard"]
+    (guard,) = sweep["owned"]
+    primary = sweep["signals"]["primary"]
+    assert f"--cov=../{sweep['root']}/{Path(guard).parent}" in sources["scripts"].split()
+    recipe = makefile.split("\nreport-script-coverage:\n", 1)[1].split("\n\n", 1)[0]
+    scripts_report, sweep_report = [line.strip() for line in recipe.splitlines() if " lcov " in line]
+    assert scripts_report.startswith("(cd scripts && ")
+    assert f"-o {python['python-scripts']['signals']['primary']['report']})" in scripts_report
+    assert sweep_report.startswith(f"(cd {sweep['root']} && ")
+    assert f"-o {primary['report']})" in sweep_report
+    assert f"--include='*/{Path(guard).parent.name}/{Path(guard).name}'" in sweep_report
 
 
 def test_workspace_bun_commands_delegate_coverage_to_the_launcher() -> None:
