@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../../src/agent-manager.ts";
 import { SUBAGENT_TOOL_NAMES } from "../../src/agent-runner.ts";
 import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../../src/agent-types.ts";
+import { drainDetached } from "../../src/detached-results.ts";
 import subagentsExtension, { WORKFLOW_ENTRY_TYPE, WORKFLOW_FILE_FLAG } from "../../src/index.ts";
 import { isScopeModelsEnabled, setScopeModelsEnabled } from "../../src/model-scope.ts";
 import type { AgentRecord } from "../../src/types.ts";
@@ -1044,6 +1045,13 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
 	it("kills a still-running workflow (and its worker thread) on session shutdown", async () => {
 		// A never-returning script: only the run's own abort signal can stop it, so
 		// abortAll() over the agent records would leave the worker spinning.
+		const sessionFile = join(hermetic.dir, "parent.jsonl");
+		const switching = ctx({
+			cwd: hermetic.dir,
+			sessionManager: { ...ctx().sessionManager, getSessionFile: () => sessionFile },
+		});
+		// Bound to a session file: that is what a switch spools into.
+		await booted.lifecycle.get("session_start")?.({ type: "session_start", reason: "startup" }, switching);
 		const result = await tools
 			.get("SubagentWorkflow")
 			.execute(
@@ -1051,13 +1059,22 @@ describe("SubagentWorkflow tool — script vs scriptPath vs name", () => {
 				{ script: `${inlineScript}await new Promise(() => {});\n` },
 				undefined,
 				undefined,
-				workflowCtx(),
+				switching,
 			);
 
-		await booted.lifecycle.get("session_shutdown")?.({}, workflowCtx());
+		// Shutdown joins the run, which settles only once its worker thread is down;
+		// a switch hands its Stopped notice to the session's spool instead of sending it.
+		await booted.lifecycle.get("session_shutdown")?.({ reason: "new" }, switching);
 
-		const sent = await awaitNotification(startedTaskId(result)!);
-		expect(String(sent[0].content)).toContain("<status>Stopped</status>");
+		expect(drainDetached(sessionFile)).toEqual([
+			expect.objectContaining({
+				content: expect.stringContaining("<status>Stopped</status>"),
+				details: expect.objectContaining({ id: startedTaskId(result) }),
+			}),
+		]);
+		expect(booted.pi.sendMessage.mock.calls.some((c: any[]) => c[0]?.customType === "subagent-notification")).toBe(
+			false,
+		);
 	});
 
 	it("reports a script that threw, rather than a run that quietly ended", async () => {

@@ -336,9 +336,8 @@ const WARM_UP_DEADLINE_MS = 9_000;
  * timeouts in #1245 (including `char:15`) were NOT reproduced under load, so this is a mitigation
  * of the measured cold cost, not a verified fix for them.
  *
- * A workflow is joined before teardown: shutdown only aborts it, and a run still settling would
- * terminate its worker thread and arm its completion notice after the leak check, overlapping the
- * lane's first case.
+ * A workflow is awaited to its completion notice before teardown, so the warm-up drives a run that
+ * finished rather than one shutdown aborted (shutdown joins an aborted run too, #1257).
  *
  * @param launch What to warm; failures read `warm-up <kind>: <phase>`.
  */

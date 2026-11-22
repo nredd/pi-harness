@@ -1,7 +1,5 @@
 /** Resource loading for in-process tests: extensions from factories, no filesystem discovery. */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
 	createExtensionRuntime,
 	createSyntheticSourceInfo,
@@ -15,6 +13,7 @@ import {
 	type ResourceLoader,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { makeOwnedTempDir } from "./temp-dir.ts";
 
 /** A factory with the path it reports as its source, e.g. a package entry. */
 export interface CreateTestExtensionsResultInput {
@@ -89,7 +88,7 @@ export async function createTestExtensionsResult(
 		taken.add(input.name);
 	}
 	const thrown: unknown[] = [];
-	const agentDir = mkdtempSync(join(tmpdir(), "pi-test-resources-"));
+	const { dir: agentDir, remove } = makeOwnedTempDir("pi-test-resources-");
 	try {
 		const loader = new DefaultResourceLoader({
 			cwd,
@@ -135,7 +134,7 @@ export async function createTestExtensionsResult(
 		}
 		return result;
 	} finally {
-		rmSync(agentDir, { recursive: true, force: true });
+		remove();
 	}
 }
 
