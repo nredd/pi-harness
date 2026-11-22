@@ -428,6 +428,11 @@ test("expect distinguishes a verified change from a preexisting condition and se
 	assert.equal(fake.waits[1].request.scopeRef, "w", "the scope ref goes out as the wire ref");
 
 	const { stateId: next } = await fake.observe();
+	// The successor observation must corroborate the helper's absence.
+	fake.waitFor = async () => {
+		fake.tree = [];
+		return { found: true, gone: true, nodeCount: 1 };
+	};
 	const gone = await fake.call(fake.bridge.executeAct, {
 		stateId: next,
 		actions: [press],
