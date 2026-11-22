@@ -97,6 +97,16 @@ make help                    # every target
   checked. The baseline may only shrink against the merge base of `HEAD` and `BASE`
   (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
   the merge base is allowed for its initial introduction only.
+- `check-ts` also runs `scripts/check-test-matchers.ts`, which rejects a bare regex literal in a
+  `toMatchObject` expected value (#1299). Vitest's subset match treats an expected `RegExp` as an
+  object with no keys, so `expect({ message: "zzz" }).toMatchObject({ message: /x/ })` passes for any
+  present value. Write `expect.stringMatching(/x/)` or an exact value instead. `toEqual`,
+  `toStrictEqual`, `objectContaining`, `arrayContaining` and `node:assert`'s `rejects`/`throws`
+  validation objects are not affected: the first four compare a `RegExp` by equality and fail on a
+  string, the last two match the regex. The scan uses the `tsgo` parser on the same owned JS/TS test
+  sources as the temp directory check, follows object and array literals (spreads, parentheses, `as`,
+  `satisfies`, conditional branches) inside the call, and fails on a syntax error. It does not
+  follow variables, helper calls or `new RegExp(...)`, and has no baseline.
 - Scripts that use `node ../../scripts/run-vitest.ts` give Vitest and its subprocesses a private
   `TMPDIR`, `TMP` and `TEMP`. The launcher removes the sandbox after the child exits, even on test
   failure. Direct Vitest and Bun invocations bypass this cleanup. `SIGINT` or `SIGTERM` delivered

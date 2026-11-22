@@ -238,6 +238,7 @@ def test_root_script_helpers_are_measured_by_import_audit_at_zero() -> None:
     }
     assert inventory(ROOT, audit) == {
         "scripts/check-commit-messages.mjs",
+        "scripts/check-test-matchers.ts",
         "scripts/check-test-tempdirs.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",

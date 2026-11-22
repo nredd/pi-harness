@@ -654,6 +654,7 @@
       "root": ".",
       "owned": [
         "scripts/check-commit-messages.mjs",
+        "scripts/check-test-matchers.ts",
         "scripts/check-test-tempdirs.mjs",
         "scripts/import_audit.ts",
         "scripts/merge-pr.ts",

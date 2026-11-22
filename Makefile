@@ -41,8 +41,9 @@ check: check-commits check-ts check-scripts check-integration  ## Owned-code gat
 check-commits:  ## Validate the complete PR/push commit range, or the latest local commit (COMMIT_RANGE overrides)
 	node scripts/check-commit-messages.mjs
 
-check-ts:  ## Test temp contract, Biome, tsc and Vitest (WORKSPACES can narrow the workspace checks)
+check-ts:  ## Test temp and toMatchObject regex contracts, Biome, tsc and Vitest (WORKSPACES can narrow the workspace checks)
 	node scripts/check-test-tempdirs.mjs "$(or $(BASE),origin/main)"
+	node scripts/check-test-matchers.ts
 	PATH="$$PATH:$${HOME}/.pi/agent/bin" npm run check$(foreach workspace,$(WORKSPACES), --workspace=$(workspace))
 
 SWEEP_GUARD := ../packages/preset/skills/ship-issue/sweep_guard.py
@@ -105,7 +106,7 @@ check-providers:  ## Synthetic providers and auth preloads Biome on the director
 	cd tests/integration/providers && node ../../../scripts/run-vitest.ts bun
 
 check-import-audit:  ## Offline import audit: Biome + strict tsc, then independent Node/V8 and Bun/Istanbul coverage against the real TypeScript parser
-	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs scripts/tests/*.mjs
+	node_modules/.bin/biome check scripts/*.ts scripts/*.mjs scripts/tests/*.ts scripts/tests/*.mjs
 	node --check scripts/router_contract.mjs
 	node_modules/.bin/tsc -p scripts/tsconfig.import-audit.json
 	@sandbox=$$(mktemp -d); trap 'rm -rf "$$sandbox"' EXIT; \
