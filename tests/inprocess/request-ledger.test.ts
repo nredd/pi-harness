@@ -233,9 +233,9 @@ it("normalizes only Agent tool result elapsed time and preserves result data", (
 });
 
 /**
- * Inject one extension message on the spawn turn and record exact custom-message provenance.
- * Registered after the subagents fork so its `context` handler sees the final transcript;
- * `convertToLlm` erases the custom type before the faux factory sees the request.
+ * Inject one extension message on the spawn turn and record exact custom-message provenance
+ * from the `context` handler, since `convertToLlm` erases the custom type before the faux
+ * factory sees the request.
  */
 function provenanceObserver(sink: { current: Categories }) {
 	return (pi: ExtensionAPI): void => {
@@ -445,11 +445,12 @@ it("accounts for compacted history and the actual spawned child's registry", asy
 		expect(rows[6]?.buckets["tool_call_args:Agent"]).toBeGreaterThan(0);
 		expect(rows[6]?.buckets["tool_result:Agent"]).toBeGreaterThan(0);
 		// The extension message is a user message by the time the factory sees it; only provenance names it.
+		const extension = `extension:${NOTE_TYPE}`;
+		expect(rows.flatMap((row, index) => (extension in row.buckets ? [index] : []))).toEqual([4, 6]);
 		for (const index of [4, 6]) {
-			expect(original[index]?.provenance).toEqual({ [NOTE]: `extension:${NOTE_TYPE}` });
-			expect(rows[index]?.buckets[`extension:${NOTE_TYPE}`]).toBe(escapedBytes(NOTE));
+			expect(original[index]?.provenance).toEqual({ [NOTE]: extension });
+			expect(rows[index]?.buckets[extension]).toBe(escapedBytes(NOTE));
 		}
-		expect(rows[3]?.buckets[`extension:${NOTE_TYPE}`]).toBeUndefined();
 		// The child's single user block is the parent's rendered history, then the task prompt.
 		const [inherited, category] = Object.entries(original[5]?.prefixes ?? {})[0] ?? [];
 		expect(category).toBe("inherited_context");

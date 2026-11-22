@@ -304,6 +304,30 @@ def test_prefix_remainder_still_splits_later_sections() -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "sdk"),
+    [
+        (json.dumps({"system": INHERITED, "messages": []}, ensure_ascii=False), False),
+        (
+            json.dumps({"system": [{"type": "text", "text": INHERITED}], "messages": []}, ensure_ascii=False),
+            False,
+        ),
+        (
+            json.dumps(
+                {"messages": [{"role": "system", "sections": {"rules": INHERITED}, "content": []}]},
+                ensure_ascii=False,
+            ),
+            True,
+        ),
+    ],
+)
+def test_prefix_matches_only_message_content(raw: str, sdk: bool) -> None:
+    """Top-level `system` text and SDK named `sections` bypass the prefix match."""
+    buckets = request_ledger(raw, prefixes={INHERITED: "inherited_context"}, sdk=sdk)["buckets"]
+    assert "inherited_context" not in buckets
+    assert sum(buckets.values()) == len(raw.encode())
+
+
+@pytest.mark.parametrize(
     ("prefixes", "message"),
     [
         ({"": "inherited_context"}, "Empty `prefixes` text"),

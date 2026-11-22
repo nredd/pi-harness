@@ -552,7 +552,12 @@ class _Attributor:
                 None
                 if exact is not None
                 else next(
-                    ((text, kind) for text, kind in self.prefixes.items() if value.startswith(text)), None
+                    (
+                        (text, prefix_category)
+                        for text, prefix_category in self.prefixes.items()
+                        if value.startswith(text)
+                    ),
+                    None,
                 )
             )
             self.text(path if bare else (*path, "text"), exact or default, system=system, prefix=prefix)
@@ -589,8 +594,10 @@ def request_ledger(
         provenance (dict[str, str] | None): exact message text -> known category;
             extension:<customType> and subagent_notices must come from an observer,
             never inferred from arbitrary natural language.
-        prefixes (dict[str, str] | None): exact leading text of a text block -> known category, the
-            rest of the block keeping its default; exact `provenance` wins and the longest prefix applies.
+        prefixes (dict[str, str] | None): exact leading text of a message-content text block ->
+            known category, the rest of the block keeping its default; exact `provenance` wins and
+            the longest prefix applies. Top-level `system` blocks and SDK `sections` never match;
+            tagged sections in a native system delta's remainder keep their own buckets.
         previous (str | None): preceding recorded request, original body.
         parent (str | None): spawning parent's request, original body.
         sdk (bool): account for a faux factory transcript instead of an Anthropic wire body.
