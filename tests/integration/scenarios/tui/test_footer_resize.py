@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from harness.sandbox import Sandbox
     from harness.tmux import TmuxPane
 
-pytestmark = [pytest.mark.stack, pytest.mark.tui]
 STATS = re.compile(r"\bhit \d+\.\d%|\bCH\d+\.\d%")
 FULL_STATS = re.compile(
     r"^\s*in \S+ out \S+ (?:read \S+ )?(?:write \S+ )?"
@@ -45,6 +44,11 @@ STATUS = "STATUS-LINE-OK"
 # Reset suffix: full `(resets ..)` or compact ` @..`.
 RESET_SUFFIX = re.compile(r"\(resets [^)]+\)| @\S+")
 OPENAI_FIVE_HOUR = re.compile(r"\b(?:OpenAI|OAI) 5h\b")
+GOOGLE_QUOTA_ROW = re.compile(
+    r"^[ \t]*(?:Quota left:|Left:)[ \t]+Goog(?:le)?\b[^\r\n]*"
+    r"\b37/250[ \t]+req(?:uests)?[ \t]+obs(?:erved)?\b[^\r\n]*$",
+    re.MULTILINE,
+)
 
 
 def preset_shows_resets(preset: Path) -> bool:
@@ -124,6 +128,8 @@ def assert_footer(pane: TmuxPane, width: int, *, resets: bool) -> None:
     raise AssertionError(f"Footer did not repaint cleanly at {width}:\n{screen}")
 
 
+@pytest.mark.stack
+@pytest.mark.tui
 def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[..., TmuxPane]) -> None:
     """120 -> 60 -> 320 -> 120 preserves one stats/quota/status row without timer scaling.
 
@@ -166,6 +172,26 @@ def test_resize_transitions_leave_no_stale_rows(sandbox: Sandbox, tui: Callable[
         assert_footer(pane, width, resets=resets)
 
 
+@pytest.mark.parametrize(
+    "screen",
+    [
+        "Quota left:\nGoogle 37/250 requests observed",
+        "Quota left: Google 37/250\nrequests observed",
+        "Quota left: Google 37/250 requests\nobserved",
+    ],
+)
+def test_google_quota_row_rejects_split_render(screen: str) -> None:
+    """Require every token of the Google count on the quota row.
+
+    Parameters:
+        screen (str): capture with the quota text split across two lines.
+    """
+    assert GOOGLE_QUOTA_ROW.search("\nLeft: Goog\t37/250 req obs\n") is not None
+    assert GOOGLE_QUOTA_ROW.search(screen) is None
+
+
+@pytest.mark.stack
+@pytest.mark.tui
 def test_google_meter_reaches_the_quota_footer(sandbox: Sandbox, tui: Callable[..., TmuxPane]) -> None:
     """A faux `google` model shows its observed count, not subscription headroom.
 
@@ -198,17 +224,13 @@ def test_google_meter_reaches_the_quota_footer(sandbox: Sandbox, tui: Callable[.
         ],
     )
     usage.set(views=[google])
-    row = (
-        r"(?m)^\s*(?:Quota left:|Left:)\s+Goog(?:le)?\b[^\n]*"
-        r"\b37/250\s+req(?:uests)?\s+obs(?:erved)?\b[^\n]*$"
-    )
     screen = tui(
         {"providers": {"google": {"models": ["faux-fast"], "steps": []}}},
         model="google/faux-fast",
         extra_args=["-e", str(USAGE_FIXTURE_EXTENSION)],
         env=fixture_env(usage),
         wait_pattern=STATUS,
-    ).wait_for(row)
-    match = re.search(row, screen)
+    ).wait_for(GOOGLE_QUOTA_ROW)
+    match = GOOGLE_QUOTA_ROW.search(screen)
     assert match is not None, screen
     assert "%" not in match[0], screen

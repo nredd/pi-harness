@@ -9,6 +9,7 @@ References:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 from itertools import count
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from harness.sandbox import Sandbox
 
 SETTLE_S = 0.3
+STUB_BANNER = re.compile(r"^STUB PI MODEL MAIN", re.IGNORECASE | re.MULTILINE)
 
 
 @pytest.fixture
@@ -94,6 +96,15 @@ def test_launch_without_a_wait_pattern_returns_before_the_first_frame(
     with stub_tui(monkeypatch, box, name="nowait", wait_pattern=None) as live:
         assert live.is_alive()
         live.wait_for(r"\bmain\b")
+
+
+def test_wait_for_preserves_compiled_pattern_flags(pane: TmuxPane) -> None:
+    """A precompiled pattern retains its case-insensitive match.
+
+    Parameters:
+        pane (TmuxPane): pane running the stub Pi session.
+    """
+    assert "stub pi model main" in pane.wait_for(STUB_BANNER, timeout_s=1)
 
 
 def test_styled_capture_keeps_escape_sequences(pane: TmuxPane) -> None:
