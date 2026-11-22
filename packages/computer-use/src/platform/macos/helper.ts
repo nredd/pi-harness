@@ -294,7 +294,7 @@ export class MacosHelperClient {
 		expectedBuild ??= macosHelperBuild(PACKAGE_ROOT);
 		if (this.helperBuild !== expectedBuild) {
 			const builds = `helper build ${this.helperBuild}, expected ${expectedBuild}`;
-			const repair = `: from the package root, run \`node scripts/setup-helper.mjs --runtime\`, then \`node scripts/setup-helper.mjs --stop-stale-daemon\` if a stale daemon is still running (setup reports the app already current). For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper${macosSigningRefusal(HELPER_APP_PATH, expectedBuild)}`;
+			const repair = `: from the package root, run \`node scripts/setup-helper.mjs --runtime\`. For a source checkout, rebuild first with \`npm run build:native\`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper${macosSigningRefusal(HELPER_APP_PATH, expectedBuild)}`;
 			// Status shows the build IDs and the repair; the daemon-reported executable path stays in the error.
 			this.staleBuildMessage = `${builds}${repair}`;
 			const executable = toOptionalString(result?.executablePath) ?? HELPER_APP_EXECUTABLE_PATH;

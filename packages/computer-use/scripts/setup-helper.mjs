@@ -426,8 +426,6 @@ function createSetup(argv, deps) {
 	const allowAdhocUpdate = args.has("--allow-adhoc-update") || env.PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE === "1";
 	// Set by the runtime client: refuse, never stop, a helper that is running.
 	const automatic = args.has("--automatic");
-	// Operator recovery only: stop a stale daemon on the managed socket and touch nothing else.
-	const stopStaleDaemon = args.has("--stop-stale-daemon");
 
 	function getArg(name) {
 		const index = argv.indexOf(name);
@@ -861,55 +859,6 @@ function createSetup(argv, deps) {
 		return alive ? `a helper process from ${helperAppExecutablePath} is running` : undefined;
 	}
 
-	/**
-	 * Operator recovery for a stale daemon that setup cannot see, e.g. one launched from a legacy path while
-	 * the bundle is already current. Asks the daemon on the managed socket for its build and sends `shutdown`
-	 * on that same connection only when the build differs from this package's. Never touches the bundle.
-	 * @returns {Promise<void>} Resolves once nothing stale listens on the managed socket.
-	 * @throws {Error} When the daemon cannot be verified, refuses to stop, or still listens afterwards.
-	 */
-	async function stopStaleHelperDaemon() {
-		const expected = macosHelperBuild(rootDir);
-		let stage = "connect";
-		let found = { build: "unknown", pid: "unknown" };
-		const outcome = await talkToHelper(managedSocketPath, (reply) => {
-			if (stage === "connect") {
-				stage = "probe";
-				return { id: "stop_probe", cmd: "diagnostics" };
-			}
-			if (reply.ok !== true || reply.id !== `stop_${stage}`)
-				throw new Error(`unexpected ${stage} reply: ${JSON.stringify(reply)}`);
-			if (stage === "shutdown") return undefined;
-			found = {
-				build: typeof reply.result?.buildIdentity === "string" ? reply.result.buildIdentity : "unknown",
-				pid: String(reply.result?.pid ?? "unknown"),
-			};
-			if (found.build === expected) return undefined;
-			stage = "shutdown";
-			return { id: "stop_shutdown", cmd: "shutdown" };
-		});
-		if (outcome.absent) {
-			console.log(`[pi-computer-use] no helper daemon is listening at ${managedSocketPath}; nothing to stop`);
-			return;
-		}
-		if (stage === "probe") {
-			console.log(`[pi-computer-use] helper daemon (pid ${found.pid}) runs the current build ${expected}; not stopped`);
-			return;
-		}
-		for (let attempt = 0; attempt < 20; attempt += 1) {
-			await sleep(100);
-			if ((await talkToHelper(managedSocketPath, () => undefined)).absent) {
-				console.log(
-					`[pi-computer-use] stopped stale helper daemon (pid ${found.pid}, build ${found.build}, expected ${expected}); the next command launches the installed helper`,
-				);
-				return;
-			}
-		}
-		throw new Error(
-			`The stale helper daemon (pid ${found.pid}, build ${found.build}) at ${managedSocketPath} accepted shutdown but still listens; quit it manually.`,
-		);
-	}
-
 	/** A running helper keeps its old code after the bundle is replaced; stop it so the next command relaunches the new one. */
 	async function stopRunningHelper() {
 		if (automatic) {
@@ -1148,13 +1097,6 @@ function createSetup(argv, deps) {
 			throw new Error(
 				"pi-computer-use helper is supported on macOS, Windows, and Linux. Use the matching --platform option.",
 			);
-		}
-
-		if (stopStaleDaemon) {
-			if (isPostinstall || automatic)
-				throw new Error("--stop-stale-daemon is an operator action; it never runs with --postinstall or --automatic.");
-			await stopStaleHelperDaemon();
-			return;
 		}
 
 		const arch = normalizeArch(hostArch);
