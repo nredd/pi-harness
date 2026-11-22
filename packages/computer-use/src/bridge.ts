@@ -87,6 +87,7 @@ import {
 	rankedTextMatch,
 	renderInteractiveControls,
 	restoreOutline,
+	revocationFor,
 	type SerializedOutline,
 	type SerializedOutlineNode,
 	type SerializedOutlineSearchMatch,
@@ -102,6 +103,7 @@ import {
 	boundToolError,
 	clearStoredOutputs,
 	readStoredOutput,
+	revokeStoredOutputs,
 	UI_TEXT_PAGE_CHARS,
 } from "./output.ts";
 import type { PermissionStatus } from "./permissions.ts";
@@ -489,6 +491,20 @@ function persistOperation(state: OperationState): void {
 	)
 		return;
 	savedStates.saveDesktop(state, state.resourceKey, state.epoch);
+	revokeOlderStates(state.currentCapture.stateId, state.resourceKey, state.currentOutline);
+}
+
+/**
+ * A look that saw a protected or unconfirmed node revokes text it does not vouch for in every other retained state of
+ * the same root, on disk too, and drops the `@o` pages those states produced. Refs are stable across looks of one
+ * root, so a node the newer look did not confirm readable by ref may be the one that turned protected.
+ */
+function revokeOlderStates(stateId: string, resourceKey: string, outline: Outline): void {
+	const confirmed = revocationFor(outline);
+	if (!confirmed) return;
+	const revoked = savedStates.revoke(resourceKey, stateId, confirmed);
+	for (const record of revoked) saveStoredOutline(record.stateId, record.value.outline);
+	if (revoked.length) revokeStoredOutputs(new Set(revoked.map((record) => record.stateId)));
 }
 
 export async function setComputerUseActivity(active: boolean): Promise<void> {
@@ -2380,6 +2396,9 @@ async function performExpandUi(
 		state.currentOutline = outline;
 		state.currentLook = { ...scoped, image: state.currentLook?.image, outline: outline.root, parsedOutline: outline };
 		persistOperation(state);
+		const stateId = state.currentCapture!.stateId;
+		// Pages this state produced before the graft may hold text the graft just redacted.
+		if (outline.nodes.some((node) => node.unconfirmed)) revokeStoredOutputs(new Set([stateId]));
 	}
 	const folded = foldToBudget(outline, { maxDepth: depth, maxNodes: 150 }, [target.ref]);
 	const details: OutlineToolDetails = {
@@ -3897,7 +3916,10 @@ function makeToolExecutor<P, D>(
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
 		try {
-			return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)));
+			// Tag each `@o` page with the state it answered for, so a later protection revocation can drop it.
+			return await executeTool(tool, ctx, params, signal, async () =>
+				applyOutputEnvelope(tool, await perform(params, signal), operationState().currentCapture?.stateId),
+			);
 		} catch (error) {
 			throw boundToolError(tool, error);
 		}

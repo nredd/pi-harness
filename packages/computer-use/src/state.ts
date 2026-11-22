@@ -6,6 +6,7 @@ import {
 	type LookResponse,
 	type Outline,
 	restoreOutline,
+	revokeUnconfirmed,
 	type SerializedOutline,
 	serializeOutline,
 } from "./outline.ts";
@@ -89,6 +90,24 @@ export class SavedStates {
 
 	clear(): void {
 		this.store.clear();
+	}
+
+	/**
+	 * Apply a protection revocation from a newer look of `resourceKey`: in every other retained desktop state of that
+	 * resource, redact nodes whose refs `confirmed` does not list. Returns the revoked records, whose outlines changed.
+	 * Side effect: mutates those records in place, keeping their eviction order.
+	 */
+	revoke(resourceKey: string, exceptStateId: string, confirmed: Set<string>): StoredState<UiObservation>[] {
+		const revoked: StoredState<UiObservation>[] = [];
+		for (const record of this.store.values()) {
+			if (record.resourceKey !== resourceKey || record.stateId === exceptStateId || record.value.kind !== "desktop")
+				continue;
+			const { outline, changed } = revokeUnconfirmed(record.value.outline, confirmed);
+			if (!changed) continue;
+			record.value = { ...record.value, outline };
+			revoked.push(record);
+		}
+		return revoked;
 	}
 
 	hydrate(record: StoredState<UiObservation> | undefined): OperationState {

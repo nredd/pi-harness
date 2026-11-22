@@ -2,16 +2,17 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "vitest";
 import { serializeOutline } from "../src/outline.ts";
-import { REQUIRED_PLATFORM_INVARIANTS, assertPlatformArchitecture } from "../src/platform/architecture.ts";
-import { ResourceScheduler, StaleResourceStateError, StateStore } from "../src/runtime.ts";
-import { SavedStates } from "../src/state.ts";
 import {
-	MODEL_TEXT_MAX_BYTES,
 	applyOutputEnvelope,
 	boundToolError,
 	clearStoredOutputs,
+	MODEL_TEXT_MAX_BYTES,
 	readStoredOutput,
+	revokeStoredOutputs,
 } from "../src/output.ts";
+import { assertPlatformArchitecture, REQUIRED_PLATFORM_INVARIANTS } from "../src/platform/architecture.ts";
+import { ResourceScheduler, StaleResourceStateError, StateStore } from "../src/runtime.ts";
+import { SavedStates } from "../src/state.ts";
 import { outlineNode as n, outlineOf } from "./support/outline-nodes.mjs";
 
 describe("StateStore", () => {
@@ -311,6 +312,18 @@ describe("bounded output store", () => {
 	afterEach(() => clearStoredOutputs());
 	const result = (text) => ({ content: [{ type: "text", text }], details: {} });
 	const textOf = (value) => value.content[0].text;
+
+	test("a revocation drops only the pages its states produced (#1234)", () => {
+		const refOf = (value) => /read_text\(\{ ref: "(@o\d+)"/.exec(textOf(value))[1];
+		const big = "x".repeat(MODEL_TEXT_MAX_BYTES + 1);
+		const revoked = refOf(applyOutputEnvelope("inspect_ui", result(big), "S-old"));
+		const otherState = refOf(applyOutputEnvelope("inspect_ui", result(big), "S-new"));
+		const untagged = refOf(applyOutputEnvelope("inspect_ui", result(big)));
+		revokeStoredOutputs(new Set(["S-old"]));
+		assert.equal(readStoredOutput(revoked, 0), undefined);
+		assert.ok(readStoredOutput(otherState, 0));
+		assert.ok(readStoredOutput(untagged, 0));
+	});
 
 	test("small results pass through untouched, including image-only ones", () => {
 		const small = result("hello");

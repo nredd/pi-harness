@@ -156,9 +156,19 @@ describe.each(Object.entries(PROTECTED_SHAPES))("a readable node that turns %s",
 		assertNoSecret(second.acted, second.text, "act_ui");
 		assert.match(second.text, /\[redacted\] +changed +\(not matched in latest look\)/);
 		await assertQueriesClean(second.stateId, "@e2");
-		// The earlier state still answers for its own look; only later states consult the new classification.
+		// The later look revoked the node in the earlier state too (#1263): no replay, and no search oracle.
 		const earlier = await fake.call(fake.bridge.executeInspectUi, { stateId: first.stateId, ref: "@e2" });
-		assert.match(fake.text(earlier), new RegExp(SECRET));
+		assertNoSecret(earlier, fake.text(earlier), "inspect_ui on the earlier state");
+		const kept = await fake.call(fake.bridge.executeInspectUi, { stateId: first.stateId, ref: "@e3" });
+		assert.match(fake.text(kept), /AXButton "Keep"/, "a node the later look confirmed keeps its text");
+		const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId: first.stateId, ref: "@e2" });
+		assertNoSecret(expanded, fake.text(expanded), "expand_ui on the earlier state");
+		// No cached hit confirms the old text; with no cached match, the live OCR retry refuses the stale state.
+		for (const text of [SECRET, "private", "hunter2"])
+			await assert.rejects(
+				fake.call(fake.bridge.executeSearchUi, { stateId: first.stateId, text }),
+				(error: Error) => /stale/i.test(error.message) && !error.message.includes(SECRET),
+			);
 	});
 });
 
@@ -254,6 +264,39 @@ test("a redacted top-level graft never echoes the old region label", async () =>
 		"the preserved field's region is redacted",
 	);
 	await assertQueriesClean(stateId, "@e2");
+});
+
+test("a scoped graft that redacts drops the same state's earlier output pages", async () => {
+	const { fake } = await desktop(PROTECTED_SHAPES["linux password"]);
+	const long = `${SECRET} ${"x".repeat(60_000)}`;
+	const group = (children: object[], extra = {}) => wireNode("g", "AXGroup", "Group", { children, ...extra });
+	let kid = wireNode("kid", "AXStaticText", long);
+	fake.lookPayload = (request: { scopeRef?: string }) =>
+		request.scopeRef === "g"
+			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group([kid]) }
+			: lookPayload({ children: [group([kid], { truncated: request.scopeRef === undefined })] });
+	const { stateId } = await fake.observe({ detail: "outline" });
+	const inspected = await fake.call(fake.bridge.executeInspectUi, { stateId, ref: "@e3" });
+	const outputRef = present(/read_text\(\{ ref: "(@o\d+)"/.exec(fake.text(inspected)))[1];
+	kid = wireNode("kid2", "password text", PROTECTED_LABEL, { label: "" });
+	await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+	await assert.rejects(fake.call(fake.bridge.executeReadText, { ref: outputRef }), /unavailable or was evicted/);
+});
+
+test("a protection revocation drops the earlier state's output pages", async () => {
+	const { fake, actWhile } = await desktop(PROTECTED_SHAPES["linux password"]);
+	const long = `${SECRET} ${"x".repeat(60_000)}`;
+	fake.tree = [wireNode("c", "AXGroup", long), wireButton("b", "Keep")];
+	const first = await fake.observe();
+	const inspected = await fake.call(fake.bridge.executeInspectUi, { stateId: first.stateId, ref: "@e2" });
+	const outputRef = present(/read_text\(\{ ref: "(@o\d+)"/.exec(fake.text(inspected)))[1];
+	const page = await fake.call(fake.bridge.executeReadText, { ref: outputRef });
+	assert.match(fake.text(page), new RegExp(SECRET), "precondition: the page holds the readable label");
+	await actWhile(first.stateId, [
+		wireNode("c", "password text", PROTECTED_LABEL, { label: "" }),
+		wireButton("b", "Keep"),
+	]);
+	await assert.rejects(fake.call(fake.bridge.executeReadText, { ref: outputRef }), /unavailable or was evicted/);
 });
 
 test("a restored node without a role expands as protected, not as a crash", async () => {
