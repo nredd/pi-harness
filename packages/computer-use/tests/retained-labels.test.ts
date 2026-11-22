@@ -161,7 +161,7 @@ describe.each(Object.entries(PROTECTED_SHAPES))("a readable node that turns %s",
 		assertNoSecret(second.acted, second.text, "act_ui");
 		assert.match(second.text, /\[redacted\] +changed +\(not matched in latest look\)/);
 		await assertQueriesClean(second.stateId, "@e2");
-		// The earlier state still answers for its own look; only later states consult the new classification.
+		// The earlier state still answers for its own look (#1263, #1279); only later states consult the new classification.
 		const earlier = await fake.call(fake.bridge.executeInspectUi, { stateId: first.stateId, ref: "@e2" });
 		assert.match(fake.text(earlier), new RegExp(SECRET));
 	});
@@ -426,7 +426,7 @@ describe("graftScopedOutline", () => {
 		);
 	const scoped = (child: object) => outlineOf(outlineNode("g", { wireRef: "g", children: [outlineNode("n", child)] }));
 
-	test("a fresh scoped look re-confirms a node an earlier revocation left unconfirmed", () => {
+	test("a fresh scoped look re-confirms a node an earlier graft left unconfirmed", () => {
 		const outline = base();
 		graftScopedOutline(outline, "@e2", scoped({ wireRef: "new", role: "password text", title: PROTECTED_LABEL }));
 		graftScopedOutline(outline, "@e2", scoped({ wireRef: "old", role: "AXStaticText", title: "Fresh" }));

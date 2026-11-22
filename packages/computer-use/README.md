@@ -1125,16 +1125,16 @@ The runtime is state-scoped and outline-first:
 - `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
 - Retained outline text is bounded by what the current snapshot can classify (#1234). A node is protected when it is a macOS secure text field, has the Linux `password text` or `unknown` role, carries the helper's `[protected]` marker, or has no role at all. Covered:
   - Protected node metadata: on parse and restore its title reads `[protected]` and its description, identifier, value and OCR text are dropped, so search, folds, diffs and serialized details never see them. Role, subrole, refs and geometry stay.
-  - Scoped `expand_ui` grafts: when the scoped look contains a protected node, preserved children it did not confirm keep their refs and role but lose title, description, identifier, value and OCR text (`[redacted]`), and are marked `unconfirmed`. `@o` pages the state produced before the graft are dropped.
+  - Scoped `expand_ui` grafts: when the scoped look contains a protected node, preserved children it did not confirm keep their refs and role but lose title, description, identifier, value and OCR text (`[redacted]`), and are marked `unconfirmed`.
   - Running notes: `search_ui`, `expand_ui` and `inspect_ui` rebuild each node region's key and label from the node now at its ref, so a protected node reads `[protected]`, an unconfirmed one `[redacted]`, and a missing one is redacted. Root-listing and capture-pairing regions carry typed provenance and pass through. A legacy region without provenance is reclassified by its ref, or redacted.
-  - Older `stateId`s of the same root: a look that contains a protected or unconfirmed node redacts, in every other retained state of that root, each node whose ref it did not see readable, rewrites their stored outlines and drops their `@o` pages. A revoked older state still addresses its refs; a zero-match search on it retries OCR live and is refused as stale.
-  - Same-ID session reconstruction: a scoped graft is persisted under its `stateId`, restore prefers the stored outline over a legacy inline copy, and a restored outline that does not match the session's newest `expand_ui` lookId is fully redacted. A failed write drops the older stored copy, so that state restores as unavailable.
 - Not covered:
   - A scoped look with no protected node keeps preserved, unconfirmed children as is.
+  - Older `stateId`s: each answers `search_ui`, `expand_ui` and `inspect_ui` from its own snapshot, so a state taken while a node was readable still shows its label after a later look saw it protected (#1263). Revocation across retained states is #1279.
+  - `@o` pages a state produced before a graft saw protection stay readable (#1279).
+  - Session restore reads the outline saved by `observe_ui`/`act_ui`; a scoped graft is not persisted, so a restart restores the pre-graft text under the same `stateId` (#1279).
   - Windows password edits carry no protection signal on the wire, so none of the above triggers for them (#1263).
   - Screenshots and OCR: protected pixels are not masked before OCR or image encoding, and OCR text attributed to another node or a picture-only title is untouched (#1263).
   - `read_text` reads live text from the helper, independent of retained outlines, and error `@o` pages are not tied to a state.
-  - Revocation matches nodes by ref; a protected replacement that a full look cannot tie to the old ref redacts every unconfirmed node of older states, and an unwritable outline store can leave a revoked copy on disk.
 - `act_ui` is the state-scoped desktop action entrypoint. The carried macOS `desktop_input` tool is a separately gated physical fallback with a shared transaction lock.
 - UI observations are immutable records; request-local hydration replaces global current state.
 - Cached queries bypass scheduling; live work is ordered per physical resource.
