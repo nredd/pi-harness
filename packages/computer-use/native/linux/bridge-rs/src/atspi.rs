@@ -273,27 +273,30 @@ impl AtspiClient {
             if filter_pid.is_some_and(|wanted| wanted != pid) {
                 continue;
             }
-            let app_name = if self.role_access(&app).await.readable().is_some() {
-                self.string_property(&app, "Name").await.unwrap_or_default()
-            } else {
-                PROTECTED_LABEL.to_owned()
-            };
+            let app_name = self
+                .checked_metadata(&app, async || {
+                    self.string_property(&app, "Name").await.unwrap_or_default()
+                })
+                .await
+                .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
             let windows = self.children(&app).await.unwrap_or_default();
             for window in windows {
-                let access = self.role_access(&window).await;
-                let (role, name) = if access.readable().is_some() {
-                    (
-                        self.role_name(&window).await.unwrap_or_default(),
-                        self.string_property(&window, "Name")
-                            .await
-                            .unwrap_or_default(),
-                    )
-                } else {
-                    (
-                        access.protected_name().to_owned(),
-                        PROTECTED_LABEL.to_owned(),
-                    )
-                };
+                let (role, name) = self
+                    .checked_metadata(&window, async || {
+                        (
+                            self.role_name(&window).await.unwrap_or_default(),
+                            self.string_property(&window, "Name")
+                                .await
+                                .unwrap_or_default(),
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|access| {
+                        (
+                            access.protected_name().to_owned(),
+                            PROTECTED_LABEL.to_owned(),
+                        )
+                    });
                 roots.push(RootSnapshot {
                     frame: self.bounds(&window).await,
                     accessible: window,
@@ -313,6 +316,24 @@ impl AtspiClient {
             }
         }
         Ok(roots)
+    }
+
+    /// Read provider metadata only while the live role is readable before and after the read.
+    async fn checked_metadata<T>(
+        &self,
+        accessible: &AccessibleRef,
+        read: impl AsyncFnOnce() -> T,
+    ) -> Result<T, RoleAccess> {
+        let access = self.role_access(accessible).await;
+        let Some(id) = access.readable() else {
+            return Err(access);
+        };
+        let metadata = read().await;
+        match self.role_access(accessible).await {
+            RoleAccess::Readable(confirmed) if confirmed == id => Ok(metadata),
+            RoleAccess::Password => Err(RoleAccess::Password),
+            _ => Err(RoleAccess::Unclassified),
+        }
     }
 
     pub async fn snapshot(
@@ -1086,6 +1107,115 @@ mod tests {
                     [WINDOW, DIALOG]
                 );
                 assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+            },
+        )
+        .await;
+    }
+
+    /// Reply once with a readable role, then persistently with `after`.
+    struct FlippingNode {
+        name: &'static str,
+        readable: u32,
+        after: u32,
+        role_requests: std::sync::atomic::AtomicUsize,
+        children: &'static [(&'static str, &'static str)],
+    }
+
+    impl FlippingNode {
+        fn new(
+            name: &'static str,
+            readable: u32,
+            after: u32,
+            children: &'static [(&'static str, &'static str)],
+        ) -> Self {
+            Self {
+                name,
+                readable,
+                after,
+                role_requests: Default::default(),
+                children,
+            }
+        }
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl FlippingNode {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            self.children
+                .iter()
+                .map(|&(destination, path)| (destination, OwnedObjectPath::try_from(path).unwrap()))
+                .collect()
+        }
+
+        fn get_role_name(&self) -> &str {
+            "frame"
+        }
+
+        fn get_role(&self) -> u32 {
+            let order = std::sync::atomic::Ordering::SeqCst;
+            if self.role_requests.fetch_add(1, order) == 0 {
+                self.readable
+            } else {
+                self.after
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn list_roots_discards_metadata_when_the_role_turns_protected_during_the_read() {
+        const DESTINATION: &str = ":1.42";
+        const APP: &str = "/app";
+        const SECRET: &str = "private fixture title";
+        with_peer(
+            |server| {
+                server
+                    .serve_at(FIXTURE_DBUS_ROOT, MockBus)?
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        TreeNode {
+                            name: "Registry",
+                            role: "desktop",
+                            children: &[(DESTINATION, APP)],
+                            has_text: false,
+                        },
+                    )?
+                    .serve_at(
+                        APP,
+                        FlippingNode::new(
+                            SECRET,
+                            75,
+                            PASSWORD_TEXT_ROLE,
+                            &[
+                                (DESTINATION, "/app/unknown"),
+                                (DESTINATION, "/app/password"),
+                                (DESTINATION, "/app/changed"),
+                            ],
+                        ),
+                    )?
+                    .serve_at("/app/unknown", FlippingNode::new(SECRET, 23, 67, &[]))?
+                    .serve_at(
+                        "/app/password",
+                        FlippingNode::new(SECRET, 23, PASSWORD_TEXT_ROLE, &[]),
+                    )?
+                    .serve_at("/app/changed", FlippingNode::new(SECRET, 23, 16, &[]))
+            },
+            async |connection| {
+                let roots = peer_client(connection).list_roots(None).await.unwrap();
+                let roles = roots
+                    .iter()
+                    .map(|root| root.role.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(roles, ["unknown", "password text", "unknown"]);
+                for (index, root) in roots.iter().enumerate() {
+                    assert_eq!(root.name, PROTECTED_LABEL);
+                    assert_eq!(root.app_name, PROTECTED_LABEL);
+                    assert!(!root_json("@w1", root, index).to_string().contains(SECRET));
+                }
             },
         )
         .await;
