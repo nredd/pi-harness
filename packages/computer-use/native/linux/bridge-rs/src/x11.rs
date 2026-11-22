@@ -465,6 +465,14 @@ pub trait InputSink {
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure>;
 }
 
+/// The logical button core pointer state shows for physical button `detail` under the
+/// pointer mapping `map` (`map[detail - 1]`), or `None` when it shows none: logical
+/// buttons outside 1 to 5 (e.g. horizontal scroll 6 and 7), disabled (0) or unmapped.
+pub fn observable_button(map: &[u8], detail: u8) -> Option<u8> {
+    let logical = map.get(usize::from(detail).checked_sub(1)?).copied()?;
+    (1..=5).contains(&logical).then_some(logical)
+}
+
 /// Live XTEST delivery pinned to one owning window.
 pub struct XtestSink {
     conn: RustConnection,
@@ -547,13 +555,9 @@ impl InputSink for XtestSink {
                 .reply()
                 .map_err(xerr)?
                 .map;
-            let logical = usize::from(detail)
-                .checked_sub(1)
-                .and_then(|index| map.get(index).copied())
-                .unwrap_or(0);
-            if !(1..=5).contains(&logical) {
+            let Some(logical) = observable_button(&map, detail) else {
                 return Ok(None);
-            }
+            };
             let mask = self
                 .conn
                 .query_pointer(self.root)
@@ -774,6 +778,22 @@ fn open_root_sink() -> Result<XtestSink, ProtocolError> {
     })
 }
 
+/// Check `policy` against `session`, then open the input connection with `open`. A
+/// failure while releases are owed, e.g. a lost display or a failed XTEST negotiation
+/// on reconnect, is `input_unsafe` naming them: the caller must learn the input may
+/// still be held, not only the cause.
+fn open_physical<T>(
+    policy: PhysicalPolicy,
+    session: SessionKind,
+    state: &InputState,
+    open: impl FnOnce() -> Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
+    policy
+        .require_physical(session)
+        .and_then(|()| open())
+        .map_err(|error| state.with_owed(error))
+}
+
 /// Guarded physical input. Every event is admitted against the live target first,
 /// and every key or button pressed is owed a release on every exit path.
 pub struct Input<S: InputSink = XtestSink> {
@@ -786,19 +806,8 @@ impl Input<XtestSink> {
     /// Connect and settle earlier unconfirmed releases before focusing the target, so
     /// a release reaches the window its press did when nothing has changed since.
     pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
-        Self::connect_with_state(policy, target, InputState::shared())
-    }
-    /// [`Input::connect`] against `state`. A failure before owed releases are settled
-    /// still names them.
-    pub fn connect_with_state(
-        policy: PhysicalPolicy,
-        target: Window,
-        state: Arc<InputState>,
-    ) -> Result<Self, ProtocolError> {
-        let (conn, root) = policy
-            .require_physical(SessionKind::detect())
-            .and_then(|()| connect_xtest())
-            .map_err(|error| state.with_owed(error))?;
+        let state = InputState::shared();
+        let (conn, root) = open_physical(policy, SessionKind::detect(), &state, connect_xtest)?;
         let input = Self::with_state(XtestSink { conn, root, target }, state);
         input.settle()?;
         validate_target(&input.sink.conn, root, target)?;
@@ -1862,25 +1871,55 @@ mod tests {
 
     #[test]
     fn reconnect_failure_names_unconfirmed_releases() {
-        let state = Arc::new(InputState::default());
-        // `ax_only` refuses on every session, so this needs no display.
-        let clean = Input::connect_with_state(PhysicalPolicy::AxOnly, 7, Arc::clone(&state));
-        assert_ne!(clean.err().unwrap().code, ErrorCode::InputUnsafe);
+        let negotiation = || {
+            Err::<(), _>(err(
+                "XTEST unavailable: extension missing",
+                ErrorCode::CapabilityDeferred,
+            ))
+        };
+        // Nothing owed: the cause is reported as it is.
+        let clean = Arc::new(InputState::default());
+        let error = open_physical(
+            PhysicalPolicy::Default,
+            SessionKind::X11,
+            &clean,
+            negotiation,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::CapabilityDeferred);
 
-        state.debt().push(Owed {
-            event: KEY_RELEASE_EVENT,
-            detail: 37,
-            ambiguous: false,
-        });
-        let error = Input::connect_with_state(PhysicalPolicy::AxOnly, 7, Arc::clone(&state))
-            .err()
-            .unwrap();
+        // Owed releases turn the same failure into `input_unsafe` naming them.
+        let state = owing(37);
+        for open in [negotiation as fn() -> Result<(), ProtocolError>, || {
+            Err(err(
+                "X11 unavailable: no display",
+                ErrorCode::CapabilityDeferred,
+            ))
+        }] {
+            let error =
+                open_physical(PhysicalPolicy::Default, SessionKind::X11, &state, open).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InputUnsafe);
+            assert!(error.message.contains("keycode 37"), "{}", error.message);
+            assert!(
+                error.message.contains("could not be settled: X"),
+                "{}",
+                error.message
+            );
+        }
+        // A session that lost X11 altogether says so too.
+        let error = open_physical(
+            PhysicalPolicy::Default,
+            SessionKind::Wayland,
+            &state,
+            || Ok(()),
+        )
+        .unwrap_err();
         assert_eq!(error.code, ErrorCode::InputUnsafe);
         assert!(error.message.contains("keycode 37"), "{}", error.message);
-        assert!(
-            error.message.contains("could not be settled"),
-            "{}",
-            error.message
+        // A connection that opens is handed back for settlement.
+        assert_eq!(
+            open_physical(PhysicalPolicy::Default, SessionKind::X11, &state, || Ok(5)).unwrap(),
+            5
         );
     }
 
@@ -2059,6 +2098,56 @@ mod tests {
         settled.settle().unwrap();
         assert_eq!(trace(&settled), [("button-", 6, false)]);
         assert!(state.unconfirmed_releases().is_empty());
+    }
+
+    #[test]
+    fn observability_follows_the_pointer_mapping() {
+        assert_eq!(observable_button(&[1, 2, 3, 4, 5, 6, 7], 5), Some(5));
+        assert_eq!(observable_button(&[1, 2, 3, 4, 5, 6, 7], 7), None);
+        assert_eq!(observable_button(&[3, 2, 1], 1), Some(3), "left-handed");
+        assert_eq!(observable_button(&[1, 0, 3], 2), None, "disabled");
+        assert_eq!(observable_button(&[1, 2, 3], 4), None, "unmapped");
+        assert_eq!(observable_button(&[1, 2, 3], 0), None, "no button 0");
+
+        // Physical 7 maps to logical 5 and physical 5 to logical 7.
+        let swapped = [1, 2, 3, 4, 7, 6, 5];
+        // Physical 7 is observable here, so a hold by another client refuses the press.
+        let input = Input::with_sink(
+            RecordingSink::default()
+                .pointer_mapping(&swapped)
+                .held(true, 7),
+        );
+        let error = input.scroll(0, 0, 1.0, 0.0).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe, "{}", error.message);
+        assert_eq!(trace(&input), [("move", 0, true)]);
+        // Physical 5 is not: its momentary press runs although another client holds it.
+        let input = Input::with_sink(
+            RecordingSink::default()
+                .pointer_mapping(&swapped)
+                .held(true, 5),
+        );
+        input.scroll(0, 0, 0.0, 1.0).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 5, true),
+                ("button-", 5, true)
+            ]
+        );
+        // And a delivery-unknown release of it is never settled by a query.
+        let state = Arc::new(InputState::default());
+        state.debt().push(Owed {
+            event: BUTTON_RELEASE_EVENT,
+            detail: 5,
+            ambiguous: true,
+        });
+        let later = Input::with_state(
+            RecordingSink::default().pointer_mapping(&swapped),
+            Arc::clone(&state),
+        );
+        assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert_eq!(state.unconfirmed_releases(), ["button 5"]);
     }
 
     #[test]

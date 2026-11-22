@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use x11rb::protocol::xproto::{Keycode, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT};
 
-use crate::x11::{InputSink, InputState, PostFailure};
+use crate::x11::{observable_button, InputSink, InputState, PostFailure};
 use crate::{ErrorCode, ProtocolError};
 
 /// One event a [`RecordingSink`] applied.
@@ -50,6 +50,8 @@ pub struct RecordingSink {
     panic_after_posts: Vec<usize>,
     cancel_after: Option<(usize, Arc<InputState>)>,
     query_fails: bool,
+    /// Pointer mapping, physical to logical; identity for buttons 1 to 10 when unset.
+    pointer_map: Option<Vec<u8>>,
     /// Sleep inside every post, as a slow server round trip would.
     post_delay: Duration,
 }
@@ -146,6 +148,11 @@ impl RecordingSink {
         self.query_fails = true;
         self
     }
+    /// Use `map` as the pointer mapping (`map[physical - 1]` is the logical button).
+    pub fn pointer_mapping(mut self, map: &[u8]) -> Self {
+        self.pointer_map = Some(map.to_vec());
+        self
+    }
     /// Events applied so far, in post order.
     pub fn events(&self) -> Vec<PostedEvent> {
         self.events.borrow().clone()
@@ -228,7 +235,8 @@ impl InputSink for RecordingSink {
             });
         Ok(Some(8 + index as u8))
     }
-    /// Like the live adapter, buttons outside 1 to 5 are unobservable.
+    /// Like the live adapter, a button is observable only when the pointer mapping
+    /// makes it logical button 1 to 5.
     fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError> {
         if self.query_fails {
             return Err(ProtocolError::new(
@@ -236,7 +244,9 @@ impl InputSink for RecordingSink {
                 ErrorCode::InternalError,
             ));
         }
-        if button && !(1..=5).contains(&detail) {
+        let identity = (1..=10).collect::<Vec<u8>>();
+        let map = self.pointer_map.as_deref().unwrap_or(&identity);
+        if button && observable_button(map, detail).is_none() {
             return Ok(None);
         }
         Ok(Some(self.down.borrow().contains(&(button, detail))))
