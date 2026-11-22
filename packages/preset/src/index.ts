@@ -344,13 +344,16 @@ export function createExpandedFooter(
 						}
 
 						const virtual = ctx.model?.api === "pi-virtual";
+						const ownsRequest = virtual && requestSelection === selectionKey(ctx);
+						const pending = running && ownsRequest;
+						const response =
+							!virtual || (pending && !live) ? undefined : routedResponse(ctx, ownsRequest ? live : undefined);
+						const physical = response?.api === "pi-virtual" ? undefined : response;
 						if (virtual) {
 							// Assistant metadata is the same physical identity used by core and subagent rows.
 							// The selected thinking level above is an input, not the routed reasoning budget.
-							const ownsRequest = requestSelection === selectionKey(ctx);
-							const pending = running && ownsRequest;
-							const response = pending && !live ? undefined : routedResponse(ctx, ownsRequest ? live : undefined);
-							if (response && response.api !== "pi-virtual") {
+							if (physical) {
+								const response = physical;
 								const level = response.thinkingLevel === undefined ? "" : ` • ${response.thinkingLevel}`;
 								const status =
 									response.stopReason === "error" || response.stopReason === "aborted"
@@ -411,7 +414,9 @@ export function createExpandedFooter(
 						const quotaState = quota.getState();
 						if (quotaState) {
 							const colorize = (color: "warning" | "error" | "dim", text: string) => theme.fg(color, text);
+							const model = virtual ? physical && { provider: physical.provider, id: physical.model } : ctx.model;
 							for (const row of fitQuotaRows(quotaState, width, colorize, {
+								model,
 								now: clock.now(),
 								timeZone: options.timeZone,
 							}))
