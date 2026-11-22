@@ -1790,6 +1790,10 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// as well as its children, and only its own signal terminates that.
 		for (const task of workflowTasks.values()) task.abortController.abort();
 		workflowTasks.clear();
+		// Joined, completion callbacks included, while the outbox is still open: an
+		// aborted run settles once its worker is down, and its Stopped notice is then
+		// spooled below on a switch or dropped with the outbox on quit (#1257).
+		await Promise.allSettled(workflowRuns);
 		const switching = event?.reason !== "quit" && sessionFile !== undefined;
 		if (switching) {
 			// A group may still be held, or not registered until the parent's turn
@@ -3380,6 +3384,19 @@ Terse command-style prompts produce shallow, generic work.
 	const workflowTasks = new Map<string, WorkflowTask>();
 
 	/**
+	 * Detached runs, each through its completion callback. `session_shutdown`
+	 * aborts the runs and joins these before disposing the outbox, widget and
+	 * fleet: a callback that ran afterwards armed its notice timer on the closed
+	 * outbox (#1257). Kept for the activation's lifetime, like the tasks above.
+	 */
+	const workflowRuns: Promise<void>[] = [];
+
+	/** Run a task in the background, then `settled`, for `session_shutdown` to join. */
+	function detachWorkflowRun(ctx: ExtensionContext, task: WorkflowTask, settled: () => void): void {
+		workflowRuns.push(runWorkflowTask(ctx, task).then(settled));
+	}
+
+	/**
 	 * Workflow runs as the fleet list wants them.
 	 *
 	 * Mapped here rather than handing `WorkflowTask` over the seam: the list is
@@ -3633,7 +3650,7 @@ Terse command-style prompts produce shallow, generic work.
 
 			// Background, like Claude Code: the id comes back now and the run keeps
 			// going without the tool call.
-			void runWorkflowTask(ctx, task).then(() => notifyWorkflowFinished(task));
+			detachWorkflowRun(ctx, task, () => notifyWorkflowFinished(task));
 
 			return {
 				content: [
@@ -3790,7 +3807,7 @@ Terse command-style prompts produce shallow, generic work.
 
 		// Detached: session_start is awaited by the host, and a workflow can run for
 		// minutes — blocking here would hold the whole session's startup.
-		void runWorkflowTask(ctx, task).then(() => {
+		detachWorkflowRun(ctx, task, () => {
 			// No tool call to attach a result card to, so the card becomes a session
 			// entry (same layout), and the outcome is handed to the model as context
 			// for its next turn rather than forcing one.
