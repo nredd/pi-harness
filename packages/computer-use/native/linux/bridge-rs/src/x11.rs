@@ -2124,16 +2124,18 @@ mod tests {
     #[test]
     fn exit_settlement_that_times_out_keeps_the_release_delivery_unknown() {
         // The release is submitted, then the exit stops waiting before it confirms: the
-        // wait ends when the sink signals the post began, not after an elapsed time.
+        // wait ends when the sink signals the post began, not after an elapsed time. The
+        // post stays open until the test releases it, after the snapshot.
         let state = owing(8);
         let (posts, posting) = std::sync::mpsc::channel();
+        let (release, held_open) = std::sync::mpsc::channel();
         let left = settle_for_exit_with(
             Arc::clone(&state),
             move || {
-                Ok(
-                    RecordingSink::scripted(&json!({"delayMs": 2000, "held": [[false, 8]]}))
-                        .announce_posts(posts),
-                )
+                Ok(RecordingSink::default()
+                    .held(false, 8)
+                    .announce_posts(posts)
+                    .hold_posts_until(held_open))
             },
             |_| {
                 assert_eq!(posting.recv_timeout(Duration::from_secs(10)), Ok(0));
@@ -2147,6 +2149,7 @@ mod tests {
         let later = Input::with_state(RecordingSink::default().held(false, 8), state);
         assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
         assert!(later.sink().events().is_empty(), "never resent");
+        release.send(()).expect("the held post is still waiting");
 
         // One that confirms in time is settled.
         let state = owing(8);

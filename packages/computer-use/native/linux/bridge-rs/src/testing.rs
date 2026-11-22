@@ -57,6 +57,9 @@ pub struct RecordingSink {
     /// Announce each post attempt as it begins, so a test waits for that instead of
     /// sleeping: on `Stderr`, a `linux-bridge testing: posting <id> <attempt>` line.
     announce: Option<Announce>,
+    /// Hold every post open, after its announcement, until the test sends on (or
+    /// drops) the paired sender.
+    hold_open: Option<mpsc::Receiver<()>>,
 }
 
 /// Where a [`RecordingSink`] announces post attempts.
@@ -160,6 +163,11 @@ impl RecordingSink {
     /// Send each post attempt's number on `posts` as the attempt begins.
     pub fn announce_posts(mut self, posts: mpsc::Sender<usize>) -> Self {
         self.announce = Some(Announce::Channel(posts));
+        self
+    }
+    /// Hold each post open until `release` receives, so a test decides when it ends.
+    pub fn hold_posts_until(mut self, release: mpsc::Receiver<()>) -> Self {
+        self.hold_open = Some(release);
         self
     }
     /// Fail every key and button state query.
@@ -279,6 +287,9 @@ impl InputSink for RecordingSink {
                 let _ = posts.send(attempt);
             }
             None => {}
+        }
+        if let Some(release) = &self.hold_open {
+            let _ = release.recv();
         }
         if !self.post_delay.is_zero() {
             std::thread::sleep(self.post_delay);
