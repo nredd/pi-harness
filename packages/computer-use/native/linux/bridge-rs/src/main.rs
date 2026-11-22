@@ -2254,6 +2254,162 @@ mod tests {
         }
     }
 
+    /// A text node with a fixed readable numeric role (61) and a live role name.
+    struct RenamingNode(watch::Receiver<&'static str>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl RenamingNode {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Fixture"
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> zbus::fdo::Result<&'static str> {
+            match *self.0.borrow() {
+                FAILING_ROLE_NAME => Err(zbus::fdo::Error::Failed("role name unavailable".into())),
+                name => Ok(name),
+            }
+        }
+
+        fn get_role(&self) -> u32 {
+            61
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            Vec::new()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            vec![TEXT]
+        }
+    }
+
+    /// Rename the role, when set, while `GetText` runs; the numeric role never changes.
+    struct RenamingText {
+        reads: Arc<AtomicUsize>,
+        rename: Option<(watch::Sender<&'static str>, &'static str)>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl RenamingText {
+        fn get_text(&self, _start: i32, _end: i32) -> &str {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            if let Some((name, next)) = &self.rename {
+                name.send(next).unwrap();
+            }
+            "private fixture text"
+        }
+    }
+
+    /// Text read under one role name is dropped when only the NAME changes during `GetText`.
+    #[tokio::test]
+    async fn role_name_change_during_get_text_drops_reply() {
+        for next in ["password text", "entry", FAILING_ROLE_NAME] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (name, live_name) = watch::channel("text");
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    peer.serve_at("/window", RenamingNode(live_name))?.serve_at(
+                        "/window",
+                        RenamingText {
+                            reads: Arc::clone(&reads),
+                            rename: Some((name.clone(), next)),
+                        },
+                    )
+                },
+                async |connection| {
+                    let fresh = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({"rootRef":root_ref,"includeImage":false}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    assert_eq!(fresh["outline"]["value"], "", "renamed to {next:?}");
+                    assert_eq!(fresh["outline"]["title"], "[protected]", "{next:?}");
+                    assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+                    // A readable old look still needs both live role fields after the read.
+                    let mut target = node();
+                    target.accessible = observed_root().accessible;
+                    target.interfaces.insert(TEXT.into());
+                    let (old_id, nodes) =
+                        lock(&state)
+                            .unwrap()
+                            .insert_look(observed_root(), vec![target], None);
+                    name.send("text").unwrap();
+                    let read = peer_request(
+                        &state,
+                        &connection,
+                        "atspiReadText",
+                        json!({"lookId":old_id,"elementRef":nodes[0].reference}),
+                    )
+                    .await;
+                    assert_eq!(
+                        read.error.map(|error| error.code),
+                        Some(ErrorCode::SecureTextUnreadable),
+                        "{next:?}"
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), 2);
+                },
+            )
+            .await;
+        }
+    }
+
+    /// A readable old look cannot read once only the live role NAME contradicts the role.
+    #[tokio::test]
+    async fn old_look_cannot_read_after_a_live_role_name_change() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (name, live_name) = watch::channel("text");
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at("/window", RenamingNode(live_name))?.serve_at(
+                    "/window",
+                    RenamingText {
+                        reads: Arc::clone(&reads),
+                        rename: None,
+                    },
+                )
+            },
+            async |connection| {
+                let look = peer_request(
+                    &state,
+                    &connection,
+                    "look",
+                    json!({"rootRef":root_ref,"includeImage":false}),
+                )
+                .await
+                .result
+                .unwrap();
+                assert_eq!(look["outline"]["value"], "private fixture text");
+                let read_args =
+                    json!({"lookId":look["lookId"],"elementRef":look["outline"]["ref"]});
+                let read = async || {
+                    peer_request(&state, &connection, "atspiReadText", read_args.clone()).await
+                };
+                assert_eq!(read().await.result.unwrap()["text"], "private fixture text");
+                let permitted_reads = reads.load(Ordering::SeqCst);
+                name.send("unknown").unwrap();
+                assert_eq!(
+                    read().await.error.map(|error| error.code),
+                    Some(ErrorCode::SecureTextUnreadable)
+                );
+                assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
+            },
+        )
+        .await;
+    }
+
     struct StalledMutation {
         stall: StalledReply,
         mutations: Arc<AtomicUsize>,

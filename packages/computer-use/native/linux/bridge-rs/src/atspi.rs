@@ -467,35 +467,35 @@ impl AtspiClient {
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut unread);
             let access = self.role_access(&accessible).await;
             unread |= access == RoleAccess::Unclassified;
-            let mut readable = access.readable();
             let mut value = String::new();
-            let (mut role, mut name, mut description) = if readable.is_some() {
-                // `wait_for` matches the role name, so a blank or failed one cannot prove absence.
-                let role_name = self.role_name(&accessible).await.unwrap_or_default();
-                unread |= role_name.trim().is_empty();
-                (
-                    role_name,
-                    field_or_default(self.string_property(&accessible, "Name").await, &mut unread),
-                    field_or_default(
-                        self.string_property(&accessible, "Description").await,
-                        &mut unread,
-                    ),
-                )
-            } else {
-                let protected = access.protected_name().to_owned();
-                (protected, PROTECTED_LABEL.to_owned(), String::new())
+            let mut fields = match access.readable() {
+                Some(id) => {
+                    // `wait_for` matches the role name, so a blank or failed one cannot prove absence.
+                    let role = self.role_name(&accessible).await.unwrap_or_default();
+                    unread |= role.trim().is_empty();
+                    NodeFields {
+                        readable: Some(id),
+                        role,
+                        name: field_or_default(
+                            self.string_property(&accessible, "Name").await,
+                            &mut unread,
+                        ),
+                        description: field_or_default(
+                            self.string_property(&accessible, "Description").await,
+                            &mut unread,
+                        ),
+                    }
+                }
+                None => NodeFields::protected(access),
             };
-            if readable.is_some() && contradicts_readable_role(&role) {
-                readable = None;
+            if fields.readable.is_some() && contradicts_readable_role(&fields.role) {
+                fields = NodeFields::protected(RoleAccess::Unclassified);
                 unread = true;
-                role = RoleAccess::Unclassified.protected_name().to_owned();
-                name = PROTECTED_LABEL.to_owned();
-                description.clear();
             }
-            if let Some(id) = readable {
+            if let Some(id) = fields.readable {
                 // Text content also needs a confirmed role name; a blank one is already `unread`.
-                let result = if interfaces.contains(TEXT) && !role.trim().is_empty() {
-                    self.read_checked_text(&accessible, id).await
+                let result = if interfaces.contains(TEXT) && !fields.role.trim().is_empty() {
+                    self.read_checked_text(&accessible, id, &fields.role).await
                 } else {
                     self.confirm_role(&accessible, id)
                         .await
@@ -503,11 +503,8 @@ impl AtspiClient {
                 };
                 match result {
                     Err(error) if error.code == ErrorCode::SecureTextUnreadable => {
-                        readable = None;
+                        fields = NodeFields::protected(RoleAccess::Unclassified);
                         unread = true;
-                        role = RoleAccess::Unclassified.protected_name().to_owned();
-                        name = PROTECTED_LABEL.to_owned();
-                        description.clear();
                     }
                     other => value = field_or_default(other, &mut unread),
                 }
@@ -535,12 +532,12 @@ impl AtspiClient {
                 bounds: self.bounds(&accessible).await,
                 accessible,
                 parent,
-                name,
-                role,
-                description,
+                name: fields.name,
+                role: fields.role,
+                description: fields.description,
                 value,
                 interfaces,
-                is_secure: readable.is_none(),
+                is_secure: fields.readable.is_none(),
                 depth,
                 unread,
             });
@@ -570,14 +567,16 @@ impl AtspiClient {
         if role_name.trim().is_empty() || contradicts_readable_role(&role_name) {
             return Err(unconfirmed_role());
         }
-        self.read_checked_text(accessible, id).await
+        self.read_checked_text(accessible, id, &role_name).await
     }
 
-    /// Discard the reply if the live role no longer matches the authorizing role.
+    /// Discard the reply unless both live role fields still match the authorizing ones: the
+    /// numeric role and the role name.
     async fn read_checked_text(
         &self,
         accessible: &AccessibleRef,
         role: u32,
+        role_name: &str,
     ) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, TEXT).await?;
         let member = "GetText";
@@ -585,6 +584,9 @@ impl AtspiClient {
             .request(member, proxy.call(member, &(0i32, -1i32)))
             .await;
         self.confirm_role(accessible, role).await?;
+        if self.role_name(accessible).await.ok().as_deref() != Some(role_name) {
+            return Err(unconfirmed_role());
+        }
         reply
     }
 
@@ -862,6 +864,28 @@ fn scoped_inventory<T>(
     match result {
         Err(error) if filter_pid.is_some() && error.code == ErrorCode::Timeout => Err(error),
         result => Ok(result.unwrap_or(fallback)),
+    }
+}
+
+/// The provider fields of one snapshot node, or fixed labels once its role is protected.
+struct NodeFields {
+    /// The role ID authorizing provider reads; `None` once the node is protected.
+    readable: Option<u32>,
+    role: String,
+    name: String,
+    description: String,
+}
+
+impl NodeFields {
+    /// The single transition to a protected node: no role authorizes a read and no provider
+    /// string survives.
+    fn protected(access: RoleAccess) -> Self {
+        Self {
+            readable: None,
+            role: access.protected_name().to_owned(),
+            name: PROTECTED_LABEL.to_owned(),
+            description: String::new(),
+        }
     }
 }
 
