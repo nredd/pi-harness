@@ -120,7 +120,7 @@ async fn handle_request_with(
         }
         "atspiReadText" | "uiaReadText" | "axReadText" => {
             read_text_with(state, &request.args, async |accessible| {
-                connect().await?.read_text(accessible).await
+                connect().await?.read_live_text(accessible).await
             })
             .await
         }
@@ -990,6 +990,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
 
     fn node() -> NodeSnapshot {
@@ -1325,7 +1326,7 @@ mod tests {
 
     struct PeerNode {
         name: &'static str,
-        role: &'static str,
+        role: watch::Receiver<Option<&'static str>>,
         stalled_role: Option<StalledReply>,
         stalled_children: Option<StalledReply>,
         child: Option<&'static str>,
@@ -1344,11 +1345,13 @@ mod tests {
             ""
         }
 
-        async fn get_role_name(&self) -> &str {
+        async fn get_role_name(&self) -> zbus::fdo::Result<&str> {
             if let Some(stall) = &self.stalled_role {
                 return stall.wait().await;
             }
             self.role
+                .borrow()
+                .ok_or_else(|| zbus::fdo::Error::Failed("role unavailable".into()))
         }
 
         async fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
@@ -1399,7 +1402,7 @@ mod tests {
                     "/window",
                     PeerNode {
                         name: "Password",
-                        role: "password text",
+                        role: watch::channel(Some("password text")).1,
                         stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
@@ -1431,6 +1434,134 @@ mod tests {
                 .await;
                 assert_eq!(reply.error.unwrap().code, ErrorCode::SecureTextUnreadable);
                 assert_eq!(reads.load(Ordering::SeqCst), 0);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn literal_unknown_role_never_reads_or_exposes_text() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Fixture",
+                        role: watch::channel(Some("unknown")).1,
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: None,
+                        text: true,
+                    },
+                )?
+                .serve_at("/window", PeerText(Arc::clone(&reads)))
+            },
+            async |connection| {
+                let look = peer_request(
+                    &state,
+                    &connection,
+                    "look",
+                    json!({"rootRef":root_ref,"includeImage":false}),
+                )
+                .await
+                .result
+                .unwrap();
+                assert_eq!(look["outline"]["value"], "");
+                let reply = peer_request(
+                    &state,
+                    &connection,
+                    "atspiReadText",
+                    json!({"lookId":look["lookId"],"elementRef":look["outline"]["ref"]}),
+                )
+                .await;
+                assert_eq!(reply.error.unwrap().code, ErrorCode::SecureTextUnreadable);
+                assert_eq!(reads.load(Ordering::SeqCst), 0);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn old_look_cannot_authorize_live_text() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (role, current_role) = watch::channel(Some("text"));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Fixture",
+                        role: current_role,
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: None,
+                        text: true,
+                    },
+                )?
+                .serve_at("/window", PeerText(Arc::clone(&reads)))
+            },
+            async |connection| {
+                let look = async || {
+                    peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({"rootRef":root_ref,"includeImage":false}),
+                    )
+                    .await
+                    .result
+                    .unwrap()
+                };
+                let read = async |look: &Value| {
+                    peer_request(
+                        &state,
+                        &connection,
+                        "atspiReadText",
+                        json!({"lookId":look["lookId"],"elementRef":look["outline"]["ref"]}),
+                    )
+                    .await
+                };
+                let old_look = look().await;
+                assert_eq!(
+                    read(&old_look).await.result.unwrap()["text"],
+                    "private fixture text"
+                );
+                let permitted_reads = reads.load(Ordering::SeqCst);
+
+                role.send(None).unwrap();
+                let new_look = look().await;
+                assert_ne!(old_look["lookId"], new_look["lookId"]);
+                assert_eq!(new_look["outline"]["value"], "");
+                assert_eq!(
+                    read(&new_look).await.error.unwrap().code,
+                    ErrorCode::SecureTextUnreadable
+                );
+
+                for live_role in [
+                    None,
+                    Some(""),
+                    Some("unknown"),
+                    Some("password text"),
+                    Some("password"),
+                ] {
+                    role.send(live_role).unwrap();
+                    let reply = read(&old_look).await;
+                    assert_eq!(
+                        reply.error.map(|error| error.code),
+                        Some(ErrorCode::SecureTextUnreadable),
+                        "role {live_role:?} unexpectedly authorized a read",
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
+                }
+
+                role.send(Some("text")).unwrap();
+                assert_eq!(
+                    read(&old_look).await.result.unwrap()["text"],
+                    "private fixture text"
+                );
             },
         )
         .await;
@@ -1521,7 +1652,7 @@ mod tests {
                         "/window",
                         PeerNode {
                             name: "Window",
-                            role: "frame",
+                            role: watch::channel(Some("frame")).1,
                             stalled_role: None,
                             stalled_children: None,
                             child: Some("/window/parent"),
@@ -1532,7 +1663,7 @@ mod tests {
                         "/window/parent",
                         PeerNode {
                             name: "Parent",
-                            role: "panel",
+                            role: watch::channel(Some("panel")).1,
                             stalled_role: None,
                             stalled_children: stalled,
                             child: Some("/window/parent/match"),
@@ -1543,7 +1674,7 @@ mod tests {
                         "/window/parent/match",
                         PeerNode {
                             name: "Matching child",
-                            role: "label",
+                            role: watch::channel(Some("label")).1,
                             stalled_role: None,
                             stalled_children: None,
                             child: None,

@@ -323,7 +323,7 @@ impl AtspiClient {
             }
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut incomplete);
             let role = self.role(&accessible).await.unwrap_or_default();
-            let unknown_role = role.trim().is_empty();
+            let unknown_role = is_unknown_role(&role);
             incomplete |= unknown_role;
             let name = field_or_default(
                 self.string_property(&accessible, "Name").await,
@@ -333,9 +333,7 @@ impl AtspiClient {
                 self.string_property(&accessible, "Description").await,
                 &mut incomplete,
             );
-            let is_secure = unknown_role
-                || role.eq_ignore_ascii_case("password text")
-                || role.eq_ignore_ascii_case("password");
+            let is_secure = unknown_role || is_password_role(&role);
             let value = if !is_secure && interfaces.contains(TEXT) {
                 field_or_default(self.read_text(&accessible).await, &mut incomplete)
             } else {
@@ -372,7 +370,22 @@ impl AtspiClient {
         })
     }
 
-    pub async fn read_text(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
+    /// Authorize an explicit text read against the live role, never a cached look.
+    pub async fn read_live_text(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<String, ProtocolError> {
+        let role = self.role(accessible).await.unwrap_or_default();
+        if is_unknown_role(&role) || is_password_role(&role) {
+            return Err(ProtocolError::new(
+                "Cannot confirm that the live accessibility role permits reading text",
+                ErrorCode::SecureTextUnreadable,
+            ));
+        }
+        self.read_text(accessible).await
+    }
+
+    async fn read_text(&self, accessible: &AccessibleRef) -> Result<String, ProtocolError> {
         let proxy = self.proxy(accessible, TEXT).await?;
         let member = "GetText";
         self.request(member, proxy.call(member, &(0i32, -1i32)))
@@ -623,6 +636,16 @@ async fn accessibility_bus_address(
 }
 
 /// Retain optional field defaults, but do not use a missing timed-out field to prove absence.
+fn is_unknown_role(role: &str) -> bool {
+    let role = role.trim();
+    role.is_empty() || role.eq_ignore_ascii_case("unknown")
+}
+
+fn is_password_role(role: &str) -> bool {
+    let role = role.trim();
+    role.eq_ignore_ascii_case("password text") || role.eq_ignore_ascii_case("password")
+}
+
 fn field_or_default<T: Default>(result: Result<T, ProtocolError>, incomplete: &mut bool) -> T {
     result.unwrap_or_else(|error| {
         *incomplete |= error.code == ErrorCode::Timeout;
