@@ -38,6 +38,11 @@ export interface PlatformReadyState {
 export interface PlatformRootQuery {
 	pid?: number;
 	title?: string;
+	/**
+	 * The caller reads a missing root as closed. The macOS backend then fails with `inventory_incomplete` unless the
+	 * helper reported the listing `complete`; a reply without the field (an older external helper) fails closed.
+	 */
+	authoritative?: boolean;
 }
 
 interface PlatformAppIdentity {
@@ -84,6 +89,12 @@ export interface PlatformRoot extends PlatformAppIdentity {
 	instanceUnavailable?: true;
 	metadata?: Record<string, unknown>;
 }
+
+/**
+ * A root listing. `complete: false` (macOS) marks one the helper could not read completely: a root it omits is
+ * unknown, not closed, and a saved root resolves from it only by its verified identity, never a lookalike.
+ */
+export type PlatformRootList = PlatformRoot[] & { complete?: boolean };
 
 export interface PlatformFrontmostResult extends PlatformAppIdentity {
 	appName: string;
@@ -222,6 +233,11 @@ export interface PlatformWaitForResponse {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
+	/**
+	 * A `gone` wait whose last walk could not read the whole scope: absence is unknown. The macOS backend also sets it
+	 * for a `gone` reply without the helper's `complete` field, e.g. from an older external helper.
+	 */
+	incomplete?: boolean;
 	nodeCount?: number;
 }
 
@@ -235,7 +251,7 @@ export interface ComputerUsePlatformBackend {
 	setActivity?(active: boolean): void | Promise<void>;
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
-	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]>;
+	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRootList>;
 	/** Explain why no roots are visible on this host (e.g. a WSL2 guest), appended to empty `find_roots` text. */
 	emptyRootsHint?(): string | undefined;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;

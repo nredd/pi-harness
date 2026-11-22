@@ -118,6 +118,8 @@ import type {
 	PlatformActRequest,
 	PlatformDiagnostics,
 	PlatformRoot,
+	PlatformRootList,
+	PlatformWaitForResponse,
 } from "./platform/types.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
 import { ResourceScheduler } from "./runtime.ts";
@@ -175,7 +177,8 @@ interface ExecutionTrace {
 	escalationReason?: string;
 	backgroundAttempt?: { outcome: "foreground_required" | "didnt"; reason: string };
 	verification?: {
-		status: "verified" | "preexisting" | "failed";
+		/** `inconclusive`: an `absent` condition was not found, but incomplete evidence cannot prove it gone. */
+		status: "verified" | "preexisting" | "failed" | "inconclusive";
 		text?: string;
 		role?: string;
 		value?: string;
@@ -348,6 +351,12 @@ interface WaitForDetails {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
+	/** An `absent` condition was not found, but incomplete evidence cannot prove it gone; `found` stays false. */
+	inconclusive?: true;
+	/** Successor nodes in the condition's scope that could not be read (`truncated`); omitted when there are none. */
+	unreadRefs?: string[];
+	/** An inconclusive absence whose root could not be observed afterward: why. No successor state exists. */
+	observationError?: string;
 	target?: SerializedOutlineSearchMatch;
 	nodeCount?: number;
 	text?: string;
@@ -727,7 +736,7 @@ async function listApps(signal?: AbortSignal): Promise<HelperApp[]> {
 	return await currentPlatformBackend.listApps(signal);
 }
 
-async function listWindows(pid: number, signal?: AbortSignal): Promise<HelperWindow[]> {
+async function listWindows(pid: number, signal?: AbortSignal): Promise<PlatformRootList> {
 	return await currentPlatformBackend.listRoots({ pid }, signal);
 }
 
@@ -1049,10 +1058,19 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
 	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
+	// A partial listing admits the ref only by its verified identity: a same-title window is another root.
+	const partial = windows.complete === false;
 	const match =
 		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
 		(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
-		windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
+		(partial
+			? undefined
+			: windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle)));
+	if (!match && partial)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Root ref '${selector}' could not be verified: the window listing was incomplete and does not name it; it may still be open. Call find_roots again, or observe_ui it later.`,
+		);
 	if (!match) {
 		throw new Error(`Root ref '${selector}' is stale. Call find_roots again and choose a current window.`);
 	}
@@ -1067,7 +1085,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean } = {},
+	options: { preferModal?: boolean; exactIdentity?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
@@ -1075,7 +1093,8 @@ async function resolveCurrentTarget(
 	assertAppNotBlocked(current);
 	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
-	if (!windows.length) {
+	const partial = windows.complete === false;
+	if (!windows.length && !partial) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
 	}
 
@@ -1089,6 +1108,14 @@ async function resolveCurrentTarget(
 	match ??= hadStableWindowId
 		? windows.find((window) => window.windowId !== undefined && window.windowId === current.windowId)
 		: undefined;
+	// A partial listing, or a caller that needs this exact root, admits it only by its verified identity: a
+	// title or ranking match could be another window.
+	if (!match && partial)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			"The current controlled window could not be verified: the window listing was incomplete and does not name it; it may still be open. Call observe_ui again, or find_roots to choose a root.",
+		);
+	if (!match && options.exactIdentity) throw new Error(CURRENT_TARGET_GONE_ERROR);
 	if (!match) {
 		const exactTitleMatches =
 			titleQuery && titleQuery !== "(untitled)"
@@ -1156,6 +1183,12 @@ async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTar
 	}
 
 	let selected = windows.find((window) => window.windowId !== undefined && window.windowId === frontmost.windowId);
+	// A partial listing that omits the named frontmost window cannot stand in another for it, by title or rank.
+	if (!selected && windows.complete === false && frontmost.windowId !== undefined)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			"The frontmost window could not be verified: the window listing was incomplete and does not name it; it may still be open. Call observe_ui again, or find_roots to choose a root.",
+		);
 	if (!selected && frontmost.windowTitle) {
 		const title = normalizeText(frontmost.windowTitle);
 		selected = windows.find((window) => normalizeText(window.title) === title);
@@ -1245,18 +1278,18 @@ function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: Look
 	};
 }
 
+/** Capture `resolved`, the root the caller already resolved, as the new current state. */
 async function captureCurrentTarget(
 	signal: AbortSignal | undefined,
 	readText: "auto" | "always" | "never",
-	maxDimension = AUTO_IMAGE_MAX_DIMENSION,
-	targetOverride?: ResolvedTarget,
+	maxDimension: number,
+	resolved: ResolvedTarget,
 	includeImage = true,
 ): Promise<CaptureResult> {
 	const state = operationState();
 	const baseOutline = state.currentOutline;
 	const baseTarget = state.currentTarget;
-	let target = targetOverride ?? (await resolveCurrentTarget(signal));
-	target = await ensureTargetWindowId(target, signal);
+	const target = await ensureTargetWindowId(resolved, signal);
 	const look = await performLook(target, { maxDimension, readText, includeImage }, signal);
 	const outline = stabilizeRefs(
 		baseTarget && sameRootIdentity(baseTarget, target) ? baseOutline : undefined,
@@ -1992,6 +2025,50 @@ function outlineConditionPresent(outline: Outline, condition: ReturnType<typeof 
 	);
 }
 
+/** Why a successor outline cannot corroborate a `gone` condition (see `absenceUnproven`). */
+interface AbsenceUnproven {
+	/** `present`: the successor still shows it; `unread`: nodes it could hide in are unread; `scope_unmatched`: its scope did not carry over and the condition shows elsewhere. */
+	reason: "present" | "unread" | "scope_unmatched";
+	/** Unread (`truncated`) successor nodes that could hold the condition. */
+	unreadRefs: string[];
+}
+
+/**
+ * Why a successor outline cannot corroborate a `gone` condition: it still shows the condition, or a node that is
+ * the condition's scope, above it, or (unless exact) inside it is unread (`truncated`). The Windows UIA wait does
+ * not report its own truncation, so absence is checked here on every platform. Element wire refs are look-local and
+ * public refs carry over structurally, so a moved scope can arrive under a fresh ref: a scope ref missing from the
+ * successor proves nothing while the condition shows anywhere in it. `undefined` when corroborated.
+ */
+function absenceUnproven(
+	outline: Outline,
+	condition: ReturnType<typeof validateCondition>,
+): AbsenceUnproven | undefined {
+	if (outlineConditionPresent(outline, condition)) return { reason: "present", unreadRefs: [] };
+	const scope = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
+	if (condition.scopeRef && !scope && outlineConditionPresent(outline, { ...condition, scopeRef: undefined }))
+		return { reason: "scope_unmatched", unreadRefs: [] };
+	const unreadRefs = outline.nodes
+		.filter(
+			(node) =>
+				node.truncated &&
+				(!scope ||
+					nodeWithinScope(scope, node.ref, false) ||
+					(!condition.scopeExact && nodeWithinScope(node, scope.ref, false))),
+		)
+		.map((node) => node.ref);
+	return unreadRefs.length > 0 ? { reason: "unread", unreadRefs } : undefined;
+}
+
+function absenceUnprovenMessage(unproven: AbsenceUnproven): string {
+	if (unproven.reason === "present") return "the successor observation still shows the condition";
+	if (unproven.reason === "scope_unmatched")
+		return "its scope could not be matched in the successor observation, which shows the condition elsewhere";
+	const { unreadRefs } = unproven;
+	const list = `${unreadRefs.slice(0, 5).join(", ")}${unreadRefs.length > 5 ? ", ..." : ""}`;
+	return `${unreadRefs.length} node${unreadRefs.length === 1 ? "" : "s"} in its scope could not be read (${list})`;
+}
+
 function conditionScopeNode(
 	outline: Outline,
 	condition: ReturnType<typeof validateCondition>,
@@ -2006,6 +2083,44 @@ function waitForViewText(outline: Outline, stateId: string, transition: OutlineD
 	return transition.useFullView
 		? renderStateView(outline, stateId, "compact").text
 		: `${renderChanges(transition.changes) || "(no element changes)"}\nUse stateId ${stateId} for subsequent actions and queries.`;
+}
+
+/**
+ * A claimed absence whose root could not be observed afterward: without a successor observation it stays
+ * `inconclusive`, and the base state is left as the current one.
+ */
+function unobservedAbsence(
+	baseStateId: string,
+	raw: PlatformWaitForResponse,
+	condition: ReturnType<typeof validateCondition>,
+	error: unknown,
+): AgentToolResult<WaitForDetails> {
+	const { text, role, value, scopeRef } = condition;
+	const reason = error instanceof Error ? error.message : String(error);
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Inconclusive: the condition is not proven gone: its root could not be observed afterward (${reason}). No successor state was created; state ${baseStateId} is unchanged. Call find_roots, then observe_ui before treating it as gone.`,
+			},
+		],
+		details: {
+			tool: "wait_for",
+			stateId: baseStateId,
+			baseStateId,
+			view: "full",
+			found: false,
+			timedOut: raw.timedOut || undefined,
+			inconclusive: true,
+			observationError: reason,
+			nodeCount: Number.isFinite(raw.nodeCount) ? Number(raw.nodeCount) : undefined,
+			text,
+			role,
+			value,
+			scopeRef,
+			renderedOutline: "",
+		},
+	};
 }
 
 async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Promise<AgentToolResult<WaitForDetails>> {
@@ -2102,27 +2217,49 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		},
 		{ signal, timeoutMs: timeoutMs + 2_000 },
 	);
-	// A desktop state hydrates from a saved record, which always carries its resource identity.
-	const refreshed = (
-		await resourceScheduler.readAt(
-			state.resourceKey!,
-			state.epoch!,
-			async () => await captureCurrentTarget(signal, "auto"),
-		)
-	).value;
+	// A helper's `gone`, or its incomplete walk, holds only when the successor observation corroborates it.
+	const absenceClaimed = gone && (raw.found || raw.incomplete === true);
+	let refreshed: CaptureResult;
+	try {
+		// A desktop state hydrates from a saved record, which always carries its resource identity. The successor
+		// re-resolves the root the wait read (by its native ref, so a changed window id is followed) without
+		// moving to a foreground modal: a modal opened meanwhile is another root, not evidence for this one. Only the
+		// exact waited root corroborates an absence: a same-title window reached by fallback never does.
+		refreshed = (
+			await resourceScheduler.readAt(
+				state.resourceKey!,
+				state.epoch!,
+				async () =>
+					await captureCurrentTarget(
+						signal,
+						"auto",
+						AUTO_IMAGE_MAX_DIMENSION,
+						await resolveCurrentTarget(signal, { preferModal: false, exactIdentity: absenceClaimed }),
+					),
+			)
+		).value;
+	} catch (error) {
+		if (signal?.aborted || !absenceClaimed) throw error;
+		return unobservedAbsence(baseView.stateId, raw, condition, error);
+	}
 	const transition = changesBetween(baseView.outline, refreshed.outline);
 	const useDiff = !transition.useFullView;
 	const matches = searchOutline(refreshed.outline, text, role, undefined, 1);
 	const foundTarget = matches[0];
+	const helperIncomplete = gone && raw.incomplete === true;
+	const unproven = absenceClaimed ? absenceUnproven(refreshed.outline, condition) : undefined;
+	const inconclusive = helperIncomplete || unproven !== undefined;
 	const details: WaitForDetails = {
 		tool: "wait_for",
 		stateId: refreshed.capture.stateId,
 		baseStateId: baseView.stateId,
 		view: useDiff ? "diff" : "full",
 		changes: useDiff ? transition.changes : undefined,
-		found: raw.found,
-		gone: raw.gone || undefined,
+		found: raw.found && !inconclusive,
+		gone: (raw.gone && !inconclusive) || undefined,
 		timedOut: raw.timedOut || undefined,
+		...(inconclusive ? { inconclusive: true as const } : {}),
+		...(unproven?.unreadRefs.length ? { unreadRefs: unproven.unreadRefs } : {}),
 		target: foundTarget ? serializeOutlineSearchMatch(foundTarget) : undefined,
 		nodeCount: Number.isFinite(raw.nodeCount) ? Number(raw.nodeCount) : refreshed.outline.nodes.length,
 		text,
@@ -2131,11 +2268,13 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		scopeRef,
 		renderedOutline: foldToBudget(refreshed.outline).text,
 	};
-	const message = details.found
-		? details.gone
-			? "Condition disappeared."
-			: "Condition appeared."
-		: `Timed out after ${timeoutMs}ms waiting for condition.`;
+	const message = inconclusive
+		? `Inconclusive: the condition is not proven gone: ${helperIncomplete ? `the accessibility tree could not be read completely within ${timeoutMs}ms` : absenceUnprovenMessage(unproven!)}. Observe or wait again before treating it as gone.`
+		: details.found
+			? details.gone
+				? "Condition disappeared."
+				: "Condition appeared."
+			: `Timed out after ${timeoutMs}ms waiting for condition.`;
 	return {
 		content: [
 			{
@@ -2731,12 +2870,33 @@ async function foregroundModalNote(target: ResolvedTarget): Promise<string | und
 	}
 }
 
+/** A helper's `gone` verdict awaiting corroboration, kept with the delivery outcome it falls back to. */
+interface ProvisionalAbsence {
+	/** The transaction's outcome before the check: an unproven absence settles back to it. */
+	fallback: ActOutcome;
+}
+
+/**
+ * Settle an `absent` check the evidence could not prove: `inconclusive`, keeping the delivery outcome from before
+ * the check. The message claims delivery only when that outcome says it worked.
+ */
+function settleUnprovenAbsence(execution: ExecutionTrace, fallback: ActOutcome, reason: string): void {
+	execution.verification!.status = "inconclusive";
+	execution.outcome = settledOutcome(execution, fallback);
+	const lead = execution.outcome === "worked" ? "The action was delivered, but its" : "The";
+	execution.error = {
+		code: "postcondition_inconclusive",
+		message: `${lead} absent postcondition is not proven: ${reason}.`,
+	};
+}
+
 export async function terminalDesktopActionResult(
 	target: ResolvedTarget,
 	baseStateId: string,
 	execution: ExecutionTrace,
 	error: unknown,
 	condition?: ReturnType<typeof validateCondition>,
+	provisional?: ProvisionalAbsence,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
 	await normalizeRootDeltaRefs(execution, target);
 	const unknownIndex = indeterminateStepIndex(execution);
@@ -2744,7 +2904,8 @@ export async function terminalDesktopActionResult(
 	let liveRoots: PlatformRoot[] = [];
 	try {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
-			const roots = await currentPlatformBackend.listRoots({ pid: target.pid });
+			// Only a complete listing proves the root closed; a partial one fails the probe.
+			const roots = await currentPlatformBackend.listRoots({ pid: target.pid, authoritative: true });
 			liveRoots = roots;
 			exactRootAvailable = roots.some((root) => exactPlatformRootMatchesTarget(root, target));
 			if (exactRootAvailable) break;
@@ -2801,8 +2962,14 @@ export async function terminalDesktopActionResult(
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
 			};
+		} else if (execution.error?.code === "postcondition_inconclusive") {
+			// The proven closure settles an absence the helper could not confirm.
+			execution.error = undefined;
 		}
 	}
+	// Without a successor observation or a proven closure, the helper's absence stays uncorroborated.
+	if (provisional && !targetClosed)
+		settleUnprovenAbsence(execution, provisional.fallback, "no successor observation could be captured");
 	const successors = targetClosed
 		? execution
 				.rootDelta!.filter(
@@ -2855,14 +3022,19 @@ export async function terminalDesktopActionResult(
 	const rootFate = targetClosed
 		? `closed before a successor observation could be captured.${successorText}`
 		: `could not be observed afterward: ${message}`;
-	const result =
+	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay.
+	// An indeterminate step names itself; any other unknown outcome, e.g. an unproven absence, says so generically.
+	const deliveryUnknown = unknownIndex >= 0 || execution.outcome === "unknown";
+	const unknownLead =
 		unknownIndex >= 0
-			? `${indeterminateSentence(execution, unknownIndex)} Its source root ${root} ${rootFate}`
-			: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
-	const next =
-		unknownIndex >= 0
-			? `Do not replay the transaction: call find_roots, then observe_ui to check whether action ${unknownIndex + 1} took effect.`
-			: "Call find_roots, then observe_ui to continue.";
+			? `${indeterminateSentence(execution, unknownIndex)} Its`
+			: "Delivery of the action is unknown, and its";
+	const result = deliveryUnknown
+		? `${unknownLead} source root ${root} ${rootFate}`
+		: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
+	const next = deliveryUnknown
+		? `Do not replay the transaction: call find_roots, then observe_ui to check whether ${unknownIndex >= 0 ? `action ${unknownIndex + 1}` : "it"} took effect.`
+		: "Call find_roots, then observe_ui to continue.";
 	return {
 		content: [
 			{
@@ -2938,6 +3110,8 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
+			// The helper's `gone`, pending corroboration by the successor observation or a proven closure.
+			let provisional: ProvisionalAbsence | undefined;
 			// Any stop, even an errorless first-step `didnt`, or an error: neither `expect` nor observed values upgrade it.
 			const partial = execution.error !== undefined || execution.stoppedAt !== undefined;
 			try {
@@ -2967,23 +3141,30 @@ async function performDesktopTransaction(
 						},
 						{ signal, timeoutMs: timeoutMs + 2_000 },
 					);
+					const before = execution.outcome ?? "unknown";
+					const status = verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed";
 					execution.verification = {
-						status: verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed",
+						status,
 						text: expectedText,
 						role: expectedRole,
 						value: expectedValue,
 						gone: gone || undefined,
 						timeoutMs,
 					};
-					execution.outcome = settledOutcome(
-						execution,
-						outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status),
-					);
-					if (!verification.found) {
-						execution.error = {
-							code: "postcondition_failed",
-							message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
-						};
+					if (gone && !verification.found && verification.incomplete) {
+						settleUnprovenAbsence(
+							execution,
+							before,
+							`the accessibility tree could not be read completely within ${timeoutMs}ms`,
+						);
+					} else {
+						execution.outcome = settledOutcome(execution, outcomeAfterCheck(before, status));
+						if (gone && verification.found) provisional = { fallback: before };
+						if (!verification.found)
+							execution.error = {
+								code: "postcondition_failed",
+								message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
+							};
 					}
 				} else {
 					await sleep(settleMsForExecution(execution), signal);
@@ -2996,6 +3177,11 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
+				if (provisional) {
+					const unproven = absenceUnproven(capture.outline, condition!);
+					if (unproven) settleUnprovenAbsence(execution, provisional.fallback, absenceUnprovenMessage(unproven));
+					provisional = undefined;
+				}
 				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
 				// An indeterminate step is always a stop; `settledOutcome` keeps it unknown should one ever arrive unstopped.
 				// An explicit delivery error also blocks the observed-value upgrade.
@@ -3049,7 +3235,7 @@ async function performDesktopTransaction(
 						});
 					throw error;
 				}
-				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);
+				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition, provisional);
 			}
 		}, signal),
 	);
@@ -4222,10 +4408,34 @@ act_ui({
 })
 ```
 
-Verification reports `verified`, `preexisting`, or `failed`. A preexisting
-condition means the requested end state holds, but is not evidence that the
-action caused it. Use `ref` for one exact element or `scopeRef` for a subtree;
-role-only conditions must be scoped, and value checks require an exact `ref`.
+Verification reports `verified`, `preexisting`, `failed`, or `inconclusive`. A
+preexisting condition means the requested end state holds, but is not evidence
+that the action caused it. Use `ref` for one exact element or `scopeRef` for a
+subtree; role-only conditions must be scoped, and value checks require an exact
+`ref`.
+
+An `absent` condition holds only on complete evidence. The helper must walk the
+whole scope and read every field the condition tests (the macOS walk stops at
+depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
+without the helper's `complete: true`, e.g. from an older external helper, as
+incomplete. The successor observation, captured from the exact root the wait read
+(its native ref or window id, never a same-title window and never a foreground
+modal that opened meanwhile), must neither show the
+condition nor mark a node `truncated` in the scope, above it or, unless the
+scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
+missing from the successor proves nothing while the condition shows anywhere in
+it. A root closure proven from a complete listing also settles it. Otherwise
+`act_ui` reports the check `inconclusive` with `postcondition_inconclusive`,
+keeping the delivery outcome from before the check (its message claims delivery
+only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
+instead of `gone`, with `unreadRefs` only when the successor has unread nodes
+there. When the root of a claimed absence cannot be observed or resolved by that
+identity afterward, `wait_for` returns `inconclusive: true` with `observationError` and no successor
+state. A `wait_for` that timed out while the helper still saw the condition is a
+failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
+failed successor observation after it, or after any presence wait, is an error.
+The Windows UIA wait still answers `gone` from a truncated walk; only the
+successor's `truncated` root catches that.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 

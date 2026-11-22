@@ -578,7 +578,9 @@ test("INV-20 bounded broad root discovery", () => {
 		"root discovery includes unrelated menu-pairing changes",
 	);
 	assert(
-		/if windows\.isEmpty \{\s*for attribute in \[kAXMainWindowAttribute, kAXFocusedWindowAttribute\]/.test(swift),
+		/fallbackWindows: \{\s*var windows: \[AXUIElement\] = \[\]\s*for attribute in \[kAXMainWindowAttribute, kAXFocusedWindowAttribute\]/.test(
+			swift,
+		) && swift.includes("windows: capped.isEmpty ? fallbackWindows() : capped"),
 		"root discovery drops windows that AXWindows omits",
 	);
 	assert(ts.includes("async function windowDetailsForFind"), "find_roots lacks an explicit root-acquisition boundary");

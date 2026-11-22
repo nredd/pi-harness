@@ -304,7 +304,13 @@ test.for([
 		expect: { text: "Go", until: "absent", timeoutMs: 250 },
 	});
 	assert.equal(result.details.status, "post_action_observation_failed");
-	assert.equal(result.details.execution.verification?.status, "verified", "the native wait_for verdict stands");
+	assert.equal(
+		result.details.execution.verification?.status,
+		"inconclusive",
+		"without a successor observation or a proven closure the native absence stays uncorroborated",
+	);
+	assert.equal(result.details.execution.outcome, "worked", "the delivery outcome stands");
+	assert.equal(result.details.execution.error?.code, "postcondition_inconclusive");
 	assert.equal(
 		(result.details.execution.rootDelta ?? []).some((delta: { change: string }) => delta.change === "closed"),
 		false,

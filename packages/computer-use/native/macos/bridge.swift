@@ -50,15 +50,99 @@ struct AXDescendant<Element> {
 	let axVisible: Bool
 }
 
+/// What an AX attribute read proved: a value, an authoritative absence, or nothing at all.
+enum AXReadEvidence: Equatable {
+	case present
+	case absent
+	case failed
+}
+
+/// Classify an AX read status. Only success and the statuses stating that the attribute or element does
+/// not exist are evidence; a timeout (`cannotComplete`) or any other failure proves nothing.
+func axReadEvidence(_ status: AXError) -> AXReadEvidence {
+	switch status {
+	case .success: return .present
+	case .noValue, .attributeUnsupported, .invalidUIElement: return .absent
+	default: return .failed
+	}
+}
+
+/// A string attribute read: its value, an authoritative absence, or a failed read.
+enum AXStringRead: Equatable {
+	case value(String)
+	case absent
+	case failed
+}
+
+/// The element fields a `waitFor` condition reads.
+enum AXWaitField {
+	case role
+	case title
+	case description
+	case value
+}
+
+/// Tri-state `waitFor` predicate over lowercased `text` and `value`: `nil` when a failed read leaves the
+/// match undecided, so the element can neither match nor prove the condition absent.
+func axWaitConditionMatch(role: String?, text: String?, value: String?, read: (AXWaitField) -> AXStringRead) -> Bool? {
+	var undecided = false
+	if let role, !role.isEmpty {
+		switch read(.role) {
+		case .value(let actual) where actual != role: return false
+		case .absent: return false
+		case .failed: undecided = true
+		default: break
+		}
+	}
+	if let text, !text.isEmpty {
+		var haystack: [String] = []
+		var unread = false
+		for field in [AXWaitField.title, .description, .value] {
+			switch read(field) {
+			case .value(let actual): haystack.append(actual)
+			case .absent: haystack.append("")
+			case .failed: haystack.append(""); unread = true
+			}
+		}
+		if !haystack.joined(separator: "\n").lowercased().contains(text) {
+			if !unread { return false }
+			undecided = true
+		}
+	}
+	if let value, !value.isEmpty {
+		switch read(.value) {
+		case .value(let actual) where actual.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != value: return false
+		case .absent: return false
+		case .failed: undecided = true
+		default: break
+		}
+	}
+	return undecided ? nil : true
+}
+
+/// A bounded walk's nodes, and whether they are the whole subtree.
+struct AXTraversal<Element> {
+	let nodes: [AXDescendant<Element>]
+	/// False when a child read failed, a node at the depth limit has or may have children, or the node
+	/// budget cut the walk: a node missing from `nodes` is then not proven absent.
+	let complete: Bool
+}
+
 /// The AX queries needed for a bounded, breadth-first descendant walk.
 struct AXTraversalWorld<Element: AnyObject> {
 	let role: (Element) -> String
-	let childLists: (Element) -> (all: [Element], visible: [Element]?)
+	/// `nil` when the children could not be read; an authoritative empty list is `[]`.
+	let childLists: (Element) -> (all: [Element], visible: [Element]?)?
 	let sameElement: (Element, Element) -> Bool
 	/// Must agree with `sameElement`: equal elements hash equally. Collisions only cost comparisons.
 	let hash: (Element) -> Int
 
 	func collect(startingAt root: Element, maxDepth: Int, maxNodes: Int) -> [AXDescendant<Element>] {
+		walk(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes, checkFrontier: false).nodes
+	}
+
+	/// `checkFrontier` reads the children of nodes at `maxDepth`, so a cut below them marks the walk incomplete.
+	func walk(startingAt root: Element, maxDepth: Int, maxNodes: Int, checkFrontier: Bool) -> AXTraversal<Element> {
 		let nodeLimit = max(1, maxNodes)
 		var queue: [(Element, Int, Bool, Bool)] = [(root, 0, false, true)]
 		// Visited elements bucketed by `hash`, so `sameElement` (CFEqual) only runs within a bucket.
@@ -66,6 +150,8 @@ struct AXTraversalWorld<Element: AnyObject> {
 		var seen: [Int: [Element]] = [:]
 		var index = 0
 		var output: [AXDescendant<Element>] = []
+		var complete = true
+		// The queue never outgrows `nodeLimit`, so the budget shows up as children left unqueued.
 		while index < queue.count && output.count < nodeLimit {
 			let (element, depth, parentInsideWebArea, inheritedVisible) = queue[index]
 			index += 1
@@ -77,16 +163,185 @@ struct AXTraversalWorld<Element: AnyObject> {
 			let elementRole = role(element)
 			let insideWebArea = parentInsideWebArea || elementRole == "AXWebArea"
 			output.append(AXDescendant(element: element, depth: depth, insideWebArea: insideWebArea, axVisible: inheritedVisible))
-			if depth >= maxDepth { continue }
-			let (childElements, visible) = childLists(element)
+			if depth >= maxDepth {
+				if checkFrontier && childLists(element)?.all.isEmpty != true { complete = false }
+				continue
+			}
+			guard let (childElements, visible) = childLists(element) else {
+				complete = false
+				continue
+			}
 			for child in childElements {
-				if queue.count >= nodeLimit { break }
+				if queue.count >= nodeLimit {
+					complete = false
+					break
+				}
 				let childVisible = inheritedVisible && (visible.map { set in set.contains { sameElement($0, child) } } ?? true)
 				queue.append((child, depth + 1, insideWebArea, childVisible))
 			}
 		}
-		return output
+		return AXTraversal(nodes: output, complete: complete)
 	}
+
+	/// One `waitFor` pass over `root`, bounded by `waitForMaxDepth` and `waitForMaxNodes`.
+	/// - Parameters:
+	///   - scopeExact: Test only `root`, so nothing below it can hide a match.
+	///   - matches: The tri-state predicate; `nil` when a failed read leaves the element undecided.
+	func waitPass(startingAt root: Element, scopeExact: Bool, matches: (Element) -> Bool?) -> AXWaitPass<Element> {
+		let traversal = walk(startingAt: root, maxDepth: scopeExact ? 0 : waitForMaxDepth, maxNodes: waitForMaxNodes, checkFrontier: !scopeExact)
+		// Absence needs the whole scope walked and every predicate read: an unread subtree or field may hold the match.
+		var undecided = !traversal.complete
+		for candidate in traversal.nodes {
+			guard let matched = matches(candidate.element) else {
+				undecided = true
+				continue
+			}
+			if matched { return AXWaitPass(nodes: traversal.nodes, verdict: .found(candidate)) }
+		}
+		return AXWaitPass(nodes: traversal.nodes, verdict: undecided ? .undecided : .absent)
+	}
+}
+
+/// The deepest level below its scope a `waitFor` pass walks.
+let waitForMaxDepth = 12
+/// The most nodes one `waitFor` pass walks.
+let waitForMaxNodes = 2000
+
+/// What one `waitFor` pass proved.
+enum AXWaitVerdict<Element> {
+	case found(AXDescendant<Element>)
+	/// The whole scope was walked and read, and nothing matched.
+	case absent
+	/// Nothing matched, but an unread subtree or field may hold a match.
+	case undecided
+}
+
+/// One `waitFor` pass: the nodes it walked and its verdict.
+struct AXWaitPass<Element> {
+	let nodes: [AXDescendant<Element>]
+	let verdict: AXWaitVerdict<Element>
+}
+
+/// The most AX windows one root inventory lists.
+let windowListCap = 128
+
+/// A root inventory lists a window only at least this large; smaller ones are helper panels and slivers.
+func inventoryFrameUsable(_ frame: CGRect) -> Bool {
+	frame.width >= 100 && frame.height >= 80
+}
+
+/// A window list is the whole inventory only when it was read and fits under `windowListCap`.
+func windowListComplete(_ count: Int?) -> Bool {
+	count.map { $0 <= windowListCap } ?? false
+}
+
+/// One AX size read: the value and its evidence decoded from the same reply.
+enum AXSizeRead: Equatable {
+	case size(CGSize)
+	case absent
+	case failed
+}
+
+/// The AX reads one pid's window inventory needs, injectable so headless tests drive production assembly.
+struct WindowInventoryWorld<Element: AnyObject> {
+	/// `AXWindows`; `nil` when the read failed.
+	let windows: () -> [Element]?
+	/// The main and focused windows, deduplicated: the fallback when `AXWindows` lists none.
+	let fallbackWindows: () -> [Element]
+	let position: (Element) -> CGPoint
+	let size: (Element) -> AXSizeRead
+	/// Not `complete` when a sheet source or a child's role could not be read.
+	let sheets: (Element) -> (sheets: [Element], complete: Bool)
+}
+
+/// The windows `AXWindows` (or its main/focused fallback) named, capped at `windowListCap`.
+struct WindowListing<Element> {
+	let windows: [Element]
+	/// The list was read and fit under the cap.
+	let complete: Bool
+}
+
+/// A window kept by the inventory, with the frames and sheets its root entry reports.
+struct InventoryWindow<Element> {
+	let element: Element
+	/// Its index in the listing, the z-order of an unpaired window.
+	let listIndex: Int
+	let axFrame: CGRect
+	let effectiveFrame: CGRect
+	let sheets: [Element]
+}
+
+/// One pid's kept windows. Every kept window is a validated positive match even when the inventory is not
+/// `complete`; only a `complete` inventory proves that a missing root closed.
+struct WindowInventorySelection<Element> {
+	let windows: [InventoryWindow<Element>]
+	let complete: Bool
+}
+
+extension WindowInventoryWorld {
+	/// Read `AXWindows` once. A failed or over-cap list still names its first `windowListCap` windows.
+	func listing() -> WindowListing<Element> {
+		let listed = windows()
+		let capped = Array((listed ?? []).prefix(windowListCap))
+		// The main/focused fallback recovers at most those two windows, never an unfocused one or its sheet.
+		return WindowListing(windows: capped.isEmpty ? fallbackWindows() : capped, complete: windowListComplete(listed?.count))
+	}
+
+	/// Keep the listed windows of a usable size with their sheets. A failed size read is retried once, only when
+	/// usable paired CG bounds do not already admit the window. A window skipped as too small only because its
+	/// size stayed unreadable, or a failed sheet read, leaves the inventory incomplete.
+	/// - Parameter pairedBounds: The paired CG window's bounds, `nil` for an unpaired window.
+	func select(_ listing: WindowListing<Element>, pairedBounds: (Element) -> CGRect?) -> WindowInventorySelection<Element> {
+		var complete = listing.complete
+		var kept: [InventoryWindow<Element>] = []
+		for (listIndex, window) in listing.windows.enumerated() {
+			let paired = pairedBounds(window)
+			// The filter and the evidence come from the same reply; a retry replaces both. Paired bounds that admit
+			// the window settle a failed read without a serial retry against the listing budget.
+			var read = size(window)
+			if read == .failed && !(paired.map(inventoryFrameUsable) ?? false) { read = size(window) }
+			var axSize = CGSize.zero
+			if case .size(let value) = read { axSize = value }
+			let axFrame = CGRect(origin: position(window), size: axSize)
+			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (paired ?? axFrame)
+			if !inventoryFrameUsable(effectiveFrame) {
+				// Skipped as too small only because its size was unreadable, a live window is unknown.
+				if paired == nil && read == .failed { complete = false }
+				continue
+			}
+			let sheetInventory = sheets(window)
+			if !sheetInventory.complete { complete = false }
+			kept.append(InventoryWindow(element: window, listIndex: listIndex, axFrame: axFrame, effectiveFrame: effectiveFrame, sheets: sheetInventory.sheets))
+		}
+		return WindowInventorySelection(windows: kept, complete: complete)
+	}
+}
+
+/// One pid's roots keyed by identity, and whether the listing was the whole inventory.
+struct RootInventorySnapshot {
+	let roots: [String: [String: Any]]
+	let complete: Bool
+}
+
+/// Root changes between two listings. Absence from an incomplete listing proves nothing: a root missing
+/// from `after` closed only when `after` is complete, and one missing from `before` appeared (or newly
+/// gained focus) only when `before` is complete.
+func rootInventoryChanges(before: RootInventorySnapshot, after: RootInventorySnapshot) -> [(change: String, root: [String: Any])] {
+	var changes: [(change: String, root: [String: Any])] = []
+	if before.complete {
+		for (key, root) in after.roots where before.roots[key] == nil { changes.append(("appeared", root)) }
+	}
+	if after.complete {
+		for (key, root) in before.roots where after.roots[key] == nil { changes.append(("closed", root)) }
+	}
+	for (key, root) in after.roots where (root["isFocused"] as? Bool) == true {
+		guard let previous = before.roots[key] else {
+			if before.complete { changes.append(("focused", root)) }
+			continue
+		}
+		if (previous["isFocused"] as? Bool) != true { changes.append(("focused", root)) }
+	}
+	return changes
 }
 
 struct WindowPairing {
@@ -2040,7 +2295,15 @@ final class Bridge {
 		}
 	}
 
+	/// Every listed root is a validated positive match. `complete` is true only when the inventory read every
+	/// live root, so a root missing from it closed; a partial listing (e.g. over `windowListCap`) still
+	/// resolves the roots it names.
 	private func listRoots(pid: Int32?, title: String? = nil) throws -> [String: Any] {
+		let inventory = rootInventory(pid: pid, title: title)
+		return ["roots": inventory.roots, "complete": inventory.complete]
+	}
+
+	private func rootInventory(pid: Int32?, title: String?) -> (roots: [[String: Any]], complete: Bool) {
 		let requestedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
 		let entries = allCGWindowEntries()
 		let isBroadDiscovery = pid == nil && requestedTitle.isEmpty
@@ -2061,11 +2324,15 @@ final class Bridge {
 			apps = broadRootCandidateApps(entries: entries)
 		}
 		var roots: [[String: Any]] = []
+		var complete = true
 		for app in apps {
 			guard let rawPid = app["pid"] as? Int, let appPid = Int32(exactly: rawPid) else { continue }
 			let appName = app["appName"] as? String ?? processName(pid: appPid) ?? "Unknown App"
 			let bundleId = app["bundleId"] as? String
-			for var root in (try? listWindows(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)) ?? [] {
+			let windows = windowInventory(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)
+			// An exited process has no roots, however its failed reads look.
+			if !windows.complete && !processIsGone(appPid) { complete = false }
+			for var root in windows.roots {
 				root["pid"] = rawPid
 				root["appName"] = appName
 				if let bundleId { root["bundleId"] = bundleId }
@@ -2101,41 +2368,62 @@ final class Bridge {
 			}
 		}
 		roots.sort { (($0["zOrder"] as? Int) ?? Int.max) < (($1["zOrder"] as? Int) ?? Int.max) }
-		return ["roots": roots]
+		return (roots, complete)
+	}
+
+	/// An exited process: `kill` reports no such process. Any other answer, including EPERM, may be live.
+	private func processIsGone(_ pid: pid_t) -> Bool {
+		pid > 0 && kill(pid, 0) != 0 && errno == ESRCH
 	}
 
 	private func listWindows(pid: Int32, cgEntries: [[String: Any]]? = nil, messagingTimeout: Float = 1.0) throws -> [[String: Any]] {
+		windowInventory(pid: pid, cgEntries: cgEntries, messagingTimeout: messagingTimeout).roots
+	}
+
+	/// The pid's windows and sheets (see `WindowInventoryWorld.select`). Not `complete` when the window list,
+	/// a sheet source or a skipped window's size could not be read, or the list exceeds `windowListCap`: an
+	/// omitted root is then unknown, while every listed root stays a valid positive match.
+	private func windowInventory(pid: Int32, cgEntries: [[String: Any]]?, messagingTimeout: Float) -> (roots: [[String: Any]], complete: Bool) {
 		ensureEnhancedAccessibility(pid: pid)
 		let appElement = AXUIElementCreateApplication(pid)
 		AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-		var windows = Array(axElementArray(appElement, attribute: kAXWindowsAttribute as CFString).prefix(128))
-		if windows.isEmpty {
-			for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
-				guard let window = copyAttribute(appElement, attribute: attribute as CFString).flatMap(asAXElement), !windows.contains(where: { sameElement($0, window) }) else { continue }
-				windows.append(window)
-			}
-		}
+		let world = WindowInventoryWorld<AXUIElement>(
+			windows: { self.axElementArrayEvidence(appElement, attribute: kAXWindowsAttribute as CFString) },
+			fallbackWindows: {
+				var windows: [AXUIElement] = []
+				for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+					guard let window = self.copyAttribute(appElement, attribute: attribute as CFString).flatMap(self.asAXElement), !windows.contains(where: { self.sameElement($0, window) }) else { continue }
+					windows.append(window)
+				}
+				return windows
+			},
+			position: { self.pointAttribute($0, attribute: kAXPositionAttribute as CFString) ?? .zero },
+			size: { self.sizeRead($0) },
+			sheets: { self.sheetInventory(of: $0) }
+		)
+		let listing = world.listing()
 		let candidates = cgWindowCandidates(pid: pid, entries: cgEntries)
-		let pairings = windowPairings(windows: windows, candidates: candidates)
+		let pairings = windowPairings(windows: listing.windows, candidates: candidates)
+		let selection = world.select(listing) { pairings[ObjectIdentifier($0)]?.candidate?.bounds }
 
 		var output: [[String: Any]] = []
-		for (zIndex, window) in windows.enumerated() {
+		for kept in selection.windows {
+			let window = kept.element
+			let zIndex = kept.listIndex
 			let axTitle = stringAttribute(window, attribute: kAXTitleAttribute as CFString) ?? ""
 			let axRole = stringAttribute(window, attribute: kAXRoleAttribute as CFString) ?? ""
 			let axSubrole = stringAttribute(window, attribute: kAXSubroleAttribute as CFString) ?? ""
-			let axFrame = frameForWindow(window)
+			let axFrame = kept.axFrame
 			let pairing = pairings[ObjectIdentifier(window)] ?? WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
 			let candidate = pairing.candidate
-
-			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (candidate?.bounds ?? axFrame)
-			if effectiveFrame.width < 100 || effectiveFrame.height < 80 { continue }
+			let effectiveFrame = kept.effectiveFrame
 			let hasUsableAXFrame = axFrame.width > 1 && axFrame.height > 1
 			let title = hasUsableAXFrame && !axTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? axTitle : (candidate?.title.isEmpty == false ? candidate!.title : axTitle)
 			let windowRef = refStore.storeWindow(window)
 			let isMinimized = boolAttribute(window, attribute: kAXMinimizedAttribute as CFString) ?? false
 			let isMain = boolAttribute(window, attribute: kAXMainAttribute as CFString) ?? false
 			let isFocused = boolAttribute(window, attribute: kAXFocusedAttribute as CFString) ?? false
-			let sheetCount = sheetElements(of: window).count
+			let sheetCount = kept.sheets.count
 			let isModal = isModalRoot(window, role: axRole, subrole: axSubrole, sheetCount: sheetCount)
 			let scale = displayScaleFactor(for: effectiveFrame)
 
@@ -2166,7 +2454,7 @@ final class Bridge {
 			}
 			output.append(item)
 
-			for sheet in sheetElements(of: window) {
+			for sheet in kept.sheets {
 				let sheetRef = refStore.storeWindow(sheet)
 				let sheetFrame = frameForWindow(sheet)
 				let sheetCandidate = bestCandidate(for: sheet, candidates: candidates)
@@ -2191,7 +2479,7 @@ final class Bridge {
 				output.append(sheetItem)
 			}
 		}
-		return output
+		return (output, selection.complete)
 	}
 
 	private func look(
@@ -3435,12 +3723,15 @@ final class Bridge {
 		return Int(exactly: number.rounded(.towardZero)) ?? 0
 	}
 
-	private func rootMetadataSnapshot(pid: Int32) -> [String: [String: Any]] {
-		let roots = ((try? listRoots(pid: pid)["roots"] as? [[String: Any]]) ?? [])
-		return Dictionary(uniqueKeysWithValues: roots.map { (rootIdentity($0), $0) })
+	private func rootMetadataSnapshot(pid: Int32) -> RootInventorySnapshot {
+		let inventory = rootInventory(pid: pid, title: nil)
+		return RootInventorySnapshot(
+			roots: Dictionary(uniqueKeysWithValues: inventory.roots.map { (rootIdentity($0), $0) }),
+			complete: inventory.complete
+		)
 	}
 
-	private func rootDelta(before: [String: [String: Any]], beforeFrontmostPid: pid_t?, pid: Int32) -> [[String: Any]] {
+	private func rootDelta(before: RootInventorySnapshot, beforeFrontmostPid: pid_t?, pid: Int32) -> [[String: Any]] {
 		var delta = rootSnapshotDelta(before: before, after: rootMetadataSnapshot(pid: pid), pid: pid)
 		if let beforeFrontmostPid, beforeFrontmostPid != NSWorkspace.shared.frontmostApplication?.processIdentifier {
 			if let frontmost = NSWorkspace.shared.frontmostApplication {
@@ -3450,22 +3741,10 @@ final class Bridge {
 		return delta
 	}
 
-	/// Compare two root snapshots keyed by `rootIdentity`: appeared roots, then closed roots, then
-	/// roots that gained focus.
-	func rootSnapshotDelta(before: [String: [String: Any]], after: [String: [String: Any]], pid: Int32) -> [[String: Any]] {
-		var delta: [[String: Any]] = []
-		for (key, root) in after where before[key] == nil {
-			delta.append(rootDeltaItem(change: "appeared", root: root, pid: pid))
-		}
-		for (key, root) in before where after[key] == nil {
-			delta.append(rootDeltaItem(change: "closed", root: root, pid: pid))
-		}
-		for (key, root) in after {
-			if (root["isFocused"] as? Bool) == true && (before[key]?["isFocused"] as? Bool) != true {
-				delta.append(rootDeltaItem(change: "focused", root: root, pid: pid))
-			}
-		}
-		return delta
+	/// Compare two root listings keyed by `rootIdentity` (see `rootInventoryChanges`): appeared roots, then
+	/// closed roots, then roots that gained focus. Absence from an incomplete listing proves nothing.
+	func rootSnapshotDelta(before: RootInventorySnapshot, after: RootInventorySnapshot, pid: Int32) -> [[String: Any]] {
+		rootInventoryChanges(before: before, after: after).map { rootDeltaItem(change: $0.change, root: $0.root, pid: pid) }
 	}
 
 	func rootDeltaItem(change: String, root: [String: Any], pid: Int32) -> [String: Any] {
@@ -3481,7 +3760,7 @@ final class Bridge {
 	// events can only accelerate the decision, never make it. A cheap
 	// CGWindowList id-set poll detects real-window appearance/closure early;
 	// the AX diff runs once at the first signal or at timeout.
-	private func attachRootDelta(to response: [String: Any], before: [String: [String: Any]], beforeFrontmostPid: pid_t?, pid: Int32, eventsLive: Bool, eventCursor: UInt64, beforeCgSignature: Set<UInt32>) -> [String: Any] {
+	private func attachRootDelta(to response: [String: Any], before: RootInventorySnapshot, beforeFrontmostPid: pid_t?, pid: Int32, eventsLive: Bool, eventCursor: UInt64, beforeCgSignature: Set<UInt32>) -> [String: Any] {
 		var output = response
 		var performed = output["performed"] as? [String: Any] ?? [:]
 
@@ -3554,32 +3833,39 @@ final class Bridge {
 		}
 		_ = ensureRootObserver(pid: pid)
 
-		func matches(_ element: AXUIElement) -> Bool {
-			let candidateRole = self.stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
-			if let role, !role.isEmpty, candidateRole != role { return false }
-			if let text, !text.isEmpty {
-				let subrole = self.stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
-				let haystack = [
-					self.stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? "",
-					self.stringAttribute(element, attribute: kAXDescriptionAttribute as CFString) ?? "",
-					self.displayValue(element, role: candidateRole, subrole: subrole),
-				].joined(separator: "\n").lowercased()
-				if !haystack.contains(text) { return false }
+		func field(_ element: AXUIElement, _ field: AXWaitField) -> AXStringRead {
+			switch field {
+			case .role: return self.stringRead(element, attribute: kAXRoleAttribute as CFString)
+			case .title: return self.stringRead(element, attribute: kAXTitleAttribute as CFString)
+			case .description: return self.stringRead(element, attribute: kAXDescriptionAttribute as CFString)
+			case .value:
+				// A secure field never exposes its value; an unreadable role or subrole cannot rule one out.
+				let role = self.stringRead(element, attribute: kAXRoleAttribute as CFString)
+				let subrole = self.stringRead(element, attribute: kAXSubroleAttribute as CFString)
+				if role == .value("AXSecureTextField") || subrole == .value("AXSecureTextField") { return .value("") }
+				if role == .failed || subrole == .failed { return .failed }
+				return self.stringRead(element, attribute: kAXValueAttribute as CFString)
 			}
-			if let expectedValue, !expectedValue.isEmpty {
-				let subrole = self.stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
-				if self.displayValue(element, role: candidateRole, subrole: subrole).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != expectedValue { return false }
-			}
-			return true
 		}
 
 		var lastCount = 0
+		var lastUndecided = false
 		repeat {
 			let changeGeneration = rootChangeGeneration(pid: pid)
-			let collected = collectDescendantsWithContext(startingAt: rootElement, maxDepth: 12, maxNodes: 2000)
-			let descendants = scopeExact ? Array(collected.prefix(1)) : collected
+			let pass = descendantWorld().waitPass(startingAt: rootElement, scopeExact: scopeExact) { element in
+				axWaitConditionMatch(role: role, text: text, value: expectedValue) { field(element, $0) }
+			}
+			let descendants = pass.nodes
 			lastCount = descendants.count
-			if let match = descendants.first(where: { matches($0.element) }) {
+			var found: AXDescendant<AXUIElement>?
+			lastUndecided = false
+			switch pass.verdict {
+			case .found(let match): found = match
+			// Only a whole, fully read scope proves the condition gone.
+			case .absent: if waitForGone { return ["found": true, "gone": true, "complete": true, "nodeCount": lastCount] }
+			case .undecided: lastUndecided = true
+			}
+			if let match = found {
 				if waitForGone {
 					waitForRootChange(pid: pid, since: changeGeneration, until: deadline)
 					continue
@@ -3597,13 +3883,13 @@ final class Bridge {
 					"nodeCount": lastCount,
 				]
 			}
-			if waitForGone {
-				return ["found": true, "gone": true, "nodeCount": lastCount]
-			}
 			waitForRootChange(pid: pid, since: changeGeneration, until: deadline)
 		} while Date() < deadline
 
-		return ["found": false, "timedOut": true, "nodeCount": lastCount]
+		var result: [String: Any] = ["found": false, "timedOut": true, "nodeCount": lastCount]
+		// The last walk could neither find the condition nor prove it absent.
+		if waitForGone && lastUndecided { result["incomplete"] = true }
+		return result
 	}
 
 	/// The element at `point`. With `pid` the query goes to that app, so a covered window still hits its own
@@ -3805,16 +4091,20 @@ final class Bridge {
 	}
 
 	private func collectDescendantsWithContext(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXDescendant<AXUIElement>] {
-		let world = AXTraversalWorld<AXUIElement>(
+		descendantWorld().collect(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes)
+	}
+
+	private func descendantWorld() -> AXTraversalWorld<AXUIElement> {
+		AXTraversalWorld<AXUIElement>(
 			role: { self.stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "" },
 			childLists: descendantChildLists,
 			sameElement: sameElement, hash: axEquivalenceHash
 		)
-		return world.collect(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes)
 	}
 
-	private func descendantChildLists(_ element: AXUIElement) -> (all: [AXUIElement], visible: [AXUIElement]?) {
-		let children = axElementArray(element, attribute: kAXChildrenAttribute as CFString)
+	/// `nil` when the children could not be read; visibility reads only refine, so their failures are ignored.
+	private func descendantChildLists(_ element: AXUIElement) -> (all: [AXUIElement], visible: [AXUIElement]?)? {
+		guard let children = axElementArrayEvidence(element, attribute: kAXChildrenAttribute as CFString) else { return nil }
 		let attributes: [CFString] = [
 			kAXVisibleChildrenAttribute as CFString,
 			kAXVisibleRowsAttribute as CFString,
@@ -4359,12 +4649,57 @@ final class Bridge {
 	// exposed only as AXSheet-role children. Merge both sources so sheet
 	// discovery works across versions.
 	private func sheetElements(of window: AXUIElement) -> [AXUIElement] {
-		var sheets = axElementArray(window, attribute: "AXSheets" as CFString)
-		for child in axElementArray(window, attribute: kAXChildrenAttribute as CFString) {
-			guard (stringAttribute(child, attribute: kAXRoleAttribute as CFString) ?? "") == "AXSheet" else { continue }
-			if !sheets.contains(where: { CFEqual($0, child) }) { sheets.append(child) }
+		sheetInventory(of: window).sheets
+	}
+
+	/// Not `complete` when either sheet source or a child's role could not be read: a sheet may be missing.
+	private func sheetInventory(of window: AXUIElement) -> (sheets: [AXUIElement], complete: Bool) {
+		let listed = axElementArrayEvidence(window, attribute: "AXSheets" as CFString)
+		let children = axElementArrayEvidence(window, attribute: kAXChildrenAttribute as CFString)
+		var complete = listed != nil && children != nil
+		var sheets = listed ?? []
+		for child in children ?? [] {
+			switch stringRead(child, attribute: kAXRoleAttribute as CFString) {
+			case .value("AXSheet"):
+				if !sheets.contains(where: { CFEqual($0, child) }) { sheets.append(child) }
+			case .failed:
+				complete = false
+			default:
+				continue
+			}
 		}
-		return sheets
+		return (sheets, complete)
+	}
+
+	/// `kAXSizeAttribute` with its evidence, decoded from one reply.
+	private func sizeRead(_ element: AXUIElement) -> AXSizeRead {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)) {
+		case .failed: return .failed
+		case .absent: return .absent
+		case .present: return decodeAXSize(value).map(AXSizeRead.size) ?? .absent
+		}
+	}
+
+	private func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
+		case .failed: return .failed
+		case .absent: return .absent
+		case .present: return (value as? String).map(AXStringRead.value) ?? .absent
+		}
+	}
+
+	/// `nil` for a failed read; an unsupported or valueless attribute is an authoritative `[]`.
+	private func axElementArrayEvidence(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
+		case .failed: return nil
+		case .absent: return []
+		case .present:
+			if let array = value as? [AXUIElement] { return array }
+			return (value as? [AnyObject])?.compactMap(asAXElement) ?? []
+		}
 	}
 
 	private func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
@@ -4409,9 +4744,12 @@ final class Bridge {
 	}
 
 	private func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
-		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
-		let cfValue = value as CFTypeRef
-		guard CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
+		decodeAXSize(copyAttribute(element, attribute: attribute))
+	}
+
+	/// A `CGSize` AX value, or `nil` for any other value.
+	private func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
+		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgSize else { return nil }
 		var size = CGSize.zero
@@ -5356,6 +5694,7 @@ Terminal `act_ui` results always say the action was delivered, and:
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
+- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`.
 
 ## Ref lifecycle
 
