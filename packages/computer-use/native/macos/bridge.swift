@@ -2531,7 +2531,7 @@ final class Bridge {
 		}
 	}
 
-	func ocrBoxDuplicatesAXLabel(_ box: OCRBox, in root: LookNode) -> Bool {
+	private func ocrBoxDuplicatesAXLabel(_ box: OCRBox, in root: LookNode) -> Bool {
 		let boxLabel = normalizedLabel(box.string)
 		if boxLabel.isEmpty { return true }
 		var queue = [root]
@@ -2548,7 +2548,7 @@ final class Bridge {
 		return false
 	}
 
-	func deepestNode(containing point: CGPoint, in root: LookNode) -> LookNode? {
+	private func deepestNode(containing point: CGPoint, in root: LookNode) -> LookNode? {
 		guard root.rect.contains(point), !root.pictureOnly else { return nil }
 		for child in root.children.reversed() {
 			if let match = deepestNode(containing: point, in: child) { return match }
@@ -2556,7 +2556,7 @@ final class Bridge {
 		return root
 	}
 
-	func deepestContainer(containing point: CGPoint, in root: LookNode) -> LookNode? {
+	private func deepestContainer(containing point: CGPoint, in root: LookNode) -> LookNode? {
 		guard root.rect.contains(point) else { return nil }
 		for child in root.children.reversed() {
 			if let match = deepestContainer(containing: point, in: child) { return match }
