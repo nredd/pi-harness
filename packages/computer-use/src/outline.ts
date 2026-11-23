@@ -60,6 +60,11 @@ export interface Outline {
 	nodes: OutlineNode[];
 	refToWireRef: Map<string, string>;
 	wireRefToRef: Map<string, string>;
+	/**
+	 * Highest `@e<n>` ref number a graft has issued. It never decreases, so a ref a graft dropped is never reissued
+	 * to another element under the same `stateId`; absent, the highest ref in `nodes` counts (#1349).
+	 */
+	refHighWater?: number;
 }
 
 export interface LookImage {
@@ -139,6 +144,8 @@ export interface SerializedOutline {
 	root: SerializedOutlineNode;
 	/** `OUTLINE_FORMAT_VERSION` of the writer; missing on outlines stored before it. */
 	formatVersion?: number;
+	/** See `Outline.refHighWater`; missing on outlines stored before it or never grafted. */
+	refHighWater?: number;
 }
 
 export interface ControlsResult {
@@ -893,7 +900,13 @@ export function countOutlineNodes(root: OutlineNode): number {
 }
 
 export function serializeOutline(outline: Outline): SerializedOutline {
-	return { lookId: outline.lookId, root: serializeOutlineNode(outline.root), formatVersion: OUTLINE_FORMAT_VERSION };
+	const serialized: SerializedOutline = {
+		lookId: outline.lookId,
+		root: serializeOutlineNode(outline.root),
+		formatVersion: OUTLINE_FORMAT_VERSION,
+	};
+	if (outline.refHighWater !== undefined) serialized.refHighWater = outline.refHighWater;
+	return serialized;
 }
 
 export function serializeOutlineNode(node: OutlineNode): SerializedOutlineNode {
@@ -922,7 +935,12 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 	};
 	const root = restoreNode(serialized.root);
 	dropTextOverProtected(root, serialized.formatVersion !== OUTLINE_FORMAT_VERSION);
-	return { lookId: serialized.lookId, root, nodes, refToWireRef, wireRefToRef };
+	const outline: Outline = { lookId: serialized.lookId, root, nodes, refToWireRef, wireRefToRef };
+	// Stored JSON is untrusted: only a nonnegative integer counts, otherwise the highest restored ref does.
+	const { refHighWater } = serialized as { refHighWater?: unknown };
+	if (typeof refHighWater === "number" && Number.isSafeInteger(refHighWater) && refHighWater >= 0)
+		outline.refHighWater = refHighWater;
+	return outline;
 }
 
 /**
@@ -1029,12 +1047,26 @@ function preserveUnreused(node: OutlineNode, parent: OutlineNode, used: Set<Outl
 	return node;
 }
 
+/** Cached children of `parent` the scoped look did not reuse, or none unless `keepUnseen`. */
+function preservedChildren(
+	oldChildren: OutlineNode[],
+	parent: OutlineNode,
+	used: Set<OutlineNode>,
+	keepUnseen: boolean,
+): OutlineNode[] {
+	if (!keepUnseen) return [];
+	return oldChildren
+		.map((child) => preserveUnreused(child, parent, used))
+		.filter((child): child is OutlineNode => Boolean(child));
+}
+
 function cloneForGraft(
 	source: OutlineNode,
 	parent: OutlineNode,
 	nextRef: () => string,
 	reusableByWireRef: Map<string, OutlineNode>,
 	used: Set<OutlineNode>,
+	keepUnseen: boolean,
 ): OutlineNode {
 	const existing = source.wireRef ? reusableByWireRef.get(source.wireRef) : undefined;
 	const oldChildren = existing?.children ?? [];
@@ -1050,11 +1082,10 @@ function cloneForGraft(
 	copyNodeFields(node, source, Boolean(existing));
 	used.add(node);
 	node.parent = parent;
-	const graftedChildren = source.children.map((child) => cloneForGraft(child, node, nextRef, reusableByWireRef, used));
-	const preservedChildren = oldChildren
-		.map((child) => preserveUnreused(child, node, used))
-		.filter((child): child is OutlineNode => Boolean(child));
-	node.children = [...graftedChildren, ...preservedChildren];
+	const graftedChildren = source.children.map((child) =>
+		cloneForGraft(child, node, nextRef, reusableByWireRef, used, keepUnseen),
+	);
+	node.children = [...graftedChildren, ...preservedChildren(oldChildren, node, used, keepUnseen)];
 	return node;
 }
 
@@ -1063,7 +1094,23 @@ function redactUnconfirmed(node: OutlineNode, confirmed: Set<OutlineNode>): void
 	for (const child of node.children) redactUnconfirmed(child, confirmed);
 }
 
-export function graftScopedOutline(outline: Outline, targetRef: string, scoped: Outline): OutlineNode {
+/** Options for `graftScopedOutline`. */
+export interface GraftOptions {
+	/**
+	 * The scoped reply is the whole live subtree of the target, so a cached descendant it omits is gone, not unread,
+	 * and is dropped with its text and ref. Linux sets it: a child moved under a protected container elsewhere is
+	 * simply absent from a complete reply (#1349). macOS and Windows omit it and keep unseen cached nodes while the
+	 * reply has no unread node.
+	 */
+	authoritative?: boolean;
+}
+
+export function graftScopedOutline(
+	outline: Outline,
+	targetRef: string,
+	scoped: Outline,
+	options: GraftOptions = {},
+): OutlineNode {
 	const target = nodeByRef(outline, targetRef);
 	if (!target) throw new Error(`Cannot graft scoped outline: target ${targetRef} is not in the current outline.`);
 	const targetRect = target.rect ? { ...target.rect } : undefined;
@@ -1073,7 +1120,9 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 		for (const child of node.children) collect(child);
 	};
 	collect(target);
-	let nextNumber = Math.max(...outline.nodes.map((node) => outlineRefNumber(node.ref)), 0) + 1;
+	// Number after every ref ever issued, not only the live ones: a ref an earlier graft dropped stays retired (#1349).
+	let nextNumber =
+		Math.max(...outline.nodes.map((node) => outlineRefNumber(node.ref)), outline.refHighWater ?? 0, 0) + 1;
 	const nextRef = () => `@e${nextNumber++}`;
 	const oldChildren = target.children;
 	const used = new Set<OutlineNode>([target]);
@@ -1084,13 +1133,15 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 	// (fail closed, #1263). Its own boxes are in scoped space too: never compare them with full-look rects.
 	target.rect = isConfirmedReadable(target) ? targetRect : undefined;
 	for (const text of target.text) text.rect = undefined;
+	// A node the scoped look left unread (`truncated`) may have been refused, e.g. a Linux child whose live `Parent`
+	// edge is unconfirmed, and the reply cannot say which cached node that was. So a cached node absent from the look
+	// survives only when the look read everything; otherwise its cached text and refs go. An authoritative reply
+	// never keeps one (#1349).
+	const keepUnseen = !options.authoritative && !scoped.nodes.some((node) => node.truncated);
 	const graftedChildren = scoped.root.children.map((child) =>
-		cloneForGraft(child, target, nextRef, reusableByWireRef, used),
+		cloneForGraft(child, target, nextRef, reusableByWireRef, used, keepUnseen),
 	);
-	const preservedChildren = oldChildren
-		.map((child) => preserveUnreused(child, target, used))
-		.filter((child): child is OutlineNode => Boolean(child));
-	target.children = [...graftedChildren, ...preservedChildren];
+	target.children = [...graftedChildren, ...preservedChildren(oldChildren, target, used, keepUnseen)];
 	for (const child of target.children) clearScopedRects(child);
 	// A preserved node is absent from the scoped look, so its classification is unknown. Once that look shows
 	// any protected node, a preserved one may be the same element under a new wire ref: drop its old text.
@@ -1098,5 +1149,6 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 	// Grafted geometry is cleared, so once the outline holds a protected node its OCR boxes cannot be placed.
 	dropTextOverProtected(outline.root);
 	rebuildIndexes(outline);
+	outline.refHighWater = nextNumber - 1;
 	return target;
 }
