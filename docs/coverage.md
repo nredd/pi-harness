@@ -451,7 +451,10 @@ main runs [here](https://github.com/nredd/pi-harness/actions/runs/45204703192) a
 [here](https://github.com/nredd/pi-harness/actions/runs/45210838089), on different commits with
 unchanged crate sources, agree on **2899 / 311** uncovered lines / functions across the crate's
 `src/` inventory, the enforced cap (#696). Their uncovered regions differ (4659 and 4656), so only
-lines and functions are capped and ratcheted. Integration tests and sysroot files are outside the denominator, but
+lines and functions are capped and ratcheted. Five hosted main runs on four different commits
+(45222250092, 45225473086, 45229504804, 45232543830, 45232602941) report identical raw line and
+function totals while their region counts vary between 4698 and 4701, so the counts that are
+capped do not wobble with timing. Integration tests and sysroot files are outside the denominator, but
 inline source tests count. Declaration-only Windows modules can lack an LLVM map even if they
 contain block comments; the Linux declaration check is unchanged. This is not Windows ARM64 or
 live desktop evidence.
@@ -520,7 +523,8 @@ and inline/source test hits do not establish runtime coverage. Its advisory refe
 **727 / 106** uncovered lines / functions on which Ubuntu main runs
 [here](https://github.com/nredd/pi-harness/actions/runs/45225473086) and
 [here](https://github.com/nredd/pi-harness/actions/runs/45229504804) agree for the same crate
-sources (#696). The separate `computer-use-swift` report-only/excluded
+sources (#696). Both runs were cancelled or superseded overall; their computer-use jobs succeeded and
+produced the reports. The separate `computer-use-swift` report-only/excluded
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
 It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
 `computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.

@@ -432,7 +432,7 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Ubuntu main runs 45225473086 and 45229504804 (same crate sources) agree on 727/106/1245 uncovered L/F/regions (#696). Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches.",
+      "note": "Ubuntu main runs 45225473086 and 45229504804 (same crate sources) agree on 727/106/1245 uncovered L/F/regions (#696). Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. The earlier pinned Linux ARM64 measurement no longer applies to the Ubuntu x64 reference. The cited runs were cancelled or superseded overall; their computer-use jobs succeeded and produced the reports.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
