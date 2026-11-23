@@ -411,6 +411,40 @@ test("Linux interpreter script aliases can only add a block", async ({ onTestFin
 	expect(await blocked()).toEqual({ 301: false, 302: false, 303: true });
 });
 
+test("Linux interpreter script aliases never identify, exempt or unblock a root", async ({ onTestFinished }) => {
+	const { userFile, find } = useLinuxRoots(onTestFinished, [
+		linuxRoot(311, "Tool", "python3", { blockAliases: ["tool"] }),
+		// An alias equal to an allowed app's identity.
+		linuxRoot(312, "Shell", "python3", { blockAliases: ["fixture-editor"] }),
+		linuxRoot(313, "Editor", "fixture-editor"),
+		linuxRoot(314, "Tool", undefined, { blockAliases: ["tool"] }),
+	]);
+	const policy = async () =>
+		Object.fromEntries(
+			(await find()).map((root) => [
+				root.pid,
+				{ appId: root.appId, blocked: root.blocked, unresolved: root.identityUnresolved },
+			]),
+		);
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["tool"] }));
+	expect(await policy()).toEqual({
+		311: { appId: "python3", blocked: true, unresolved: undefined },
+		312: { appId: "python3", blocked: false, unresolved: undefined },
+		313: { appId: "fixture-editor", blocked: false, unresolved: undefined },
+		314: { appId: undefined, blocked: true, unresolved: true },
+	});
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: [] }));
+	expect(await policy()).toEqual({
+		311: { appId: "python3", blocked: false, unresolved: undefined },
+		312: { appId: "python3", blocked: false, unresolved: undefined },
+		313: { appId: "fixture-editor", blocked: false, unresolved: undefined },
+		314: { appId: undefined, blocked: true, unresolved: true },
+	});
+	// The interpreter identity blocks; an alias naming an unblocked app never exempts it.
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["python3"] }));
+	expect(await policy()).toMatchObject({ 311: { blocked: true }, 312: { blocked: true }, 313: { blocked: false } });
+});
+
 test("Linux read_text revalidates the exact root that owns the look before every live read", async ({
 	onTestFinished,
 }) => {

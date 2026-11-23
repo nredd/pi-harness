@@ -1423,7 +1423,7 @@ fn contradicts_readable_role(role_name: &str) -> bool {
 /// an unreadable or non-UTF-8 `exe` link, a relative target, or a shared bus proxy.
 /// A ` (deleted)` link suffix is ambiguous (a replaced binary, or a file literally named so),
 /// so the identity drops it and the literal basename stays a block-only alias.
-/// An interpreter also reports the script aliases of its `cmdline` ([`script_aliases`]).
+/// An interpreter also reports the script aliases of its `cmdline` ([`hosted_aliases`]).
 pub fn process_executable(proc_root: &Path, pid: u64) -> Option<Executable> {
     if pid == 0 {
         return None;
@@ -1435,16 +1435,16 @@ pub fn process_executable(proc_root: &Path, pid: u64) -> Option<Executable> {
     if name.is_empty() || BUS_PROXY_EXECUTABLES.contains(&name) {
         return None;
     }
-    let script_aliases = Interpreter::of(name)
+    let aliases = Interpreter::of(name)
         .and_then(|interpreter| {
             let cmdline = read_cmdline(&process.join("cmdline"))?;
-            Some(script_aliases(interpreter, &cmdline))
+            Some(hosted_aliases(interpreter, &cmdline))
         })
         .unwrap_or_default();
     Some(Executable {
         name: name.to_owned(),
         link_name: link_name.to_owned(),
-        script_aliases,
+        script_aliases: aliases,
     })
 }
 
@@ -1465,7 +1465,8 @@ enum OptionArg {
     Flag,
     /// An option whose value is the next token, skipped unread.
     Value,
-    /// The next token is a module (`python -m`, `java -m`).
+    /// The next token is a module (`python -m`, `java -m`), or the inline value of
+    /// `java --module=`.
     Module,
     /// The next token is a jar path (`java -jar`).
     Jar,
@@ -1476,15 +1477,10 @@ enum OptionArg {
 impl Interpreter {
     /// The interpreter an `exe` basename names, `None` for any other executable.
     fn of(name: &str) -> Option<Self> {
-        // `python`, `python3` or `python3.12`: a version of dot-separated digit runs.
-        let python_version = name.strip_prefix("python").is_some_and(|version| {
-            version.is_empty()
-                || version
-                    .split('.')
-                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-        });
+        if is_python(name) {
+            return Some(Self::Python);
+        }
         match name {
-            _ if python_version => Some(Self::Python),
             "node" | "nodejs" => Some(Self::Node),
             "java" => Some(Self::Java),
             "gjs" | "gjs-console" => Some(Self::Gjs),
@@ -1495,7 +1491,6 @@ impl Interpreter {
     /// How this interpreter reads `token`, which starts with `-`. An option this does not
     /// know might take the next token as its value, so it stops rather than misread it.
     fn option(self, token: &str) -> OptionArg {
-        let long_with_value = token.starts_with("--") && token.contains('=');
         match self {
             Self::Python => match token {
                 "-b" | "-bb" | "-B" | "-d" | "-E" | "-i" | "-I" | "-O" | "-OO" | "-P" | "-q"
@@ -1532,11 +1527,6 @@ impl Interpreter {
                 | "--conditions"
                 | "--title"
                 | "--input-type" => OptionArg::Value,
-                // `--eval=code` and `--print=code` run inline code, so no script follows.
-                _ if token.starts_with("--eval=") || token.starts_with("--print=") => {
-                    OptionArg::Stop
-                }
-                _ if long_with_value => OptionArg::Flag,
                 _ => OptionArg::Stop,
             },
             Self::Java => match token {
@@ -1557,22 +1547,21 @@ impl Interpreter {
                 | "--source" => OptionArg::Value,
                 "-m" | "--module" => OptionArg::Module,
                 "-jar" => OptionArg::Jar,
-                _ if long_with_value
-                    || [
-                        "-D",
-                        "-X",
-                        "-agentlib:",
-                        "-agentpath:",
-                        "-javaagent:",
-                        "-ea",
-                        "-da",
-                        "-enableassertions",
-                        "-disableassertions",
-                        "-verbose",
-                        "-splash:",
-                    ]
-                    .iter()
-                    .any(|prefix| token.starts_with(prefix)) =>
+                _ if [
+                    "-D",
+                    "-X",
+                    "-agentlib:",
+                    "-agentpath:",
+                    "-javaagent:",
+                    "-ea",
+                    "-da",
+                    "-enableassertions",
+                    "-disableassertions",
+                    "-verbose",
+                    "-splash:",
+                ]
+                .iter()
+                .any(|prefix| token.starts_with(prefix)) =>
                 {
                     OptionArg::Flag
                 }
@@ -1583,12 +1572,43 @@ impl Interpreter {
                 "-I" | "--include-path" | "--coverage-prefix" | "--coverage-output" => {
                     OptionArg::Value
                 }
-                _ if token.starts_with("--command=") => OptionArg::Stop,
-                _ if long_with_value => OptionArg::Flag,
                 _ => OptionArg::Stop,
             },
         }
     }
+
+    /// How this interpreter reads a `--name=value` token by its `name`. Only a known option
+    /// that takes a value (now inline), `java --module=` or an allowlisted `=` form is read
+    /// on; any other, e.g. `--eval=code` or an unknown option, stops: whether the next token
+    /// is the script or an app argument is unknowable, and an argument may be a secret.
+    fn inline_option(self, name: &str) -> OptionArg {
+        match self.option(name) {
+            OptionArg::Value => OptionArg::Flag,
+            OptionArg::Module if self == Self::Java => OptionArg::Module,
+            _ if self == Self::Node && NODE_INLINE_OPTIONS.contains(&name) => OptionArg::Flag,
+            _ => OptionArg::Stop,
+        }
+    }
+}
+
+/// Node options read whole only in their `--name=value` form.
+const NODE_INLINE_OPTIONS: [&str; 5] = [
+    "--inspect",
+    "--inspect-brk",
+    "--inspect-port",
+    "--max-old-space-size",
+    "--stack-size",
+];
+
+/// Whether an `exe` basename is `python`, `python3` or `python3.12`: `python` plus a
+/// version of dot-separated digit runs.
+fn is_python(name: &str) -> bool {
+    name.strip_prefix("python").is_some_and(|version| {
+        version.is_empty()
+            || version
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    })
 }
 
 /// `cmdline` at `path`, read only from a regular file and at most [`MAX_CMDLINE_BYTES`], or
@@ -1622,29 +1642,40 @@ fn read_cmdline(path: &Path) -> Option<Vec<u8>> {
 /// interpreter runs, so never an option value, inline code or a later app argument. Only
 /// that token's basename (and stem, e.g. `tool` of `tool.py`) or module name is kept,
 /// never the rest of argv, which can carry secrets. Anything it cannot read whole as
-/// that (non-UTF-8, an unknown option, a control character, past 255 bytes) is no alias.
-fn script_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
+/// that (non-UTF-8, an unknown option or `=` option, a control character, past 255
+/// bytes) is no alias.
+fn hosted_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
+    let java = interpreter == Interpreter::Java;
     let mut tokens = cmdline.split(|&byte| byte == 0).skip(1);
     let mut options = true;
     while let Some(token) = tokens.next() {
         let Ok(token) = std::str::from_utf8(token) else {
             return Vec::new();
         };
-        let kind = match token {
+        let (kind, inline) = match token {
             "--" if options => {
                 options = false;
                 continue;
             }
-            "-" => OptionArg::Stop,
-            _ if options && token.starts_with('-') => interpreter.option(token),
-            _ if interpreter == Interpreter::Java && token.starts_with('@') => OptionArg::Stop,
-            _ if interpreter == Interpreter::Java => return module_aliases(token, false),
+            "-" => (OptionArg::Stop, None),
+            _ if options && token.starts_with('-') => match token.split_once('=') {
+                Some((name, value)) if token.starts_with("--") => {
+                    (interpreter.inline_option(name), Some(value))
+                }
+                _ => (interpreter.option(token), None),
+            },
+            // `java Tool.java` runs a source file; any other Java target is a class name.
+            _ if java && token.ends_with(".java") => return file_aliases(token),
+            _ if java && token.starts_with('@') => (OptionArg::Stop, None),
+            _ if java => return module_aliases(token, false),
             _ => return file_aliases(token),
         };
         let mut value = || {
-            tokens
-                .next()
-                .and_then(|value| std::str::from_utf8(value).ok())
+            inline.or_else(|| {
+                tokens
+                    .next()
+                    .and_then(|value| std::str::from_utf8(value).ok())
+            })
         };
         match kind {
             OptionArg::Flag => {}
@@ -1652,7 +1683,6 @@ fn script_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
                 value();
             }
             OptionArg::Module => {
-                let java = interpreter == Interpreter::Java;
                 return value().map_or_else(Vec::new, |module| module_aliases(module, java));
             }
             OptionArg::Jar => return value().map_or_else(Vec::new, file_aliases),
@@ -1664,13 +1694,13 @@ fn script_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
 
 /// A script path's basename, plus its stem for a known script extension.
 fn file_aliases(path: &str) -> Vec<String> {
-    let Some(basename) = path.rsplit('/').next().filter(|name| is_script_alias(name)) else {
+    let Some(basename) = path.rsplit('/').next().filter(|name| is_hosted_name(name)) else {
         return Vec::new();
     };
     let stem = SCRIPT_EXTENSIONS
         .iter()
         .find_map(|extension| basename.strip_suffix(extension))
-        .filter(|stem| is_script_alias(stem));
+        .filter(|stem| is_hosted_name(stem));
     std::iter::once(basename)
         .chain(stem)
         .map(str::to_owned)
@@ -1687,7 +1717,7 @@ fn module_aliases(module: &str, split_main: bool) -> Vec<String> {
         vec![module]
     };
     let dotted = |name: &&str| {
-        is_script_alias(name)
+        is_hosted_name(name)
             && name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$'))
@@ -1698,9 +1728,9 @@ fn module_aliases(module: &str, split_main: bool) -> Vec<String> {
     names.into_iter().map(str::to_owned).collect()
 }
 
-/// Whether `name` is reportable as a script alias: a non-empty name other than `.` and
-/// `..`, at most [`MAX_SCRIPT_ALIAS_BYTES`], with no control character.
-fn is_script_alias(name: &str) -> bool {
+/// Whether `name` is reportable as a script, module or class alias: a non-empty name other
+/// than `.` and `..`, at most [`MAX_SCRIPT_ALIAS_BYTES`], with no control character.
+fn is_hosted_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_SCRIPT_ALIAS_BYTES
         && name != "."
@@ -3703,7 +3733,7 @@ mod tests {
     fn aliases_of(interpreter: Interpreter, args: &[&str]) -> Vec<String> {
         let mut cmdline = args.join("\0").into_bytes();
         cmdline.push(0);
-        script_aliases(interpreter, &cmdline)
+        hosted_aliases(interpreter, &cmdline)
     }
 
     #[test]
@@ -3805,6 +3835,23 @@ mod tests {
             // Inline code in a long `=` option is code, not a flag: the next token is argv.
             (Node, &["node", "--eval=run()", "main.js"], none.clone()),
             (Node, &["node", "--print=1", "main.js"], none.clone()),
+            // A known value option's `=` form is whole; an unknown `=` option stops.
+            (
+                Node,
+                &["node", "--require=x.js", "app.js", "secretArg"],
+                names(&["app.js", "app"]),
+            ),
+            (
+                Node,
+                &["node", "--inspect=9229", "app.js"],
+                names(&["app.js", "app"]),
+            ),
+            (Node, &["node", "--unknown=x", "secretArg"], none.clone()),
+            (
+                Node,
+                &["node", "--no-warnings=x", "secretArg"],
+                none.clone(),
+            ),
             (
                 Node,
                 &["node", "--unknown", "secret", "main.js"],
@@ -3838,6 +3885,33 @@ mod tests {
                 &["java", "--add-opens=a/b=ALL", "-m", "app.mod"],
                 names(&["app.mod"]),
             ),
+            (
+                Java,
+                &["java", "--module=app.mod/app.Main", "secretArg"],
+                names(&["app.mod", "app.Main"]),
+            ),
+            (
+                Java,
+                &["java", "--add-opens=a/b=ALL-UNNAMED", "Main", "secretArg"],
+                names(&["Main"]),
+            ),
+            (
+                Java,
+                &["java", "--enable-preview=x", "secretArg"],
+                none.clone(),
+            ),
+            (Java, &["java", "--module="], none.clone()),
+            // Source-file mode: the basename and stem, from a bare or a full path.
+            (
+                Java,
+                &["java", "Tool.java", "secretArg"],
+                names(&["Tool.java", "Tool"]),
+            ),
+            (
+                Java,
+                &["java", "--source", "21", "/opt/Tool.java"],
+                names(&["Tool.java", "Tool"]),
+            ),
             (Java, &["java", "-m", "a/b/c"], none.clone()),
             (Java, &["java", "-m", "a/"], none.clone()),
             (Java, &["java", "@argfile"], none.clone()),
@@ -3851,6 +3925,18 @@ mod tests {
             ),
             (Gjs, &["gjs", "-c", "print(1)"], none.clone()),
             (Gjs, &["gjs", "--command=print(1)", "x.js"], none.clone()),
+            (
+                Gjs,
+                &["gjs", "--include-path=/lib", "app.js"],
+                names(&["app.js", "app"]),
+            ),
+            (Gjs, &["gjs", "--module=x", "secretArg"], none.clone()),
+            (
+                Python,
+                &["python3", "--check-hash-based-pycs=always", "tool.py"],
+                names(&["tool.py", "tool"]),
+            ),
+            (Python, &["python3", "--help=x", "secretArg"], none.clone()),
         ];
         for (interpreter, args, expected) in cases {
             assert_eq!(&aliases_of(*interpreter, args), expected, "{args:?}");
@@ -3863,13 +3949,13 @@ mod tests {
             aliases_of(Python, &["python3", &format!("{stem}.py")]),
             names(&[&format!("{stem}.py"), &stem])
         );
-        assert_eq!(script_aliases(Python, b"python3\0-u\0\xff.py\0"), none);
+        assert_eq!(hosted_aliases(Python, b"python3\0-u\0\xff.py\0"), none);
         assert_eq!(
-            script_aliases(Python, b"python3\0-W\0\xff\0tool.py\0"),
+            hosted_aliases(Python, b"python3\0-W\0\xff\0tool.py\0"),
             names(&["tool.py", "tool"])
         );
         // A rewritten title is one token: no argv to read.
-        assert_eq!(script_aliases(Python, b"python3 tool.py"), none);
+        assert_eq!(hosted_aliases(Python, b"python3 tool.py"), none);
     }
 
     #[test]
