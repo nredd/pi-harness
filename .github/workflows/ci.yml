@@ -680,17 +680,7 @@ jobs:
       - name: Merge the shards' coverage reports
         id: merge-coverage
         if: ${{ !cancelled() && steps.plan.outputs.run == 'true' }}
-        run: |
-          cd "$RUNNER_TEMP/shard-coverage"
-          duplicates=$(find . -mindepth 2 -type f | cut -d/ -f3- | sort | uniq -d)
-          if [ -n "$duplicates" ]; then
-            echo "::error title=duplicate shard coverage::More than one shard produced: ${duplicates//$'\n'/ }"
-            exit 1
-          fi
-          for shard in */; do
-            echo "Merging ${shard%/}"
-            cp -R "$shard." "$GITHUB_WORKSPACE/"
-          done
+        run: python3 scripts/ci_merge_shard_coverage.py
       # The accounting reads reports, the policy and Git, and runs no test, so the macOS cell's reports are
       # accounted here with `--os darwin` (the `--reports-root` replay docs/coverage.md describes).
       - name: Coverage accounting (existing reports, including test failures)

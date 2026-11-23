@@ -152,6 +152,7 @@ describe("cleanRecovery", () => {
 		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
 		vi.mocked(Date.now).mockReturnValue(at("2026-11-02", 3));
 		expect((await exportStats(agent, out)).warnings).toEqual([
+			expect.stringMatching(/^no readable published manifest bounds this export \(manifest\.json unreadable\)/),
 			"recovery files retained: run clean-recovery to remove those the active snapshot covers",
 		]);
 		expect(stateOf().recoveryFiles).toEqual([superseded]);

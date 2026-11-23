@@ -60,7 +60,7 @@ const config = definePackageConfig("computer-use-vitest", {
 		// own derived budgets.
 		testTimeout: 20_000,
 		coverage: {
-			// The launcher marks the report-only Bun run; keep the per-file pins on Node.
+			// The launcher marks the Bun run, held by its aggregate zero budget; keep the per-file pins on Node.
 			thresholds:
 				process.env.PI_EXPECT_BUN_RUNTIME === "1"
 					? undefined
