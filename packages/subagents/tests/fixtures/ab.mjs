@@ -2,8 +2,10 @@
  * ab.mjs — run the benchmarks against the working tree AND against another git
  * ref, then print the difference.
  *
- *   npm run bench:ab -- master
- *   npm run bench:ab -- HEAD~1 --rounds 5 --filter viewer
+ *   node tests/fixtures/ab.mjs master
+ *   node tests/fixtures/ab.mjs HEAD~1 --rounds 5 --filter viewer
+ *
+ * Run it from `packages/subagents`: the working tree is `process.cwd()`.
  *
  * This is the question `vitest bench --compare` cannot answer. `--compare` only
  * annotates a run with a stored baseline and never fails; more importantly the
@@ -42,7 +44,7 @@ const FIXTURES = join("tests", "fixtures", "perf-fixtures.ts");
 function usage(message) {
 	if (message) console.error(`\n  ${message}`);
 	console.error(`
-  Usage: npm run bench:ab -- <ref> [--rounds N] [--filter substring]
+  Usage: node tests/fixtures/ab.mjs <ref> [--rounds N] [--filter substring]
 
     <ref>       git ref to compare the working tree against (e.g. master, HEAD~1)
     --rounds    how many alternating A/B rounds to run (default 3)
