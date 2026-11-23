@@ -49,6 +49,11 @@ export interface SavedChildCheckOptions {
 	boundFile?: string;
 	/** Resolves directories and the parent file; pass one `canonicalPaths()` per batch of checks. */
 	canonical?: (path: string) => string;
+	/**
+	 * Why a live writer claim holds the canonical transcript, if one does
+	 * (`writerClaimHolder`, #1247): such a child is possibly running however old its last write.
+	 */
+	writerClaim?: (canonicalFile: string) => string | undefined;
 }
 
 function validChildPath(file: string): boolean {
@@ -225,8 +230,8 @@ export function checkSavedChild(options: SavedChildCheckOptions): SavedChildChec
 			return { refusal: `child session does not match its saved working directory: ${file}` };
 		}
 		// Any status: a journal row can be lost (a failed or truncated append), so
-		// only the transcript's write age can say no process still drives it.
-		const write = lastWrite(stats.mtimeMs, now);
+		// only the transcript's write age and writer claim can say no process still drives it.
+		const write = lastWrite(stats.mtimeMs, now) ?? options.writerClaim?.(canonicalFile);
 		if (write) {
 			const recorded = status === "running" ? "" : `last recorded status ${status}, `;
 			return {
