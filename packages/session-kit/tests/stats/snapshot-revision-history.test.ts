@@ -75,6 +75,21 @@ function plant(snapshotDir: string, rows: Partial<Shard>[]): void {
 	writeFileSync(join(snapshotDir, "manifest.json"), JSON.stringify(published));
 }
 
+/** Re-publish the first (base) October shard with `quota` added, as if the export had observed it. */
+function baseWithQuota(snapshotDir: string, quota: SnapshotQuota[]): void {
+	const published = manifest(snapshotDir);
+	const index = published.shards.findIndex((ref) => ref.month === "2026-10");
+	const ref = published.shards[index];
+	if (!ref) throw new Error("October base missing");
+	const base = decodeShard(readFileSync(join(snapshotDir, ref.file)), published, ref.month);
+	const bytes = encodeShard({ ...base, quota: [...(base.quota ?? []), ...quota] });
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	const file = `2026-10-${sha256}.json.gz`;
+	writeFileSync(join(snapshotDir, file), bytes);
+	published.shards[index] = { month: "2026-10", file, sha256, bytes: bytes.length };
+	writeFileSync(join(snapshotDir, "manifest.json"), JSON.stringify(published));
+}
+
 const mainPath = (): string => join(agent, "sessions", "main.jsonl");
 /**
  * Drop the usage cache before re-exporting a rewritten transcript: it keys on size and mtime, and a
@@ -94,6 +109,19 @@ function publishedQuota(snapshotDir: string): SnapshotQuota[] {
 		.filter((ref) => ref.month === "2026-10")
 		.flatMap((ref) => decodeShard(readFileSync(join(snapshotDir, ref.file)), published, ref.month).quota ?? []);
 }
+/** Every published October row of one session, decoded from the raw files. */
+function publishedEnds(snapshotDir: string, startMs: number): number[] {
+	const published = manifest(snapshotDir);
+	return published.shards
+		.filter((ref) => ref.month === "2026-10")
+		.flatMap((ref) => decodeShard(readFileSync(join(snapshotDir, ref.file)), published, ref.month).sessions)
+		.filter((session) => session.startMs === startMs)
+		.map((session) => session.endMs)
+		.sort((a, b) => a - b);
+}
+const octoberRefs = (snapshotDir: string) => manifest(snapshotDir).shards.filter((ref) => ref.month === "2026-10");
+const sameWindow = (n: number, from = 0): SnapshotQuota[] =>
+	Array.from({ length: n }, (_, i) => quotaRow("shared", at("2026-10-07") + (from + i) * 60_000));
 async function viewed() {
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	return loadCombined(viewer);
@@ -158,7 +186,8 @@ it("packs what a regenerated month carries within the sealed shard limit", async
 		readings.map((q) => ({ quota: [q] })),
 	);
 	await revise();
-	expect(manifest(snapshotDir).shards.filter((ref) => ref.month === "2026-10")).toHaveLength(2);
+	// Distinct windows all fit in the fresh base.
+	expect(octoberRefs(snapshotDir)).toHaveLength(1);
 	const combined = await viewed();
 	expect(combined.calls.map((call) => call.input)).toEqual([11]);
 	expect(combined.quota).toHaveLength(32);
@@ -197,14 +226,102 @@ it("keeps every same-window quota reading when a regenerated month packs past th
 	expect(combined.sessions.find((row) => row.startMs === at("2026-10-09"))?.endMs).toBe(at("2026-10-11"));
 });
 
-it("refuses to publish when a regenerated month cannot keep its history within the shard limit", async () => {
+it("keeps every distinct sealed end of a session when a regeneration packs past the shard limit", async () => {
+	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 10)] });
+	const start = at("2026-10-09");
+	const hour = 3_600_000;
+	const long = join(agent, "sessions", "long.jsonl");
+	sessionFile(long, { startMs: start, lines: [line("a", start + hour, 20), line("b", start + 12 * hour, 30)] });
+	const { snapshotDir } = await exportStats(agent, out);
+	const [baseRef] = octoberRefs(snapshotDir);
+	const base = decodeShard(readFileSync(join(snapshotDir, baseRef?.file ?? "")), manifest(snapshotDir), "2026-10");
+	const session = base.sessions.find((row) => row.startMs === start);
+	if (!session) throw new Error("long session missing from the published base");
+	// Published ends 10:00, 11:00 beside the base's 12:00, which the scan still reaches, and 30 other
+	// windows: 33 regenerated shards, packed past the limit.
+	plant(snapshotDir, [
+		...[10, 11].map((h) => ({ sessions: [{ ...session, endMs: start + h * hour }] })),
+		...Array.from({ length: 30 }, (_, i) => ({ quota: [quotaRow(`limit-${i}`)] })),
+	]);
+	await revise();
+	expect(octoberRefs(snapshotDir).length).toBeLessThanOrEqual(32);
+	expect(publishedEnds(snapshotDir, start)).toEqual([10, 11, 12].map((h) => start + h * hour));
+	expect(publishedQuota(snapshotDir)).toHaveLength(30);
+	const combined = await viewed();
+	expect(combined.sessions.find((row) => row.startMs === start)?.endMs).toBe(start + 12 * hour);
+});
+
+it("publishes a regenerated month whose history fills exactly 32 shards with the fresh base", async () => {
 	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 10)] });
 	const { snapshotDir } = await exportStats(agent, out);
-	// 32 readings of one window need 32 delta shards beside the regenerated base: 33 in all.
-	const readings = Array.from({ length: 32 }, (_, i) => quotaRow("shared", at("2026-10-07") + i * 60_000));
+	// The old base holds the corrected call and one reading of the window; 31 more readings beside it.
+	const readings = sameWindow(32);
+	baseWithQuota(snapshotDir, readings.slice(0, 1));
+	plant(
+		snapshotDir,
+		readings.slice(1).map((q) => ({ quota: [q] })),
+	);
+	await revise();
+	expect(octoberRefs(snapshotDir)).toHaveLength(32);
+	expect(publishedQuota(snapshotDir)).toHaveLength(32);
+	expect(publishedQuota(snapshotDir)).toEqual(expect.arrayContaining(readings));
+	expect((await viewed()).calls.map((call) => call.input)).toEqual([11]);
+});
+
+it("keeps readings a regeneration preserved when a later append overflows the month", async () => {
+	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 10)] });
+	const { snapshotDir } = await exportStats(agent, out);
+	const readings = sameWindow(32);
 	plant(
 		snapshotDir,
 		readings.map((q) => ({ quota: [q] })),
+	);
+	await revise();
+	expect(octoberRefs(snapshotDir)).toHaveLength(32);
+	// A late call with no correction: an ordinary append past the limit.
+	sessionFile(join(agent, "sessions", "late.jsonl"), {
+		startMs: at("2026-10-20"),
+		lines: [line("late", at("2026-10-20"), 70)],
+	});
+	await exportStats(agent, out);
+	expect(octoberRefs(snapshotDir).length).toBeLessThanOrEqual(32);
+	expect(publishedQuota(snapshotDir)).toHaveLength(32);
+	expect(publishedQuota(snapshotDir)).toEqual(expect.arrayContaining(readings));
+	expect((await viewed()).calls.map((call) => call.input).sort((a, b) => a - b)).toEqual([11, 70]);
+});
+
+it("packs a month a cross-month revision empties into its first carried shard", async () => {
+	const path = mainPath();
+	sessionFile(path, { startMs: at("2026-08-31"), lines: [line("call", at("2026-09-15"), 10)] });
+	const { snapshotDir } = await exportStats(agent, out);
+	// No fresh September shard: the first carry is the base, already holding one reading of the window.
+	const readings = Array.from({ length: 32 }, (_, i) => quotaRow("shared", at("2026-09-20") + i * 60_000));
+	const other = quotaRow("other", at("2026-09-20"));
+	plant(
+		snapshotDir,
+		[readings.slice(0, 1), [other], ...readings.slice(1).map((q) => [q])].map((quota) => ({ month: "2026-09", quota })),
+	);
+	sessionFile(path, { startMs: at("2026-08-31"), lines: [line("call", at("2026-10-15"), 10)] });
+	dropUsageCache();
+	await exportStats(agent, out);
+	const published = manifest(snapshotDir);
+	const september = published.shards
+		.filter((ref) => ref.month === "2026-09")
+		.flatMap((ref) => decodeShard(readFileSync(join(snapshotDir, ref.file)), published, ref.month).quota ?? []);
+	expect(published.shards.filter((ref) => ref.month === "2026-09")).toHaveLength(32);
+	expect(september).toHaveLength(33);
+	expect(september).toEqual(expect.arrayContaining([...readings, other]));
+});
+
+it("refuses to publish when a regenerated month cannot keep its history within the shard limit", async () => {
+	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 10)] });
+	const { snapshotDir } = await exportStats(agent, out);
+	// 33 distinct readings of one window need 33 shards even with the fresh base as the first.
+	const readings = sameWindow(33);
+	baseWithQuota(snapshotDir, readings.slice(0, 1));
+	plant(
+		snapshotDir,
+		readings.slice(1).map((q) => ({ quota: [q] })),
 	);
 	const before = readFileSync(join(snapshotDir, "manifest.json"), "utf8");
 	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 11)] });

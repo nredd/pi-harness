@@ -759,12 +759,13 @@ call (same harness/session/entry identity, different timestamp/counters) or chan
 attribution retires the affected months' references and regenerates those months from the clean
 scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
 corrections regenerate both affected months. Only the superseded rows are dropped: every other event,
-session end and quota reading the retired shards held that the scan no longer reproduces (calls and
-sessions archived only in published history, later session ends, quota readings) is carried into delta
-shards of the regenerated month. Past 32 shards the carries are packed losslessly (every distinct quota
-reading and session end is kept, never compacted away); if the month still needs more than 32 shards the
-export is refused before anything is published, leaving the previous manifest and shards intact, and
-`--replace-harnesses` is the explicit way through. Entry identities shared by distinct sessions are not
+every distinct session end and every quota reading the retired shards held that the scan does not reproduce
+exactly (calls and sessions archived only in published history, earlier and later session ends, quota
+readings) is carried into delta shards of the regenerated month. Past 32 shards the carries are packed
+losslessly into the fresh shard and as few more as validation allows (never compacted away); if the month
+still needs more than 32 shards (e.g. 33 readings of one quota window) the export is refused before anything
+is published, leaving the previous manifest and shards intact, and `--replace-harnesses` is the explicit
+way through. Entry identities shared by distinct sessions are not
 revisions of one another. Legacy events without an `entryId` retain tuple matching: corrected
 counters or timestamps cannot be identified and can append beside the old row in a sealed month.
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
@@ -782,8 +783,10 @@ accept this machine again only from a later export timestamped at or after the `
 
 New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
 that limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte
-and compacts later shards and any new delta. It keeps archived calls and the maximum session end
-even after transcripts leave the scan. The viewer orders equal-time imported calls within a session
+and repacks later shards and any new delta losslessly when that fits within 32 shards. Only when it does
+not does it compact them: that keeps archived calls and the maximum session end even after transcripts
+leave the scan, but drops lower session ends and quota readings that can never win, including ones a
+regeneration preserved. The viewer orders equal-time imported calls within a session
 by event ID regardless of shard boundaries. Compaction keeps quota readings that can win as windows
 reset, using separate shards for readings of the same key. Base readings participate without
 occupying any delta slots. The combined reader orders quota by the serialized

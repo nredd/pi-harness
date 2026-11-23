@@ -996,9 +996,10 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 
 /**
  * Regenerate a revised sealed month from the clean scan, then carry what its retired shards held that the
- * scan no longer reproduces (archived calls and sessions, later session ends, quota readings) in delta
- * shards. Only the superseded rows themselves are dropped. Past the shard limit the carries are packed
- * losslessly; if even that does not fit, publication is refused rather than dropping a sealed row.
+ * scan no longer reproduces (archived calls and sessions, every distinct session end, quota readings) in
+ * delta shards. Only the superseded rows themselves are dropped. Past the shard limit the carries are packed
+ * losslessly into the fresh shard and as few more as validation allows; if even that does not fit,
+ * publication is refused rather than dropping a sealed row.
  */
 function regenerateMonth(
 	month: string,
@@ -1015,6 +1016,7 @@ function regenerateMonth(
 				sessions: shard.sessions.filter((session) => !revisions.supersededSessionIds.has(session.id)),
 			},
 			shards,
+			true,
 		);
 		if (carry) shards.push(carry);
 	}
@@ -1030,17 +1032,25 @@ function regenerateMonth(
 }
 
 /**
- * Pack delta shards into as few shards as validation allows without dropping a row: every event goes to
- * the first slot, and the n-th row of one session or quota window goes to the n-th slot.
+ * Pack `deltas` into `first` and as few further shards as validation allows without dropping a row: every
+ * event joins `first`, and each session or quota row goes to the first shard not yet holding its session id
+ * or quota window, counting the rows `first` already holds.
  */
-function packLossless(base: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
-	const slots: CompactShard[] = [{ ...base, events: deltas.flatMap((delta) => delta.events), sessions: [], quota: [] }];
+function packLossless(first: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
+	const slots: CompactShard[] = [
+		{
+			...first,
+			events: [...first.events, ...deltas.flatMap((delta) => delta.events)],
+			sessions: [...first.sessions],
+			quota: [...first.quota],
+		},
+	];
 	const slot = (n: number): CompactShard => {
-		slots[n] ??= { ...base, events: [], sessions: [], quota: [] };
+		slots[n] ??= { ...first, events: [], sessions: [], quota: [] };
 		return slots[n];
 	};
-	const sessionRows = new Map<string, number>();
-	const quotaRows = new Map<string, number>();
+	const sessionRows = new Map(first.sessions.map((session) => [session.id, 1]));
+	const quotaRows = new Map(first.quota.map((q) => [quotaKey(q), 1]));
 	for (const delta of deltas) {
 		for (const session of delta.sessions) {
 			const n = sessionRows.get(session.id) ?? 0;
@@ -1053,10 +1063,14 @@ function packLossless(base: CompactShard, deltas: readonly CompactShard[]): Comp
 			quotaRows.set(quotaKey(q), n + 1);
 		}
 	}
-	return [base, ...slots];
+	return slots;
 }
 
-/** Compact late updates without rewriting the base or consulting the current transcript scan. */
+/**
+ * Compact late updates without rewriting the base or consulting the current transcript scan, dropping
+ * session ends below the maximum and quota readings that can never win. Only used once lossless packing
+ * no longer fits.
+ */
 function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
 	const baseSessions = new Map(base.sessions.map((session) => [session.id, session]));
 	const sessions = new Map(baseSessions);
@@ -1105,16 +1119,27 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 
 const nonempty = (shard: CompactShard): boolean => shard.events.length + shard.sessions.length + shard.quota.length > 0;
 
-function monthDelta(full: CompactShard, old: readonly CompactShard[]): CompactShard | undefined {
+/**
+ * What `full` adds to `old`. A session row is new past the maximum end `old` holds, or, with `exactEnds`
+ * (regeneration, which must keep every distinct sealed end), when `old` lacks that exact id and end.
+ */
+function monthDelta(full: CompactShard, old: readonly CompactShard[], exactEnds = false): CompactShard | undefined {
 	const events = new Set(old.flatMap((shard) => shard.events.map((event) => event.id)));
 	const ends = new Map<string, number>();
+	const rows = new Set<string>();
+	const row = (session: SnapshotSession): string => JSON.stringify([session.id, session.endMs]);
 	for (const shard of old)
-		for (const session of shard.sessions) ends.set(session.id, Math.max(ends.get(session.id) ?? 0, session.endMs));
+		for (const session of shard.sessions) {
+			ends.set(session.id, Math.max(ends.get(session.id) ?? 0, session.endMs));
+			rows.add(row(session));
+		}
 	const quotas = new Set(old.flatMap((shard) => shard.quota.map((q) => JSON.stringify(q))));
 	const delta = {
 		...full,
 		events: full.events.filter((event) => !events.has(event.id)),
-		sessions: full.sessions.filter((session) => session.endMs > (ends.get(session.id) ?? 0)),
+		sessions: full.sessions.filter((session) =>
+			exactEnds ? !rows.has(row(session)) : session.endMs > (ends.get(session.id) ?? 0),
+		),
 		quota: full.quota.filter((q) => !quotas.has(JSON.stringify(q))),
 	};
 	return nonempty(delta) ? delta : undefined;
@@ -1436,7 +1461,10 @@ async function publishStats(
 		let deltas = replaced ? regenerateMonth(month, full, replaced, revisions) : delta ? [delta] : [];
 		if (old.length + deltas.length > MAX_SEALED_SHARDS) {
 			const base = nth(old, 0);
-			deltas = compactDeltas(base.shard, [...old.slice(1).map(({ shard }) => shard), ...deltas]);
+			const rest = [...old.slice(1).map(({ shard }) => shard), ...deltas];
+			// Keep every row (e.g. readings a regeneration preserved) whenever lossless packing fits beside the base.
+			const packed = packLossless({ ...base.shard, events: [], sessions: [], quota: [] }, rest).filter(nonempty);
+			deltas = packed.length < MAX_SEALED_SHARDS ? packed : compactDeltas(base.shard, rest);
 			old = [base];
 		}
 		for (const { ref, shard, expandedBytes } of old) {
