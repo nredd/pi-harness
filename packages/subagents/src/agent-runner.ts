@@ -56,7 +56,7 @@ import { createRosterTools } from "./roster-tools.ts";
 import { preloadSkills } from "./skill-loader.ts";
 import { isStaleCtxError } from "./stale-ctx.ts";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.ts";
-import { claimTranscript, openClaimed, type TranscriptClaim } from "./transcript-claim.ts";
+import { claimCreated, claimTranscript, openClaimed, type TranscriptClaim } from "./transcript-claim.ts";
 import type { SubagentType, ThinkingLevel } from "./types.ts";
 import type { LifetimeUsage } from "./usage.ts";
 import type { CompiledSchema } from "./workflow/json-schema.ts";
@@ -1482,25 +1482,26 @@ async function runClaimedAgent(
 	// as `outputTranscript`.
 	const persistSession = agentConfig?.persistSession ?? (options.nested ? false : rememberAgents);
 	const resumeFile = options.resumeSessionFile;
+	const createSession = (dir: string | undefined) =>
+		SessionManager.create(effectiveCwd, dir, {
+			// Optional metadata — it only nests the subagent under its spawner in
+			// `/resume`. Until `rememberAgents` this ran solely for the rare
+			// `persist_session: true` agent; now it runs for every spawn, so a
+			// context without a session manager (a bare programmatic ctx) must
+			// still persist rather than take the whole spawn down.
+			parentSession: ctx.sessionManager?.getSessionFile?.(),
+		});
 	const sessionManager = resumeFile
 		? // Reopening an existing conversation: the file already carries its own
 			// header (cwd, parent) and history, so none of the create-time options
 			// apply. `sessionDir` still matters for a later /new or /branch off it.
 			// Claimed first, then checked and opened under the claim.
-			openClaimed(resumeFile, claims, () => SessionManager.open(resumeFile, sessionDir), options.verifyResumeFile)
+			openClaimed(resumeFile, claims, (claimed) => SessionManager.open(claimed, sessionDir), options.verifyResumeFile)
 		: persistSession
-			? SessionManager.create(effectiveCwd, sessionDir, {
-					// Optional metadata — it only nests the subagent under its spawner in
-					// `/resume`. Until `rememberAgents` this ran solely for the rare
-					// `persist_session: true` agent; now it runs for every spawn, so a
-					// context without a session manager (a bare programmatic ctx) must
-					// still persist rather than take the whole spawn down.
-					parentSession: ctx.sessionManager?.getSessionFile?.(),
-				})
+			? // A fresh transcript is not on disk until its first flush; claim its
+				// path now, written at the canonical path the claim covers.
+				claimCreated(createSession(sessionDir), claims, createSession)
 			: SessionManager.inMemory(effectiveCwd);
-	// A fresh transcript is not on disk until its first flush; claim its path now.
-	const createdFile = !resumeFile && persistSession ? sessionManager.getSessionFile?.() : undefined;
-	if (createdFile) claims.push(claimTranscript(createdFile));
 
 	// Pi 0.80.8 replaced createAgentSession's modelRegistry option with
 	// modelRuntime, but ExtensionContext still exposes only the registry facade.
@@ -1707,6 +1708,10 @@ export async function resumeAgent(
 	const file = session.sessionManager?.getSessionFile?.();
 	const claim = file ? claimTranscript(file) : undefined;
 	try {
+		// Written through a link: the claim covers a path these writes may leave.
+		if (claim && claim.file !== file) {
+			throw new Error(`child session is written through a link, not at its claimed path ${claim.file}: ${file}`);
+		}
 		return await resumeClaimedAgent(session, prompt, options);
 	} finally {
 		claim?.release();

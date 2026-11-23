@@ -56,7 +56,7 @@ export interface SavedChildCheckOptions {
 	writerClaim?: (canonicalFile: string) => string | undefined;
 }
 
-function validChildPath(file: string): boolean {
+export function validChildPath(file: string): boolean {
 	return isAbsolute(file) && !file.split(/[\\/]/).includes("..");
 }
 
