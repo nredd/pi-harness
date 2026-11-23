@@ -296,16 +296,16 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 	}
 
 	{
-		// Stale helper and setup unavailable: actionable error naming both causes; fixing it later recovers (retry).
+		// Stale helper (the immediate predecessor, protocol 8) and setup unavailable: actionable error naming both causes; fixing it later recovers (retry).
 		const c = await makeCase({ installs: false });
-		await fs.writeFile(c.helper, helperScript({ protocol: 4, startFile: c.starts }));
+		await fs.writeFile(c.helper, helperScript({ protocol: 8, startFile: c.starts }));
 		await fs.chmod(c.helper, 0o755);
 		const client = c.client();
 		await assert.rejects(client.command("echo", {}), (error) => {
 			assert.match(error.message, /no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set/);
 			assert.match(
 				error.message,
-				/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 9, got 4\./,
+				/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 9, got 8\./,
 			);
 			return true;
 		});

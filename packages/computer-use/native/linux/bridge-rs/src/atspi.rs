@@ -326,6 +326,20 @@ impl AtspiClient {
     }
 
     async fn application_pid(&self, accessible: &AccessibleRef) -> Result<u64, ProtocolError> {
+        let connection_pid = self
+            .connection_pid(accessible)
+            .await?
+            .map_err(atspi_error)?;
+        Ok(u64::from(connection_pid))
+    }
+
+    /// The bus's reply to `GetConnectionUnixProcessID`, kept as the bus sent it so a caller can
+    /// tell a connection the bus no longer has from a lookup that failed; a deadline or a proxy
+    /// that could not be built is the outer error.
+    async fn connection_pid(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<zbus::Result<u32>, ProtocolError> {
         let bus = Proxy::new(
             &self.connection,
             DBUS_DESTINATION,
@@ -335,10 +349,12 @@ impl AtspiClient {
         .await
         .map_err(atspi_error)?;
         let member = "GetConnectionUnixProcessID";
-        let connection_pid: u32 = self
-            .request(member, bus.call(member, &(accessible.destination.as_str())))
-            .await?;
-        Ok(u64::from(connection_pid))
+        wait_for_reply(
+            self.request_timeout,
+            member,
+            bus.call(member, &(accessible.destination.as_str())),
+        )
+        .await
     }
 
     /// The connection PID of `accessible`'s bus owner and that process's executable. Only a
@@ -346,23 +362,34 @@ impl AtspiClient {
     /// requests, so it stays unidentified.
     ///
     /// The bus reports the PID the connection had when it connected, so the `exe` read counts
-    /// only when the same connection still reports that PID after it (#1294): the bus drops a
-    /// connection once its owner exits, and a PID is reused only after its owner exits, so a
-    /// live connection means the read reached its owner. A lookup that fails is an error, like
-    /// the first one; a changed PID is unidentified.
+    /// only when the same connection still reports that PID after it (#1294). That only rejects
+    /// a reused PID once the bus has already dropped the owner's connection: it does not prove
+    /// the read reached the owner. A socket another process inherited keeps the connection, and
+    /// a bus can answer before it processes the owner's hangup, so both still return the old
+    /// PID; the `exe` changing before the read under two equal replies goes unnoticed (#1333).
+    ///
+    /// The outer error is the first lookup failing, or the recheck finding the connection gone
+    /// (`NameHasNoOwner`): the owner is gone, as if the first lookup had failed. The inner
+    /// result is the identity: unidentified on a changed PID, an error when the recheck itself
+    /// failed or timed out, which says nothing about the owner.
     async fn bus_owner(
         &self,
         accessible: &AccessibleRef,
-    ) -> Result<(u64, Option<Executable>), ProtocolError> {
+    ) -> Result<(u64, Attribution), ProtocolError> {
         let pid = self.application_pid(accessible).await?;
         if !accessible.destination.starts_with(':') {
-            return Ok((pid, None));
+            return Ok((pid, Ok(None)));
         }
         let Some(executable) = process_executable(&self.proc_root, pid) else {
-            return Ok((pid, None));
+            return Ok((pid, Ok(None)));
         };
-        let confirmed = self.application_pid(accessible).await? == pid;
-        Ok((pid, confirmed.then_some(executable)))
+        let attribution = match self.connection_pid(accessible).await {
+            Ok(Ok(again)) => Ok((u64::from(again) == pid).then_some(executable)),
+            Ok(Err(error)) if connection_gone(&error) => return Err(atspi_error(error)),
+            Ok(Err(error)) => Err(atspi_error(error)),
+            Err(error) => Err(error),
+        };
+        Ok((pid, attribution))
     }
 
     /// Every application's roots, or only those of the processes `filter_pids` names: a
@@ -380,11 +407,17 @@ impl AtspiClient {
         let mut roots = Vec::new();
         for app in applications {
             // A PID-scoped inventory proves absence, so an app it could not read must fail it.
-            let (pid, executable) =
-                scoped_inventory(filter_pids, self.bus_owner(&app).await, (0, None))?;
+            let (pid, attribution) =
+                scoped_inventory(filter_pids, self.bus_owner(&app).await, (0, Ok(None)))?;
             if filter_pids.is_some_and(|wanted| !wanted.contains(&pid)) {
                 continue;
             }
+            // A failed recheck leaves the owner unknown: a PID-scoped inventory fails rather
+            // than list its root without identity, an unscoped one keeps it unidentified.
+            let executable = match attribution {
+                Err(error) if filter_pids.is_some() => return Err(error),
+                attribution => attribution.unwrap_or(None),
+            };
             let app_name = self
                 .checked_metadata(&app, async || {
                     self.string_property(&app, "Name").await.unwrap_or_default()
@@ -454,7 +487,8 @@ impl AtspiClient {
         };
         for app in self.children(&registry).await? {
             if app.destination == root.destination && self.children(&app).await?.contains(root) {
-                let (pid, executable) = self.bus_owner(root).await?;
+                let (pid, attribution) = self.bus_owner(root).await?;
+                let executable = attribution?;
                 let name = self
                     .checked_metadata(root, async || {
                         self.string_property(root, "Name").await.unwrap_or_default()
@@ -1048,6 +1082,16 @@ fn unavailable(error: impl std::fmt::Display) -> ProtocolError {
         format!("AT-SPI2 is unavailable: {error}"),
         ErrorCode::CapabilityDeferred,
     )
+}
+
+/// A bus owner's executable once the bus still reported its PID after the read, `None` when it
+/// stays unidentified, or the error of a recheck that could not tell (#1294).
+type Attribution = Result<Option<Executable>, ProtocolError>;
+
+/// The bus no longer has the connection, so its owner is gone.
+fn connection_gone(error: &zbus::Error) -> bool {
+    matches!(error, zbus::Error::MethodError(name, _, _)
+        if name.as_str() == "org.freedesktop.DBus.Error.NameHasNoOwner")
 }
 
 fn atspi_error(error: impl std::fmt::Display) -> ProtocolError {
@@ -1960,9 +2004,20 @@ mod tests {
         .await;
     }
 
-    /// One scripted `GetConnectionUnixProcessID` reply: the PID, or `None` once the connection
-    /// is gone, and the `exe` target the fixture PID links to from then on.
-    type PidReply = (Option<u32>, Option<&'static str>);
+    /// One scripted answer to `GetConnectionUnixProcessID`.
+    #[derive(Clone, Copy, Debug)]
+    enum Lookup {
+        Pid(u32),
+        /// The bus no longer has the connection: `NameHasNoOwner`.
+        Gone,
+        /// Any other bus error, which says nothing about the owner.
+        Failed,
+        /// Never answered.
+        Stalled,
+    }
+
+    /// One scripted lookup and the `exe` target the fixture PID links to from then on.
+    type PidReply = (Lookup, Option<&'static str>);
 
     /// A bus answering connection PID lookups from a script. A reply can relink the fixture
     /// PID's `exe` before it is sent, as a PID reused right after the lookup would (#1294).
@@ -1974,9 +2029,9 @@ mod tests {
     #[zbus::interface(name = "org.freedesktop.DBus")]
     impl ScriptedBus {
         #[zbus(name = "GetConnectionUnixProcessID")]
-        fn get_connection_unix_process_id(&self, name: &str) -> zbus::fdo::Result<u32> {
+        async fn get_connection_unix_process_id(&self, name: &str) -> zbus::fdo::Result<u32> {
             assert_eq!(name, ":1.42");
-            let (pid, relink) = self
+            let (lookup, relink) = self
                 .replies
                 .lock()
                 .unwrap()
@@ -1986,70 +2041,179 @@ mod tests {
                 std::fs::remove_file(&self.exe).unwrap();
                 std::os::unix::fs::symlink(target, &self.exe).unwrap();
             }
-            pid.ok_or_else(|| zbus::fdo::Error::NameHasNoOwner(format!("{name} is gone")))
+            match lookup {
+                Lookup::Pid(pid) => Ok(pid),
+                Lookup::Gone => Err(zbus::fdo::Error::NameHasNoOwner(format!("{name} is gone"))),
+                Lookup::Failed => Err(zbus::fdo::Error::Failed("bus overloaded".into())),
+                Lookup::Stalled => std::future::pending().await,
+            }
         }
     }
 
+    /// Exercise one fixture root on `:1.42` whose bus answers PID lookups from `script`, then
+    /// check the helper asked for every scripted reply.
+    async fn with_scripted_owner<T>(
+        script: &[PidReply],
+        exercise: impl AsyncFnOnce(&AtspiClient) -> T,
+    ) -> T {
+        let proc = ProcFixture::new(&[(25361, "/usr/bin/fixture-editor")]);
+        let replies = Arc::new(Mutex::new(script.iter().copied().collect()));
+        let bus = ScriptedBus {
+            replies: Arc::clone(&replies),
+            exe: proc.0.join("25361").join("exe"),
+        };
+        with_peer(
+            |server| {
+                let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
+                    name,
+                    role,
+                    children,
+                    has_text: false,
+                };
+                server
+                    .serve_at(FIXTURE_DBUS_ROOT, bus)?
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        node("Registry", "desktop", &[(":1.42", "/app")]),
+                    )?
+                    .serve_at(
+                        "/app",
+                        node("Editor", "application", &[(":1.42", "/app/window")]),
+                    )?
+                    .serve_at("/app/window", node("Notes", "frame", &[]))
+            },
+            async |connection| {
+                let client = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT)
+                    .with_proc_root(&proc.0);
+                let result = exercise(&client).await;
+                assert!(replies.lock().unwrap().is_empty(), "{script:?}");
+                result
+            },
+        )
+        .await
+    }
+
+    const REUSED: &str = "/usr/bin/reused-pid";
+
     /// The `exe` read counts only while the root's connection still reports the same PID after
-    /// it: a PID reused between the bus lookup and the read can only belong to a new process once
-    /// the owner exited, and then the bus has dropped the owner's connection (#1294).
+    /// it (#1294). A gone connection means the owner is gone; a recheck that failed or timed out
+    /// leaves the owner unknown: an unscoped listing keeps the root unidentified, a PID-scoped
+    /// one fails rather than list it without identity.
     #[tokio::test]
     async fn identity_needs_the_same_bus_owner_after_the_exe_read() {
-        const REUSED: &str = "/usr/bin/reused-pid";
-        let cases: [(&[PidReply], u64, Option<&str>); 4] = [
-            (
-                &[(Some(25361), None), (Some(25361), None)],
-                25361,
-                Some("fixture-editor"),
-            ),
+        use Lookup::{Failed, Gone, Pid, Stalled};
+        type Listed = Result<&'static [(u64, Option<&'static str>)], ErrorCode>;
+        const EDITOR: Listed = Ok(&[(25361, Some("fixture-editor"))]);
+        const UNIDENTIFIED: Listed = Ok(&[(25361, None)]);
+        // (script, unscoped listing, listing scoped to 25361)
+        let cases: [(&[PidReply], Listed, Listed); 7] = [
+            (&[(Pid(25361), None), (Pid(25361), None)], EDITOR, EDITOR),
             // The owner exits and its PID is reused before the read: the connection is gone.
-            (&[(Some(25361), Some(REUSED)), (None, None)], 0, None),
-            (&[(Some(25361), None), (Some(25362), None)], 25361, None),
+            (
+                &[(Pid(25361), Some(REUSED)), (Gone, None)],
+                Ok(&[(0, None)]),
+                Ok(&[]),
+            ),
+            (
+                &[(Pid(25361), None), (Pid(25362), None)],
+                UNIDENTIFIED,
+                UNIDENTIFIED,
+            ),
             // A PID reused only after the recheck: the read already named the live owner.
             (
-                &[(Some(25361), None), (Some(25361), Some(REUSED))],
-                25361,
-                Some("fixture-editor"),
+                &[(Pid(25361), None), (Pid(25361), Some(REUSED))],
+                EDITOR,
+                EDITOR,
+            ),
+            (
+                &[(Pid(25361), None), (Failed, None)],
+                UNIDENTIFIED,
+                Err(ErrorCode::InternalError),
+            ),
+            (
+                &[(Pid(25361), None), (Stalled, None)],
+                UNIDENTIFIED,
+                Err(ErrorCode::Timeout),
+            ),
+            // Known limit (#1333): the `exe` changed before the read but both replies match, as
+            // with an inherited socket or a bus still processing the hangup, so the new
+            // executable is accepted.
+            (
+                &[(Pid(25361), Some(REUSED)), (Pid(25361), None)],
+                Ok(&[(25361, Some("reused-pid"))]),
+                Ok(&[(25361, Some("reused-pid"))]),
             ),
         ];
-        for (script, pid, identity) in cases {
-            let proc = ProcFixture::new(&[(25361, "/usr/bin/fixture-editor")]);
-            let replies = Arc::new(Mutex::new(script.iter().copied().collect()));
-            let bus = ScriptedBus {
-                replies: Arc::clone(&replies),
-                exe: proc.0.join("25361").join("exe"),
-            };
-            with_peer(
-                |server| {
-                    let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
-                        name,
-                        role,
-                        children,
-                        has_text: false,
-                    };
-                    server
-                        .serve_at(FIXTURE_DBUS_ROOT, bus)?
-                        .serve_at(
-                            FIXTURE_REGISTRY_ROOT,
-                            node("Registry", "desktop", &[(":1.42", "/app")]),
-                        )?
-                        .serve_at(
-                            "/app",
-                            node("Editor", "application", &[(":1.42", "/app/window")]),
-                        )?
-                        .serve_at("/app/window", node("Notes", "frame", &[]))
-                },
-                async |connection| {
-                    let client = peer_client(connection).with_proc_root(&proc.0);
-                    let roots = client.list_roots(None).await.unwrap();
-                    let [root] = roots.as_slice() else {
-                        panic!("expected one root, got {}", roots.len());
-                    };
-                    assert_eq!((root.pid, executable_name(root)), (pid, identity));
-                    assert!(replies.lock().unwrap().is_empty(), "{script:?}");
-                },
-            )
+        for (script, unscoped, scoped) in cases {
+            for (filter, expected) in [(None, unscoped), (Some(&[25361_u64][..]), scoped)] {
+                let listed = with_scripted_owner(script, async |client| {
+                    client.list_roots(filter).await.map(|roots| {
+                        roots
+                            .iter()
+                            .map(|root| (root.pid, executable_name(root).map(str::to_owned)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .await;
+                let expected = expected.map(|roots| {
+                    roots
+                        .iter()
+                        .map(|&(pid, name)| (pid, name.map(str::to_owned)))
+                        .collect::<Vec<_>>()
+                });
+                assert_eq!(
+                    listed.map_err(|error| error.code),
+                    expected,
+                    "{script:?} {filter:?}"
+                );
+            }
+        }
+    }
+
+    /// A saved root's lookup (`atspiLookRoot`) shares the recheck: a changed PID is
+    /// unidentified, and a gone, failed or stalled recheck fails the lookup.
+    #[tokio::test]
+    async fn exact_root_needs_the_same_bus_owner_after_the_exe_read() {
+        use Lookup::{Failed, Gone, Pid, Stalled};
+        /// The looked-up root's executable name, or the lookup's error.
+        type Found = Result<Option<&'static str>, ErrorCode>;
+        let cases: [(&[PidReply], Found); 5] = [
+            (
+                &[(Pid(25361), None), (Pid(25361), None)],
+                Ok(Some("fixture-editor")),
+            ),
+            (&[(Pid(25361), None), (Pid(25362), None)], Ok(None)),
+            (
+                &[(Pid(25361), Some(REUSED)), (Gone, None)],
+                Err(ErrorCode::InternalError),
+            ),
+            (
+                &[(Pid(25361), None), (Failed, None)],
+                Err(ErrorCode::InternalError),
+            ),
+            (
+                &[(Pid(25361), None), (Stalled, None)],
+                Err(ErrorCode::Timeout),
+            ),
+        ];
+        let root = AccessibleRef {
+            destination: ":1.42".into(),
+            path: "/app/window".into(),
+        };
+        for (script, expected) in cases {
+            let found = with_scripted_owner(script, async |client| {
+                client.exact_root(&root).await.map(|live| {
+                    let live = live.expect("the root is listed");
+                    assert_eq!(live.pid, 25361);
+                    live.executable.map(|executable| executable.name)
+                })
+            })
             .await;
+            assert_eq!(
+                found.map_err(|error| error.code),
+                expected.map(|name| name.map(str::to_owned)),
+                "{script:?}"
+            );
         }
     }
 
