@@ -326,8 +326,8 @@ async fn handle_request_with(
         #[cfg(feature = "testing")]
         "testingStall" => testing_stall(&request.id, &request.args).await,
         "atspiReadText" | "uiaReadText" | "axReadText" => {
-            read_text_with(state, &request.args, async |accessible| {
-                connect().await?.read_live_text(accessible).await
+            read_text_with(state, &request.args, async |root, accessible| {
+                connect().await?.read_live_text(root, accessible).await
             })
             .await
         }
@@ -707,22 +707,33 @@ fn initial_image_size(root: &RootSnapshot, base_size: Option<(u16, u16)>) -> (u1
 
 /// The accessibility operation needed after a look has resolved its target.
 trait SnapshotSource {
-    async fn snapshot_from(
+    /// Snapshot `root`, redacting protected nodes, or from an explicit `scope`, refusing one
+    /// that is protected or whose live ancestry up to `root` is.
+    async fn snapshot_within(
         &self,
-        start: &AccessibleRef,
+        root: &AccessibleRef,
+        scope: Option<&AccessibleRef>,
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<Vec<NodeSnapshot>, ProtocolError>;
 }
 
 impl SnapshotSource for AtspiClient {
-    async fn snapshot_from(
+    async fn snapshot_within(
         &self,
-        start: &AccessibleRef,
+        root: &AccessibleRef,
+        scope: Option<&AccessibleRef>,
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
-        Ok(self.snapshot_from(start, max_nodes, max_depth).await?.nodes)
+        let snapshot = match scope {
+            Some(scope) => {
+                self.snapshot_within(root, scope, max_nodes, max_depth)
+                    .await?
+            }
+            None => self.snapshot_from(root, max_nodes, max_depth).await?,
+        };
+        Ok(snapshot.nodes)
     }
 }
 
@@ -769,14 +780,19 @@ async fn look_with<S: SnapshotSource>(
         }
         (
             client
-                .snapshot_from(&scope.accessible, max_nodes, max_depth)
+                .snapshot_within(
+                    &root.accessible,
+                    Some(&scope.accessible),
+                    max_nodes,
+                    max_depth,
+                )
                 .await?,
             Some(base),
         )
     } else {
         (
             client
-                .snapshot_from(&root.accessible, max_nodes, max_depth)
+                .snapshot_within(&root.accessible, None, max_nodes, max_depth)
                 .await?,
             None,
         )
@@ -1341,11 +1357,17 @@ fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
 async fn read_text_with(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
-    read: impl AsyncFnOnce(&AccessibleRef) -> Result<String, ProtocolError>,
+    read: impl AsyncFnOnce(&AccessibleRef, &AccessibleRef) -> Result<String, ProtocolError>,
 ) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "atspiReadText requires lookId")?;
     let element_ref = required_str(args, "elementRef", "atspiReadText requires elementRef")?;
-    let node = lock(state)?.element(look_id, element_ref)?;
+    let (root, node) = {
+        let state = lock(state)?;
+        (
+            state.look(look_id)?.root.accessible,
+            state.element(look_id, element_ref)?,
+        )
+    };
     if node.is_secure {
         return Err(ProtocolError::new(
             "Refers to a secure text field; refusing to read its value",
@@ -1353,7 +1375,7 @@ async fn read_text_with(
         ));
     }
     let text = if node.interfaces.contains(TEXT) {
-        read(&node.accessible).await?
+        read(&root, &node.accessible).await?
     } else {
         String::new()
     };
@@ -1430,7 +1452,7 @@ async fn wait_for(
         } = match &scope {
             Some(scope) => {
                 client
-                    .snapshot_from(&scope.accessible, DEFAULT_MAX_NODES, 20)
+                    .snapshot_within(&root.accessible, &scope.accessible, DEFAULT_MAX_NODES, 20)
                     .await?
             }
             None => client.snapshot(&root, DEFAULT_MAX_NODES, 20).await?,
@@ -1536,7 +1558,7 @@ mod tests {
     use super::*;
     use linux_bridge::testing::RecordingSink;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
 
@@ -1567,13 +1589,14 @@ mod tests {
     }
 
     impl SnapshotSource for SnapshotFixture {
-        async fn snapshot_from(
+        async fn snapshot_within(
             &self,
-            start: &AccessibleRef,
+            root: &AccessibleRef,
+            scope: Option<&AccessibleRef>,
             max_nodes: usize,
             max_depth: usize,
         ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
-            assert_eq!(start.path, self.path);
+            assert_eq!(scope.unwrap_or(root).path, self.path);
             assert_eq!((max_nodes, max_depth), self.limits);
             Ok(self.nodes.clone())
         }
@@ -1849,7 +1872,7 @@ mod tests {
                 .unwrap()
                 .insert_look(observed_root(), vec![editor, password], None);
         let args = |index: usize, offset| json!({"lookId":look_id,"elementRef":nodes[index].reference,"offset":offset,"limit":2});
-        let read = async |target: &AccessibleRef| {
+        let read = async |_root: &AccessibleRef, target: &AccessibleRef| {
             assert_eq!(target.path, "/node");
             Ok("A雪😊z".into())
         };
@@ -2003,7 +2026,7 @@ mod tests {
         let result = read_text_with(
             &state,
             &json!({"lookId": look_id, "elementRef": nodes[0].reference}),
-            async |_| panic!("non-text node requested text"),
+            async |_, _| panic!("non-text node requested text"),
         )
         .await
         .unwrap();
@@ -2040,6 +2063,10 @@ mod tests {
 
     /// Fixture role name that makes `GetRoleName` fail with a non-timeout error.
     const FAILING_ROLE_NAME: &str = "<GetRoleName fails>";
+    /// Fixture `Parent` that fails with a fast non-timeout error.
+    const FAILING_PARENT: (&str, &str) = ("<Parent fails>", "/");
+    /// Fixture `Parent` that never replies.
+    const STALLED_PARENT: (&str, &str) = ("<Parent stalls>", "/");
 
     struct PeerNode {
         name: &'static str,
@@ -2048,6 +2075,9 @@ mod tests {
         role_name: &'static str,
         stalled_children: Option<StalledReply>,
         child: Option<&'static str>,
+        /// The live `Parent` (bus name, path); `None` does not implement the property, and
+        /// `FAILING_PARENT` and `STALLED_PARENT` fail or stall the read.
+        parent: Option<(&'static str, &'static str)>,
         text: bool,
     }
 
@@ -2096,6 +2126,18 @@ mod tests {
                 vec![TEXT]
             } else {
                 vec![]
+            }
+        }
+
+        #[zbus(property)]
+        async fn parent(&self) -> zbus::fdo::Result<(&str, OwnedObjectPath)> {
+            match self.parent {
+                None => Err(zbus::fdo::Error::UnknownProperty("no Parent".into())),
+                Some(FAILING_PARENT) => Err(zbus::fdo::Error::Failed("parent unavailable".into())),
+                Some(STALLED_PARENT) => std::future::pending().await,
+                Some((destination, path)) => {
+                    Ok((destination, OwnedObjectPath::try_from(path).unwrap()))
+                }
             }
         }
     }
@@ -2149,6 +2191,7 @@ mod tests {
                         stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2197,6 +2240,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2260,6 +2304,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: true,
                         },
                     )?
@@ -2316,6 +2361,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2336,6 +2382,18 @@ mod tests {
                         .await
                         .result
                         .unwrap();
+                    assert!(!fresh.to_string().contains(SECRET), "role ID {id}");
+                    let node = lock(&state)
+                        .unwrap()
+                        .element(
+                            fresh["lookId"].as_str().unwrap(),
+                            fresh["outline"]["ref"].as_str().unwrap(),
+                        )
+                        .unwrap();
+                    assert_eq!(node.name, "[protected]");
+                    assert!(node.description.is_empty());
+                    assert!(!node.searchable_text().contains(SECRET));
+                    // A protected scope refuses rather than returning a redacted node (#1233).
                     let scoped = peer_request(
                         &state,
                         &connection,
@@ -2345,22 +2403,13 @@ mod tests {
                             "baseLookId":fresh["lookId"],"scopeRef":fresh["outline"]["ref"],
                         }),
                     )
-                    .await
-                    .result
-                    .unwrap();
-                    for look in [fresh, scoped] {
-                        assert!(!look.to_string().contains(SECRET), "role ID {id}");
-                        let node = lock(&state)
-                            .unwrap()
-                            .element(
-                                look["lookId"].as_str().unwrap(),
-                                look["outline"]["ref"].as_str().unwrap(),
-                            )
-                            .unwrap();
-                        assert_eq!(node.name, "[protected]");
-                        assert!(node.description.is_empty());
-                        assert!(!node.searchable_text().contains(SECRET));
-                    }
+                    .await;
+                    assert!(!format!("{scoped:?}").contains(SECRET), "role ID {id}");
+                    assert_eq!(
+                        scoped.error.unwrap().code,
+                        ErrorCode::SecureTextUnreadable,
+                        "role ID {id}"
+                    );
                     assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
                 }
             },
@@ -2384,6 +2433,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: false,
                     },
                 )
@@ -2404,25 +2454,28 @@ mod tests {
                         args["lookId"] = look["lookId"].clone();
                         args["scopeRef"] = look["outline"]["ref"].clone();
                     }
-                    peer_request(&state, &connection, "atspiWaitFor", args)
-                        .await
-                        .result
-                        .unwrap()
+                    peer_request(&state, &connection, "atspiWaitFor", args).await
                 };
                 for scoped in [false, true] {
                     assert_eq!(
-                        wait(scoped).await["found"],
+                        wait(scoped).await.result.unwrap()["found"],
                         true,
                         "readable, scoped {scoped}"
                     );
                 }
                 for id in [40, 67] {
                     role.send(Some(id)).unwrap();
-                    for scoped in [false, true] {
-                        let reply = wait(scoped).await;
-                        assert_eq!(reply["found"], false, "role ID {id}, scoped {scoped}");
-                        assert_eq!(reply["timedOut"], true, "role ID {id}, scoped {scoped}");
-                    }
+                    let reply = wait(false).await.result.unwrap();
+                    assert_eq!(reply["found"], false, "role ID {id}");
+                    assert_eq!(reply["timedOut"], true, "role ID {id}");
+                    // A protected scope refuses rather than searching a redacted node (#1233).
+                    let scoped = wait(true).await;
+                    assert!(!format!("{scoped:?}").contains(SECRET), "role ID {id}");
+                    assert_eq!(
+                        scoped.error.unwrap().code,
+                        ErrorCode::SecureTextUnreadable,
+                        "role ID {id}"
+                    );
                 }
             },
         )
@@ -2445,6 +2498,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2505,6 +2559,7 @@ mod tests {
                         stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2591,6 +2646,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: true,
                         },
                     )?
@@ -3018,6 +3074,936 @@ mod tests {
         .await;
     }
 
+    const CONTAINED_SECRET: &str = "private contained label";
+
+    /// A readable text field inside a panel whose live role the test controls (#1233).
+    fn serve_contained_field(
+        peer: zbus::connection::Builder<'static>,
+        panel_role: watch::Receiver<Option<u32>>,
+        panel_role_name: &'static str,
+        stalled_panel_role: Option<StalledReply>,
+        field_parent: Option<(&'static str, &'static str)>,
+        field_text: impl zbus::object_server::Interface,
+    ) -> zbus::Result<zbus::connection::Builder<'static>> {
+        peer.serve_at(
+            "/window",
+            PeerNode {
+                name: "Window",
+                role: watch::channel(Some(23)).1,
+                role_name: "frame",
+                stalled_role: None,
+                stalled_children: None,
+                child: Some("/window/panel"),
+                parent: None,
+                text: false,
+            },
+        )?
+        .serve_at(
+            "/window/panel",
+            PeerNode {
+                name: "Panel",
+                role: panel_role,
+                role_name: panel_role_name,
+                stalled_role: stalled_panel_role,
+                stalled_children: None,
+                child: Some("/window/panel/field"),
+                parent: Some((":1.1", "/window")),
+                text: false,
+            },
+        )?
+        .serve_at("/window/panel/field", contained_field(field_parent))?
+        .serve_at("/window/panel/field", field_text)
+    }
+
+    fn contained_field(parent: Option<(&'static str, &'static str)>) -> PeerNode {
+        PeerNode {
+            name: CONTAINED_SECRET,
+            role: watch::channel(Some(61)).1,
+            role_name: "entry",
+            stalled_role: None,
+            stalled_children: None,
+            child: None,
+            parent,
+            text: true,
+        }
+    }
+
+    /// Field text that turns the panel protected during the next `GetText` once armed.
+    struct ProtectingText {
+        panel_role: Arc<watch::Sender<Option<u32>>>,
+        armed: Arc<AtomicBool>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl ProtectingText {
+        fn get_text(&self, _start: i32, _end: i32) -> &str {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.panel_role.send(Some(PASSWORD_ROLE)).unwrap();
+            }
+            "private fixture text"
+        }
+    }
+
+    /// A panel that turns protected while listing its children, during the next
+    /// `GetChildren` once armed.
+    struct ProtectingPanel {
+        role: Arc<watch::Sender<Option<u32>>>,
+        armed: Arc<AtomicBool>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl ProtectingPanel {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Panel"
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> &str {
+            "panel"
+        }
+
+        fn get_role(&self) -> zbus::fdo::Result<u32> {
+            (*self.role.borrow()).ok_or_else(|| zbus::fdo::Error::Failed("role unavailable".into()))
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.role.send(Some(PASSWORD_ROLE)).unwrap();
+            }
+            vec![(
+                ":1.1",
+                OwnedObjectPath::try_from("/window/panel/field").unwrap(),
+            )]
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            vec![]
+        }
+
+        #[zbus(property)]
+        fn parent(&self) -> (&str, OwnedObjectPath) {
+            (":1.1", OwnedObjectPath::try_from("/window").unwrap())
+        }
+    }
+
+    /// A readable text field whose live `Parent` the test controls.
+    struct MovingField {
+        parent: watch::Receiver<&'static str>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl MovingField {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            CONTAINED_SECRET
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> &str {
+            "entry"
+        }
+
+        fn get_role(&self) -> u32 {
+            61
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            Vec::new()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            vec![TEXT]
+        }
+
+        #[zbus(property)]
+        fn parent(&self) -> (&str, OwnedObjectPath) {
+            (
+                ":1.1",
+                OwnedObjectPath::try_from(*self.parent.borrow()).unwrap(),
+            )
+        }
+    }
+
+    /// Field text that moves the field under the protected vault during the next `GetText`
+    /// once armed, without changing any role.
+    struct MovingText {
+        parent: Arc<watch::Sender<&'static str>>,
+        armed: Arc<AtomicBool>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl MovingText {
+        fn get_text(&self, _start: i32, _end: i32) -> &str {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.parent.send("/window/vault").unwrap();
+            }
+            "private fixture text"
+        }
+    }
+
+    const PASSWORD_ROLE: u32 = 40;
+    /// A wait budget that a request resolving on its first snapshot never reaches.
+    const FIRST_SNAPSHOT_WAIT_MS: u64 = 3_000;
+
+    /// A scoped look and a scoped wait at `scope` of `look`.
+    fn scoped_requests(root_ref: &str, look: &Value, scope: &Value) -> [(&'static str, Value); 2] {
+        [
+            (
+                "look",
+                json!({
+                    "rootRef":root_ref,"includeImage":false,
+                    "baseLookId":look["lookId"],"scopeRef":scope["ref"],
+                }),
+            ),
+            (
+                "atspiWaitFor",
+                json!({
+                    "rootRef":root_ref,"text":CONTAINED_SECRET,
+                    "timeoutMs":FIRST_SNAPSHOT_WAIT_MS,
+                    "lookId":look["lookId"],"scopeRef":scope["ref"],
+                }),
+            ),
+        ]
+    }
+
+    /// The read paths that start below the root of `look` (window -> panel -> field): a
+    /// scoped look and a scoped wait at the panel and at the field, and an explicit read of
+    /// the field.
+    fn contained_requests(root_ref: &str, look: &Value) -> Vec<(&'static str, Value)> {
+        let panel = &look["outline"]["children"][0];
+        let field = &panel["children"][0];
+        let mut requests = Vec::from(scoped_requests(root_ref, look, panel));
+        requests.extend(scoped_requests(root_ref, look, field));
+        requests.push((
+            "atspiReadText",
+            json!({"lookId":look["lookId"],"elementRef":field["ref"]}),
+        ));
+        requests
+    }
+
+    async fn contained_reads(
+        state: &Arc<Mutex<HelperState>>,
+        connection: &Connection,
+        root_ref: &str,
+        look: &Value,
+    ) -> Vec<Response> {
+        let mut replies = Vec::new();
+        for (cmd, args) in contained_requests(root_ref, look) {
+            replies.push(peer_request(state, connection, cmd, args).await);
+        }
+        replies
+    }
+
+    #[tokio::test]
+    async fn protected_container_protects_its_descendants() {
+        for (protected, stalled, code) in [
+            (Some(40), false, ErrorCode::SecureTextUnreadable),
+            (Some(67), false, ErrorCode::SecureTextUnreadable),
+            (Some(0), false, ErrorCode::SecureTextUnreadable),
+            (None, false, ErrorCode::InternalError),
+            (None, true, ErrorCode::Timeout),
+        ] {
+            let case = format!("panel role {protected:?}, stalled {stalled}");
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (role, panel_role) = watch::channel(Some(39));
+            let (stall, mut stalled_requests) = StalledReply::new();
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    serve_contained_field(
+                        peer,
+                        panel_role,
+                        "panel",
+                        stalled.then_some(stall),
+                        Some((":1.1", "/window/panel")),
+                        PeerText::new(Arc::clone(&reads)),
+                    )
+                },
+                async |connection| {
+                    let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                    let look = peer_request(&state, &connection, "look", look_args.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    let field = &look["outline"]["children"][0]["children"][0];
+                    assert_eq!(field["title"], CONTAINED_SECRET, "{case}");
+                    assert_eq!(field["value"], "private fixture text", "{case}");
+                    let [panel_look, panel_wait, field_look, field_wait, read]: [Response; 5] =
+                        contained_reads(&state, &connection, &root_ref, &look)
+                            .await
+                            .try_into()
+                            .unwrap();
+                    for scoped in [panel_look, field_look] {
+                        let text = scoped.result.unwrap().to_string();
+                        assert!(text.contains(CONTAINED_SECRET), "{case}");
+                    }
+                    for wait in [panel_wait, field_wait] {
+                        assert_eq!(wait.result.unwrap()["found"], true, "{case}");
+                    }
+                    assert_eq!(read.result.unwrap()["text"], "private fixture text");
+
+                    role.send(protected).unwrap();
+                    let permitted_reads = reads.load(Ordering::SeqCst);
+                    let fresh = peer_request(&state, &connection, "look", look_args.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    let text = fresh.to_string();
+                    assert!(!text.contains(CONTAINED_SECRET), "{case}: {text}");
+                    assert!(!text.contains("private fixture text"), "{case}: {text}");
+                    let panel = &fresh["outline"]["children"][0];
+                    assert_eq!(panel["title"], "[protected]", "{case}");
+                    assert_eq!(panel["truncated"], true, "{case}");
+                    assert_eq!(panel["children"], json!([]), "{case}");
+                    // The refs of the earlier, readable look no longer reach the field, and a
+                    // protected scope refuses rather than returning a redacted node.
+                    while stalled_requests.try_recv().is_ok() {}
+                    for reply in contained_reads(&state, &connection, &root_ref, &look).await {
+                        assert!(!reply.ok, "{case}: {reply:?}");
+                        assert_eq!(reply.error.unwrap().code, code, "{case}");
+                    }
+                    if stalled {
+                        // Each of the five refuses at its first read of the panel's role,
+                        // before reading anything at or below the scope.
+                        let mut stalls = 0;
+                        while stalled_requests.try_recv().is_ok() {
+                            stalls += 1;
+                        }
+                        assert_eq!(stalls, 5, "{case}");
+                    }
+                    let unscoped = peer_request(
+                        &state,
+                        &connection,
+                        "atspiWaitFor",
+                        json!({"rootRef":root_ref,"text":CONTAINED_SECRET,"timeoutMs":100}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    assert_eq!(unscoped["found"], false, "{case}");
+                    let gone = peer_request(
+                        &state,
+                        &connection,
+                        "atspiWaitFor",
+                        json!({"rootRef":root_ref,"text":CONTAINED_SECRET,"gone":true}),
+                    )
+                    .await;
+                    assert_eq!(gone.error.unwrap().code, ErrorCode::Timeout, "{case}");
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads, "{case}");
+
+                    role.send(Some(39)).unwrap();
+                    let replies = contained_reads(&state, &connection, &root_ref, &look).await;
+                    assert_eq!(
+                        replies[4].result.as_ref().unwrap()["text"],
+                        "private fixture text"
+                    );
+                },
+            )
+            .await;
+        }
+    }
+
+    /// A container that turns protected while its descendant is read, or while its children
+    /// are listed, discards what was read below it.
+    #[tokio::test]
+    async fn container_protected_during_a_contained_read_discards_it() {
+        let (role, panel_role) = watch::channel(Some(39));
+        let role = Arc::new(role);
+        let armed = Arc::new(AtomicBool::new(false));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                serve_contained_field(
+                    peer,
+                    panel_role,
+                    "panel",
+                    None,
+                    Some((":1.1", "/window/panel")),
+                    ProtectingText {
+                        panel_role: Arc::clone(&role),
+                        armed: Arc::clone(&armed),
+                    },
+                )
+            },
+            async |connection| {
+                let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                let look = peer_request(&state, &connection, "look", look_args.clone())
+                    .await
+                    .result
+                    .unwrap();
+                let field = &look["outline"]["children"][0]["children"][0];
+                assert_eq!(field["title"], CONTAINED_SECRET);
+                for (cmd, args) in contained_requests(&root_ref, &look) {
+                    role.send(Some(39)).unwrap();
+                    armed.store(true, Ordering::SeqCst);
+                    let reply = peer_request(&state, &connection, cmd, args).await;
+                    assert!(!armed.load(Ordering::SeqCst), "{cmd} never read the text");
+                    assert!(!reply.ok, "{cmd}: {reply:?}");
+                    assert!(
+                        !format!("{reply:?}").contains("private fixture text"),
+                        "{cmd}"
+                    );
+                    assert_eq!(
+                        reply.error.unwrap().code,
+                        ErrorCode::SecureTextUnreadable,
+                        "{cmd}"
+                    );
+                }
+                // Neither a full look nor a scope at the root, whose own checks pass, returns
+                // what was read below the panel: it is redacted and its subtree dropped.
+                let root_scope = &look["outline"];
+                let [scoped_look, (_, mut scoped_wait)] =
+                    scoped_requests(&root_ref, &look, root_scope);
+                scoped_wait["timeoutMs"] = json!(100);
+                for (cmd, args) in [
+                    ("look", look_args),
+                    scoped_look,
+                    ("atspiWaitFor", scoped_wait),
+                ] {
+                    role.send(Some(39)).unwrap();
+                    armed.store(true, Ordering::SeqCst);
+                    let reply = peer_request(&state, &connection, cmd, args).await;
+                    assert!(!armed.load(Ordering::SeqCst), "{cmd} never read the text");
+                    let result = reply.result.unwrap();
+                    let text = result.to_string();
+                    assert!(!text.contains(CONTAINED_SECRET), "{cmd}: {text}");
+                    assert!(!text.contains("private fixture text"), "{cmd}: {text}");
+                    if cmd == "look" {
+                        let panel = &result["outline"]["children"][0];
+                        assert_eq!(panel["title"], "[protected]", "{text}");
+                        assert_eq!(panel["truncated"], true, "{text}");
+                        assert_eq!(panel["children"], json!([]), "{text}");
+                    } else {
+                        assert_eq!(result["found"], false, "{text}");
+                    }
+                }
+            },
+        )
+        .await;
+
+        // The panel turns protected while listing the field: the field is never read.
+        let (role, _panel_role) = watch::channel(Some(39));
+        let role = Arc::new(role);
+        let reads = Arc::new(AtomicUsize::new(0));
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Window",
+                        role: watch::channel(Some(23)).1,
+                        role_name: "frame",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel"),
+                        parent: None,
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel",
+                    ProtectingPanel {
+                        role: Arc::clone(&role),
+                        armed: Arc::clone(&armed),
+                    },
+                )?
+                .serve_at(
+                    "/window/panel/field",
+                    contained_field(Some((":1.1", "/window/panel"))),
+                )?
+                .serve_at("/window/panel/field", PeerText::new(Arc::clone(&reads)))
+            },
+            async |connection| {
+                let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                let look = peer_request(&state, &connection, "look", look_args.clone())
+                    .await
+                    .result
+                    .unwrap();
+                let panel = &look["outline"]["children"][0];
+                assert_eq!(panel["children"][0]["title"], CONTAINED_SECRET);
+                let permitted_reads = reads.load(Ordering::SeqCst);
+                let [panel_look, _] = scoped_requests(&root_ref, &look, panel);
+                let [root_look, _] = scoped_requests(&root_ref, &look, &look["outline"]);
+                for (cmd, args) in [("look", look_args), panel_look, root_look] {
+                    role.send(Some(39)).unwrap();
+                    armed.store(true, Ordering::SeqCst);
+                    let reply = peer_request(&state, &connection, cmd, args.clone()).await;
+                    assert!(
+                        !armed.load(Ordering::SeqCst),
+                        "{args} never listed the field"
+                    );
+                    assert!(!format!("{reply:?}").contains(CONTAINED_SECRET), "{args}");
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads, "{args}");
+                    if args.get("scopeRef") == Some(&panel["ref"]) {
+                        // The scope itself turned protected: refuse, not a redacted panel.
+                        let code = reply.error.unwrap().code;
+                        assert_eq!(code, ErrorCode::SecureTextUnreadable, "{args}");
+                    } else {
+                        let result = reply.result.unwrap();
+                        let panel = &result["outline"]["children"][0];
+                        assert_eq!(panel["title"], "[protected]", "{args}");
+                        assert_eq!(panel["truncated"], true, "{args}");
+                        assert_eq!(panel["children"], json!([]), "{args}");
+                    }
+                }
+            },
+        )
+        .await;
+
+        // The field moves under a protected vault while its text is read, and no role changes:
+        // neither a full look nor a scope at the root or at the readable panel it left, whose
+        // own ancestry checks all pass, returns what was read.
+        let (parent, field_parent) = watch::channel("/window/panel");
+        let parent = Arc::new(parent);
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Window",
+                        role: watch::channel(Some(23)).1,
+                        role_name: "frame",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel"),
+                        parent: None,
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel",
+                    PeerNode {
+                        name: "Panel",
+                        role: watch::channel(Some(39)).1,
+                        role_name: "panel",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel/field"),
+                        parent: Some((":1.1", "/window")),
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/vault",
+                    PeerNode {
+                        name: "Vault",
+                        role: watch::channel(Some(PASSWORD_ROLE)).1,
+                        role_name: "password text",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel/field"),
+                        parent: Some((":1.1", "/window")),
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel/field",
+                    MovingField {
+                        parent: field_parent,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel/field",
+                    MovingText {
+                        parent: Arc::clone(&parent),
+                        armed: Arc::clone(&armed),
+                    },
+                )
+            },
+            async |connection| {
+                let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                let look = peer_request(&state, &connection, "look", look_args.clone())
+                    .await
+                    .result
+                    .unwrap();
+                let panel = &look["outline"]["children"][0];
+                assert_eq!(panel["children"][0]["title"], CONTAINED_SECRET);
+                let [panel_look, _] = scoped_requests(&root_ref, &look, panel);
+                let [root_look, (_, mut root_wait)] =
+                    scoped_requests(&root_ref, &look, &look["outline"]);
+                root_wait["timeoutMs"] = json!(100);
+                for (cmd, args) in [
+                    ("look", look_args),
+                    panel_look,
+                    root_look,
+                    ("atspiWaitFor", root_wait),
+                ] {
+                    parent.send("/window/panel").unwrap();
+                    armed.store(true, Ordering::SeqCst);
+                    let reply = peer_request(&state, &connection, cmd, args.clone()).await;
+                    assert!(!armed.load(Ordering::SeqCst), "{args} never read the text");
+                    let result = reply.result.unwrap();
+                    let text = result.to_string();
+                    assert!(!text.contains(CONTAINED_SECRET), "{args}: {text}");
+                    assert!(!text.contains("private fixture text"), "{args}: {text}");
+                    if cmd == "atspiWaitFor" {
+                        assert_eq!(result["found"], false, "{text}");
+                        continue;
+                    }
+                    let left = if args.get("scopeRef") == Some(&panel["ref"]) {
+                        &result["outline"]
+                    } else {
+                        &result["outline"]["children"][0]
+                    };
+                    assert_eq!(left["title"], "Panel", "{text}");
+                    assert_eq!(left["truncated"], true, "{text}");
+                    assert_eq!(left["children"], json!([]), "{text}");
+                }
+            },
+        )
+        .await;
+    }
+
+    /// A `GetChildren` edge is followed only when the child's live `Parent`, when readable, is
+    /// the node that listed it: a readable sibling that also lists a field never exposes a
+    /// field whose live parent is protected.
+    #[tokio::test]
+    async fn get_children_alias_never_bypasses_a_protected_parent() {
+        for (field_parent, visible) in [
+            ((":1.1", "/window/sibling"), true),
+            ((":1.1", "/window/panel"), false),
+            // A `Parent` that never replies does not confirm the sibling's edge.
+            (STALLED_PARENT, false),
+        ] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    peer.serve_at(
+                        "/window",
+                        PeerNode {
+                            name: "Window",
+                            role: watch::channel(Some(23)).1,
+                            role_name: "frame",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: Some("/window/sibling"),
+                            parent: None,
+                            text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/sibling",
+                        PeerNode {
+                            name: "Sibling",
+                            role: watch::channel(Some(39)).1,
+                            role_name: "panel",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: Some("/window/panel/field"),
+                            parent: Some((":1.1", "/window")),
+                            text: false,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/panel",
+                        PeerNode {
+                            name: "Password panel",
+                            role: watch::channel(Some(PASSWORD_ROLE)).1,
+                            role_name: "password text",
+                            stalled_role: None,
+                            stalled_children: None,
+                            child: Some("/window/panel/field"),
+                            parent: Some((":1.1", "/window")),
+                            text: false,
+                        },
+                    )?
+                    .serve_at("/window/panel/field", contained_field(Some(field_parent)))?
+                    .serve_at("/window/panel/field", PeerText::new(Arc::clone(&reads)))
+                },
+                async |connection| {
+                    let look = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({"rootRef":root_ref,"includeImage":false}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    let text = look.to_string();
+                    assert_eq!(text.contains(CONTAINED_SECRET), visible, "{text}");
+                    let sibling = &look["outline"]["children"][0];
+                    assert_eq!(sibling["title"], "Sibling");
+                    assert_eq!(sibling["truncated"], !visible, "{text}");
+                    let [scoped, _] = scoped_requests(&root_ref, &look, sibling);
+                    let scoped = peer_request(&state, &connection, scoped.0, scoped.1).await;
+                    let scoped = scoped.result.unwrap().to_string();
+                    assert_eq!(scoped.contains(CONTAINED_SECRET), visible, "{scoped}");
+                    // Only the hidden case actually waits out its budget.
+                    let budget = if visible { FIRST_SNAPSHOT_WAIT_MS } else { 100 };
+                    let wait = peer_request(
+                        &state,
+                        &connection,
+                        "atspiWaitFor",
+                        json!({"rootRef":root_ref,"text":CONTAINED_SECRET,"timeoutMs":budget}),
+                    )
+                    .await;
+                    assert_eq!(wait.result.unwrap()["found"], visible, "{field_parent:?}");
+                    assert_eq!(
+                        reads.load(Ordering::SeqCst) > 0,
+                        visible,
+                        "{field_parent:?}"
+                    );
+                },
+            )
+            .await;
+        }
+    }
+
+    /// A link in a straight chain of readable panels; the leaf has text.
+    struct ChainNode {
+        parent: String,
+        child: Option<String>,
+        text: bool,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl ChainNode {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Link"
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> &str {
+            "panel"
+        }
+
+        fn get_role(&self) -> u32 {
+            39
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            self.child
+                .iter()
+                .map(|path| (":1.1", OwnedObjectPath::try_from(path.as_str()).unwrap()))
+                .collect()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            if self.text {
+                vec![TEXT]
+            } else {
+                vec![]
+            }
+        }
+
+        #[zbus(property)]
+        fn parent(&self) -> (&str, OwnedObjectPath) {
+            (
+                ":1.1",
+                OwnedObjectPath::try_from(self.parent.as_str()).unwrap(),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_ancestry_refuses_contained_reads() {
+        const PANEL: Option<(&str, &str)> = Some((":1.1", "/window/panel"));
+        // (field `Parent`, panel role name, field reads' code, panel scopes' code, full look
+        // discloses the field)
+        for (field_parent, panel_role_name, code, panel_code, discloses) in [
+            (
+                PANEL,
+                FAILING_ROLE_NAME,
+                ErrorCode::InternalError,
+                Some(ErrorCode::InternalError),
+                false,
+            ),
+            (
+                PANEL,
+                "  ",
+                ErrorCode::SecureTextUnreadable,
+                Some(ErrorCode::SecureTextUnreadable),
+                false,
+            ),
+            // Only a provider that does not implement `Parent` keeps its `GetChildren` edges;
+            // an explicit read still needs the live ancestry.
+            (None, "panel", ErrorCode::InternalError, None, true),
+            // A `Parent` that fails, fast or by timing out, does not confirm the edge.
+            (
+                Some(FAILING_PARENT),
+                "panel",
+                ErrorCode::InternalError,
+                None,
+                false,
+            ),
+            (
+                Some(STALLED_PARENT),
+                "panel",
+                ErrorCode::Timeout,
+                None,
+                false,
+            ),
+            (
+                Some((":1.2", "/window/panel")),
+                "panel",
+                ErrorCode::SecureTextUnreadable,
+                None,
+                false,
+            ),
+            (
+                Some(("", "/org/a11y/atspi/null")),
+                "panel",
+                ErrorCode::SecureTextUnreadable,
+                None,
+                false,
+            ),
+            (
+                Some((":1.1", "/window/panel/field")),
+                "panel",
+                ErrorCode::SecureTextUnreadable,
+                None,
+                false,
+            ),
+        ] {
+            let case = format!("{field_parent:?} {panel_role_name:?}");
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (state, root_ref) = peer_root_state();
+            // The refs come from a look while the ancestry is still confirmed.
+            let look = with_peer(
+                |peer| {
+                    serve_contained_field(
+                        peer,
+                        watch::channel(Some(39)).1,
+                        "panel",
+                        None,
+                        PANEL,
+                        PeerText::new(Arc::clone(&reads)),
+                    )
+                },
+                async |connection| {
+                    let args = json!({"rootRef":root_ref,"includeImage":false,"readText":"never"});
+                    peer_request(&state, &connection, "look", args)
+                        .await
+                        .result
+                        .unwrap()
+                },
+            )
+            .await;
+            let field = &look["outline"]["children"][0]["children"][0];
+            assert_eq!(field["title"], CONTAINED_SECRET, "{case}");
+            with_peer(
+                |peer| {
+                    serve_contained_field(
+                        peer,
+                        watch::channel(Some(39)).1,
+                        panel_role_name,
+                        None,
+                        field_parent,
+                        PeerText::new(Arc::clone(&reads)),
+                    )
+                },
+                async |connection| {
+                    let args = json!({"rootRef":root_ref,"includeImage":false,"readText":"never"});
+                    let fresh = peer_request(&state, &connection, "look", args)
+                        .await
+                        .result
+                        .unwrap()
+                        .to_string();
+                    assert_eq!(
+                        fresh.contains(CONTAINED_SECRET),
+                        discloses,
+                        "{case}: {fresh}"
+                    );
+                    let mut requests = contained_requests(&root_ref, &look);
+                    let field_requests = requests.split_off(2);
+                    for (cmd, args) in requests {
+                        if panel_code.is_none() && cmd == "atspiWaitFor" {
+                            continue;
+                        }
+                        let reply = peer_request(&state, &connection, cmd, args).await;
+                        if let Some(panel_code) = panel_code {
+                            assert!(!reply.ok, "{case}: {reply:?}");
+                            assert_eq!(reply.error.unwrap().code, panel_code, "{case}");
+                        } else if cmd == "look" {
+                            // The panel scope is readable; the field below it is not reached.
+                            let scoped = reply.result.unwrap().to_string();
+                            assert_eq!(scoped.contains(CONTAINED_SECRET), discloses, "{case}");
+                        }
+                    }
+                    let permitted_reads = reads.load(Ordering::SeqCst);
+                    for (cmd, args) in field_requests {
+                        let reply = peer_request(&state, &connection, cmd, args).await;
+                        assert!(!reply.ok, "{case}: {reply:?}");
+                        assert_eq!(reply.error.unwrap().code, code, "{case}");
+                    }
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads, "{case}");
+                },
+            )
+            .await;
+        }
+
+        // The depth bound: a node `links` `Parent` links below the root.
+        for (links, readable) in [(255, true), (256, true), (257, false)] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (state, _) = peer_root_state();
+            let path = |index: usize| {
+                if index == 0 {
+                    "/window".to_owned()
+                } else {
+                    format!("/window/link{index}")
+                }
+            };
+            let mut leaf = node();
+            leaf.accessible = AccessibleRef {
+                destination: ":1.1".into(),
+                path: path(links),
+            };
+            leaf.interfaces.insert(TEXT.into());
+            let (look_id, nodes) =
+                lock(&state)
+                    .unwrap()
+                    .insert_look(observed_root(), vec![leaf], None);
+            with_peer(
+                |mut peer| {
+                    for index in 0..=links {
+                        peer = peer.serve_at(
+                            path(index),
+                            ChainNode {
+                                parent: path(index.saturating_sub(1)),
+                                child: (index < links).then(|| path(index + 1)),
+                                text: index == links,
+                            },
+                        )?;
+                    }
+                    peer.serve_at(path(links), PeerText::new(Arc::clone(&reads)))
+                },
+                async |connection| {
+                    let reply = peer_request(
+                        &state,
+                        &connection,
+                        "atspiReadText",
+                        json!({"lookId":look_id,"elementRef":nodes[0].reference}),
+                    )
+                    .await;
+                    if readable {
+                        assert_eq!(reply.result.unwrap()["text"], "private fixture text");
+                    } else {
+                        let code = reply.error.unwrap().code;
+                        assert_eq!(code, ErrorCode::SecureTextUnreadable, "{links} links");
+                        assert_eq!(reads.load(Ordering::SeqCst), 0, "{links} links");
+                    }
+                },
+            )
+            .await;
+        }
+    }
+
     #[tokio::test]
     async fn wait_for_gone_rejects_incomplete_snapshot() {
         let (stall, mut requests) = StalledReply::new();
@@ -3035,6 +4021,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: Some("/window/parent"),
+                            parent: None,
                             text: false,
                         },
                     )?
@@ -3047,6 +4034,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: stalled,
                             child: Some("/window/parent/match"),
+                            parent: None,
                             text: false,
                         },
                     )?
@@ -3059,6 +4047,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: false,
                         },
                     )
@@ -3143,6 +4132,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: Some("/window/label"),
+                            parent: None,
                             text: false,
                         },
                     )?
@@ -3155,6 +4145,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: false,
                         },
                     )
