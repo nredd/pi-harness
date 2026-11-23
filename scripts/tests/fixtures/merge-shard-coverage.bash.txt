@@ -1,0 +1,10 @@
+cd "$RUNNER_TEMP/shard-coverage"
+duplicates=$(find . -mindepth 2 -type f | cut -d/ -f3- | sort | uniq -d)
+if [ -n "$duplicates" ]; then
+  echo "::error title=duplicate shard coverage::More than one shard produced: ${duplicates//$'\n'/ }"
+  exit 1
+fi
+for shard in */; do
+  echo "Merging ${shard%/}"
+  cp -R "$shard." "$GITHUB_WORKSPACE/"
+done

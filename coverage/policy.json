@@ -526,7 +526,7 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Owner excludes computer-use from coverage maintenance; this measures its JS/TS runtime source under the Vitest suites from #347 with enforced uncovered-count ratchet caps (#645), not a 100% claim. `computer-use` keeps the full inventory.",
-      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS and Ubuntu each measured zero uncovered lines, functions, branches and statements.",
+      "note": "Istanbul over the package's Vitest suites; subprocess-run scripts count only what the suites import. At #755 CI HEAD 3a162381, macOS and Ubuntu each measured zero uncovered lines, functions, branches and statements. Bun is enforced at zero from the change that flipped it (#645); evidence: main run 45009970545 (39b7a5bb) macOS and Ubuntu Bun reports each listed all 36 primary files with zero misses, measured before the enforcement.",
       "signals": {
         "primary": {
           "report": "coverage/primary/lcov.info",
@@ -536,8 +536,7 @@
         "bun": {
           "report": "coverage/bun/lcov.info",
           "max_uncovered": { "darwin": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 }, "linux": { "lines": 0, "functions": 0, "branches": 0, "statements": 0 } },
-          "enforcement": "report-only",
-          "reason": "Compare full-suite Bun coverage to the primary zero budgets; establish a Bun floor only after complete-source hosted receipts on macOS and Linux (#645).",
+          "enforcement": "enforced",
           "reporters": ["text", "lcov", "json-summary"]
         }
       }

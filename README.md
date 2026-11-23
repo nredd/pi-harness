@@ -105,26 +105,32 @@ make help                    # every target
   `rejects`/`throws` validation objects are deliberately NOT banned: the first five compare a
   `RegExp` by equality and fail on a matching string (never vacuous), the last two match the regex.
   A name or shorthand property in the expected value is followed into its initializer when its nearest
-  binding in scope is a plain `const` directly in the file, a block or a `switch` case block (#1302,
-  #1315), e.g. `const re = /x/; expect(a).toMatchObject({ message: re })`, and a name reused per test
-  (`const expected = ...` in each) resolves per scope. Every binding other than a `let`/`const`/`using`
-  statement (`var`, parameters, `catch`, `for` headers, destructuring, function, class, import, enum and
-  namespace names) counts as visible throughout its enclosing function or the file, and any such binding
-  inside the chosen `const`'s scope that may be visible at the use blocks following, so shadowing can
-  only cause a miss. `let`/`var`/`using`, destructuring, namespace-block `const`, helper calls,
-  `new RegExp(...)`, imports and `arguments` (implicitly bound by every ordinary function) are not
-  followed. Bindings are classified once per file and indexed by scope and name, so many tests reusing
-  one name stay linear. A `const`
-  fixes the binding, not its contents, so a name that appears in a write target anywhere in the file
-  (`expected.m = ...`, `expected[0] += ...`, `++`/`--`, `delete`, the first argument of
-  `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`) is not followed under ANY of its
-  bindings, nor is a use anywhere inside a `with` statement nested in the chosen `const`'s scope: the
-  object may shadow the name in the body, and the object expression itself is skipped too although it
-  is evaluated first (conservative, only a miss). Syntactic, so the temporal dead zone is not modeled:
-  a `const` used in a different `switch` clause than its initializer may be uninitialized at runtime,
-  and the guard still reports it. Mutation through aliases or calls is not tracked: this can still produce a
-  finding for a value later overwritten; fix the test by naming the regex differently or asserting
-  directly. Each initializer is walked once per matcher call, so shared initializers stay linear.
+  binding in scope is a plain `const` directly in the file, a block, a `switch` case block or an
+  unexported, non-ambient namespace block (#1302, #1315, #1334), e.g.
+  `const re = /x/; expect(a).toMatchObject({ message: re })`, and a name reused per test
+  (`const expected = ...` in each) resolves per scope. A `let`/`const`/`using` statement and the names
+  it destructures bind exactly their scope, a `catch` binding its clause, and a `let`/`const`/`using`
+  `for` header its statement. Every other binding (`var`, parameters, exported namespace members,
+  function, class, import, enum and namespace names) counts as visible throughout its enclosing
+  function or the file, a superset of its real scope (exact regions for these are #1356), and any such
+  binding inside the chosen `const`'s scope that may be visible at the use blocks following, so
+  shadowing can only cause a miss. `let`/`var`/`using`, destructured names, exported namespace members
+  (visible in every merged block), helper calls, `new RegExp(...)`, imports and `arguments` (implicitly
+  bound by every ordinary function) are not followed. Bindings are classified once per file and indexed
+  by scope and name, and writes are sorted per name and binary searched, so many tests reusing one name
+  stay O(n log n). A `const` fixes the binding, not its contents, so it is not followed when its scope
+  holds a write target naming it under ANY binding (`expected.m = ...`, `expected[0] += ...`,
+  `++`/`--`, `delete`, a `for...in`/`for...of` target, the first argument of
+  `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`); a write outside that scope cannot
+  reach it, so one test writing its own `expected` no longer hides another's. Writes are not resolved
+  to a binding, so a write to a nearer shadowing binding inside the scope still blocks (#1356). Nor is a
+  use anywhere inside a `with` statement nested in the chosen `const`'s scope: the object may shadow the
+  name in the body, and the object expression itself is skipped too although it is evaluated first
+  (conservative, only a miss). Syntactic, so the temporal dead zone is not modeled: a `const` used in a
+  different `switch` clause than its initializer may be uninitialized at runtime, and the guard still
+  reports it. Mutation through aliases or calls is not tracked: this can still produce a finding for a
+  value later overwritten; fix the test by naming the regex differently or asserting directly. Each
+  initializer is walked once per matcher call, so shared initializers stay linear.
   The scan uses the `tsgo` parser on the same owned JS/TS test sources as the temp directory check,
   recognizes `.toMatchObject(...)` and `["toMatchObject"](...)` calls, follows object and array
   literals (spreads, parentheses, `as`, `satisfies`, conditional branches) inside the call, and
@@ -232,6 +238,7 @@ Docs-only PRs still report the four Ubuntu checks without running their gates. m
 GitHub does not order job admission by push age: a delayed or re-run older push can cancel a newer push’s macOS cell. A tip check cannot make admission atomic with `main` moving. These are not required checks; the cancelled cell is visible, and the next push or an eligible dispatch re-measures it.
 
 For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. The planner sets `windows_native_required` when an executing Ubuntu cell selects the `packages/computer-use` workspace. The Windows job and Ubuntu fan-in both read that boolean and fail on a missing or malformed decision for an executing cell. macOS does not require the Windows producer.
+The fan-in then merges the downloaded shard reports with `scripts/ci_merge_shard_coverage.py` (held at 0/0/0 uncovered like the other `scripts/` Python). It refuses a report path that more than one shard produced, before copying anything, then copies each shard over the checkout with `cp -R`. Only files below a shard's top-level directory count: files directly under the download root are ignored, and a hidden top-level directory is checked for duplicates but not merged. An unreadable subdirectory is skipped without the stderr diagnostic `find` printed.
 
 ### Review and merge evidence
 

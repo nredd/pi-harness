@@ -26,6 +26,11 @@ function retryDelay(delay: unknown) {
 	return { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: delay };
 }
 
+it("takes the hint floor from the caller", () => {
+	expect(classify("429: retry in 45s", NOW, 30_000)).toStrictEqual({ class: "hinted", hintMs: 45_000, ...quota });
+	expect(classify("429: retry in 95s", NOW, 120_000)).toStrictEqual(perMinute);
+});
+
 describe("classify failure text", () => {
 	it.each<[string, string | undefined, FailureClassification]>([
 		[
@@ -101,6 +106,19 @@ describe("classify failure text", () => {
 		["prepayment credits", "No prepayment credits", billing],
 		["billing wording", "billing account disabled", billing],
 		["payment required", "Payment required", billing],
+		["insufficient credits", "Insufficient credits for this request", billing],
+		["insufficient balance", "insufficient balance", billing],
+		["billing hard limit", "Billing hard limit has been reached", billing],
+		["parenthesized 402", "OpenAI API error (402): No funds", billing],
+		[
+			"parenthesized 503 overrides billing prose",
+			'OpenAI API error (503): {"error":{"message":"billing service failed"}}',
+			other,
+		],
+		["parenthesized 401 overrides quota prose", "Mistral API error (401): quota project", other],
+		["parenthesized 429 with a daily token", "Mistral API error (429): Daily quota exceeded", daily],
+		["bare billing mention is weak", "400: Invalid billing address", weak],
+		["billing limit without an affirmative verb is weak", "billing limit", weak],
 		["billing in the JSON status position", '{"error":{"code":402,"message":"No funds"}}', billing],
 		["502 overrides billing prose", "502: upstream failure checking billing", other],
 		["503 overrides JSON quota evidence", `503: ${rpc(quotaId("PerDay"))}`, other],
@@ -110,10 +128,22 @@ describe("classify failure text", () => {
 		["overload after underscore separator", "server_overloaded: quota exceeded", other],
 		["bare mixed-case overload", "Overloaded", other],
 		["timeout with quota wording", "ETIMEDOUT: quota exceeded", other],
-		["network failure with stray status", "network error after 429 bytes", other],
+		["free-text network wording is not a transport error", "network error after 429 bytes", weak],
 		["connection reset with quota-looking wording", "ECONNRESET while checking billing", other],
 		["safety overrides quota wording", "SAFETY: quota exceeded", other],
-		["blocked overrides a 429", "429: response blocked, retry in 95s", other],
+		["free-text blocked does not override a 429", "429: response blocked, retry in 95s", hinted],
+		["daily 429 mentioning blocked requests", "429: Daily quota exceeded; requests are blocked until reset", daily],
+		["free-text unavailable does not override a 429", "429: quota temporarily unavailable", unknown],
+		["free-text forbidden does not override a 429", "429: requests forbidden until reset", unknown],
+		["free-text safety does not override a 429", "429: rate limit exceeded for platform safety", unknown],
+		["free-text unauthorized does not override a 429", "429: unauthorized burst, rate limit exceeded", unknown],
+		["gRPC UNAVAILABLE status overrides quota prose", '{"error":{"status":"UNAVAILABLE","message":"quota"}}', other],
+		[
+			"Anthropic authentication type overrides quota prose",
+			'{"error":{"type":"authentication_error","message":"quota"}}',
+			other,
+		],
+		["socket hang up with quota wording", "socket hang up: quota exceeded", other],
 		["provider stop wrapper overrides a JSON body", `provider stopped with: ${rpc(quotaId("PerDay"))}`, other],
 		["provider stop reason mentions quota", "Provider stopped with: quota exceeded", other],
 		["401 overrides billing", "401: check billing", other],
@@ -252,7 +282,6 @@ const legacyFixtures = [
 	"Your credit balance is too low; check billing",
 	`400 {"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."}}`,
 	"billing account disabled",
-	"billing limit",
 	"overloaded_error",
 	"overloaded",
 	"request took 4290ms",
@@ -291,7 +320,6 @@ it.each([
 	"usage-limit",
 	"usage_limit",
 	"usagelimit",
-	"billing",
 	"out of budget",
 	"extra usage",
 	"extra-usage",
@@ -303,6 +331,12 @@ it.each([
 ])("preserves the legacy gate phrase %s", (text) => {
 	expect(legacyGate(text)).toBe(true);
 	expectQuotaClass(text);
+});
+
+// A bare billing mention still passes the gate, but it is weak: S15, never read or marked.
+it.each(["billing", "billing limit"])("keeps the legacy gate for the billing mention %s as weak evidence", (text) => {
+	expect(legacyGate(text)).toBe(true);
+	expect(classify(text, NOW)).toStrictEqual(weak);
 });
 
 it.each([
@@ -324,4 +358,118 @@ it.each([
 	const expected = Date.parse(resetAt);
 	expect(nextPacificMidnight(now)).toBe(expected);
 	expect(classify("RESOURCE_EXHAUSTED: Daily", now)).toStrictEqual({ ...daily, resetAt: expected });
+});
+
+// Core's `formatProviderError` prefixes are `<provider> API error (<status>): ` plus the
+// `OpenAI Decisions error` and `llama.cpp error` labels. Any other parenthesized number is prose
+// and never outranks the body's structured status.
+it.each<[string, string, FailureClassification]>([
+	["free-prefix 402 is not a status", "Request ID (402): malformed input", weak],
+	[
+		"free-prefix 503 cannot veto a JSON daily 429",
+		'Shard (503): {"error":{"code":429,"message":"Daily quota exceeded"}}',
+		daily,
+	],
+	["free-prefix 401 is not a status", "Tenant (401): quota exceeded", unknown],
+	["core provider prefix 429", "google-vertex API error (429): Daily quota exceeded", daily],
+	["core provider prefix 503", "Azure OpenAI API error (503): quota exceeded", other],
+	["OpenAI Decisions 429", "OpenAI Decisions error (429): Daily limit reached", daily],
+	["OpenAI Decisions 503", "OpenAI Decisions error (503): Daily quota exceeded", other],
+	["llama.cpp 429", "llama.cpp error (429): Daily limit reached", daily],
+	["llama.cpp 503", "llama.cpp error (503): Daily quota exceeded", other],
+	["System One API 503", "System One API error (503): Daily quota exceeded", other],
+	// Decision record: unlisted wrapper labels are ignored by design, so the body reads as daily.
+	["unlisted label error prefix 503", "Gateway error (503): Daily quota exceeded", daily],
+])("reads statuses only from core wrappers: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
+
+// Billing needs a 402, a billing error code or affirmative payment wording of the provider's own.
+it.each<[string, string, FailureClassification]>([
+	["quoted single-quoted enum value", "400: Invalid enum value 'insufficient credits'", other],
+	["quoted double-quoted value", '400: Invalid value "payment required" for field tier', other],
+	[
+		"unquoted validation of a 4xx",
+		"422: Validation failed: plan must be one of free, pro; got insufficient credits",
+		other,
+	],
+	["billing error code", '{"error":{"code":"billing_hard_limit_reached","message":"Limit reached"}}', billing],
+	["apostrophes are not quotes", "You're out of credits. Credits depleted, top up", billing],
+	[
+		"Anthropic 400 credit balance",
+		'400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}',
+		billing,
+	],
+])("requires affirmative billing evidence: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
+
+// S5: an error type vetoes only from a structured field or the verdict position at the start of
+// the message, never from an uppercase word inside a genuine quota message.
+it.each<[string, string, FailureClassification]>([
+	[
+		"UNAVAILABLE inside a daily 429 body",
+		'429: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Daily quota exceeded. Model UNAVAILABLE until reset."}}',
+		daily,
+	],
+	["PERMISSION_DENIED inside daily prose", "429: Daily quota exceeded, PERMISSION_DENIED for new requests", daily],
+	["SAFETY after the status", "429: SAFETY: quota exceeded", other],
+	["UNAVAILABLE as a structured reason", rpc({ "@type": "google.rpc.ErrorInfo", reason: "UNAVAILABLE" }), other],
+])("matches non-quota types in verdict positions only: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
+
+// S7: per-minute never marks, so explicit per-minute evidence beats billing and daily wording.
+// Decision record: an explicit, unquoted or structured per-minute limit beats a 402; a quoted one does not.
+it.each<[string, string, FailureClassification]>([
+	[
+		"billing wording with a PerMinute quotaId",
+		`429: ${JSON.stringify({ error: { code: 429, message: "Insufficient credits", details: [quotaId("RequestsPerMinute")] } })}`,
+		perMinute,
+	],
+	["credits depleted for a per-minute window", "Credits depleted for RequestsPerMinute", perMinute],
+	["402 naming a per-minute window", "402: payment required, PerMinute", perMinute],
+	["daily wording with a per-minute token", "429: Daily quota exceeded (RequestsPerMinute)", perMinute],
+	["402 with a quoted PerMinute plan", '402: payment required for plan "PerMinute"', billing],
+	["402 with a single-quoted per-minute value", "402: payment required for tier 'RequestsPerMinute'", billing],
+	["429 quoting a per-minute metric stays a throttle", "429: Quota exceeded for metric 'RequestsPerMinute'", perMinute],
+])("lets explicit per-minute evidence win: %s", (_name, text, expected) => {
+	expect(classify(text, NOW)).toStrictEqual(expected);
+});
+
+// Core-generated quota messages are verdicts, not weak gate matches: S15 never reads or marks weak.
+it.each([
+	"You have hit your ChatGPT usage limit (plus plan). Try again in ~158 min.",
+	"You have hit your ChatGPT usage limit.",
+	"You exceeded your current quota, please check your plan and billing details.",
+	"Monthly usage limit reached",
+	"GoUsageLimitError",
+	"FreeUsageLimitError",
+])("treats the core quota message %s as quota evidence", (text) => {
+	expect(classify(text, NOW)).toStrictEqual(unknown);
+	expect(legacyGate(text)).toBe(true);
+});
+
+// Anthropic subscription window exhaustion arrives as statusless stream-error prose. It is a quota
+// verdict of unknown shape: it reaches the read, and infers only on the repeat threshold (S8).
+it.each([
+	"You have reached your weekly usage limit",
+	"You've reached your weekly usage limit. Resets Monday 9am",
+	"5-hour limit reached, resets 3pm",
+	"Five-hour usage limit reached",
+	"You've hit your session limit",
+	"Weekly limit exceeded",
+	"Claude AI usage limit reached|1750000000",
+	"You have hit your usage limit.",
+])("treats the window exhaustion %s as quota evidence", (text) => {
+	expect(classify(text, NOW)).toStrictEqual(unknown);
+	expect(legacyGate(text)).toBe(true);
+});
+
+it.each([
+	"You have not reached your weekly usage limit",
+	"You haven't hit your usage limit yet",
+	"weekly usage limit: 40% used",
+])("keeps non-affirmative window wording %s weak", (text) => {
+	expect(classify(text, NOW)).toStrictEqual(weak);
 });

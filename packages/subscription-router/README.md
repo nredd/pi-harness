@@ -153,8 +153,9 @@ legacy strategies keep their behavior and serialized decisions.
 
 ### Provider declarations
 
-This release validates and loads `providers` declarations but does not apply them to routing,
-usage reads or display yet. Optional top-level `providers` entries are keyed by Pi provider ID.
+Optional top-level `providers` entries are keyed by Pi provider ID. `collector`, `evidence`,
+`fallbackOnReadError` and `failure` apply now (see [confirming evidence](#confirming-evidence));
+`label`, `quotaGroup` and `windows` are validated and loaded but not applied yet.
 
 Merge declarations from [here](examples/providers.json) into an existing config, keeping its
 `profiles`. The example's `profiles: {}` registers nothing. No declarations are installed by default.
@@ -175,7 +176,12 @@ Merge declarations from [here](examples/providers.json) into an existing config,
 - `evidence` lists unique adapter IDs in order: `read`, `failure` and `observed`.
   `fallbackOnReadError` opts in to continuing after a failed read; `failure` can declare
   `parser`, `minHintSeconds` (non-negative), `repeat` (`count` and `withinMinutes`) and
-  `maxBlockMinutes` (at most 1440).
+  `maxBlockMinutes` (at most 1440). `minHintSeconds` sets the hint floor: 60 seconds by default, and
+  a lower value lets shorter hints mark. A higher value only narrows what the `failure` adapter
+  infers: the never-mark line stays at 60 seconds, so a collected provider still reads a longer hint. `maxBlockMinutes` only lowers: the 24-hour and 60-minute
+  caps and the billing and unknown-shape backoff. `parser` is accepted, but one
+  classifier reads both generic and Google RPC bodies. `observed` is skipped until the request
+  ledger lands.
 
 The [schema](schemas/subscription-router.schema.json) rejects unknown keys inside provider
 settings except inside `collector.options`. The loader also checks that `timeZone` is known
@@ -189,7 +195,7 @@ register. Other unknown root keys are still ignored.
 - Balanced `user`: highest-ranked eligible entry, with incumbent hysteresis below
 - Balanced `direct`: stays on the eligible previous model when supplied, otherwise uses the balanced pick
 - `continuation`: stays on the model that last answered, unless unavailable or quota-blocked; balancing applies only when it must leave
-- `retry` (upstream auto-retry, e.g. a 429): refreshes usage. Confirmed -> mark and advance. Otherwise retry the same model
+- `retry` (upstream auto-retry, e.g. a 429): runs the provider's [evidence chain](#confirming-evidence). Confirmed -> mark and advance. Otherwise retry the same model
 - All blocked: the request fails with the earliest known reset
 
 Balanced scoring (conditional fairness guarantees and exclusions [here](#quota-fairness-contract)):
@@ -214,7 +220,7 @@ surface-scoped cap is not enforced (fail-open): a 429 against it still falls thr
 retry path. A block lasts until the reset the provider reported. Without one it backs off
 5 minutes, doubling up to 60.
 
-Confirmation needs live data read after the failure: a cached or in-flight read from before the
+The `read` adapter ([confirming evidence](#confirming-evidence)) needs live data read after the failure: a cached or in-flight read from before the
 error's timestamp doesn't count, while simultaneous failures still share one request. A failed or
 backed-off read confirms nothing. If a later failure supersedes an in-flight read, earlier callers
 follow the newer read (or its fresh cached result), rather than treating supersession as failure.
@@ -226,6 +232,84 @@ evidence: the caller uses the newest qualifying success in its supersession chai
 Cancellation never uses this fallback, and neither deadline fallback nor supersession extends the wait.
 Confirmation evaluates that exact returned snapshot, not a potentially different shared cache entry.
 
+### Confirming evidence
+
+Decision record: marks need evidence, and a fresh usage read is one of several adapters. This
+replaces the old rule that only a fresh read may mark: without it a metered provider, or a
+collected provider used with an API key, never failed over.
+
+Decision records (owner, 2026-11-23). The C9 rule has a test that fails if it is widened or removed;
+the others rest on the named existing tests (S15, the failure classifier rows, the L7 dedupe test):
+
+- C9 (commit only while the requester's selection is current) applies to inferred marks only. A
+  read-confirmed mark is shared provider state and is written whether or not the requester's
+  selection is still current (after a pin or profile switch). A cancelled request (aborted signal)
+  writes no mark of either kind
+- A weak match never reads (S15): it is never confirmed, so a collected provider's read never
+  runs for it
+- Unlisted wrapper labels are ignored by design: `Gateway error (503): Daily quota exceeded` is
+  prose and reads as daily. A status counts only from a leading status or a wrapper listed in
+  `PREFIXED_STATUS` (`src/failure.ts`), so a new core wrapper label must be added there
+- An explicit per-minute limit, unquoted or structured, beats a 402 or billing wording; a quoted
+  value (`402: payment required for plan "PerMinute"`) stays billing
+- Dedupe follows L7: a failure keyed by model and message timestamp counts once while its mark
+  is live. Dedupe never compares `markedAt` with the failure time (`markedAt >= evidenceAt`),
+  which would drop a distinct failure that happened before the first confirmation finished.
+  `markedAt` is provenance for the status views only
+
+Never-mark rules run first, for every provider: an auth (401/403), 5xx, transport, safety,
+per-minute or weak failure is never confirmed, whatever its wording, so not even a collected
+provider's read can mark one. Per-minute means an explicit per-minute window, which beats billing
+and daily wording in the same error (against billing only a structured window or unquoted wording:
+`402: payment required for plan "PerMinute"` stays billing), or a hint under 60 seconds (under `minHintSeconds` when that
+is lower). Weak means the gate matched with no quota verdict, e.g. `processed 429 tokens` (S15).
+Affirmative window exhaustion prose is a verdict, not weak: Anthropic streams statusless
+`You have reached your weekly usage limit` or `5-hour limit reached`, so a usage, weekly, 5-hour
+or session limit followed by reached/hit/exceeded (or reached your ... limit, unnegated) reaches
+the read, and without a usage source counts as a bare quota status.
+A status counts only in leading (`429: ...`) or core's wrapper position, `<provider> API error (<status>): `,
+`OpenAI Decisions error (<status>): ` or `llama.cpp error (<status>): `;
+any other parenthesized number, e.g. `Request ID (402)`, is prose. Error types such as `SAFETY` or
+`UNAVAILABLE` veto only as a structured field or at the start of the message; inside a quota
+message they, like free-text words such as "blocked", are not negative evidence.
+
+Then each provider runs its `evidence` chain in order, default `read` then `failure`. An adapter
+blocks (mark), clears (authoritative "not blocked", stop) or abstains (ask the next one):
+
+- `read`: the fresh usage read above. An available read blocks or clears, so a collected
+  provider keeps read-only confirmation. No collector, or an API-key credential (`sk-ant-api...`
+  on `anthropic`), abstains: only then may the failure infer. Every other read clears unless
+  `fallbackOnReadError`: failed, stale, older than the failure, without a usage credential, or
+  from a collector replaced or retired during the read
+- `failure`: classifies the failure text. A daily window token marks the model on the first
+  failure until the next 00:00 `America/Los_Angeles`, at most 24 hours. A retry hint of at least
+  `minHintSeconds` (default 60) marks it until the hint, at most 60 minutes, and a 10-minute spend
+  window until it ends. A 402, a billing error code (`billing_hard_limit_reached`,
+  `insufficient_credits`, ...) or affirmative payment exhaustion (`payment required`,
+  `credits depleted`, `insufficient credits` or `balance`, `credit balance is too low`,
+  `billing hard limit`) marks the whole provider with the 5-minute doubling backoff. Wording
+  inside a quoted value or a 4xx validation error, e.g. `Invalid enum value 'insufficient credits'`,
+  never does, nor does a bare mention of billing, e.g. `Invalid billing address`. A bare quota status marks the model with that backoff on
+  its second distinct failure within 10 minutes, with no success between. A failure at or before
+  the model's latest success never counts or marks, however late its confirmation finishes. Auth
+  errors surface as they are
+
+A deadline is measured from the failure: a hint or window reset that already passed when
+confirmation finishes writes no mark, and only a decision without a deadline backs off. One
+failure, keyed by model and message timestamp, counts once: confirmed twice, e.g. by racing
+requests, it neither adds a repeat nor grows the backoff, while distinct failures count separately
+even when both precede the first confirmation. Late or weaker evidence never shortens a live
+inferred mark: an older 95 s hint confirmed after a newer daily 429 counts, but the daily deadline
+stays. The deadline check and the write share one clock sample. Cancellation during the evidence
+wait writes nothing, and an inferred mark is committed only while the requester's selection is
+still current, checked right before the write on every path (retry, settle recovery and the
+partial-output mark). A read-confirmed mark is shared provider state and is written regardless. Inferred marks carry `evidence: "inferred"` plus `expiry` (`hinted`, `window-reset` or
+`backoff`) and `cause` (`quota` or `billing`); their window names start with `inferred:`, so the
+display surfaces (`/router status`, `subscription_usage` and `ChainExhaustedError`) say so.
+Admission only honors the mark: it reports eligibility, the mark's reset and wait advice, not its
+provenance. Read-confirmed marks carry none of these fields. A fresh read never clears an inferred mark. `/router reset` clears marks
+and failure counts. Inferred marks live in memory only for now.
+
 Mid-run recovery: upstream doesn't retry terminal quota errors (`insufficient_quota`, billing,
 `subscription_sharing_usage_limit_exceeded`), so they end the run. At `agent_before_settle` the
 router confirms the block, omits the failed assistant message with a `context_edit` (pi won't
@@ -234,8 +318,8 @@ Each chain model gets at most one recovery per user prompt. Router quota failove
 messages containing nonempty text/thinking or any tool call: emitted output cannot be retracted
 safely, so retry explicitly instead of switching models. Core's same-model transient retries and
 recoverable length/overflow retries are unchanged, including partial attempts core already omitted.
-A retryable partial quota error is confirmed and marked before refusing failover; terminal partial
-quota errors are refused before confirmation. Prior successful tool turns remain in context and
+A partial quota error, retryable or terminal, is confirmed and marked before refusing failover, so
+the next prompt skips the exhausted scope; the partial message is never omitted or continued. Prior successful tool turns remain in context and
 are not re-executed by router recovery.
 
 Continuous failover requires a routed binding, e.g. a subagent tier `deep: ["router/deep"]`.
@@ -246,16 +330,17 @@ effective thinking follow the destination; core retains responsibility for think
 context limits and compaction. Failure to compact does not authorize truncation or tool replay;
 a provider context error remains explicit if ordinary core recovery cannot finish.
 
-The default remains hybrid: cached eligibility before each request and fresh confirmation after
+The default remains hybrid: cached eligibility before each request and evidence after
 quota-looking failures. Low remaining quota alone is not exhaustion. Authentication, permission,
-model, billing and transport errors do not independently prove subscription exhaustion. There is
-no predictive switch, new recovery engine, cross-tier or paid API fallback.
+model and transport errors never mark; a billing failure infers a provider-wide mark only through
+the `failure` adapter, after any authoritative read. There is no predictive switch, new recovery engine,
+cross-tier or paid API fallback.
 
 Recovery captures the requesting session's selection generation, durable model-change identity
 and cancellation signal before awaiting confirmation. The durable identity also guards requesters
 using a shared route without loading their own router extension. Manual pins, another profile, away-and-back selection, session replacement
-or cancellation invalidate its permission to omit context, continue, record a routing decision or
-announce a switch. A stale retry route ends explicitly with a selection-changed error rather than
+or cancellation invalidate its permission to omit context, continue, record a routing decision,
+announce a switch or commit an inferred mark. A stale retry route ends explicitly with a selection-changed error rather than
 dispatching under the new selection. Physical response metadata updates do not invalidate selection. Valid shared
 quota observations remain shared; a cancelled collector still cannot confirm a block. Recovery
 budgets and edits remain session-owned, including when siblings share one runtime. An exhausted
@@ -268,7 +353,7 @@ precede the context edit and continuation; manual changes or aborts while it wai
 the edit and notice. Hosts older than core `v1.3.0-nredd.12` lack the cancellation signal this depends on.
 
 Built-in usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
-auth has no subscription window and is never blocked. Codex window names follow the reported
+auth has no subscription window, so only failure-inferred evidence blocks it. Codex window names follow the reported
 `limit_window_seconds`, not their primary/secondary position: some plans expose only a weekly
 primary window. Missing durations retain the legacy positional fallback; other durations stay
 explicit in seconds rather than being mislabeled as 5h or weekly. Normalized windows carry optional
@@ -541,8 +626,9 @@ reject group/other access and symlinks without repairing existing state.
 The `lint` and `format` commands run Biome on the package directory using the shared root configuration.
 
 `tests/scenarios/` covers terminal/retry/unconfirmed recovery, partial-stream refusal, cancellation,
-bounded retries, direct `subscription_usage` execution and all six balanced cases through the real
-router factory and core session harness, under Vitest and Bun. Policy tests add pre-calculus golden
+bounded retries, direct `subscription_usage` execution, all six balanced cases and inferred-evidence
+failover (faux `google`, `google-vertex` and API-key `anthropic`) through the real router factory and
+core session harness, under Vitest and Bun. Policy tests add pre-calculus golden
 receipts (including full status, numeric/timing boundaries, confirmation races, cancellation and partial
 output), a Git-blob-pinned merge-base oracle with 4,096 seeded differential cases, deterministic
 exhaustive properties, offline normalized replay, strict failback, raw-remaining
