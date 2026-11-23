@@ -67,3 +67,29 @@ test("records source and exact custom-type provenance without replacing the requ
 		else process.env.HARNESS_LEDGER_REGISTRY = old;
 	}
 });
+
+test("injects the opt-in fixture note on user prompts only", () => {
+	const old = process.env.HARNESS_LEDGER_NOTE;
+	const handlers = new Map<string, (event: unknown) => unknown>();
+	try {
+		requestLedgerProbe({
+			on: (name: string, callback: (event: unknown) => unknown) => handlers.set(name, callback),
+			getAllTools: () => [],
+		} as unknown as ExtensionAPI);
+		const start = handlers.get("before_agent_start");
+		assert.ok(start);
+		const user = { type: "before_agent_start", messageType: "user", prompt: "go" };
+		delete process.env.HARNESS_LEDGER_NOTE;
+		assert.equal(start(user), undefined);
+		process.env.HARNESS_LEDGER_NOTE = "";
+		assert.equal(start(user), undefined);
+		process.env.HARNESS_LEDGER_NOTE = "Fixture note";
+		assert.equal(start({ ...user, messageType: "custom" }), undefined);
+		assert.deepEqual(start(user), {
+			message: { customType: "ledger-fixture", content: "Fixture note", display: false },
+		});
+	} finally {
+		if (old === undefined) delete process.env.HARNESS_LEDGER_NOTE;
+		else process.env.HARNESS_LEDGER_NOTE = old;
+	}
+});
