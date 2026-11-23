@@ -304,8 +304,27 @@ interface ConnectionClass {
 	managed: boolean;
 }
 
+/** One daemon start shared by concurrent `ensureDaemon` callers. */
+interface PendingStart {
+	promise: Promise<boolean>;
+	/** Aborts the start once every waiter has abandoned it. */
+	controller: AbortController;
+	waiters: number;
+}
+
+/** Wait for `promise` unless `signal` aborts first; the promise itself keeps running. */
+async function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return await promise;
+	return await new Promise<T>((resolve, reject) => {
+		const onAbort = () => reject(new Error("Operation aborted."));
+		signal.addEventListener("abort", onAbort, { once: true });
+		void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
+}
+
 export class MacosHelperClient {
 	private daemonAvailable = false;
+	private pendingStart?: PendingStart;
 	private requestSequence = 0;
 	private diagnosticsCache?: PlatformDiagnostics;
 	/** Last reported build, safe to display (see `displayBuild`). */
@@ -553,8 +572,47 @@ export class MacosHelperClient {
 		}
 	}
 
+	/**
+	 * Make sure a verified daemon answers, launching the installed app on positive absence.
+	 * Concurrent callers in this process share one start, so they launch at most one helper between them (`open -n`
+	 * starts a new instance every time). Each caller's signal abandons only its own wait; the shared start is
+	 * aborted once every waiter has, and a later caller starts afresh.
+	 * @returns false when no daemon answered within the probe loop.
+	 */
 	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
 		if (this.daemonAvailable) return true;
+		throwIfAborted(signal);
+		const start = this.joinStart();
+		start.waiters += 1;
+		try {
+			return await untilAborted(start.promise, signal);
+		} finally {
+			start.waiters -= 1;
+			if (start.waiters === 0 && signal?.aborted) start.controller.abort();
+		}
+	}
+
+	/**
+	 * The in-flight start, or a new one. An abandoned start is never joined: it is already rejecting with the
+	 * abort, which every step it awaits honours at once.
+	 */
+	private joinStart(): PendingStart {
+		const current = this.pendingStart;
+		if (current && !current.controller.signal.aborted) return current;
+		const controller = new AbortController();
+		const start: PendingStart = {
+			controller,
+			waiters: 0,
+			promise: this.startDaemon(controller.signal).finally(() => {
+				// An abandoned start settles after its replacement was created; it must not clear that one.
+				if (this.pendingStart === start) this.pendingStart = undefined;
+			}),
+		};
+		this.pendingStart = start;
+		return start;
+	}
+
+	private async startDaemon(signal: AbortSignal): Promise<boolean> {
 		// Launch only on positive absence: `probeResident` throws on anything inconclusive, and `launchDaemon`
 		// refuses an external socket.
 		if (!(await this.probeResident(signal))) {

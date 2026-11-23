@@ -597,6 +597,67 @@ describe("install, launch and runProcess", () => {
 		SLOW_MS,
 	);
 
+	// #1235: `open -n` starts a new instance on every call, so concurrent callers must share one launch.
+	describe("concurrent ensureDaemon callers", () => {
+		/** A stopped fake; `open` runs each route in turn (`undefined` brings the fake up after `delayMs`). */
+		async function launchRig(routes = [], delayMs = 150) {
+			const fake = await fakeOn();
+			await fake.stop();
+			const spawn = createFakeSpawn({
+				open: () => {
+					const route = routes.shift();
+					if (route) return route;
+					setTimeout(() => void fake.start(), delayMs);
+					return { exitCode: 0 };
+				},
+			});
+			const { MacosHelperClient } = await load({ external: false, fake, spawn });
+			const opens = () => spawn.calls.filter(({ command }) => command === "open").length;
+			return { client: new MacosHelperClient(), opens, spawn };
+		}
+
+		test("share one launch while the helper cold-starts", async () => {
+			const { client, opens } = await launchRig();
+			assert.deepEqual(await Promise.all([client.ensureDaemon(), client.ensureDaemon(), client.ensureDaemon()]), [
+				true,
+				true,
+				true,
+			]);
+			assert.equal(opens(), 1);
+			assert.equal(await client.ensureDaemon(), true, "the finished start is not reused: availability answers");
+			assert.equal(opens(), 1);
+		});
+
+		test("one caller's abort ends only its own wait", async () => {
+			const { client, opens } = await launchRig([], 300);
+			const controller = new AbortController();
+			const aborted = client.ensureDaemon(controller.signal);
+			const other = client.ensureDaemon();
+			await vi.waitFor(() => assert.equal(opens(), 1));
+			controller.abort();
+			await assert.rejects(aborted, /Operation aborted\./);
+			assert.equal(await other, true);
+			assert.equal(opens(), 1);
+		});
+
+		test("a start every caller abandoned is aborted, and later callers share a fresh one", async () => {
+			const hung = createFakeChild({ hang: true });
+			const { client, opens } = await launchRig([hung], 300);
+			const controller = new AbortController();
+			const abandoned = client.ensureDaemon(controller.signal);
+			await vi.waitFor(() => assert.equal(opens(), 1));
+			controller.abort();
+			await assert.rejects(abandoned, /Operation aborted\./);
+			assert.deepEqual(hung.signals, ["SIGTERM"], "the abandoned launch is killed");
+			// Created while the abandoned start is still settling: it must neither join nor be cleared by that start.
+			const later = client.ensureDaemon();
+			await vi.waitFor(() => assert.equal(opens(), 2));
+			const joined = client.ensureDaemon();
+			assert.deepEqual(await Promise.all([later, joined]), [true, true], "neither inherits the abort");
+			assert.equal(opens(), 2);
+		});
+	});
+
 	describe("runProcess", () => {
 		async function runner(routes) {
 			const spawn = createFakeSpawn({ tool: routes });
