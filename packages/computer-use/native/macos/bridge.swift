@@ -417,9 +417,10 @@ extension RootInventorySnapshot {
 
 /// Root changes between two listings. Absence from an incomplete listing proves nothing: a root missing
 /// from `after` closed only when `after` is complete, and one missing from `before` appeared (or newly
-/// gained focus) only when `before` is complete. Only a read `isFocused` is compared: a root gained focus when it
-/// reads `true` after and `false` before, so a root whose focus read failed on either side (no `isFocused`, see
-/// `RootState`) never reports a focus change.
+/// gained focus) only when `before` is complete. Only a root's own focus read is compared (`rootOwnFocus`): a root present
+/// in both listings gained focus when it reads `true` after and `false` before, so a root whose focus read failed on
+/// either side (no `isFocused`, see `RootState`) or that took its window's focus (`focusInherited`) never reports a
+/// focus change. A root new in `after` that reads focused reports both `appeared` and `focused`.
 func rootInventoryChanges(before: RootInventorySnapshot, after: RootInventorySnapshot) -> [(change: String, root: [String: Any])] {
 	var changes: [(change: String, root: [String: Any])] = []
 	if before.complete {
@@ -428,14 +429,20 @@ func rootInventoryChanges(before: RootInventorySnapshot, after: RootInventorySna
 	if after.complete {
 		for (key, root) in before.roots where after.roots[key] == nil { changes.append(("closed", root)) }
 	}
-	for (key, root) in after.roots where (root["isFocused"] as? Bool) == true {
+	for (key, root) in after.roots where rootOwnFocus(root) == true {
 		guard let previous = before.roots[key] else {
 			if before.complete { changes.append(("focused", root)) }
 			continue
 		}
-		if (previous["isFocused"] as? Bool) == false { changes.append(("focused", root)) }
+		if rootOwnFocus(previous) == false { changes.append(("focused", root)) }
 	}
 	return changes
+}
+
+/// A root entry's own focus read: its `isFocused`, or `nil` when it was not read or a sheet took it from its window
+/// (`focusInherited`, see `rootEntries`).
+func rootOwnFocus(_ root: [String: Any]) -> Bool? {
+	(root["focusInherited"] as? Bool) == true ? nil : root["isFocused"] as? Bool
 }
 
 struct WindowPairing {
@@ -719,16 +726,19 @@ extension RootInventoryWorld {
 /// sheet's root) under the identity fields `rootIdentity` reads and the state flags, and the `rootRef`s of the roots it
 /// cannot key. A flag that was not read (see `RootState`) is left out, whatever `extras` says. `isOnscreen` is the paired
 /// CG window's (a sheet without one takes its window's), else the negated `isMinimized` of its window, else left out.
+/// A sheet whose own `AXFocused` was not read takes its window's read `isFocused` for root selection, marked
+/// `focusInherited` so `rootInventoryChanges` never compares it as the sheet's own read.
 func rootEntries<Element>(
 	_ windows: [ClassifiedWindow<Element>], ref: (Element) -> String,
 	extras: (ClassifiedWindow<Element>, InventoryRoot<Element>?) -> [String: Any]
 ) -> (roots: [[String: Any]], unidentified: Set<String>) {
 	var roots: [[String: Any]] = []
 	var unidentified = Set<String>()
-	func append(_ root: InventoryRoot<Element>, onscreen: Bool?, extras: [String: Any]) {
+	func append(_ root: InventoryRoot<Element>, onscreen: Bool?, inheritedFocus: Bool? = nil, extras: [String: Any]) {
 		let rootRef = ref(root.element)
 		var entry = extras
-		entry["isFocused"] = root.state.focused.map { $0 as Any }
+		entry["isFocused"] = (root.state.focused ?? inheritedFocus).map { $0 as Any }
+		entry["focusInherited"] = root.state.focused == nil && inheritedFocus != nil ? true : nil
 		entry["isMain"] = root.state.main.map { $0 as Any }
 		entry["isMinimized"] = root.state.minimized.map { $0 as Any }
 		entry["isOnscreen"] = onscreen.map { $0 as Any }
@@ -746,7 +756,9 @@ func rootEntries<Element>(
 	for window in windows {
 		let onscreen = window.root.pairing.candidate?.isOnscreen ?? window.root.state.minimized.map { !$0 }
 		append(window.root, onscreen: onscreen, extras: extras(window, nil))
-		for sheet in window.sheets { append(sheet, onscreen: sheet.pairing.candidate?.isOnscreen ?? onscreen, extras: extras(window, sheet)) }
+		for sheet in window.sheets {
+			append(sheet, onscreen: sheet.pairing.candidate?.isOnscreen ?? onscreen, inheritedFocus: window.root.state.focused, extras: extras(window, sheet))
+		}
 	}
 	return (roots, unidentified)
 }
@@ -6020,7 +6032,7 @@ Terminal `act_ui` results say the action was delivered, or say its delivery is u
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
-- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`. `rootDelta` also treats its own snapshot as incomplete when it excludes a root it cannot key the same way in every listing (see Root discovery), so a root beside it is never proven closed. A root reports `isFocused`, `isMain` and `isMinimized` only as read: a failed, absent or non-boolean read leaves the field out instead of reading `false` (an unpaired window then omits `isOnscreen` too), and a sheet reports only its own `AXFocused`, never its window's. `rootDelta` reports `focused` only for a root read unfocused before the action and focused after it, so a failed focus read never reports a focus change, though it can hide one.
+- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`. `rootDelta` also treats its own snapshot as incomplete when it excludes a root it cannot key the same way in every listing (see Root discovery), so a root beside it is never proven closed. The helper payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a `CFBoolean`: a failed, absent or non-boolean (e.g. numeric) reply leaves the field out instead of reading `false` (an unpaired window then omits `isOnscreen` too). A sheet's `isMain` and `isMinimized` are constant `false`; it carries its own `AXFocused` when read, else its window's read focus marked `focusInherited`, for root selection only. For a root in both listings, `rootDelta` reports `focused` only when its own focus read `false` before and `true` after, so unread or inherited focus never reports a focus change, though it can hide one; a root new since a complete listing whose own focus reads `true` reports both `appeared` and `focused`. The TS client still parses an omitted flag as `false` (#1314).
 
 ## Ref lifecycle
 

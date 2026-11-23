@@ -503,11 +503,18 @@ text with its `execution` trace. The result is also:
   roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
   failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
   stacked within a few points of each other can therefore report no `closed` or `appeared` change at
-  all. Discovery and target resolution still list every such root. `focused` compares only read focus: a root
-  reports `isFocused`, `isMain` and `isMinimized` only when the AX read returned a boolean, never a
-  failed read as `false`, and a sheet reports its own `AXFocused`, never its window's. A root whose
-  focus read failed on either side reports no `focused` change (#1303), so a failed read can hide a
-  real focus change but never invents one. Windows listings carry no completeness information, so an empty listing from
+  all. Discovery and target resolution still list every such root. `focused` compares only read focus. The native helper
+  payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a
+  `CFBoolean`; a failed, absent or non-boolean (e.g. numeric `0`) reply leaves the field out, never
+  `false`, and an unpaired window whose minimized read was left out omits `isOnscreen` too. A sheet's
+  `isMain` and `isMinimized` are constant `false`, not reads. A sheet carries its own `AXFocused` when
+  read, else its window's read `isFocused` marked `focusInherited`, for root selection only, so a
+  focused window's sheet still wins `observe_ui` selection. A root present in both listings reports
+  `focused` only when its own focus read `false` before and `true` after; unread or inherited focus on
+  either side reports none (#1303), so a failed read can hide a real focus change but never invents
+  one. A root new since a complete listing whose own focus reads `true` reports both `appeared` and
+  `focused`. The macOS TS client still parses an omitted flag as `false`, so `find_roots` details and
+  ranking read unknown as `false` (#1314). Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ### Ref lifecycle
@@ -2977,11 +2984,18 @@ Terminal `act_ui` results say the action was delivered, or say its delivery is u
   roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
   failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
   stacked within a few points of each other can therefore report no `closed` or `appeared` change at
-  all. Discovery and target resolution still list every such root. `focused` compares only read focus: a root
-  reports `isFocused`, `isMain` and `isMinimized` only when the AX read returned a boolean, never a
-  failed read as `false`, and a sheet reports its own `AXFocused`, never its window's. A root whose
-  focus read failed on either side reports no `focused` change (#1303), so a failed read can hide a
-  real focus change but never invents one. Windows listings carry no completeness information, so an empty listing from
+  all. Discovery and target resolution still list every such root. `focused` compares only read focus. The native helper
+  payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a
+  `CFBoolean`; a failed, absent or non-boolean (e.g. numeric `0`) reply leaves the field out, never
+  `false`, and an unpaired window whose minimized read was left out omits `isOnscreen` too. A sheet's
+  `isMain` and `isMinimized` are constant `false`, not reads. A sheet carries its own `AXFocused` when
+  read, else its window's read `isFocused` marked `focusInherited`, for root selection only, so a
+  focused window's sheet still wins `observe_ui` selection. A root present in both listings reports
+  `focused` only when its own focus read `false` before and `true` after; unread or inherited focus on
+  either side reports none (#1303), so a failed read can hide a real focus change but never invents
+  one. A root new since a complete listing whose own focus reads `true` reports both `appeared` and
+  `focused`. The macOS TS client still parses an omitted flag as `false`, so `find_roots` details and
+  ranking read unknown as `false` (#1314). Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ## Ref lifecycle

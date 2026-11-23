@@ -582,8 +582,8 @@ private func assertContestedPairings(_ bridge: Bridge) {
 }
 
 /// `AXFocused`, `AXMain` and `AXMinimized` are reported only as read (`RootState`): a failed or non-boolean reply is
-/// left out, never `false`, so `rootDelta` never reports a focus change from it, and a sheet never reports its window's
-/// focus (#1303).
+/// left out, never `false`, so `rootDelta` never reports a focus change from it. A sheet whose own focus was not read
+/// takes its window's for root selection only (`focusInherited`), never as a focus change of its own (#1303).
 private func assertStateReads(_ bridge: Bridge) {
     func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
     let yes: AnyObject = kCFBooleanTrue
@@ -600,13 +600,14 @@ private func assertStateReads(_ bridge: Bridge) {
     expect(changes(snapshot(["k": unfocused]), snapshot(["k": focused])) == ["focused:w"], "a root read unfocused, then focused, gained focus")
     expect(changes(snapshot(["k": unread]), snapshot(["k": focused])).isEmpty, "a root whose focus read failed before the action never gained focus")
     expect(changes(snapshot(["k": focused]), snapshot(["k": unread])).isEmpty && changes(snapshot(["k": unfocused]), snapshot(["k": unread])).isEmpty, "nor does one whose read failed after it")
+    expect(rootOwnFocus(focused) == true && rootOwnFocus(unread) == nil && rootOwnFocus(["isFocused": true, "focusInherited": true]) == nil, "inherited focus is not the root's own read")
 
     // A window paired with its own CG window, so its identity is read on both sides; only its state replies vary.
     let doc = FakeRoot("doc")
     let sheet = FakeRoot("sheet")
-    func listing(_ states: [String: AnyObject], onscreen: Bool? = true) -> FakeListing {
+    func listing(_ states: [String: AnyObject], onscreen: Bool? = true, sheeted: Bool = true) -> FakeListing {
         let listing = FakeListing([doc])
-        listing.sheets = ["doc": [sheet]]
+        if sheeted { listing.sheets = ["doc": [sheet]] }
         listing.titles = ["sheet": .value("Save")]
         listing.frames = ["sheet": CGRect(x: 700, y: 150, width: 400, height: 300)]
         if let onscreen { listing.candidates = [CGWindowCandidate(windowId: 7, title: "", bounds: FakeListing.frame, isOnscreen: onscreen, layer: 0, zOrder: 0)] }
@@ -620,21 +621,25 @@ private func assertStateReads(_ bridge: Bridge) {
     expect(failed.snapshot.complete && Set(failed.snapshot.roots.keys) == ["window:7", "meta:sheet:AXSheet:Save:700,150,400,300"], "a failed state read leaves the identity comparable")
     let read = listing(["doc.focused": no]).classify(bridge)
     let gained = listing(["doc.focused": yes]).classify(bridge)
-    expect(changes(read.snapshot, gained.snapshot) == ["focused:doc"], "a window read unfocused, then focused, gained focus")
+    expect(changes(read.snapshot, gained.snapshot) == ["focused:doc"], "a window read unfocused, then focused, gained focus; its sheet's inherited focus did not")
     expect(changes(failed.snapshot, gained.snapshot).isEmpty, "a failed focus read before the action reports no focus change")
     expect(changes(gained.snapshot, failed.snapshot).isEmpty, "nor after it")
     let numeric = listing(["doc.focused": NSNumber(value: 0), "doc.minimized": NSNumber(value: 2)]).classify(bridge)
     expect(numeric.entries.first.map { $0["isFocused"] == nil && $0["isMinimized"] == nil } == true, "a numeric reply is left out")
     expect(changes(numeric.snapshot, gained.snapshot).isEmpty, "a numeric 0 before a boolean true reports no focus change")
 
-    // The sheet reads its own `AXFocused`, never its window's.
+    // A sheet whose own `AXFocused` was not read takes its window's read focus for selection, marked inherited: a focused
+    // window's sheet at the window's z-order still reads focused, so it stays in front for `observe_ui` selection.
     let sheets = gained.entries.dropFirst()
-    expect(sheets.count == 1 && sheets.allSatisfy { $0["isFocused"] == nil }, "a sheet whose own focus read failed does not take its window's")
+    expect(sheets.count == 1 && sheets.allSatisfy { $0["isFocused"] as? Bool == true && $0["focusInherited"] as? Bool == true }, "a sheet whose own focus read failed takes its window's, marked inherited")
     expect(sheets.allSatisfy { $0["isMain"] as? Bool == false && $0["isMinimized"] as? Bool == false }, "a sheet is never main or minimized")
+    expect(failed.entries.dropFirst().allSatisfy { $0["isFocused"] == nil && $0["focusInherited"] == nil }, "nothing is inherited from an unread window focus")
+    expect(changes(listing(["doc.focused": yes], sheeted: false).classify(bridge).snapshot, gained.snapshot) == ["appeared:sheet"], "a new sheet with inherited focus appeared but did not gain focus")
     let ownFocus = listing(["doc.focused": yes, "sheet.focused": no]).classify(bridge)
-    expect(ownFocus.entries.map { $0["isFocused"] as? Bool } == [true, false], "a sheet reports its own focus read")
+    expect(ownFocus.entries.map { $0["isFocused"] as? Bool } == [true, false] && ownFocus.entries.allSatisfy { $0["focusInherited"] == nil }, "a sheet reports its own focus read")
     let sheetGained = listing(["doc.focused": yes, "sheet.focused": yes]).classify(bridge)
     expect(changes(ownFocus.snapshot, sheetGained.snapshot) == ["focused:sheet"], "a sheet read unfocused, then focused, gained focus")
+    expect(changes(ownFocus.snapshot, gained.snapshot).isEmpty, "a sheet read unfocused, then inheriting focus, did not")
 
     // `isOnscreen`: the paired CG window's, else the read `isMinimized` negated, else unknown; a sheet without a CG
     // window of its own takes its window's.
