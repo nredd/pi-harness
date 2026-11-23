@@ -668,6 +668,13 @@ it.each([
 	const path = join(first.snapshotDir, "manifest.json");
 	const before = readFileSync(path);
 	const files = readdirSync(first.snapshotDir).sort();
+	// A later clock and a new call, so a replacement proves it published this scan, not the old manifest.
+	const later = at("2026-11-02") + 60_000;
+	vi.mocked(Date.now).mockReturnValue(later);
+	sessionFile(join(agent, "sessions", "later.jsonl"), {
+		startMs: later,
+		lines: [assistantLine({ ms: later, provider: "physical", model: "fixture", input: 2 })],
+	});
 	const failure = Object.assign(new Error(`${code}: denied, open '${path}'`), { code, syscall: "open", path });
 	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 	// Never cleared by a retry: the owner must act, or explicitly replace the manifest.
@@ -684,14 +691,19 @@ it.each([
 		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 	} else if (replaceHarnesses) {
 		expect(result).toHaveProperty("machineId");
-		expect(manifest(first.snapshotDir).exportedAt).toBeGreaterThan(0);
+		expect(readFileSync(path)).not.toEqual(before);
+		expect(manifest(first.snapshotDir).exportedAt).toBe(later);
+		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+		expect((await loadCombined(viewer)).calls.map((call) => call.input).sort()).toEqual([1, 2]);
 	} else {
+		// Restoring read access keeps archived history; replacing would drop what the scan lacks.
 		expect(result).toMatchObject({
 			message:
-				"Published usage history is unreadable (manifest.json); restore it from the sync checkout, " +
-				"or pass --replace-harnesses to publish without it",
+				`Published usage manifest is not readable (${code} on manifest.json); restore read access to it ` +
+				"and retry before considering --replace-harnesses, which drops published history absent from this scan",
 			refusal: "history-unreadable",
 		});
+		expect((result as Error).message).not.toContain("restore it from the sync checkout");
 		expect(readFileSync(path)).toEqual(before);
 		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 	}
@@ -1361,9 +1373,12 @@ it("keeps unidentified legacy events stable across repeated sealed-month exports
 	expect((await loadCombined(viewer)).calls).toHaveLength(1);
 });
 
-/** The refusal for an ordinary export whose next instant falls in a later month than its clock. */
+/**
+ * The refusal for an ordinary export whose next instant falls in a later month than its clock. It clears
+ * with time, so it is a plain `Error` with no refusal code: callers retry it.
+ */
 const laterMonth = (now: number, published: number, month: string) => ({
-	refusal: "month-rollback",
+	name: "Error",
 	message:
 		`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
 		`published one (${new Date(published).toISOString()}); publishing would seal months this clock has ` +

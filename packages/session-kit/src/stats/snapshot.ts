@@ -180,11 +180,12 @@ async function atomicContents(path: string, contents: string | Uint8Array): Prom
 
 /**
  * Why an export cannot succeed until the owner acts: retrying it unchanged never helps. Each is a fixed
- * refusal site, never inferred from a message; anything else, contention or I/O included, has no code.
+ * refusal site, never inferred from a message; anything else, contention, I/O and a refusal that clears
+ * with time included, has no code. `watermark-ahead` is clock-dependent: a lead just over 366 days clears
+ * as the clock advances, so callers should bound their wait on it rather than stop for good.
  */
 export type RefusalCode =
 	| "watermark-ahead"
-	| "month-rollback"
 	| "history-unreadable"
 	| "history-over-budget"
 	| "manifest-missing"
@@ -900,10 +901,12 @@ type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unread
  * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
  * invalid), the first authenticated shard the expansion budget could not hold, and the manifest's own
  * `exportedAt`, which still bounds the next publication instant. A manifest the owner may not read
- * (`damaged` is `manifest.json`) has no `exportedAt`: like an unreadable one, it bounds nothing.
+ * (`damaged` is `manifest.json`, `denied` its errno code) has no `exportedAt`: like an unreadable one, it
+ * bounds nothing.
  */
 interface Damaged {
 	damaged: string[];
+	denied?: string;
 	exportedAt?: number;
 	overBudget?: string;
 }
@@ -926,7 +929,8 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 		// refuses an ordinary export and that explicit replacement publishes over by rename, as before.
 		// Ambiguous I/O (EIO, EMFILE, EBUSY...) stays fatal and unclassified: it may clear on retry.
 		const code = (error as NodeJS.ErrnoException).code;
-		if (readFailure(error) && (code === "EACCES" || code === "EPERM")) return { damaged: ["manifest.json"] };
+		if (readFailure(error) && (code === "EACCES" || code === "EPERM"))
+			return { damaged: ["manifest.json"], denied: code };
 		if (readFailure(error)) throw error;
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
@@ -964,6 +968,13 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 function intactPrevious(previous: Previous | Damaged, replace: boolean): Previous {
 	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
 	if (replace) return "unreadable";
+	// Restoring read access keeps the archived history a replacement would drop; only the errno code is named.
+	if (previous.denied !== undefined)
+		throw new ExportRefusal(
+			"history-unreadable",
+			`Published usage manifest is not readable (${previous.denied} on manifest.json); restore read access to it ` +
+				"and retry before considering --replace-harnesses, which drops published history absent from this scan",
+		);
 	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
 	if (previous.damaged.length === 0 && previous.overBudget !== undefined)
 		throw new ExportRefusal(
@@ -1362,10 +1373,10 @@ async function publishStats(
 	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
 	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
 	// later export could not tell them from months a clock-ahead export sealed: refuse (nothing written).
-	// A replacement seals nothing from the previous generation, so it may publish there.
+	// A replacement seals nothing from the previous generation, so it may publish there. No refusal code:
+	// this clears by itself once the clock reaches that month, so callers keep retrying it.
 	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
-		throw new ExportRefusal(
-			"month-rollback",
+		throw new Error(
 			`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
 				`published one (${new Date(publishedAt).toISOString()}); publishing would seal months this clock has ` +
 				`not left. Fix the clock or wait until ${monthOf(exportedAt)}, or pass --replace-harnesses to publish ` +

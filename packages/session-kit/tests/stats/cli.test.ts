@@ -135,10 +135,10 @@ describe("stats CLI", () => {
 			[expect.stringMatching(/^Published usage manifest exportedAt .* is more than 366 days ahead/)],
 			refusal("watermark-ahead"),
 		]);
+		// A clock a month behind is refused, but that clears with time: retryable, so no code.
 		clock.mockReturnValue(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() - 1, 15));
 		expect(await attempt(["export", ...wide])).toEqual([
 			[expect.stringMatching(/^Clock .* is in an earlier month than the next export/)],
-			refusal("month-rollback"),
 		]);
 		clock.mockRestore();
 		const bytes = readFileSync(join(exported.snapshotDir, shard));

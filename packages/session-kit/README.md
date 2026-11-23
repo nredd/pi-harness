@@ -574,25 +574,32 @@ deleted/former-root bad records remain fail-closed with an unknown line. Wrapper
 forward this bounded protocol; forwarding arbitrary exporter stderr is not safe.
 
 An export refused until the owner acts exits 1 and ends stderr with exactly one
-`pi-stats-refusal: {"code":...}` line after the message. Retrying it unchanged never helps. Codes:
+`pi-stats-refusal: {"code":...}` line after the message. Retrying it unchanged does not help until the owner acts (but see the
+clock-dependent note below). Codes:
 `history-unreadable`, `history-over-budget`, `manifest-missing`,
 `harness-set-narrowed`, `harness-set-unknown` (the safeguards above that only a repair or an explicit
-`--replace-harnesses` gets past), `month-rollback` (an ordinary export whose next instant falls in a
-later month than its clock; fixing the clock, `--replace-harnesses` or waiting until that month gets
-past it), `watermark-ahead` (an implausible published `exportedAt`; `--replace-harnesses` does not
-bypass it) and `export-state-invalid` (export state or outbox bookkeeping that
+`--replace-harnesses` gets past), `watermark-ahead` (an implausible published `exportedAt`;
+`--replace-harnesses` does not bypass it) and `export-state-invalid` (export state or outbox bookkeeping that
 reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
 the file, which holds the salt, nor attaching its parse error). Each code comes from one fixed
-refusal site, never from matching a message. `history-unreadable` means a published shard is
+refusal site, never from matching a message. Clock-dependent refusals may clear with time: an
+ordinary export refused because its next instant falls in a later month than its clock succeeds once
+the clock reaches that month, so it has no code and callers retry it. `watermark-ahead` is owner
+action for a corrupt or hostile watermark, but a lead merely over 366 days clears once it falls to
+366 days: on it a wrapper should recheck until a bounded deadline, not stop for good (only the year
+10000 ceiling never clears). `history-unreadable` means a published shard is
 missing (`ENOENT`) or fails its digest/parse/validation, or reading `manifest.json` is denied
-(`EACCES`/`EPERM`, persistent until the owner fixes its permissions; `--replace-harnesses` publishes
-over it by rename, like a corrupt manifest). Any other filesystem error reading the manifest, a
+(`EACCES`/`EPERM`, persistent until the owner fixes its permissions). A denied manifest is reported as
+`Published usage manifest is not readable (<EACCES|EPERM> on manifest.json); restore read access to it
+and retry before considering --replace-harnesses, which drops published history absent from this
+scan`: restoring access keeps archived history, while `--replace-harnesses` publishes over it by
+rename, like a corrupt manifest. Any other filesystem error reading the manifest, a
 shard or the state (`EIO`, `EMFILE`, `EBUSY`, a denied shard or state read, ...) says nothing
 about the file, stays fatal under `--replace-harnesses` too, and is not a refusal. A malformed
 `machine.json` is reported as `Invalid installation identity in <path>: not valid JSON`, never
 quoting the file nor attaching its parse error; it has no code. A refusal whose lock release also fails keeps its code, with the unlock warning
 appended to the message. No line means the failure is unclassified (lock contention, I/O, an
-incomplete scan, usage): treat it as retryable. The diagnostic before the line is escaped to one
+incomplete scan, usage, a month rollback): treat it as retryable. The diagnostic before the line is escaped to one
 line (line breaks and other control characters as `\n`, `\uXXXX`; the fixed usage text excepted),
 so a path cannot forge the line, but consumers must still accept only a complete
 `pi-stats-refusal: {"code":"<code>"}` whose code is in the list above, and only as the FINAL stderr
@@ -819,8 +826,8 @@ An ordinary export whose next instant falls in a later month than its clock (the
 in a later month, or ends the clock's month) is refused with no cache or publication writes: `Clock
 (<now>) is in an earlier month than the next export after the last published one (<published>);
 publishing would seal months this clock has not left. Fix the clock or wait until <YYYY-MM>, or pass
---replace-harnesses to publish without published history absent from this scan` (refusal code
-`month-rollback`). Publishing would seal
+--replace-harnesses to publish without published history absent from this scan` (no refusal code: it
+clears with time, so wrappers retry it). Publishing would seal
 the clock's own month (and any between) while it is still in it, so later deletions and corrections
 there could never apply, and the next export could not tell those months from ones a clock-ahead
 export sealed. Waiting keeps all history. `--replace-harnesses` publishes just after the published
