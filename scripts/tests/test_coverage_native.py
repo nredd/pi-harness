@@ -32,6 +32,7 @@ from coverage_accounting import (
     check_ratchet,
     check_remeasurements,
     check_signal_ratchet,
+    check_stale_mapped_totals,
     is_llvm_producer,
     measured_mapped_totals,
     parse_lcov,
@@ -715,8 +716,37 @@ def test_windows_mapped_totals_refuse_a_shrinking_denominator(
     listed = stale_mapped_totals(tmp_path, cfg, measured, "win32")
     assert listed == ({"windows/primary": {"win32": expected}} if expected else {})
     assert ("STALE mapped totals, not compared (#1270)" in caplog.text) == bool(expected)
+    if expected:
+        with pytest.raises(ValueError, match=r"Stale mapped totals \(#1270\).*'windows/primary/win32'"):
+            check_stale_mapped_totals(cfg, listed)
+    else:
+        check_stale_mapped_totals(cfg, listed)
     # Measurement replays never gate on recorded totals.
     assert account(tmp_path, cfg, "win32", reports, measure=True)[1] == []
+
+
+def test_stale_mapped_totals_fail_only_enforced_signals(tmp_path: Path) -> None:
+    """Fail an enforced signal on unguarded files; report-only signals and replays keep the warning.
+
+    Parameters:
+        tmp_path (Path): Disposable source and separate reports roots.
+    Returns:
+        None.
+    Raises:
+        AssertionError: Stale files of an enforced signal pass, or a replay or report-only signal fails.
+    """
+    cfg = windows_artifact_fixture(tmp_path)[0]
+    signal = cfg.packages["windows"].signals["primary"]
+    stale = {"windows/primary": {"win32": [MAIN_RS]}}
+    with pytest.raises(ValueError, match=rf"'windows/primary/win32' \['{MAIN_RS}'\]$") as raised:
+        check_stale_mapped_totals(cfg, stale)
+    assert "`--measure`" in str(raised.value)
+    assert "needs no `remeasurements` entry" in str(raised.value)
+    check_stale_mapped_totals(cfg, {})
+    check_stale_mapped_totals(cfg, stale, measure=True)
+    signal.enforcement = "report-only"
+    signal.reason = "Fixture"
+    check_stale_mapped_totals(cfg, stale)
 
 
 def ratchet_fixture(tmp_path: Path) -> tuple[Policy, Policy, MappedFile]:
@@ -1011,8 +1041,8 @@ def test_windows_cli_proposes_and_records_mapped_totals(tmp_path: Path, case: st
 
     Parameters:
         tmp_path (Path): Disposable committed checkout and separate reports root.
-        case (str): `shrunk-lines` fails on unchanged source; `changed-source` passes with `main.rs`
-            listed stale.
+        case (str): `shrunk-lines` fails on unchanged source; `changed-source` fails with `main.rs`
+            listed stale until its proposed refresh is recorded.
     Returns:
         None.
     Raises:
@@ -1036,8 +1066,10 @@ def test_windows_cli_proposes_and_records_mapped_totals(tmp_path: Path, case: st
         assert "Mapped totals shrank without a source change" in gate.stderr
         assert written["stale_mapped_totals"] == {}
     else:
-        assert gate.returncode == 0, gate.stderr
+        # A source edit fails until the same PR records a reviewed refresh (#1270).
+        assert gate.returncode == 1
         assert "STALE mapped totals, not compared (#1270)" in gate.stderr
+        assert [error.split(":")[0] for error in written["errors"]] == ["Stale mapped totals (#1270)"]
         assert written["stale_mapped_totals"] == {"windows/primary": {"win32": [MAIN_RS]}}
     measured = written["measured_mapped_totals"]["windows/primary"]["win32"]
     assert measured[MAIN_RS] == {"sha256": digest, "lines": 2, "functions": 3}
@@ -1047,3 +1079,14 @@ def test_windows_cli_proposes_and_records_mapped_totals(tmp_path: Path, case: st
     assert re.search(r'^-\s+"lines": 3,$', replay.stderr, re.MULTILINE)
     refreshed = re.search(rf'^\+\s+"sha256": "{digest}",$', replay.stderr, re.MULTILINE)
     assert (refreshed is not None) == (case == "changed-source")
+    if case == "changed-source":
+        # Recording the proposed refresh of the edited source passes with no `remeasurements` entry.
+        cfg.packages["windows"].signals["primary"].mapped_totals["win32"] = {
+            path: MappedFile.model_validate(record) for path, record in measured.items()
+        }
+        (tmp_path / "coverage/policy.json").write_text(cfg.model_dump_json())
+        rerun = subprocess.run(
+            [*common, "--base", "HEAD"], capture_output=True, text=True, check=False, timeout=30
+        )
+        assert rerun.returncode == 0, rerun.stderr
+        assert json.loads(summary.read_text())["stale_mapped_totals"] == {}
