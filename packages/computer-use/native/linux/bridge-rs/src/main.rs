@@ -28,7 +28,8 @@ const EXIT_JOIN_LIMIT: Duration = Duration::from_millis(300);
 /// How long a helper exiting past `EXIT_JOIN_LIMIT` gives replies already queued, e.g.
 /// `cancelled` for requests that never started, to reach stdout before it exits anyway.
 const EXIT_FLUSH_LIMIT: Duration = Duration::from_millis(200);
-/// The client's SIGTERM-to-SIGKILL grace (`HELPER_TERMINATE_GRACE_MS`).
+/// The client's SIGTERM-to-SIGKILL grace (`HELPER_TERMINATE_GRACE_MS`);
+/// `tests/linux-kill-grace.test.ts` keeps the two equal.
 const KILL_GRACE: Duration = Duration::from_millis(750);
 // The exit past stuck requests waits out both limits; it must stay inside the grace.
 const _: () =
@@ -50,6 +51,23 @@ impl Replies {
     fn send(&self, response: Response) {
         let _ = self.0.send(Outgoing::Reply(response));
     }
+    /// Queue a marker that `done` hears once every reply queued before it was written.
+    /// Returns `false` if the writer already stopped: nothing more is written then.
+    fn mark_written(&self, done: tokio::sync::oneshot::Sender<()>) -> bool {
+        self.0.send(Outgoing::Written(done)).is_ok()
+    }
+}
+
+/// Set by `drain` once it gives up on stuck requests and starts the reply flush.
+static EXIT_FLUSH_BEGAN: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// In the dev-only `testing` build with `PI_CU_TESTING_HOLD_REPLIES_UNTIL_EXIT_FLUSH`
+/// set, the stdout writer holds every reply until `drain` starts its flush, so a process
+/// test fails if the stuck exit path stops flushing. Always `false` in the release
+/// helper.
+fn testing_hold_replies() -> bool {
+    cfg!(feature = "testing")
+        && std::env::var_os("PI_CU_TESTING_HOLD_REPLIES_UNTIL_EXIT_FLUSH").is_some()
 }
 
 /// Write each queued reply as one flushed JSON line, until the queue closes or a write
@@ -58,9 +76,14 @@ async fn write_replies(
     mut out: impl tokio::io::AsyncWrite + Unpin,
     mut queue: mpsc::UnboundedReceiver<Outgoing>,
 ) {
+    let mut hold = testing_hold_replies();
     while let Some(item) = queue.recv().await {
         match item {
             Outgoing::Reply(response) => {
+                if hold {
+                    EXIT_FLUSH_BEGAN.notified().await;
+                    hold = false;
+                }
                 if let Ok(mut line) = serde_json::to_vec(&response) {
                     line.push(b'\n');
                     if out.write_all(&line).await.is_err() {
@@ -105,9 +128,10 @@ async fn drain(
         let _ = writer.await;
         return Drained::All;
     }
+    // `notify_one` keeps a permit for a writer not yet waiting.
+    EXIT_FLUSH_BEGAN.notify_one();
     let (done, written) = tokio::sync::oneshot::channel();
-    // A writer that stopped dropped the marker with the queue: nothing more is written.
-    if output.0.send(Outgoing::Written(done)).is_ok() {
+    if output.mark_written(done) {
         let _ = tokio::time::timeout(EXIT_FLUSH_LIMIT, written).await;
     }
     Drained::Stuck
