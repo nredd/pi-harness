@@ -1,9 +1,15 @@
 /**
  * Carryover through real `AgentSession`s and file-backed `SessionManager`s: core persists the first
  * session's todos, and a fresh startup session in the same cwd and session directory gets them
- * listed once on its first request, without importing them.
+ * listed once on its first request, without importing them. `/new` through a real
+ * `AgentSessionRuntime` lists the replaced session's live branch, not its last entry on disk.
  */
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	type AgentSessionServices,
+	type CreateAgentSessionRuntimeFactory,
+	createAgentSessionRuntime,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import {
 	createHarness,
 	createTestUiContext,
@@ -86,4 +92,58 @@ it("lists the previous same-cwd session's open todos once in a fresh startup ses
 	const persisted = JSON.stringify(second.sessionManager.getBranch());
 	expect(persisted).not.toContain(CARRYOVER_LIST_MESSAGE_TYPE);
 	expect(persisted).not.toContain(HEADER);
+});
+
+it("lists the live branch /new replaced, after /tree moved its leaf without writing", async () => {
+	const cwd = makeTestTempDir("todo-carryover-cwd-", onTestFinished);
+	const sessionDir = makeTestTempDir("todo-carryover-sessions-", onTestFinished);
+	const createRuntime: CreateAgentSessionRuntimeFactory = async (options) => {
+		const harness = await createHarness({
+			cwd: options.cwd,
+			sessionManager: options.sessionManager,
+			sessionStartEvent: options.sessionStartEvent,
+			extensionFactories: [(pi) => registerTodo(pi)],
+		});
+		harnesses.push(harness);
+		const services = { cwd: options.cwd, agentDir: options.agentDir } as AgentSessionServices;
+		const extensionsResult = harness.session.resourceLoader.getExtensions();
+		return { session: harness.session, extensionsResult, services, diagnostics: [] };
+	};
+	const runtime = await createAgentSessionRuntime(createRuntime, {
+		cwd,
+		agentDir: sessionDir,
+		sessionManager: SessionManager.create(cwd, sessionDir),
+		sessionStartEvent: { type: "session_start", reason: "startup" },
+	});
+	const bind = (session: typeof runtime.session) =>
+		session.bindExtensions({ mode: "tui", uiContext: createTestUiContext() });
+	runtime.setRebindSession(bind);
+	await bind(runtime.session);
+	const [first] = harnesses;
+
+	first.setResponses([
+		fauxAssistantMessage(fauxToolCall("todo", { action: "create", subject: "Ship widgets" })),
+		fauxAssistantMessage("Tracked."),
+	]);
+	await runtime.session.prompt("Track the widget work");
+	const tracked = first.sessionManager.getLeafId() as string;
+	first.setResponses([
+		fauxAssistantMessage(fauxToolCall("todo", { action: "update", id: 1, status: "completed", evidence: "a1b2c3" })),
+		fauxAssistantMessage("Done."),
+	]);
+	await runtime.session.prompt("Finish it");
+	// Back to where #1 was still open, with no summary: core moves the leaf and writes nothing.
+	const written = first.sessionManager.getEntries().length;
+	await runtime.session.navigateTree(tracked, { summarize: false });
+	expect(first.sessionManager.getEntries()).toHaveLength(written);
+	expect(first.sessionManager.getLeafId()).toBe(tracked);
+
+	await runtime.newSession();
+	const second = harnesses[1];
+	expect(runtime.session).toBe(second.session);
+	const seen: string[] = [];
+	second.setResponses([recordLast(seen, fauxAssistantMessage("Noted."))]);
+	await runtime.session.prompt("Continue");
+	expect(seen[0]).toContain(`(${first.sessionManager.getSessionId()}) last recorded`);
+	expect(seen[0]).toContain("- #1 pending Ship widgets\n");
 });

@@ -2,7 +2,7 @@
  * Fresh-session carryover: which previous session is read, how its branch is replayed from the
  * file, and the one-shot hidden list the first request outside Plan mode gets.
  */
-import { utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -11,6 +11,7 @@ import {
 	formatCarriedTodos,
 	loadPreviousOpenTodos,
 	previousSessionOf,
+	recordOutgoing,
 } from "../../src/plan/carryover.ts";
 import { __resetState } from "../../src/todo.ts";
 import { CARRYOVER_LIST_MESSAGE_TYPE, STATE_ENTRY_TYPE } from "../../src/tool/types.ts";
@@ -69,14 +70,58 @@ describe("previousSessionOf", () => {
 		getHeader: () => ({}),
 		getCwd: () => CWD,
 		getSessionDir: () => "/sessions",
+		getSessionFile: () => "/sessions/b.jsonl",
 		...overrides,
 	});
-
-	it("reads the exact predecessor of /new", () => {
-		expect(previousSessionOf({ reason: "new", previousSessionFile: "/sessions/a.jsonl" }, manager())).toEqual({
-			file: "/sessions/a.jsonl",
+	/** The session `/new` replaces: `a.jsonl` in `cwd`, live branch `branch`. */
+	const outgoingManager = (branch: unknown[], cwd = CWD) =>
+		manager({
+			getSessionId: () => "prev",
+			getBranch: () => branch,
+			getHeader: () => ({ cwd }),
+			getSessionFile: () => "/sessions/a.jsonl",
 		});
-		expect(previousSessionOf({ reason: "new" }, manager())).toBeUndefined();
+	const shutdown = { reason: "new", targetSessionFile: "/sessions/b.jsonl" };
+	const started = { reason: "new", previousSessionFile: "/sessions/a.jsonl" };
+
+	it("carries the live branch /new captured at shutdown, once", () => {
+		recordOutgoing(shutdown, outgoingManager([snapshot("e1", null, OPEN)]));
+		expect(previousSessionOf(started, manager())).toEqual({
+			carried: { sessionId: "prev", tasks: [OPEN[1], OPEN[2]] },
+		});
+		expect(previousSessionOf(started, manager())).toBeUndefined();
+	});
+
+	it("refuses a /new capture from another cwd, predecessor or target, or with nothing open", () => {
+		recordOutgoing(shutdown, outgoingManager([snapshot("e1", null, OPEN)], "/other"));
+		expect(previousSessionOf(started, manager())).toBeUndefined();
+		recordOutgoing(shutdown, outgoingManager([snapshot("e1", null, OPEN)]));
+		expect(previousSessionOf({ reason: "new", previousSessionFile: "/sessions/z.jsonl" }, manager())).toBeUndefined();
+		recordOutgoing(shutdown, outgoingManager([snapshot("e1", null, OPEN)]));
+		expect(previousSessionOf(started, manager({ getSessionFile: () => "/sessions/c.jsonl" }))).toBeUndefined();
+		expect(previousSessionOf(started, manager({ getSessionFile: undefined }))).toBeUndefined();
+		recordOutgoing(shutdown, outgoingManager([snapshot("e1", null, [OPEN[0]])]));
+		expect(previousSessionOf(started, manager())).toBeUndefined();
+		// Nothing was captured for this /new at all.
+		expect(previousSessionOf(started, manager())).toBeUndefined();
+	});
+
+	it("captures only /new shutdowns of a readable file-backed session", () => {
+		const live = [snapshot("e1", null, OPEN)];
+		recordOutgoing({ reason: "resume", targetSessionFile: "/sessions/b.jsonl" }, outgoingManager(live));
+		recordOutgoing({ reason: "new" }, outgoingManager(live));
+		recordOutgoing(shutdown, { ...outgoingManager(live), getSessionFile: () => undefined });
+		recordOutgoing(shutdown, {
+			...outgoingManager(live),
+			getBranch: () => {
+				throw new Error("stale");
+			},
+		});
+		expect(previousSessionOf(started, manager())).toBeUndefined();
+		recordOutgoing(shutdown, { ...outgoingManager(live), getHeader: undefined });
+		expect(previousSessionOf(started, manager({ getCwd: () => undefined }))).toEqual(
+			expect.objectContaining({ carried: expect.objectContaining({ sessionId: "prev" }) }),
+		);
 	});
 
 	it("scans the session directory at process startup", () => {
@@ -94,7 +139,10 @@ describe("previousSessionOf", () => {
 	it("never carries over into a non-empty branch or a child session", () => {
 		expect(previousSessionOf({ reason: "startup" }, manager({ getBranch: () => [{}] }))).toBeUndefined();
 		const child = manager({ getHeader: () => ({ parentSession: "/sessions/parent.jsonl" }) });
-		expect(previousSessionOf({ reason: "new", previousSessionFile: "/sessions/a.jsonl" }, child)).toBeUndefined();
+		recordOutgoing(shutdown, outgoingManager([snapshot("e1", null, OPEN)]));
+		expect(previousSessionOf(started, child)).toBeUndefined();
+		// The child consumed the capture: nothing is left for a later start of that file.
+		expect(previousSessionOf(started, manager())).toBeUndefined();
 	});
 
 	it("has nothing to scan without a session directory, cwd or header getter", () => {
@@ -110,10 +158,10 @@ describe("previousSessionOf", () => {
 });
 
 describe("loadPreviousOpenTodos", () => {
-	it("returns the open todos of the predecessor's current branch", async () => {
+	it("returns the open todos of the predecessor's persisted branch", async () => {
 		const dir = makeTestTempDir("todo-carryover-", onTestFinished);
 		// The abandoned branch (e2) is not the leaf's ancestry; a partial trailing line is skipped.
-		const file = writeSession(
+		writeSession(
 			dir,
 			"a.jsonl",
 			[
@@ -127,37 +175,45 @@ describe("loadPreviousOpenTodos", () => {
 			],
 			100,
 		);
-		const carried = await loadPreviousOpenTodos({ file });
-		expect(carried).toEqual({ sessionId: "prev", tasks: [OPEN[1], OPEN[2]] });
+		expect(await loadPreviousOpenTodos(scan(dir))).toEqual({ sessionId: "prev", tasks: [OPEN[1], OPEN[2]] });
 	});
 
-	it("returns undefined when nothing is open, the header is missing, or the file is unreadable", async () => {
+	it("returns a captured /new list as is", async () => {
+		const carried = { sessionId: "prev", tasks: [] };
+		expect(await loadPreviousOpenTodos({ carried })).toBe(carried);
+	});
+
+	it("returns undefined when nothing is open or the directory is unreadable", async () => {
 		const dir = makeTestTempDir("todo-carryover-", onTestFinished);
-		const closed = writeSession(dir, "a.jsonl", [header("prev"), snapshot("e1", null, [OPEN[0]])], 100);
-		const headerless = writeSession(dir, "b.jsonl", [snapshot("e1", null, OPEN)], 100);
-		expect(await loadPreviousOpenTodos({ file: closed })).toBeUndefined();
-		expect(await loadPreviousOpenTodos({ file: headerless })).toBeUndefined();
-		expect(await loadPreviousOpenTodos({ file: join(dir, "missing.jsonl") })).toBeUndefined();
+		writeSession(dir, "a.jsonl", [header("prev"), snapshot("e1", null, [OPEN[0]])], 100);
+		expect(await loadPreviousOpenTodos(scan(dir))).toBeUndefined();
 		expect(await loadPreviousOpenTodos(scan(join(dir, "missing")))).toBeUndefined();
 	});
 
 	it("stops walking at a parent cycle or a missing parent", async () => {
+		const cycle = makeTestTempDir("todo-carryover-", onTestFinished);
+		writeSession(cycle, "a.jsonl", [header("prev"), snapshot("e1", "e2", OPEN), snapshot("e2", "e1", [OPEN[0]])], 100);
+		const orphan = makeTestTempDir("todo-carryover-", onTestFinished);
+		writeSession(orphan, "b.jsonl", [header("prev"), snapshot("e2", "gone", OPEN)], 100);
+		expect(await loadPreviousOpenTodos(scan(cycle))).toBeUndefined();
+		expect((await loadPreviousOpenTodos(scan(orphan)))?.tasks).toHaveLength(2);
+	});
+
+	it("skips a vanished or unreadable entry during discovery", async () => {
 		const dir = makeTestTempDir("todo-carryover-", onTestFinished);
-		const cycle = writeSession(
-			dir,
-			"a.jsonl",
-			[header("prev"), snapshot("e1", "e2", OPEN), snapshot("e2", "e1", [OPEN[0]])],
-			100,
-		);
-		const orphan = writeSession(dir, "b.jsonl", [header("prev"), snapshot("e2", "gone", OPEN)], 100);
-		expect(await loadPreviousOpenTodos({ file: cycle })).toBeUndefined();
-		expect((await loadPreviousOpenTodos({ file: orphan }))?.tasks).toHaveLength(2);
+		writeSession(dir, "a-valid.jsonl", [header("valid"), snapshot("e1", null, OPEN)], 100);
+		// A dangling link fails `stat`; a directory named like a session fails its header read.
+		symlinkSync(join(dir, "gone.jsonl"), join(dir, "b-dangling.jsonl"));
+		mkdirSync(join(dir, "c-dir.jsonl"));
+		utimesSync(join(dir, "c-dir.jsonl"), 900, 900);
+		expect((await loadPreviousOpenTodos(scan(dir)))?.sessionId).toBe("valid");
 	});
 
 	it("scans for the newest top-level same-cwd session other than the current one", async () => {
 		const dir = makeTestTempDir("todo-carryover-", onTestFinished);
 		const open = (subject: string) => [snapshot("e1", null, [{ id: 1, subject, status: "pending" }])];
-		writeSession(dir, "a-oldest.jsonl", [header("oldest"), ...open("oldest")], 100);
+		// Newest wins even though the older file sorts later by name.
+		writeSession(dir, "z-oldest.jsonl", [header("oldest"), ...open("oldest")], 100);
 		writeSession(dir, "b-chosen.jsonl", [header("chosen"), ...open("chosen")], 200);
 		writeSession(dir, "c-child.jsonl", [header("child", { parentSession: "/p.jsonl" }), ...open("child")], 300);
 		writeSession(dir, "d-elsewhere.jsonl", [header("elsewhere", { cwd: "/other" }), ...open("elsewhere")], 300);
@@ -250,12 +306,28 @@ describe("carryover through the context hook", () => {
 		expect(await context({ messages: [user] }, ctx)).toBeUndefined();
 	});
 
-	it("reads the exact /new predecessor", async () => {
-		const dir = previousDir();
-		const { handler, ctx } = setup("/unused");
-		await handler("session_start")({ reason: "new", previousSessionFile: join(dir, "prev.jsonl") }, ctx);
-		const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: unknown[] };
-		expect(result.messages[1]).toMatchObject({ customType: CARRYOVER_LIST_MESSAGE_TYPE });
+	it("lists what /new captured from the session it replaced, never another cwd's", async () => {
+		for (const [cwd, listed] of [
+			[CWD, true],
+			["/other", false],
+		] as const) {
+			__resetState();
+			const outgoing = createTodoCtx({
+				sessionId: "prev",
+				mode: "tui",
+				hasUI: false,
+				branch: [snapshot("e1", null, OPEN)] as never,
+				sessionManager: { getHeader: () => ({ cwd }) as never, getSessionFile: () => "/sessions/prev.jsonl" },
+			});
+			const { handler, ctx } = setup("/unused");
+			await handler("session_start")({ reason: "startup" }, outgoing);
+			await handler("session_shutdown")({ reason: "new", targetSessionFile: "/tmp/test-session.jsonl" }, outgoing);
+			await handler("session_start")({ reason: "new", previousSessionFile: "/sessions/prev.jsonl" }, ctx);
+			const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: unknown[] } | undefined;
+			expect(result?.messages[1]).toEqual(
+				listed ? expect.objectContaining({ customType: CARRYOVER_LIST_MESSAGE_TYPE }) : undefined,
+			);
+		}
 	});
 
 	it("carries nothing into a headless session or a resumed one", async () => {
