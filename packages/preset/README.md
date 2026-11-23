@@ -328,6 +328,11 @@ attributes (including `text=auto`), conversion configuration or mismatched index
 endings also mean keep. The `git ls-files --eol` probe classifies raw bytes without running
 filters. Effective
 `core.filemode=false` means keep because Git status can hide executable-bit changes.
+Staged changes (an index that differs from `HEAD`, including staged deletions, intent-to-add,
+unmerged and gitlink entries, and entries hidden by `skip-worktree` or `assume-unchanged`) mean
+keep, as does a `HEAD` the comparison cannot read; the cached `git diff-index` compares object IDs
+and reads no worktree files. This is defense in depth for a future `eligible` path; today it only
+names the keep reason.
 Limits:
 - Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
   Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
@@ -338,7 +343,7 @@ Limits:
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate has no other hold. Report only the guard's evidence; delete nothing.
 - The guard does not probe upstream transports. If no PR exists, it reports `no PR; upstream not checked`.
-- The guard omits `git status` and does not compare tracked content or staged changes. Attributes
+- The guard omits `git status` and does not compare tracked worktree content with the index. Attributes
   or driver configuration could change after an attribute scan and cause `git status` to run a
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
   `git status` or `git diff` on a retained worktree to fill that gap.

@@ -539,6 +539,148 @@ def test_disabled_trustctime_hides_same_size_edit_with_restored_mtime(wt: Worktr
     keep(wt, "core.trustctime")
 
 
+@pytest.mark.parametrize("kind", ["modified", "deleted", "intent-to-add"])
+def test_staged_change_keeps_under_closed_scope(wt: Worktrees, kind: str) -> None:
+    if kind == "modified":
+        (wt.path / "tracked").write_text("staged only\n")
+        git(wt.path, "add", "tracked")
+    elif kind == "deleted":
+        git(wt.path, "rm", "--quiet", "tracked")
+    else:
+        (wt.path / "new").write_bytes(b"")
+        git(wt.path, "add", "--intent-to-add", "new")
+    assert git(wt.path, "ls-files", "--others") == b""
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert result["reasons"] == ["staged changes: index differs from HEAD"]
+
+
+def test_staged_change_check_runs_no_configured_diff_program(wt: Worktrees) -> None:
+    marker = wt.bin / "diff-program-ran"
+    adapter(
+        wt.bin,
+        "mark-diff",
+        f"""
+        import sys
+        from pathlib import Path
+
+        with Path({str(marker)!r}).open("a") as log:
+            log.write(f"{{len(sys.argv) - 1}}\\n")
+        print("diff program ran")
+        if len(sys.argv) == 2:
+            print(Path(sys.argv[1]).read_text(), end="")
+        """,
+    )
+    program = quote(str(wt.bin / "mark-diff"))
+    git(wt.path, "config", "diff.external", program)
+    git(wt.path, "config", "diff.mark.textconv", program)
+    (wt.repo / ".git/info").mkdir(parents=True, exist_ok=True)
+    (wt.repo / ".git/info/attributes").write_text("tracked diff=mark\n")
+    (wt.path / "tracked").write_text("staged only\n")
+    git(wt.path, "add", "tracked")
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert not marker.exists()
+    assert code == 0
+    assert result["reasons"] == ["staged changes: index differs from HEAD"]
+    # Positive controls: porcelain diffs of the same index run both programs, which succeed.
+    assert b"diff program ran" in git(wt.path, "diff", "--cached")
+    assert marker.read_text().split() == ["7"]
+    assert b"diff program ran" in git(wt.path, "diff", "--cached", "--no-ext-diff")
+    assert set(marker.read_text().split()[1:]) == {"1"}
+
+
+@pytest.mark.parametrize("head", ["unborn", "missing branch", "missing object"])
+def test_staged_check_keeps_when_head_cannot_be_compared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, head: str
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = tmp_path / "repo"
+    if head == "unborn":
+        repo.mkdir()
+        git(repo, "init", "--template=")
+    else:
+        init(repo)
+    if head == "missing branch":
+        git(repo, "symbolic-ref", "HEAD", "refs/heads/gone")
+    elif head == "missing object":
+        (repo / ".git/refs/heads/main").write_text("1" * 40 + "\n")
+    # Every check before the comparison passes; only diff-index can fail here.
+    with pytest.raises(GUARD_MODULE["KeepError"], match=r"`git diff-index --cached` failed \(128\)"):
+        GUARD_MODULE["check_status"](repo, repo / ".git")
+
+
+def test_unresolvable_head_in_linked_worktree_keeps(wt: Worktrees) -> None:
+    git(wt.path, "symbolic-ref", "HEAD", "refs/heads/gone")
+    quiet(wt)
+    # End to end, assess fails on HEAD before the status checks; the unit test above
+    # proves the comparison itself keeps when HEAD cannot be read.
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert "`git rev-parse --verify` failed (128)" in str(result["reasons"])
+
+
+def test_unmerged_index_keeps_after_merge_markers_are_gone(wt: Worktrees) -> None:
+    (wt.repo / "tracked").write_text("main side\n")
+    git(wt.repo, "commit", "--quiet", "-am", "Main side")
+    (wt.path / "tracked").write_text("merged side\n")
+    git(wt.path, "commit", "--quiet", "-am", "Merged side")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    with pytest.raises(subprocess.CalledProcessError, match="returned non-zero exit status 1"):
+        git(wt.path, "merge", "--no-edit", "main")
+    assert git(wt.path, "ls-files", "--unmerged")
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["reasons"] == ["in-progress operation `MERGE_HEAD`"]
+    for name in ("MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "AUTO_MERGE"):
+        (wt.admin / name).unlink(missing_ok=True)
+    assert git(wt.path, "ls-files", "--unmerged")
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert result["reasons"] == ["staged changes: index differs from HEAD"]
+
+
+@pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
+def test_flagged_entry_with_staged_blob_keeps_as_staged(wt: Worktrees, flag: str) -> None:
+    (wt.path / "tracked").write_text("staged only\n")
+    git(wt.path, "add", "tracked")
+    git(wt.path, "update-index", flag, "tracked")
+    # The worktree matches HEAD again; only the index blob differs.
+    (wt.path / "tracked").write_text("saved\n")
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert result["reasons"] == ["staged changes: index differs from HEAD"]
+
+
+@pytest.mark.parametrize("change", ["added", "removed"])
+def test_staged_gitlink_change_keeps(wt: Worktrees, change: str) -> None:
+    oid = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    git(wt.path, "update-index", "--add", "--cacheinfo", f"160000,{oid},module")
+    if change == "removed":
+        git(wt.path, "commit", "--quiet", "-m", "Gitlink")
+        wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+        git(wt.path, "rm", "--cached", "--quiet", "module")
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    if change == "removed":
+        assert result["reasons"] == ["staged changes: index differs from HEAD"]
+    else:
+        # A gitlink in the index is held earlier; the comparison still sees it.
+        assert "registered submodule" in str(result["reasons"])
+        with pytest.raises(GUARD_MODULE["KeepError"], match="staged changes"):
+            GUARD_MODULE["check_staged"](wt.path)
+
+
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
     (wt.path / "retained-empty").mkdir()
     quiet(wt)
