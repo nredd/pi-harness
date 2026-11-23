@@ -1,7 +1,7 @@
 import { effectiveBlockedBundleIds, getComputerUseConfig } from "../../config.ts";
 import { assertMacosPidUpperBound } from "../../find-params.ts";
 import { type LookResponse, parseLookResponse } from "../../outline.ts";
-import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
+import { toBoolean, toFiniteNumber, toOptionalBoolean, toOptionalString } from "../coerce.ts";
 import type {
 	ComputerUsePlatformBackend,
 	FramePoints,
@@ -92,10 +92,10 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			framePoints: parseFramePoints(raw),
 			scaleFactor: Math.max(1, toFiniteNumber((raw as any)?.scaleFactor, 1)),
 			zOrder: Math.trunc(toFiniteNumber((raw as any)?.zOrder, 0)),
-			isMinimized: toBoolean((raw as any)?.isMinimized),
-			isOnscreen: toBoolean((raw as any)?.isOnscreen),
-			isMain: toBoolean((raw as any)?.isMain),
-			isFocused: toBoolean((raw as any)?.isFocused),
+			isMinimized: toOptionalBoolean((raw as any)?.isMinimized),
+			isOnscreen: toOptionalBoolean((raw as any)?.isOnscreen),
+			isMain: toOptionalBoolean((raw as any)?.isMain),
+			isFocused: toOptionalBoolean((raw as any)?.isFocused),
 			isModal: toBoolean((raw as any)?.isModal),
 			metadata,
 		};

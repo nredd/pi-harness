@@ -83,11 +83,15 @@ export interface PlatformRoot extends PlatformAppIdentity {
 	zOrder: number;
 	framePoints: FramePoints;
 	scaleFactor: number;
-	isOnscreen: boolean;
-	isFocused: boolean;
-	isMinimized: boolean;
+	/**
+	 * State flags: `undefined` means the platform did not read the flag (the macOS helper omits an unread one), never
+	 * `false`. Ranking and modal selection in `root-selection.ts` treat unknown as no evidence either way.
+	 */
+	isOnscreen?: boolean;
+	isFocused?: boolean;
+	isMinimized?: boolean;
 	/** Best-effort; platforms without a main-window concept may mirror `isFocused`. */
-	isMain: boolean;
+	isMain?: boolean;
 	/** Platform-reported modality fact, including platform-specific modal/dialog/sheet signals. */
 	isModal: boolean;
 	/** Windows: discovery could not bind this root to a verifiable window instance, so it is refused. */
