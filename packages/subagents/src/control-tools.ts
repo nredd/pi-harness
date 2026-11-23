@@ -8,11 +8,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { abortable } from "./abortable.ts";
-import { type AgentManager, describeEvicted, isTopLevelAgent, markConsumed } from "./agent-manager.ts";
-import { agentNotFound } from "./agent-ref.ts";
+import { type AgentManager, describeEvicted, type EvictedNote, isTopLevelAgent } from "./agent-manager.ts";
+import { type AgentRef, agentNotFound, type SurvivorReach } from "./agent-ref.ts";
 import { getAgentConversation, SUBAGENT_TOOL_NAMES, steerAgent } from "./agent-runner.ts";
 import type { Clock } from "./clock.ts";
-import { type CompletionOutbox, NOTIFICATION_HOLD_MS } from "./completion-outbox.ts";
+import { NOTIFICATION_HOLD_MS } from "./completion-outbox.ts";
 import { listRunningDetached } from "./detached-results.ts";
 import { errorMessage } from "./error-message.ts";
 import { modelSelectionNote } from "./model-selection.ts";
@@ -20,7 +20,6 @@ import { planSteerBlocked, planSteerRefusal } from "./plan-mode-children.ts";
 import { getStatusNote, partialOutputSuffix } from "./status-note.ts";
 import type { AgentRecord } from "./types.ts";
 import { formatCost, formatDuration, getDisplayName } from "./ui/agent-widget.ts";
-import type { FleetList } from "./ui/fleet-list.ts";
 import { getLifetimeCost, getSessionContextPercent } from "./usage.ts";
 import type { WorkflowTask } from "./workflow/task.ts";
 
@@ -92,13 +91,10 @@ const QUEUE_WAIT_POLL_MS = Math.floor(NOTIFICATION_HOLD_MS / 4);
 
 interface ControlToolDeps {
 	pi: ExtensionAPI;
-	manager: AgentManager;
 	clock: Clock;
-	fleet: Pick<FleetList, "acknowledgeFailure">;
-	outbox: Pick<CompletionOutbox, "cancel">;
-	workflowTasks: ReadonlyMap<string, WorkflowTask>;
-	liveAgentById: (id: string) => AgentRecord | undefined;
-	resolveAgentRef: (ref: string) => AgentRecord | undefined;
+	/** Mark a settled result read: no completion notice, no failure badge. */
+	markRead: (record: AgentRecord) => void;
+	resolveSessionRef: (input: string, reach: SurvivorReach) => AgentRef;
 	isShowCostEnabled: () => boolean;
 	formatLifetimeTokens: (record: AgentRecord) => string;
 	textResult: (message: string) => AgentToolResult;
@@ -120,13 +116,9 @@ interface ControlToolDeps {
 export function registerControlTools(deps: ControlToolDeps): void {
 	const {
 		pi,
-		manager,
 		clock,
-		fleet,
-		outbox,
-		workflowTasks,
-		liveAgentById,
-		resolveAgentRef,
+		markRead,
+		resolveSessionRef,
 		isShowCostEnabled,
 		formatLifetimeTokens,
 		textResult,
@@ -162,17 +154,19 @@ export function registerControlTools(deps: ControlToolDeps): void {
 				),
 			}),
 			execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
-				const latest = manager.latestId(params.agent_id);
-				const record = liveAgentById(latest) ?? resolveAgentRef(latest);
-				if (!record) {
-					const note = manager.getEvictedNote(latest);
-					if (!note) return errorResult(agentNotFound(manager, latest));
-					const diagnostic = agentNotFound(manager, latest, true);
+				// A read reaches every survivor in the process, not only this session's.
+				const ref = resolveSessionRef(params.agent_id, "process");
+				if (ref.state === "saved" && ref.note) {
+					const { note } = ref;
+					const diagnostic = agentNotFound(note.id, note, true);
 					if (note.fromSavedSession && (note.status === "running" || note.reopenRefusal))
 						return errorResult(diagnostic);
 					return textResult(diagnostic);
 				}
-				if (!isTopLevelAgent(record)) return errorResult(agentNotFound(manager, latest));
+				// A workflow run or its child, a tombstone with no note, or nothing at all.
+				if (ref.state !== "live" && ref.state !== "queued" && ref.state !== "retained")
+					return errorResult(agentNotFound(params.agent_id));
+				const { record } = ref;
 
 				// Wait for completion if requested. Cancellation stops only this tool
 				// call; the background agent keeps running and remains unconsumed so its
@@ -219,11 +213,7 @@ export function registerControlTools(deps: ControlToolDeps): void {
 				}
 
 				// Mark result as consumed — suppresses the completion notification
-				if (record.status !== "running" && record.status !== "queued") {
-					markConsumed(record, clock.now());
-					fleet.acknowledgeFailure(record.id);
-					outbox.cancel(record.id);
-				}
+				if (record.status !== "running" && record.status !== "queued") markRead(record);
 
 				// Verbose: include full conversation
 				if (params.verbose && record.session) {
@@ -261,16 +251,13 @@ export function registerControlTools(deps: ControlToolDeps): void {
 			}),
 			execute: async (toolCallId, params, signal, onUpdate, ctx) => {
 				// An evicted id that was reopened answers as the record it continues under (#330).
-				const latest = manager.latestId(params.agent_id);
-				const record = resolveAgentRef(latest);
-				if (record && !isTopLevelAgent(record)) return errorResult(agentNotFound(manager, params.agent_id));
-				if (record?.status !== "running" && record?.status !== "queued") {
-					// Finished: continue it, as Claude Code's SendMessage does. An evicted
-					// record is known only by its note; Agent's resume reopens its session
-					// from disk or explains why it cannot.
-					const finished = record ?? manager.getEvictedNote(latest);
-					if (!finished) return errorResult(agentNotFound(manager, params.agent_id));
-					const historical = !record && manager.getEvictedNote(latest)?.fromSavedSession;
+				const ref = resolveSessionRef(params.agent_id, "session");
+				/**
+				 * Finished: continue it, as Claude Code's SendMessage does. An evicted
+				 * record is known only by its note; Agent's resume reopens its session
+				 * from disk or explains why it cannot.
+				 */
+				const resumeFinished = (finished: AgentRecord | EvictedNote, historical: boolean) => {
 					if (finished.status === "stopped" && !historical) {
 						return errorResult(
 							`Agent "${finished.id}" was stopped (status: stopped). steer_subagent does not resume a stopped agent.`,
@@ -278,11 +265,12 @@ export function registerControlTools(deps: ControlToolDeps): void {
 					}
 					// The Agent tool's own resume path, not a copy: same reopen, turn
 					// budget, transcript and result. `subagent_type` is the record's own,
-					// so its frontmatter governs as it does for an `@handle` resume.
+					// so its frontmatter governs as it does for an `@handle` resume. A
+					// reopened id is passed as asked, so the result says what it continues as.
 					return agentTool.execute(
 						toolCallId,
 						{
-							resume: latest === params.agent_id ? finished.id : params.agent_id,
+							resume: ref.latest === ref.requested ? finished.id : ref.requested,
 							prompt: params.message,
 							description: finished.description,
 							subagent_type: finished.type,
@@ -292,7 +280,12 @@ export function registerControlTools(deps: ControlToolDeps): void {
 						onUpdate,
 						ctx,
 					);
-				}
+				};
+				if (ref.state === "retained") return resumeFinished(ref.record, false);
+				if (ref.state === "saved" && ref.note) return resumeFinished(ref.note, !!ref.note.fromSavedSession);
+				// A workflow run or its child, a tombstone with no note, or nothing at all.
+				if (ref.state !== "live" && ref.state !== "queued") return errorResult(agentNotFound(params.agent_id));
+				const { record } = ref;
 				// Running or queued under no Plan policy: a steer from a planning parent would drive edits.
 				if (planSteerBlocked(record, pi.events)) return errorResult(planSteerRefusal(record.id));
 				if (!record.session) {
@@ -303,7 +296,7 @@ export function registerControlTools(deps: ControlToolDeps): void {
 					record.pendingSteers.push(params.message);
 					pi.events.emit("subagents:steered", { id: record.id, message: params.message });
 					return textResult(
-						record.status === "queued"
+						ref.state === "queued"
 							? `Steering message queued for agent ${record.id} (status: queued). It will be delivered when the agent starts.`
 							: `Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`,
 					);
@@ -361,7 +354,8 @@ export function registerControlTools(deps: ControlToolDeps): void {
 				}),
 			}),
 			execute: async (_toolCallId, params) => {
-				const task = workflowTasks.get(params.agent_id);
+				const ref = resolveSessionRef(params.agent_id, "session");
+				const task = ref.state === "workflow-owned" && ref.owner.kind === "run" ? ref.owner.task : undefined;
 				if (task && isLiveWorkflow(task)) {
 					// Marked first: the run's notice is written when it settles, after this returns.
 					task.stoppedBy = "parent";
@@ -376,12 +370,9 @@ export function registerControlTools(deps: ControlToolDeps): void {
 						`Workflow "${task.meta!.name}" (${task.id}) is already stopping. A completion notice follows.`,
 					);
 				}
-				const latest = manager.latestId(params.agent_id);
-				const found = resolveAgentRef(latest);
-				const record = found && isTopLevelAgent(found) ? found : undefined;
-				if (record?.status !== "running" && record?.status !== "queued") {
-					const note = manager.getEvictedNote(latest);
-					if (!record && !task && note?.fromSavedSession) {
+				if (ref.state !== "live" && ref.state !== "queued") {
+					const note = ref.state === "saved" ? ref.note : undefined;
+					if (note?.fromSavedSession) {
 						return {
 							...textResult(
 								`${describeEvicted(note)}.\nNo live registry handle is available here; this historical entry cannot stop work.\n${describeStoppable()}`,
@@ -389,13 +380,15 @@ export function registerControlTools(deps: ControlToolDeps): void {
 							isError: true,
 						};
 					}
-					const status = record?.status ?? task?.status ?? note?.status;
+					// A workflow's child names nothing here: it stops with its run.
+					const status = ref.state === "retained" ? ref.record.status : (task?.status ?? note?.status);
 					const what = status
 						? `"${params.agent_id}" is not running (status: ${status})`
 						: `No agent or workflow "${params.agent_id}"`;
 					return { ...textResult(`${what}, so there is nothing to stop.\n${describeStoppable()}`), isError: true };
 				}
-				const wasQueued = record.status === "queued";
+				const { record } = ref;
+				const wasQueued = ref.state === "queued";
 				stopAgent(record, "parent");
 				const statsParts = [`Tool uses: ${record.toolUses}`];
 				const tokens = formatLifetimeTokens(record);

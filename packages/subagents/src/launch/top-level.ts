@@ -15,6 +15,7 @@ import {
 	streamToOutputFile,
 } from "../output-file.ts";
 import type { checkSavedChild } from "../saved-child-session.ts";
+import { heldClaimRefusal } from "../transcript-claim.ts";
 import type { AgentRecord, AgentTombstone, JoinMode } from "../types.ts";
 import type { AgentActivity, AgentWidget } from "../ui/agent-widget.ts";
 import type { FleetList } from "../ui/fleet-list.ts";
@@ -57,6 +58,7 @@ interface TopLevelLaunchDeps {
 	reloadCustomAgents: () => void;
 	savedSessionChecker: (
 		ctx: ExtensionContext,
+		claimed?: boolean,
 	) => (note: EvictedNote, file: string) => ReturnType<typeof checkSavedChild>;
 	getDefaultJoinMode: () => JoinMode;
 	joinTurnGroup: (id: string, joinMode: JoinMode) => void;
@@ -141,6 +143,8 @@ export function createTopLevelLaunch(deps: TopLevelLaunchDeps) {
 		// conversation. Only the mention dispatcher may set it, and only from a
 		// path this extension itself recorded — never from anything a caller sent.
 		delete safeOptions.resumeSessionFile;
+		// Same rule: a forged check could wave through a transcript it should refuse.
+		delete safeOptions.verifyResumeFile;
 		// Bypasses handle allocation, so a forged value would duplicate a live
 		// agent's name and make `@handle` ambiguous. Same rule: dispatcher only.
 		delete safeOptions.reclaim;
@@ -179,14 +183,21 @@ export function createTopLevelLaunch(deps: TopLevelLaunchDeps) {
 		opts: { maxTurns?: number } = {},
 	): Promise<{ ok: true; id: string } | { ok: false; failure: ReopenFailure }> {
 		const saved = manager.getEvictedNote(entry.id);
+		let verifyResumeFile: (() => string | undefined) | undefined;
 		if (saved?.fromSavedSession) {
 			// Bound to the transcript startup validated: a link retargeted since must not redirect it.
-			const checked = savedSessionChecker(ctx)(
-				{ ...saved, canonicalSessionFile: entry.sessionFile },
-				saved.sessionFile!,
-			);
+			const check = (bound: string, claimed?: boolean) =>
+				savedSessionChecker(ctx, claimed)({ ...saved, canonicalSessionFile: bound }, saved.sessionFile!);
+			const checked = check(entry.sessionFile);
 			if ("refusal" in checked) return { ok: false, failure: { reason: "spawn-failed", message: checked.refusal } };
 			entry = { ...entry, sessionFile: checked.file };
+			// Checked again under the writer claim (#1247): another process may have
+			// written it, or a link moved it, between this check and the open.
+			const bound = checked.file;
+			verifyResumeFile = () => {
+				const recheck = check(bound, true);
+				return "refusal" in recheck ? recheck.refusal : undefined;
+			};
 		}
 		// Checked here rather than left to SessionManager.open: that runs inside
 		// runAgent, whose rejection lands on the record as an agent error, not in
@@ -198,6 +209,15 @@ export function createTopLevelLaunch(deps: TopLevelLaunchDeps) {
 			manager.dropTombstone(entry.handle);
 			return { ok: false, failure: { reason: "session-gone" } };
 		}
+		// An early answer for a transcript a live writer holds; the runner's claim
+		// still decides. An I/O error reading the claim is reported as it is.
+		let held: string | undefined;
+		try {
+			held = heldClaimRefusal(entry.sessionFile);
+		} catch (err) {
+			held = errorMessage(err);
+		}
+		if (held !== undefined) return { ok: false, failure: { reason: "spawn-failed", message: held } };
 
 		// The Agent tool deliberately falls back to general-purpose for a type it
 		// cannot resolve (#183), which covers a deleted file AND a merely
@@ -224,6 +244,7 @@ export function createTopLevelLaunch(deps: TopLevelLaunchDeps) {
 				reclaim: { handle: entry.handle, alias: entry.alias },
 				previousId: entry.id,
 				resumeSessionFile: entry.sessionFile,
+				verifyResumeFile,
 				// Historical disclosures never replace the continuation's current selection.
 				...(entry.modelFallback ? { previousModelFallback: entry.modelFallback } : {}),
 				...(entry.modelTier ? { previousModelTier: entry.modelTier } : {}),

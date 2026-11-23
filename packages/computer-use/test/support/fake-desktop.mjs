@@ -69,6 +69,7 @@ const BACKEND_KEYS = [
 	"ensureReady",
 	"listApps",
 	"listRoots",
+	"listRootsOfPids",
 	"getFrontmost",
 	"observe",
 	"act",
@@ -171,6 +172,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		lookPayload: undefined,
 		/** Replaceable `waitFor` backend result: receives the request. */
 		waitFor: async () => ({ found: true, nodeCount: 2 }),
+		/** `parseLookResponse` options, e.g. the Linux backend's `{ unmarkedNodesUnread: true }`. */
+		parseOptions: undefined,
 	};
 	const findWire = (nodes, ref) => {
 		for (const node of nodes) {
@@ -200,6 +203,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 				(request?.scopeRef && findWire(fake.tree, request.scopeRef)) ||
 				wireNode("w", "AXWindow", fake.windowTitle, {
 					subrole: "AXStandardWindow",
+					truncated: false,
 					rect: { x: 0, y: 0, w: 300, h: 200 },
 					children: fake.tree,
 				}),
@@ -209,7 +213,9 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		};
 	};
 	Object.assign(currentPlatformBackend, {
-		name: options.platform ?? currentPlatformBackend.name,
+		// Pin a host-neutral fake to macOS policy so it behaves alike on every CI host; Linux and Windows
+		// admit roots only by an executable identity the default roots do not carry.
+		name: options.platform ?? "macos",
 		ensureReady: async () => {
 			fake.readyCalls++;
 			return {
@@ -236,7 +242,7 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		},
 		observe: async (request) => {
 			fake.looks.push(request);
-			return parseLookResponse((fake.lookPayload ?? defaultLook)(request));
+			return parseLookResponse((fake.lookPayload ?? defaultLook)(request), fake.parseOptions);
 		},
 		act: async (request, options) => {
 			fake.actCalls.push(request);
@@ -262,6 +268,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			return await fake.waitFor(request, options);
 		},
 	});
+	// The fake answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
 	fake.ctx = ctx;

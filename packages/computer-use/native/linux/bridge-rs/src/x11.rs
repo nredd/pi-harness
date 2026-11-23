@@ -3,7 +3,13 @@ use crate::atspi::{Rect, RootSnapshot};
 use crate::{ErrorCode, ProtocolError};
 use base64::Engine as _;
 use serde_json::{json, Value};
+use std::cell::Cell;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 use x11rb::connection::Connection;
+use x11rb::errors::ReplyError;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ButtonIndex, ClientMessageData, ClientMessageEvent, ConnectionExt as _,
     Drawable, EventMask, GetImageReply, ImageFormat, ImageOrder, Keycode, MapState, Window,
@@ -60,7 +66,21 @@ impl PhysicalPolicy {
             value => Err(invalid(format!("Unknown delivery policy '{value}'"))),
         }
     }
+    /// Refuse strict headless (`ax_only`) with `foreground_required` before any physical
+    /// target, geometry or session is resolved (#1298): the action needs foreground
+    /// delivery, whatever this session could otherwise offer.
+    pub fn refuse_strict_headless(self) -> Result<(), ProtocolError> {
+        if self == Self::AxOnly {
+            return Err(err(
+                "ax_only policy forbids synthesized input and window focus",
+                ErrorCode::ForegroundRequired,
+            ));
+        }
+        Ok(())
+    }
+    /// Admit physical input under this policy in `session`; strict headless refuses first.
     pub fn require_physical(self, session: SessionKind) -> Result<(), ProtocolError> {
+        self.refuse_strict_headless()?;
         if session == SessionKind::Headless {
             return Err(err(
                 "Physical input is unavailable in a headless Linux session",
@@ -73,17 +93,13 @@ impl PhysicalPolicy {
                 ErrorCode::CapabilityDeferred,
             ));
         }
-        match self {
-            Self::AxOnly => Err(err(
-                "ax_only policy forbids XTEST and window focus",
-                ErrorCode::CoordinateBlocked,
-            )),
-            Self::Background => Err(err(
+        if self == Self::Background {
+            return Err(err(
                 "Background policy forbids global XTEST input",
                 ErrorCode::ForegroundRequired,
-            )),
-            Self::Default | Self::Foreground => Ok(()),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -92,6 +108,8 @@ pub struct WindowInfo {
     pub id: u32,
     pub pid: u64,
     pub title: String,
+    /// `WM_CLASS` (instance, class), app-supplied.
+    pub wm_class: Option<(String, String)>,
     pub frame: Rect,
     pub focused: bool,
     pub minimized: bool,
@@ -108,48 +126,86 @@ pub fn available() -> bool {
     SessionKind::detect() == SessionKind::X11 && connect().is_ok()
 }
 
+/// The X11 windows of this process's `DISPLAY`, via [`windows_on`].
+pub fn list_display_windows() -> Result<Option<Vec<WindowInfo>>, ProtocolError> {
+    windows_on(std::env::var_os("DISPLAY").as_deref(), list_windows)
+}
+
+/// The windows `list` reads from `display`. `Ok(None)` only when no X display is configured
+/// (no X11 session and no XWayland): confirmed absence of `WM_CLASS` evidence. A configured
+/// display whose listing fails is an error, never absence (#1300).
+pub fn windows_on(
+    display: Option<&std::ffi::OsStr>,
+    list: impl FnOnce() -> Result<Vec<WindowInfo>, ProtocolError>,
+) -> Result<Option<Vec<WindowInfo>>, ProtocolError> {
+    match display {
+        Some(display) if !display.is_empty() => list().map(Some),
+        _ => Ok(None),
+    }
+}
+
 pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
     let (conn, screen) = connect()?;
-    let root = conn.setup().roots[screen].root;
-    let a = Atoms::new(&conn)?;
-    let active = property32(&conn, root, a.active, AtomEnum::WINDOW.into())
+    windows_of(&conn, screen)
+}
+
+/// Every client window `conn` lists on `screen`. Each read here enumerates, pairs or
+/// classifies a window, so one failed request (a dropped connection, an X11 error, e.g. a
+/// window destroyed mid-listing) fails the whole listing, never a partial one: a window
+/// skipped or a class dropped could admit a root its `WM_CLASS` blocks (#1311). Only a
+/// successful reply without the property is absence, e.g. a window with no `WM_CLASS`.
+fn windows_of(conn: &impl Connection, screen: usize) -> Result<Vec<WindowInfo>, ProtocolError> {
+    let root = conn
+        .setup()
+        .roots
+        .get(screen)
+        .ok_or_else(|| err("X11 screen is missing", ErrorCode::CapabilityDeferred))?
+        .root;
+    let a = Atoms::new(conn)?;
+    let active = property32(conn, root, a.active, AtomEnum::WINDOW.into())?
         .first()
         .copied();
-    let mut windows = property32(&conn, root, a.stacking, AtomEnum::WINDOW.into());
+    let mut windows = property32(conn, root, a.stacking, AtomEnum::WINDOW.into())?;
     if windows.is_empty() {
-        windows = property32(&conn, root, a.clients, AtomEnum::WINDOW.into());
+        windows = property32(conn, root, a.clients, AtomEnum::WINDOW.into())?;
     }
     let mut out = Vec::new();
     for (z_order, id) in windows.into_iter().rev().enumerate() {
-        let Ok(g) = conn
-            .get_geometry(id)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .ok_or(())
-        else {
-            continue;
-        };
+        let g = conn.get_geometry(id).map_err(xerr)?.reply().map_err(xerr)?;
         let translated = conn
             .translate_coordinates(id, root, 0, 0)
-            .ok()
-            .and_then(|c| c.reply().ok());
-        let states = property32(&conn, id, a.state, AtomEnum::ATOM.into());
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        let states = property32(conn, id, a.state, AtomEnum::ATOM.into())?;
+        let class = conn
+            .get_property(false, id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        // A class the reply did not carry whole (another type, or past 4 KiB) is unread,
+        // never absent.
+        let whole = class.type_ == u32::from(AtomEnum::STRING)
+            && class.format == 8
+            && class.bytes_after == 0;
+        if class.type_ != x11rb::NONE && !whole {
+            return Err(err(
+                format!("X11 WM_CLASS of window {id} is not a complete STRING"),
+                ErrorCode::InternalError,
+            ));
+        }
         out.push(WindowInfo {
             id,
-            pid: property32(&conn, id, a.pid, AtomEnum::CARDINAL.into())
+            pid: property32(conn, id, a.pid, AtomEnum::CARDINAL.into())?
                 .first()
                 .copied()
-                .unwrap_or(0) as u64,
-            title: title(&conn, id, &a),
+                .unwrap_or(0)
+                .into(),
+            title: title(conn, id, &a)?,
+            wm_class: wm_class_property(class.format, class.bytes_after, &class.value),
             frame: Rect {
-                x: translated
-                    .as_ref()
-                    .map(|r| i32::from(r.dst_x))
-                    .unwrap_or(i32::from(g.x)),
-                y: translated
-                    .as_ref()
-                    .map(|r| i32::from(r.dst_y))
-                    .unwrap_or(i32::from(g.y)),
+                x: i32::from(translated.dst_x),
+                y: i32::from(translated.dst_y),
                 width: i32::from(g.width),
                 height: i32::from(g.height),
             },
@@ -161,61 +217,175 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
     Ok(out)
 }
 
-pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
+/// Pair each root with its best-ranked X11 window of the same PID, title first, then
+/// geometry; each window pairs once. Pairing is a heuristic, so `WM_CLASS` is copied only
+/// when no other window of that PID ranks equally (#1300): a tie is no class evidence,
+/// never proof that one sibling's class belongs to the root. Blocking is additive, so a tie
+/// reports every tied window's class in `class_candidates` and any blocked one refuses it.
+/// Returns each root's [`Pairing`]: a tie is `Ambiguous` even when no tied window has a class.
+pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) -> Vec<Pairing> {
     let mut used = Vec::new();
+    let mut pairings = Vec::with_capacity(roots.len());
     for root in roots {
-        let best = windows
-            .iter()
-            .filter(|w| w.pid != 0 && w.pid == root.pid && !used.contains(&w.id))
-            .min_by_key(|w| {
-                let title = if !root.name.is_empty()
-                    && (w.title.contains(&root.name) || root.name.contains(&w.title))
-                {
-                    0
-                } else {
-                    1_000_000
-                };
-                title + distance(root.frame.as_ref(), &w.frame)
-            });
+        let rank = |w: &WindowInfo| {
+            let title = if !root.name.is_empty()
+                && (w.title.contains(&root.name) || root.name.contains(&w.title))
+            {
+                0
+            } else {
+                1_000_000
+            };
+            title + distance(root.frame.as_ref(), &w.frame)
+        };
+        let owned = || windows.iter().filter(|w| w.pid != 0 && w.pid == root.pid);
+        let best = owned()
+            .filter(|w| !used.contains(&w.id))
+            .min_by_key(|w| rank(w));
         if let Some(w) = best {
+            // A window already paired elsewhere still ties: that pairing was a choice too.
+            let tied = owned()
+                .filter(|other| rank(other) == rank(w))
+                .collect::<Vec<_>>();
+            let ambiguous = tied.len() > 1;
+            root.class_candidates = if ambiguous {
+                tied.iter()
+                    .filter_map(|other| other.wm_class.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             used.push(w.id);
             root.x11_window = Some(w.id);
             root.frame = Some(w.frame.clone());
             root.is_focused = w.focused;
             root.is_minimized = w.minimized;
             root.z_order = Some(w.z_order);
+            root.wm_class = if ambiguous { None } else { w.wm_class.clone() };
             if root.name.is_empty() {
                 root.name.clone_from(&w.title);
             }
+            pairings.push(if ambiguous {
+                Pairing::Ambiguous
+            } else {
+                Pairing::Paired
+            });
+        } else {
+            pairings.push(Pairing::Unpaired);
+        }
+    }
+    pairings
+}
+
+/// How confidently [`enrich_roots`] paired a root with an X11 window, reported apart from
+/// its class aliases: a tie of classless windows has no aliases but is no clean pairing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pairing {
+    /// One window ranked best; its `WM_CLASS`, if any, is the root's.
+    Paired,
+    /// Several windows ranked equally; none of their classes is attributed.
+    Ambiguous,
+    /// No window of the root's PID.
+    Unpaired,
+}
+
+impl Pairing {
+    /// The `metadata.x11Pairing` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Paired => "paired",
+            Self::Ambiguous => "ambiguous",
+            Self::Unpaired => "unpaired",
         }
     }
 }
+/// Parse a `WM_CLASS` property reply: only a complete 8-bit value, never a truncated or
+/// differently formatted one.
+pub fn wm_class_property(format: u8, bytes_after: u32, value: &[u8]) -> Option<(String, String)> {
+    (format == 8 && bytes_after == 0)
+        .then(|| parse_wm_class(value))
+        .flatten()
+}
+/// Parse an ICCCM `WM_CLASS` value: two NUL-terminated Latin-1 strings, instance then class.
+/// Anything else is unattributed rather than guessed.
+pub fn parse_wm_class(value: &[u8]) -> Option<(String, String)> {
+    let value = value.strip_suffix(&[0])?;
+    let mut parts = value.split(|&byte| byte == 0);
+    let latin1 = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|&byte| char::from(byte))
+            .collect::<String>()
+    };
+    let (instance, class) = (parts.next()?, parts.next()?);
+    (parts.next().is_none() && !class.is_empty()).then(|| (latin1(instance), latin1(class)))
+}
+/// The L1 distance between two frames, each edge widened to `i64` before it is subtracted:
+/// live AT-SPI extents are arbitrary `i32`s, and an `i32` difference could overflow and
+/// rank a farther window first.
 fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
     a.map(|a| {
-        i64::from(
-            (a.x - b.x).abs()
-                + (a.y - b.y).abs()
-                + (a.width - b.width).abs()
-                + (a.height - b.height).abs(),
-        )
+        [
+            (a.x, b.x),
+            (a.y, b.y),
+            (a.width, b.width),
+            (a.height, b.height),
+        ]
+        .into_iter()
+        .map(|(a, b)| (i64::from(a) - i64::from(b)).abs())
+        .fold(0, i64::saturating_add)
     })
     .unwrap_or(0)
 }
 
 pub fn focus_window(window: Window, policy: PhysicalPolicy) -> Result<Value, ProtocolError> {
     policy.require_physical(SessionKind::detect())?;
-    let (conn, screen) = connect()?;
-    let root = conn.setup().roots[screen].root;
-    let atom = intern(&conn, "_NET_ACTIVE_WINDOW")?;
+    activate_unless_cancelled(
+        &InputState::shared(),
+        || {
+            let (conn, screen) = connect()?;
+            let root = conn.setup().roots[screen].root;
+            let atom = intern(&conn, "_NET_ACTIVE_WINDOW")?;
+            Ok((conn, root, atom))
+        },
+        |(conn, root, atom)| send_active_window(&conn, root, window, atom),
+    )?;
+    Ok(json!({"focused":true,"delivery":"ewmh","windowId":window}))
+}
+
+/// Run the blocking preparation for an EWMH activation request, e.g. X11 connection
+/// setup and the atom lookup, then send it with `send` unless shutdown began in the
+/// meantime: admission before `prepare` does not cover a request sent after it.
+fn activate_unless_cancelled<P>(
+    state: &InputState,
+    prepare: impl FnOnce() -> Result<P, ProtocolError>,
+    send: impl FnOnce(P) -> Result<(), ProtocolError>,
+) -> Result<(), ProtocolError> {
+    let prepared = prepare()?;
+    if state.is_cancelled() {
+        return Err(err(
+            "Helper is shutting down; the focus request was not sent",
+            ErrorCode::Cancelled,
+        ));
+    }
+    send(prepared)
+}
+
+/// Ask the window manager to activate `target` with `_NET_ACTIVE_WINDOW` (`atom`).
+fn send_active_window(
+    c: &RustConnection,
+    root: Window,
+    target: Window,
+    atom: Atom,
+) -> Result<(), ProtocolError> {
     let event = ClientMessageEvent {
         response_type: CLIENT_MESSAGE_EVENT,
         format: 32,
         sequence: 0,
-        window,
+        window: target,
         type_: atom,
         data: ClientMessageData::from([2, 0, 0, 0, 0]),
     };
-    conn.send_event(
+    c.send_event(
         false,
         root,
         EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
@@ -224,8 +394,7 @@ pub fn focus_window(window: Window, policy: PhysicalPolicy) -> Result<Value, Pro
     .map_err(xerr)?
     .check()
     .map_err(xerr)?;
-    conn.flush().map_err(xerr)?;
-    Ok(json!({"focused":true,"delivery":"ewmh","windowId":window}))
+    c.flush().map_err(xerr)
 }
 
 pub fn capture_window(
@@ -422,101 +591,59 @@ fn decode(
     Ok(out)
 }
 
-pub struct Input {
+/// Why a post did not confirm.
+#[derive(Debug, Clone)]
+pub enum PostFailure {
+    /// The server refused the request: it had no effect.
+    Rejected(ProtocolError),
+    /// The request may have reached the server, which may have executed it.
+    Uncertain(ProtocolError),
+}
+impl PostFailure {
+    fn into_error(self) -> ProtocolError {
+        match self {
+            Self::Rejected(error) | Self::Uncertain(error) => error,
+        }
+    }
+}
+
+/// Destination for physical input events, so sequencing runs headless in tests.
+///
+/// `admit` and `admit_point` recheck the live target immediately before an effect.
+/// `post` emits one event without admission: owed releases go through it, so a
+/// refused target can never strand a held key or button.
+pub trait InputSink {
+    /// Refuse unless the target window is still mapped and active.
+    fn admit(&self) -> Result<(), ProtocolError>;
+    /// Refuse unless the screen point hits the target or one of its descendants:
+    /// `occluded_target` when another window covers it, `coordinate_blocked` when
+    /// it lies outside the target.
+    fn admit_point(&self, x: i32, y: i32) -> Result<(), ProtocolError>;
+    /// Resolve a keysym to a keycode, or `None` when the keymap lacks it.
+    fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError>;
+    /// Whether the key (or, when `button`, the pointer button) `detail` is down now,
+    /// whoever pressed it, or `None` when the state source cannot observe that input.
+    fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError>;
+    /// Post one event unconditionally.
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure>;
+}
+
+/// The logical button core pointer state shows for physical button `detail` under the
+/// pointer mapping `map` (`map[detail - 1]`), or `None` when it shows none: logical
+/// buttons outside 1 to 5 (e.g. horizontal scroll 6 and 7), disabled (0) or unmapped.
+pub fn observable_button(map: &[u8], detail: u8) -> Option<u8> {
+    let logical = map.get(usize::from(detail).checked_sub(1)?).copied()?;
+    (1..=5).contains(&logical).then_some(logical)
+}
+
+/// Live XTEST delivery pinned to one owning window.
+pub struct XtestSink {
     conn: RustConnection,
     root: Window,
     target: Window,
 }
-impl Input {
-    pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
-        policy.require_physical(SessionKind::detect())?;
-        let (conn, screen) = connect()?;
-        let root = conn.setup().roots[screen].root;
-        validate_target(&conn, root, target)?;
-        prepare_focus(&conn, root, target, policy)?;
-        xtest::get_version(&conn, 2, 2)
-            .map_err(xerr)?
-            .reply()
-            .map_err(|e| {
-                err(
-                    format!("XTEST unavailable: {e}"),
-                    ErrorCode::CapabilityDeferred,
-                )
-            })?;
-        Ok(Self { conn, root, target })
-    }
-    pub fn move_pointer(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)
-    }
-    pub fn click(&self, x: i32, y: i32, button: &str, count: u64) -> Result<(), ProtocolError> {
-        let b = button_detail(button)?;
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
-        for _ in 0..count.clamp(1, 3) {
-            self.fake(BUTTON_PRESS_EVENT, b, 0, 0)?;
-            self.fake(BUTTON_RELEASE_EVENT, b, 0, 0)?;
-        }
-        Ok(())
-    }
-    pub fn scroll(&self, x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
-        self.preflight_point(x, y)?;
-        self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
-        for _ in 0..dy.abs().ceil().clamp(0., 100.) as usize {
-            self.button(if dy < 0. { 4 } else { 5 })?;
-        }
-        for _ in 0..dx.abs().ceil().clamp(0., 100.) as usize {
-            self.button(if dx < 0. { 6 } else { 7 })?;
-        }
-        Ok(())
-    }
-    pub fn drag(&self, path: &[(i32, i32)], button: &str) -> Result<(), ProtocolError> {
-        if path.len() < 2 {
-            return Err(invalid("drag requires at least two points"));
-        }
-        let b = button_detail(button)?;
-        for &(x, y) in path {
-            self.preflight_point(x, y)?;
-        }
-        self.fake(MOTION_NOTIFY_EVENT, 0, path[0].0, path[0].1)?;
-        self.fake(BUTTON_PRESS_EVENT, b, 0, 0)?;
-        for &(x, y) in &path[1..] {
-            self.fake(MOTION_NOTIFY_EVENT, 0, x, y)?;
-        }
-        self.fake(BUTTON_RELEASE_EVENT, b, 0, 0)
-    }
-    pub fn type_text(&self, text: &str) -> Result<(), ProtocolError> {
-        for ch in text.chars() {
-            let (sym, shift) = char_keysym(ch)
-                .ok_or_else(|| invalid(format!("Unsupported XTEST character {ch:?}")))?;
-            if shift {
-                self.key(0xffe1, KEY_PRESS_EVENT)?;
-            }
-            self.key(sym, KEY_PRESS_EVENT)?;
-            self.key(sym, KEY_RELEASE_EVENT)?;
-            if shift {
-                self.key(0xffe1, KEY_RELEASE_EVENT)?;
-            }
-        }
-        Ok(())
-    }
-    pub fn keypress(&self, names: &[&str]) -> Result<(), ProtocolError> {
-        if names.is_empty() {
-            return Err(invalid("keypress requires keys"));
-        }
-        let syms = names
-            .iter()
-            .map(|n| named_keysym(n).ok_or_else(|| invalid(format!("Unsupported key '{n}'"))))
-            .collect::<Result<Vec<_>, _>>()?;
-        for &s in &syms {
-            self.key(s, KEY_PRESS_EVENT)?;
-        }
-        for &s in syms.iter().rev() {
-            self.key(s, KEY_RELEASE_EVENT)?;
-        }
-        Ok(())
-    }
-    fn preflight_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+impl InputSink for XtestSink {
+    fn admit(&self) -> Result<(), ProtocolError> {
         validate_target(&self.conn, self.root, self.target)?;
         if active_window(&self.conn, self.root)? != Some(self.target) {
             return Err(err(
@@ -524,26 +651,45 @@ impl Input {
                 ErrorCode::ForegroundRequired,
             ));
         }
+        Ok(())
+    }
+    fn admit_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+        let (x, y) = (clamp_i16(x), clamp_i16(y));
         let hit = self
             .conn
-            .translate_coordinates(self.root, self.root, clamp_i16(x), clamp_i16(y))
+            .translate_coordinates(self.root, self.root, x, y)
             .map_err(xerr)?
             .reply()
             .map_err(xerr)?
             .child;
-        if hit == 0 || !windows_related(&self.conn, hit, self.target)? {
-            return Err(err(
-                "Refusing XTEST pointer delivery because the target point is outside or occluded",
-                ErrorCode::CoordinateBlocked,
-            ));
+        if hit != 0 && windows_related(&self.conn, hit, self.target)? {
+            return Ok(());
         }
-        Ok(())
-    }
-    fn key(&self, sym: u32, event: u8) -> Result<(), ProtocolError> {
-        let code = self
-            .keycode(sym)?
-            .ok_or_else(|| invalid(format!("No keycode for keysym 0x{sym:x}")))?;
-        self.fake(event, code, 0, 0)
+        let local = self
+            .conn
+            .translate_coordinates(self.root, self.target, x, y)
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        let geometry = self
+            .conn
+            .get_geometry(self.target)
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        let inside = (0..i32::from(geometry.width)).contains(&i32::from(local.dst_x))
+            && (0..i32::from(geometry.height)).contains(&i32::from(local.dst_y));
+        Err(if inside {
+            err(
+                "Refusing XTEST pointer delivery because another window covers the target point",
+                ErrorCode::OccludedTarget,
+            )
+        } else {
+            err(
+                "Refusing XTEST pointer delivery because the point is outside the owning window",
+                ErrorCode::CoordinateBlocked,
+            )
+        })
     }
     fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError> {
         let setup = self.conn.setup();
@@ -560,18 +706,44 @@ impl Input {
             .position(|s| s.contains(&sym))
             .map(|i| min + i as u8))
     }
-    fn button(&self, b: u8) -> Result<(), ProtocolError> {
-        self.fake(BUTTON_PRESS_EVENT, b, 0, 0)?;
-        self.fake(BUTTON_RELEASE_EVENT, b, 0, 0)
-    }
-    fn fake(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
-        validate_target(&self.conn, self.root, self.target)?;
-        if active_window(&self.conn, self.root)? != Some(self.target) {
-            return Err(err(
-                "Refusing XTEST delivery because the owning window is no longer active",
-                ErrorCode::ForegroundRequired,
-            ));
+    fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError> {
+        if button {
+            // XTEST posts physical buttons; core pointer state carries logical buttons 1
+            // to 5 as mask bits 8 to 12. Map through the pointer mapping, and report any
+            // button outside those five (e.g. horizontal scroll 6 and 7) as unobservable.
+            let map = self
+                .conn
+                .get_pointer_mapping()
+                .map_err(xerr)?
+                .reply()
+                .map_err(xerr)?
+                .map;
+            let Some(logical) = observable_button(&map, detail) else {
+                return Ok(None);
+            };
+            let mask = self
+                .conn
+                .query_pointer(self.root)
+                .map_err(xerr)?
+                .reply()
+                .map_err(xerr)?
+                .mask;
+            return Ok(Some(u16::from(mask) & (1 << (7 + logical)) != 0));
         }
+        let keys = self
+            .conn
+            .query_keymap()
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?
+            .keys;
+        Ok(Some(
+            keys[usize::from(detail / 8)] & (1 << (detail % 8)) != 0,
+        ))
+    }
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
+        // A send failure may follow a partial write; only an X11 error reply proves the
+        // server refused the request. `check` flushes and waits for that answer.
         xtest::fake_input(
             &self.conn,
             event,
@@ -582,10 +754,654 @@ impl Input {
             clamp_i16(y),
             0,
         )
-        .map_err(xerr)?
+        .map_err(|e| PostFailure::Uncertain(xerr(e)))?
         .check()
-        .map_err(xerr)?;
-        self.conn.flush().map_err(xerr)
+        .map_err(|e| match e {
+            ReplyError::X11Error(_) => PostFailure::Rejected(xerr(e)),
+            ReplyError::ConnectionError(_) => PostFailure::Uncertain(xerr(e)),
+        })
+    }
+}
+
+/// A release still owed for a key or button this helper pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Owed {
+    /// `KEY_RELEASE_EVENT` or `BUTTON_RELEASE_EVENT`.
+    event: u8,
+    detail: u8,
+    /// A release was submitted but its delivery is unknown. Never resent blindly:
+    /// it is settled only by observing the input up, so one on an input the state
+    /// source cannot observe stays owed.
+    ambiguous: bool,
+}
+impl Owed {
+    fn button(self) -> bool {
+        self.event == BUTTON_RELEASE_EVENT
+    }
+    fn describe(self) -> String {
+        if self.button() {
+            format!("button {}", self.detail)
+        } else {
+            format!("keycode {}", self.detail)
+        }
+    }
+    /// What stays owed after posting this release: nothing once confirmed, the same
+    /// resendable release after a definite rejection, else a delivery-unknown one.
+    fn after_post(self, result: &Result<(), PostFailure>) -> Option<Self> {
+        match result {
+            Ok(()) => None,
+            Err(PostFailure::Rejected(_)) => Some(Self {
+                ambiguous: false,
+                ..self
+            }),
+            Err(PostFailure::Uncertain(_)) => Some(Self {
+                ambiguous: true,
+                ..self
+            }),
+        }
+    }
+    fn unknown(self) -> Self {
+        Self {
+            ambiguous: true,
+            ..self
+        }
+    }
+}
+
+/// Inputs that may be held, under one lock: an exit snapshot and a cleanup handing a
+/// failed release from `held` to `debt` exclude each other, so a snapshot never sees
+/// the input in neither list.
+#[derive(Debug, Default)]
+struct Owing {
+    /// Unconfirmed releases in press order; the newest is released first.
+    debt: Vec<Owed>,
+    /// Inputs a running action registered before submitting their press and has not
+    /// confirmed released yet. An exit that cannot wait for that action names them.
+    held: Vec<Owed>,
+}
+impl Owing {
+    fn unhold(&mut self, owed: Owed) {
+        if let Some(index) = self
+            .held
+            .iter()
+            .rposition(|entry| entry.event == owed.event && entry.detail == owed.detail)
+        {
+            self.held.remove(index);
+        }
+    }
+    /// Owed releases for an exit report: delivery-unknown ones say so.
+    fn report(&self) -> Vec<String> {
+        self.debt
+            .iter()
+            .map(|owed| {
+                let name = owed.describe();
+                if owed.ambiguous {
+                    format!("{name} (delivery unknown, never resent)")
+                } else {
+                    name
+                }
+            })
+            .collect()
+    }
+}
+
+/// Helper-wide physical input state shared by every action: releases a cleanup
+/// could not confirm, inputs a running action pressed, and the shutdown flag. It lives
+/// in this process only.
+#[derive(Debug, Default)]
+pub struct InputState {
+    owing: Mutex<Owing>,
+    cancelled: AtomicBool,
+}
+impl InputState {
+    /// The process-wide state live delivery uses.
+    pub fn shared() -> Arc<Self> {
+        static SHARED: OnceLock<Arc<InputState>> = OnceLock::new();
+        Arc::clone(SHARED.get_or_init(Arc::default))
+    }
+    /// Stop admitting physical input, for shutdown. Owed releases still run.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+    /// Keys and buttons whose release is unconfirmed, e.g. `keycode 37`.
+    pub fn unconfirmed_releases(&self) -> Vec<String> {
+        self.owing()
+            .debt
+            .iter()
+            .map(|owed| owed.describe())
+            .collect()
+    }
+    /// Refuse while a release is unconfirmed.
+    fn refusal(&self) -> Option<ProtocolError> {
+        let unconfirmed = self.unconfirmed_releases();
+        (!unconfirmed.is_empty()).then(|| {
+            err(
+                format!(
+                    "Refusing physical input: the release of {} is unconfirmed",
+                    unconfirmed.join(", ")
+                ),
+                ErrorCode::InputUnsafe,
+            )
+        })
+    }
+    /// A failure before owed releases could be consulted, e.g. on reconnect, still
+    /// names them: the caller must learn the input may be held, not only the cause.
+    fn with_owed(&self, error: ProtocolError) -> ProtocolError {
+        match self.refusal() {
+            Some(refusal) => err(
+                format!(
+                    "{}; they could not be settled: {}",
+                    refusal.message, error.message
+                ),
+                ErrorCode::InputUnsafe,
+            ),
+            None => error,
+        }
+    }
+    /// What an exit that cannot wait for running actions must name: owed releases, as
+    /// in the exit report, then inputs a running action may hold. One snapshot.
+    pub fn possibly_held(&self) -> Vec<String> {
+        self.possibly_held_with(|| {})
+    }
+    /// [`Self::possibly_held`] with `between` run after the owed releases are read and
+    /// before the held inputs are, inside the same lock.
+    fn possibly_held_with(&self, between: impl FnOnce()) -> Vec<String> {
+        let owing = self.owing();
+        let mut names = owing.report();
+        between();
+        names.extend(
+            owing
+                .held
+                .iter()
+                .map(|owed| format!("{} (held by a running action)", owed.describe())),
+        );
+        names
+    }
+    /// Register `owed` as possibly held, before its press is submitted.
+    fn hold(&self, owed: Owed) {
+        self.owing().held.push(owed);
+    }
+    /// Its release is confirmed, or its press was rejected.
+    fn unhold(&self, owed: Owed) {
+        self.owing().unhold(owed);
+    }
+    /// A cleanup's result, in one step: `unconfirmed` joins the debt and `released`
+    /// leaves the held list, so an exit sees each input in one of them.
+    fn hand_over(&self, unconfirmed: Vec<Owed>, released: Vec<Owed>) {
+        let mut owing = self.owing();
+        owing.debt.extend(unconfirmed);
+        for owed in released {
+            owing.unhold(owed);
+        }
+    }
+    /// Owed releases for an exit report: delivery-unknown ones say so.
+    fn exit_report(&self) -> Vec<String> {
+        self.owing().report()
+    }
+    /// The one transition for an owed release in the debt: replace the entry for the
+    /// same input with `left`, or remove it when `left` is `None`.
+    fn resolve(&self, owed: Owed, left: Option<Owed>) {
+        let mut owing = self.owing();
+        let debt = &mut owing.debt;
+        let same = |entry: &Owed| entry.event == owed.event && entry.detail == owed.detail;
+        if let Some(index) = debt.iter().rposition(same) {
+            match left {
+                Some(left) => debt[index] = left,
+                None => {
+                    debt.remove(index);
+                }
+            }
+        }
+    }
+    fn owing(&self) -> std::sync::MutexGuard<'_, Owing> {
+        // Plain data: a panic elsewhere cannot leave it inconsistent.
+        self.owing.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Before the helper exits, try to settle owed releases on a fresh X11 connection
+/// with no target window, waiting at most `limit`. Returns what stays owed, named for
+/// stderr. See [`settle_for_exit`].
+pub fn exit_settlement(state: Arc<InputState>, limit: Duration) -> Vec<String> {
+    settle_for_exit(state, open_root_sink, limit)
+}
+
+/// Settle owed releases through [`Input::settle`] on a sink from `open`, waiting at
+/// most `limit`. A release submitted when the wait ends was already marked
+/// delivery-unknown by `settle`, so it is reported and kept that way, never resendable.
+pub fn settle_for_exit<S, F>(state: Arc<InputState>, open: F, limit: Duration) -> Vec<String>
+where
+    S: InputSink + 'static,
+    F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
+{
+    settle_for_exit_with(state, open, |finished| {
+        let _ = finished.recv_timeout(limit);
+    })
+}
+
+/// [`settle_for_exit`] with the wait for the settlement thread left to `wait`, which
+/// gets the channel that thread signals when it is done.
+fn settle_for_exit_with<S, F>(
+    state: Arc<InputState>,
+    open: F,
+    wait: impl FnOnce(&std::sync::mpsc::Receiver<()>),
+) -> Vec<String>
+where
+    S: InputSink + 'static,
+    F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
+{
+    if state.owing().debt.is_empty() {
+        return Vec::new();
+    }
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = Arc::clone(&state);
+    std::thread::spawn(move || {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(sink) = open() {
+                let _ = Input::with_state(sink, worker).settle();
+            }
+        }));
+        let _ = done.send(());
+    });
+    wait(&finished);
+    state.exit_report()
+}
+
+fn open_root_sink() -> Result<XtestSink, ProtocolError> {
+    if SessionKind::detect() != SessionKind::X11 {
+        return Err(err(
+            "No X11 session to settle owed releases on",
+            ErrorCode::CapabilityDeferred,
+        ));
+    }
+    let (conn, root) = connect_xtest()?;
+    Ok(XtestSink {
+        conn,
+        root,
+        target: root,
+    })
+}
+
+/// Check `policy` against `session`, then open the input connection with `open`. A
+/// failure while releases are owed, e.g. a lost display or a failed XTEST negotiation
+/// on reconnect, is `input_unsafe` naming them: the caller must learn the input may
+/// still be held, not only the cause.
+fn open_physical<T>(
+    policy: PhysicalPolicy,
+    session: SessionKind,
+    state: &InputState,
+    open: impl FnOnce() -> Result<T, ProtocolError>,
+) -> Result<T, ProtocolError> {
+    policy
+        .require_physical(session)
+        .and_then(|()| open())
+        .map_err(|error| state.with_owed(error))
+}
+
+/// Guarded physical input. Every event is admitted against the live target first,
+/// and every key or button pressed is owed a release on every exit path.
+pub struct Input<S: InputSink = XtestSink> {
+    sink: S,
+    state: Arc<InputState>,
+    delivered: Cell<usize>,
+    uncertain: Cell<bool>,
+}
+impl Input<XtestSink> {
+    /// Connect and settle earlier unconfirmed releases before focusing the target, so
+    /// a release reaches the window its press did when nothing has changed since.
+    pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
+        let state = InputState::shared();
+        let (conn, root) = open_physical(policy, SessionKind::detect(), &state, connect_xtest)?;
+        let input = Self::with_state(XtestSink { conn, root, target }, state);
+        input.settle()?;
+        validate_target(&input.sink.conn, root, target)?;
+        prepare_focus(&input.sink.conn, root, target, policy, &input.state)?;
+        Ok(input)
+    }
+}
+impl<S: InputSink> Input<S> {
+    /// Input with its own state, for one-off and test use.
+    pub fn with_sink(sink: S) -> Self {
+        Self::with_state(sink, Arc::default())
+    }
+    pub fn with_state(sink: S, state: Arc<InputState>) -> Self {
+        Self {
+            sink,
+            state,
+            delivered: Cell::new(0),
+            uncertain: Cell::new(false),
+        }
+    }
+    pub fn sink(&self) -> &S {
+        &self.sink
+    }
+    pub fn state(&self) -> &InputState {
+        &self.state
+    }
+    /// Events confirmed posted so far, including owed releases. Admission is per
+    /// event, so a stop leaves every earlier event delivered and no later one.
+    pub fn delivered_units(&self) -> usize {
+        self.delivered.get()
+    }
+    /// Whether a post may have executed without confirmation, e.g. a lost reply.
+    pub fn delivery_uncertain(&self) -> bool {
+        self.uncertain.get()
+    }
+    /// Retry the releases an earlier cleanup could not confirm, newest first, and
+    /// refuse with `input_unsafe` while any stays unconfirmed. An input already up is
+    /// settled without posting. An ambiguous release is never resent: another client
+    /// may hold that input now. These posts belong to the earlier action and are not
+    /// counted.
+    pub fn settle(&self) -> Result<(), ProtocolError> {
+        let pending = self.state.owing().debt.clone();
+        for owed in pending.into_iter().rev() {
+            let left = catch_unwind(AssertUnwindSafe(|| self.settle_one(owed)))
+                // A panic mid-post leaves its delivery unknown.
+                .unwrap_or(Some(owed.unknown()));
+            self.state.resolve(owed, left);
+        }
+        let names = self.state.unconfirmed_releases();
+        if names.is_empty() {
+            return Ok(());
+        }
+        Err(err(
+            format!(
+                "Refusing physical input: the release of {} is unconfirmed and it may still be held. Release it, then retry.",
+                names.join(", ")
+            ),
+            ErrorCode::InputUnsafe,
+        ))
+    }
+    /// Settle one owed release; returns it again while it stays owed.
+    fn settle_one(&self, owed: Owed) -> Option<Owed> {
+        match self.sink.is_down(owed.button(), owed.detail) {
+            Ok(Some(false)) => None,
+            // Down, or unobservable: only a confirmed release post settles it.
+            Ok(Some(true) | None) if !owed.ambiguous => {
+                // Delivery-unknown in the shared debt from submission on: a caller that
+                // stops waiting now, e.g. an exit, must never see it as resendable.
+                self.state.resolve(owed, Some(owed.unknown()));
+                owed.after_post(&self.sink.post(owed.event, owed.detail, 0, 0))
+            }
+            Ok(Some(true) | None) | Err(_) => Some(owed),
+        }
+    }
+    /// Pointer actions check their point up front, then recheck it before the motion
+    /// and before every button press: a point can become covered while the same
+    /// window stays active.
+    pub fn move_pointer(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)
+    }
+    pub fn click(&self, x: i32, y: i32, button: &str, count: u64) -> Result<(), ProtocolError> {
+        let b = button_detail(button)?;
+        self.preflight_point(x, y)?;
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        let mut held = Held::new(self);
+        for _ in 0..count.clamp(1, 3) {
+            held.tap_at(b, (x, y))?;
+        }
+        Ok(())
+    }
+    pub fn scroll(&self, x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
+        self.preflight_point(x, y)?;
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        let mut held = Held::new(self);
+        for _ in 0..dy.abs().ceil().clamp(0., 100.) as usize {
+            held.tap_at(if dy < 0. { 4 } else { 5 }, (x, y))?;
+        }
+        for _ in 0..dx.abs().ceil().clamp(0., 100.) as usize {
+            held.tap_at(if dx < 0. { 6 } else { 7 }, (x, y))?;
+        }
+        Ok(())
+    }
+    /// Validate the whole path up front, then recheck the start before the motion and
+    /// the press, and each destination before its motion.
+    pub fn drag(&self, path: &[(i32, i32)], button: &str) -> Result<(), ProtocolError> {
+        if path.len() < 2 {
+            return Err(invalid("drag requires at least two points"));
+        }
+        let b = button_detail(button)?;
+        for &(x, y) in path {
+            self.preflight_point(x, y)?;
+        }
+        self.fake_at(MOTION_NOTIFY_EVENT, 0, path[0].0, path[0].1)?;
+        let mut held = Held::new(self);
+        held.press_at(b, path[0])?;
+        for &(x, y) in &path[1..] {
+            self.fake_at(MOTION_NOTIFY_EVENT, 0, x, y)?;
+        }
+        held.release()
+    }
+    pub fn type_text(&self, text: &str) -> Result<(), ProtocolError> {
+        // Reject unsupported characters before the first post, not midway through.
+        let keys = text
+            .chars()
+            .map(|ch| {
+                char_keysym(ch)
+                    .ok_or_else(|| invalid(format!("Unsupported XTEST character {ch:?}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut held = Held::new(self);
+        for (sym, shift) in keys {
+            if shift {
+                held.press(
+                    KEY_PRESS_EVENT,
+                    KEY_RELEASE_EVENT,
+                    self.key_code(SHIFT_KEYSYM)?,
+                )?;
+            }
+            held.tap(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, self.key_code(sym)?)?;
+            if shift {
+                held.release()?;
+            }
+        }
+        Ok(())
+    }
+    pub fn keypress(&self, names: &[&str]) -> Result<(), ProtocolError> {
+        if names.is_empty() {
+            return Err(invalid("keypress requires keys"));
+        }
+        let syms = names
+            .iter()
+            .map(|n| named_keysym(n).ok_or_else(|| invalid(format!("Unsupported key '{n}'"))))
+            .collect::<Result<Vec<_>, _>>()?;
+        if (1..syms.len()).any(|i| syms[..i].contains(&syms[i])) {
+            return Err(invalid("keypress repeats a key within one chord"));
+        }
+        let mut held = Held::new(self);
+        for &s in &syms {
+            held.press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, self.key_code(s)?)?;
+        }
+        for _ in &syms {
+            held.release()?;
+        }
+        Ok(())
+    }
+    /// Refuse once shutdown began, or while an earlier release is unconfirmed, then
+    /// recheck the live target. Runs before every unit.
+    fn admit(&self) -> Result<(), ProtocolError> {
+        if self.state.is_cancelled() {
+            return Err(err(
+                "Helper is shutting down; physical input stopped",
+                ErrorCode::Cancelled,
+            ));
+        }
+        if let Some(refusal) = self.state.refusal() {
+            return Err(refusal);
+        }
+        self.sink.admit()
+    }
+    fn preflight_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.admit()?;
+        self.sink.admit_point(x, y)
+    }
+    fn key_code(&self, sym: u32) -> Result<Keycode, ProtocolError> {
+        self.sink
+            .keycode(sym)?
+            .ok_or_else(|| invalid(format!("No keycode for keysym 0x{sym:x}")))
+    }
+    /// Admit the target and the point, then post one event.
+    fn fake_at(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.preflight_point(x, y)?;
+        self.post(event, detail, x, y)
+    }
+    fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
+        self.post_checked(event, detail, x, y)
+            .map_err(PostFailure::into_error)
+    }
+    /// Post one event without admission and account for it: a confirmed post counts,
+    /// an unconfirmed one marks delivery uncertain.
+    fn post_checked(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
+        let result = self.sink.post(event, detail, x, y);
+        match &result {
+            Ok(()) => self.delivered.set(self.delivered.get() + 1),
+            Err(PostFailure::Uncertain(_)) => self.uncertain.set(true),
+            Err(PostFailure::Rejected(_)) => {}
+        }
+        result
+    }
+    /// Release `owed` during cleanup. Returns it again when the release stays
+    /// unconfirmed. An ambiguous release is settled by observing the input up, never
+    /// resent.
+    fn release_owed(&self, owed: Owed) -> Option<Owed> {
+        if owed.ambiguous {
+            return match self.sink.is_down(owed.button(), owed.detail) {
+                Ok(Some(false)) => None,
+                Ok(Some(true) | None) | Err(_) => Some(owed),
+            };
+        }
+        owed.after_post(&self.post_checked(owed.event, owed.detail, 0, 0))
+    }
+}
+
+const SHIFT_KEYSYM: u32 = 0xffe1;
+
+/// Keys and buttons pressed and not yet released. Dropping it attempts every owed
+/// release, newest first, without admission, each isolated by `catch_unwind` so a
+/// panicking release cannot skip the rest. Releases it cannot confirm become
+/// helper-wide debt that blocks further physical input until a later request
+/// confirms them. Nothing runs under `panic = "abort"` or `SIGKILL`.
+struct Held<'a, S: InputSink> {
+    input: &'a Input<S>,
+    owed: Vec<Owed>,
+}
+impl<'a, S: InputSink> Held<'a, S> {
+    fn new(input: &'a Input<S>) -> Self {
+        Self {
+            input,
+            owed: Vec::new(),
+        }
+    }
+    /// Refuse an input that is already down, since its release would end another
+    /// client's hold, then admit and press. An input whose state cannot be observed is
+    /// pressed. A rejected press is not owed; an uncertain one is, because the server
+    /// may have executed it.
+    fn press(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
+        let input = self.input;
+        self.press_admitted(press, release, detail, || input.admit())
+    }
+    /// Press pointer button `detail`, admitting the target and `point` at effect.
+    fn press_at(&mut self, detail: u8, (x, y): (i32, i32)) -> Result<(), ProtocolError> {
+        let input = self.input;
+        self.press_admitted(BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, detail, || {
+            input.preflight_point(x, y)
+        })
+    }
+    fn press_admitted(
+        &mut self,
+        press: u8,
+        release: u8,
+        detail: u8,
+        admit: impl FnOnce() -> Result<(), ProtocolError>,
+    ) -> Result<(), ProtocolError> {
+        let button = release == BUTTON_RELEASE_EVENT;
+        if self.input.sink.is_down(button, detail)? == Some(true) {
+            let name = Owed {
+                event: release,
+                detail,
+                ambiguous: false,
+            }
+            .describe();
+            return Err(err(
+                format!("Refusing to press {name}: it is already held"),
+                ErrorCode::InputUnsafe,
+            ));
+        }
+        admit()?;
+        let owed = Owed {
+            event: release,
+            detail,
+            ambiguous: false,
+        };
+        self.owed.push(owed);
+        // Visible to an exit before submission: the server may execute the press even
+        // if its reply never comes back.
+        self.input.state.hold(owed);
+        match self.input.post_checked(press, detail, 0, 0) {
+            Err(PostFailure::Rejected(error)) => {
+                self.owed.pop();
+                self.input.state.unhold(owed);
+                Err(error)
+            }
+            result => result.map_err(PostFailure::into_error),
+        }
+    }
+    /// Admit and release the newest owed input; a no-op when nothing is held. Sequences
+    /// release in reverse press order, so the newest is always the one to release. It
+    /// stays owed until the post confirms, and is ambiguous from submission until the
+    /// sink definitely rejects it.
+    fn release(&mut self) -> Result<(), ProtocolError> {
+        let Some(&owed) = self.owed.last() else {
+            return Ok(());
+        };
+        self.input.admit()?;
+        // Ambiguous from submission on: a panic inside the sink must not leave it
+        // looking unsent, or cleanup would release it a second time.
+        if let Some(last) = self.owed.last_mut() {
+            last.ambiguous = true;
+        }
+        match self.input.post_checked(owed.event, owed.detail, 0, 0) {
+            Ok(()) => {
+                self.owed.pop();
+                self.input.state.unhold(owed);
+                Ok(())
+            }
+            Err(PostFailure::Rejected(error)) => {
+                // A definite rejection had no effect: the release may be sent again.
+                if let Some(last) = self.owed.last_mut() {
+                    last.ambiguous = false;
+                }
+                Err(error)
+            }
+            Err(PostFailure::Uncertain(error)) => Err(error),
+        }
+    }
+    fn tap(&mut self, press: u8, release: u8, detail: u8) -> Result<(), ProtocolError> {
+        self.press(press, release, detail)?;
+        self.release()
+    }
+    fn tap_at(&mut self, detail: u8, point: (i32, i32)) -> Result<(), ProtocolError> {
+        self.press_at(detail, point)?;
+        self.release()
+    }
+}
+impl<S: InputSink> Drop for Held<'_, S> {
+    fn drop(&mut self) {
+        let mut unconfirmed = Vec::new();
+        let mut released = Vec::new();
+        while let Some(owed) = self.owed.pop() {
+            let input = self.input;
+            let left = catch_unwind(AssertUnwindSafe(|| input.release_owed(owed)))
+                // A panic mid-post leaves its delivery unknown.
+                .unwrap_or(Some(owed.unknown()));
+            unconfirmed.extend(left);
+            released.push(owed);
+        }
+        unconfirmed.reverse();
+        self.input.state.hand_over(unconfirmed, released);
     }
 }
 
@@ -614,10 +1430,11 @@ fn prepare_focus(
     root: Window,
     target: Window,
     policy: PhysicalPolicy,
+    state: &InputState,
 ) -> Result<(), ProtocolError> {
     let plan = focus_plan(policy, active_window(c, root)? == Some(target))?;
     if plan == FocusPlan::ActivateAndConfirm {
-        request_active_window(c, root, target)?;
+        request_active_window(c, root, target, state)?;
     }
     for _ in 0..20 {
         if active_window(c, root)? == Some(target) {
@@ -660,7 +1477,7 @@ fn validate_target(c: &RustConnection, root: Window, target: Window) -> Result<(
     if attributes.map_state != MapState::VIEWABLE
         || geometry.width == 0
         || geometry.height == 0
-        || property32(c, target, atoms.state, AtomEnum::ATOM.into()).contains(&atoms.hidden)
+        || property32(c, target, atoms.state, AtomEnum::ATOM.into())?.contains(&atoms.hidden)
     {
         return Err(err(
             "Owning X11 window is not mapped and visible",
@@ -671,7 +1488,7 @@ fn validate_target(c: &RustConnection, root: Window, target: Window) -> Result<(
 }
 fn active_window(c: &RustConnection, root: Window) -> Result<Option<Window>, ProtocolError> {
     let atom = intern(c, "_NET_ACTIVE_WINDOW")?;
-    Ok(property32(c, root, atom, AtomEnum::WINDOW.into())
+    Ok(property32(c, root, atom, AtomEnum::WINDOW.into())?
         .first()
         .copied())
 }
@@ -679,26 +1496,13 @@ fn request_active_window(
     c: &RustConnection,
     root: Window,
     target: Window,
+    state: &InputState,
 ) -> Result<(), ProtocolError> {
-    let atom = intern(c, "_NET_ACTIVE_WINDOW")?;
-    let event = ClientMessageEvent {
-        response_type: CLIENT_MESSAGE_EVENT,
-        format: 32,
-        sequence: 0,
-        window: target,
-        type_: atom,
-        data: ClientMessageData::from([2, 0, 0, 0, 0]),
-    };
-    c.send_event(
-        false,
-        root,
-        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-        event,
+    activate_unless_cancelled(
+        state,
+        || intern(c, "_NET_ACTIVE_WINDOW"),
+        |atom| send_active_window(c, root, target, atom),
     )
-    .map_err(xerr)?
-    .check()
-    .map_err(xerr)?;
-    c.flush().map_err(xerr)
 }
 fn windows_related(c: &RustConnection, hit: Window, target: Window) -> Result<bool, ProtocolError> {
     fn ancestors(c: &RustConnection, mut w: Window) -> Result<Vec<Window>, ProtocolError> {
@@ -789,7 +1593,7 @@ struct Atoms {
     utf8: Atom,
 }
 impl Atoms {
-    fn new(c: &RustConnection) -> Result<Self, ProtocolError> {
+    fn new(c: &impl Connection) -> Result<Self, ProtocolError> {
         Ok(Self {
             clients: intern(c, "_NET_CLIENT_LIST")?,
             stacking: intern(c, "_NET_CLIENT_LIST_STACKING")?,
@@ -802,6 +1606,21 @@ impl Atoms {
         })
     }
 }
+/// Connect and negotiate XTEST, returning the connection and its root window.
+fn connect_xtest() -> Result<(RustConnection, Window), ProtocolError> {
+    let (conn, screen) = connect()?;
+    let root = conn.setup().roots[screen].root;
+    xtest::get_version(&conn, 2, 2)
+        .map_err(xerr)?
+        .reply()
+        .map_err(|e| {
+            err(
+                format!("XTEST unavailable: {e}"),
+                ErrorCode::CapabilityDeferred,
+            )
+        })?;
+    Ok((conn, root))
+}
 fn connect() -> Result<(RustConnection, usize), ProtocolError> {
     x11rb::connect(None).map_err(|e| {
         err(
@@ -810,35 +1629,54 @@ fn connect() -> Result<(RustConnection, usize), ProtocolError> {
         )
     })
 }
-fn intern(c: &RustConnection, n: &str) -> Result<Atom, ProtocolError> {
+fn intern(c: &impl Connection, n: &str) -> Result<Atom, ProtocolError> {
     c.intern_atom(false, n.as_bytes())
         .map_err(xerr)?
         .reply()
         .map(|r| r.atom)
         .map_err(xerr)
 }
-fn property32(c: &RustConnection, w: Window, p: Atom, t: Atom) -> Vec<u32> {
-    c.get_property(false, w, p, t, 0, u32::MAX)
-        .ok()
-        .and_then(|v| v.reply().ok())
-        .and_then(|v| v.value32().map(Iterator::collect))
-        .unwrap_or_default()
+/// A 32-bit property's values; empty only when the window lacks it (a reply of type `None`).
+/// A failed request, or a present value of another type or format or not read whole, is an
+/// error, never an empty value: e.g. an unreadable `_NET_WM_PID` read as absent would leave
+/// its window unpaired and its root admitted on its executable alone (#1311).
+fn property32(c: &impl Connection, w: Window, p: Atom, t: Atom) -> Result<Vec<u32>, ProtocolError> {
+    let reply = c
+        .get_property(false, w, p, t, 0, u32::MAX)
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    if reply.type_ == x11rb::NONE {
+        return Ok(Vec::new());
+    }
+    let unread = || {
+        err(
+            format!("X11 property {p} of window {w} is not a complete 32-bit value of type {t}"),
+            ErrorCode::InternalError,
+        )
+    };
+    if reply.type_ != t || reply.bytes_after != 0 {
+        return Err(unread());
+    }
+    reply.value32().map(Iterator::collect).ok_or_else(unread)
 }
-fn title(c: &RustConnection, w: Window, a: &Atoms) -> String {
+/// `_NET_WM_NAME`, else `WM_NAME`; empty when the window has neither. A failed request is
+/// an error: the title ranks the window's pairing.
+fn title(c: &impl Connection, w: Window, a: &Atoms) -> Result<String, ProtocolError> {
     let utf = c
         .get_property(false, w, a.name, a.utf8, 0, 4096)
-        .ok()
-        .and_then(|v| v.reply().ok())
-        .and_then(|v| String::from_utf8(v.value).ok())
-        .unwrap_or_default();
-    if !utf.is_empty() {
-        return utf;
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    if let Some(utf) = String::from_utf8(utf.value).ok().filter(|t| !t.is_empty()) {
+        return Ok(utf);
     }
-    c.get_property(false, w, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 4096)
-        .ok()
-        .and_then(|v| v.reply().ok())
-        .map(|v| String::from_utf8_lossy(&v.value).into_owned())
-        .unwrap_or_default()
+    let name = c
+        .get_property(false, w, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 4096)
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    Ok(String::from_utf8_lossy(&name.value).into_owned())
 }
 fn err(m: impl Into<String>, code: ErrorCode) -> ProtocolError {
     ProtocolError::new(m, code)
@@ -859,6 +1697,7 @@ fn capture_err(e: impl std::fmt::Display) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::RecordingSink;
     use std::cell::RefCell;
     use std::io::Cursor;
 
@@ -991,13 +1830,35 @@ mod tests {
     }
     #[test]
     fn policy_guards() {
-        assert_eq!(
-            PhysicalPolicy::AxOnly
-                .require_physical(SessionKind::X11)
-                .unwrap_err()
-                .code,
-            ErrorCode::CoordinateBlocked
-        );
+        // Strict headless is `foreground_required` in every session kind (#1298).
+        for session in [
+            SessionKind::X11,
+            SessionKind::Wayland,
+            SessionKind::Headless,
+        ] {
+            let error = PhysicalPolicy::AxOnly
+                .require_physical(session)
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{session:?}");
+            assert!(error.message.starts_with("ax_only"), "{}", error.message);
+        }
+        // Outside strict headless the session decides first.
+        for policy in [PhysicalPolicy::Default, PhysicalPolicy::Background] {
+            assert_eq!(
+                policy
+                    .require_physical(SessionKind::Wayland)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CapabilityDeferred
+            );
+            assert_eq!(
+                policy
+                    .require_physical(SessionKind::Headless)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CoordinateBlocked
+            );
+        }
         assert_eq!(
             PhysicalPolicy::Background
                 .require_physical(SessionKind::X11)
@@ -1009,9 +1870,52 @@ mod tests {
             .require_physical(SessionKind::X11)
             .is_ok());
         assert!(PhysicalPolicy::Default
-            .require_physical(SessionKind::Headless)
-            .is_err());
+            .require_physical(SessionKind::X11)
+            .is_ok());
     }
+    #[test]
+    fn focus_does_not_send_after_shutdown() {
+        // Shutdown begins while the atom lookup blocks: the request is never sent.
+        let state = InputState::default();
+        let sent = Cell::new(false);
+        let result = activate_unless_cancelled(
+            &state,
+            || {
+                state.cancel();
+                Ok(())
+            },
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::Cancelled);
+        assert!(!sent.get(), "no _NET_ACTIVE_WINDOW after shutdown began");
+
+        // Otherwise it is sent, and a failed preparation sends nothing.
+        let state = InputState::default();
+        activate_unless_cancelled(
+            &state,
+            || Ok(()),
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(sent.replace(false));
+        let failed = activate_unless_cancelled(
+            &state,
+            || Err::<(), _>(err("no atom", ErrorCode::InternalError)),
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(failed.unwrap_err().code, ErrorCode::InternalError);
+        assert!(!sent.get());
+    }
+
     #[test]
     fn focus_policy_is_deterministic() {
         assert_eq!(
@@ -1075,6 +1979,769 @@ mod tests {
         assert_eq!(resize_rgba(&source, 2, 2, 1, 1), vec![1, 2, 3, 4]);
         assert_eq!(resize_rgba(&source, 2, 2, 2, 2), source);
     }
+    /// `(kind, detail, admitted)` per recorded event, keycodes in first-use order from 8.
+    fn trace(input: &Input<RecordingSink>) -> Vec<(&'static str, u8, bool)> {
+        input
+            .sink()
+            .events()
+            .iter()
+            .map(|e| {
+                let kind = match e.event {
+                    KEY_PRESS_EVENT => "key+",
+                    KEY_RELEASE_EVENT => "key-",
+                    BUTTON_PRESS_EVENT => "button+",
+                    BUTTON_RELEASE_EVENT => "button-",
+                    _ => "move",
+                };
+                (kind, e.detail, e.admitted)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn completed_input_admits_every_event_and_counts_it() {
+        let input = Input::with_sink(RecordingSink::default());
+        input.click(5, 6, "left", 2).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 1, true),
+                ("button-", 1, true),
+                ("button+", 1, true),
+                ("button-", 1, true),
+            ]
+        );
+        assert_eq!(
+            (input.sink().events()[0].x, input.sink().events()[0].y),
+            (5, 6)
+        );
+        assert_eq!(input.delivered_units(), 5);
+        let input = Input::with_sink(RecordingSink::default());
+        input.type_text("aA").unwrap();
+        input.keypress(&["control", "a"]).unwrap();
+        input.move_pointer(1, 2).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key+", 9, true),
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key-", 9, true),
+                ("key+", 10, true),
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key-", 10, true),
+                ("move", 0, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn refusal_after_a_press_releases_owed_input_without_admission() {
+        // Drag: three point preflights, the start motion and the press are admitted.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(5));
+        let error = input.drag(&[(1, 1), (2, 2), (3, 3)], "right").unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 3, true),
+                ("button-", 3, false)
+            ]
+        );
+        assert_eq!(input.delivered_units(), 3);
+
+        // Chord refused before its third key: both held modifiers release, newest first.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(2));
+        let error = input.keypress(&["control", "shift", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, false),
+                ("key-", 8, false),
+            ]
+        );
+
+        // Chord refused while releasing: each key is released exactly once.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(3));
+        input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, true),
+                ("key-", 8, false),
+            ]
+        );
+
+        // Typing refused after shift: shift releases and the shifted key never posts.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(3));
+        input.type_text("aB").unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key-", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, false),
+            ]
+        );
+        assert_eq!(input.delivered_units(), 4);
+
+        // Scroll refused on the second notch release.
+        let input = Input::with_sink(RecordingSink::default().refuse_admission_after(5));
+        input.scroll(0, 0, 0.0, 3.0).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 5, true),
+                ("button-", 5, true),
+                ("button+", 5, true),
+                ("button-", 5, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_posts_and_missing_keys_still_release_held_input() {
+        // The server rejects the second press: it is not owed, only control releases.
+        let input = Input::with_sink(RecordingSink::default().fail_post(1));
+        let error = input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, false)]);
+        assert_eq!(input.delivered_units(), 2);
+        assert!(!input.delivery_uncertain());
+        assert!(input.state().unconfirmed_releases().is_empty());
+
+        // The release post is rejected: it stays owed and is retried once on unwind.
+        let input = Input::with_sink(RecordingSink::default().fail_post(2));
+        input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("key+", 8, true),
+                ("key+", 9, true),
+                ("key-", 9, false),
+                ("key-", 8, false),
+            ]
+        );
+        assert!(input.state().unconfirmed_releases().is_empty());
+
+        // A key missing from the keymap mid-chord releases the keys already down.
+        let input = Input::with_sink(RecordingSink::default().unmapped('a' as u32));
+        let error = input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, false)]);
+    }
+
+    #[test]
+    fn an_unconfirmed_cleanup_becomes_debt_that_blocks_input_until_settled() {
+        // The action is refused while control is held, and its cleanup release fails.
+        let state = Arc::new(InputState::default());
+        let sink = RecordingSink::default()
+            .refuse_admission_after(1)
+            .fail_post(1);
+        let input = Input::with_state(sink, Arc::clone(&state));
+        let error = input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        assert_eq!(trace(&input), [("key+", 8, true)]);
+        assert_eq!(state.unconfirmed_releases(), ["keycode 8"]);
+
+        // Every later unit is refused, naming the held key, before anything posts.
+        let next = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        let error = next.type_text("b").unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+        assert!(error.message.contains("keycode 8"), "{}", error.message);
+        assert!(next.sink().events().is_empty());
+
+        // A retry whose release fails again keeps the debt and refuses.
+        let retry = Input::with_state(
+            RecordingSink::default().held(false, 8).fail_post(0),
+            Arc::clone(&state),
+        );
+        assert_eq!(retry.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert_eq!(state.unconfirmed_releases(), ["keycode 8"]);
+
+        // A failed state query proves nothing either.
+        let blind = Input::with_state(RecordingSink::default().query_fails(), Arc::clone(&state));
+        assert_eq!(blind.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(blind.sink().events().is_empty());
+
+        // A confirmed release clears it, and is not counted against the new action.
+        let settled =
+            Input::with_state(RecordingSink::default().held(false, 8), Arc::clone(&state));
+        settled.settle().unwrap();
+        assert_eq!(trace(&settled), [("key-", 8, false)]);
+        assert_eq!(settled.delivered_units(), 0);
+        assert!(state.unconfirmed_releases().is_empty());
+        settled.type_text("b").unwrap();
+
+        // An input already up settles without posting.
+        state.owing().debt.push(Owed {
+            event: BUTTON_RELEASE_EVENT,
+            detail: 1,
+            ambiguous: false,
+        });
+        let up = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        up.settle().unwrap();
+        assert!(up.sink().events().is_empty());
+    }
+
+    #[test]
+    fn reconnect_failure_names_unconfirmed_releases() {
+        let negotiation = || {
+            Err::<(), _>(err(
+                "XTEST unavailable: extension missing",
+                ErrorCode::CapabilityDeferred,
+            ))
+        };
+        // Nothing owed: the cause is reported as it is.
+        let clean = Arc::new(InputState::default());
+        let error = open_physical(
+            PhysicalPolicy::Default,
+            SessionKind::X11,
+            &clean,
+            negotiation,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::CapabilityDeferred);
+
+        // Owed releases turn the same failure into `input_unsafe` naming them.
+        let state = owing(37);
+        for open in [negotiation as fn() -> Result<(), ProtocolError>, || {
+            Err(err(
+                "X11 unavailable: no display",
+                ErrorCode::CapabilityDeferred,
+            ))
+        }] {
+            let error =
+                open_physical(PhysicalPolicy::Default, SessionKind::X11, &state, open).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InputUnsafe);
+            assert!(error.message.contains("keycode 37"), "{}", error.message);
+            assert!(
+                error.message.contains("could not be settled: X"),
+                "{}",
+                error.message
+            );
+        }
+        // A session that lost X11 altogether says so too.
+        let error = open_physical(
+            PhysicalPolicy::Default,
+            SessionKind::Wayland,
+            &state,
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+        assert!(error.message.contains("keycode 37"), "{}", error.message);
+        // A connection that opens is handed back for settlement.
+        assert_eq!(
+            open_physical(PhysicalPolicy::Default, SessionKind::X11, &state, || Ok(5)).unwrap(),
+            5
+        );
+    }
+
+    /// A sink that records, at every post, what an exit would name as possibly held.
+    struct Watching {
+        inner: RecordingSink,
+        state: Arc<InputState>,
+        seen: RefCell<Vec<Vec<String>>>,
+    }
+    impl InputSink for Watching {
+        fn admit(&self) -> Result<(), ProtocolError> {
+            self.inner.admit()
+        }
+        fn admit_point(&self, x: i32, y: i32) -> Result<(), ProtocolError> {
+            self.inner.admit_point(x, y)
+        }
+        fn keycode(&self, sym: u32) -> Result<Option<Keycode>, ProtocolError> {
+            self.inner.keycode(sym)
+        }
+        fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError> {
+            self.inner.is_down(button, detail)
+        }
+        fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
+            self.seen.borrow_mut().push(self.state.possibly_held());
+            self.inner.post(event, detail, x, y)
+        }
+    }
+
+    fn watching(inner: RecordingSink) -> Input<Watching> {
+        let state = Arc::new(InputState::default());
+        let sink = Watching {
+            inner,
+            state: Arc::clone(&state),
+            seen: RefCell::default(),
+        };
+        Input::with_state(sink, state)
+    }
+
+    #[test]
+    fn a_press_is_visible_to_an_exit_before_it_is_submitted() {
+        let input = watching(RecordingSink::default());
+        input.type_text("A").unwrap();
+        let held = "keycode 8 (held by a running action)";
+        let both = vec![
+            held.to_owned(),
+            "keycode 9 (held by a running action)".to_owned(),
+        ];
+        // Shift press, `a` press, `a` release, shift release.
+        assert_eq!(
+            *input.sink().seen.borrow(),
+            [
+                vec![held.to_owned()],
+                both.clone(),
+                both,
+                vec![held.to_owned()]
+            ]
+        );
+        assert!(
+            input.state().possibly_held().is_empty(),
+            "all confirmed released"
+        );
+
+        // A rejected press is not held; an uncertain one stays named until cleanup
+        // hands it to the debt.
+        let input = watching(RecordingSink::default().fail_post(0));
+        assert!(input.type_text("A").is_err());
+        assert!(input.state().possibly_held().is_empty());
+        let input = watching(RecordingSink::default().lose_ack(0, true).fail_post(1));
+        assert!(input.type_text("A").is_err());
+        assert_eq!(input.state().possibly_held(), ["keycode 8"]);
+    }
+
+    #[test]
+    fn exit_snapshot_during_debt_transfer() {
+        // A cleanup hands a failed release from the held list to the debt while an
+        // exit snapshot is between its reads: the snapshot still names the input. The
+        // window gives a racing transfer time to run; one lock keeps it out.
+        let state = Arc::new(InputState::default());
+        let owed = Owed {
+            event: KEY_RELEASE_EVENT,
+            detail: 8,
+            ambiguous: false,
+        };
+        state.hold(owed);
+        let (done, transferred) = std::sync::mpsc::channel();
+        let cleanup = Arc::clone(&state);
+        let mut worker = None;
+        let snapshot = state.possibly_held_with(|| {
+            worker = Some(std::thread::spawn(move || {
+                cleanup.hand_over(vec![owed], vec![owed]);
+                let _ = done.send(());
+            }));
+            let _ = transferred.recv_timeout(Duration::from_millis(300));
+        });
+        assert_eq!(snapshot, ["keycode 8 (held by a running action)"]);
+        worker.expect("spawned").join().expect("transfer");
+        assert_eq!(state.possibly_held(), ["keycode 8"]);
+    }
+
+    fn owing(detail: u8) -> Arc<InputState> {
+        let state = Arc::new(InputState::default());
+        state.owing().debt.push(Owed {
+            event: KEY_RELEASE_EVENT,
+            detail,
+            ambiguous: false,
+        });
+        state
+    }
+
+    #[test]
+    fn exit_settlement_that_times_out_keeps_the_release_delivery_unknown() {
+        // The release is submitted, then the exit stops waiting before it confirms: the
+        // wait ends when the sink signals the post began, not after an elapsed time. The
+        // post stays open until the test releases it, after the snapshot.
+        let state = owing(8);
+        let (posts, posting) = std::sync::mpsc::channel();
+        let (release, held_open) = std::sync::mpsc::channel();
+        let left = settle_for_exit_with(
+            Arc::clone(&state),
+            move || {
+                Ok(RecordingSink::default()
+                    .held(false, 8)
+                    .announce_posts(posts)
+                    .hold_posts_until(held_open))
+            },
+            |_| {
+                assert_eq!(posting.recv_timeout(Duration::from_secs(10)), Ok(0));
+            },
+        );
+        assert_eq!(left, ["keycode 8 (delivery unknown, never resent)"]);
+        assert!(
+            state.owing().debt[0].ambiguous,
+            "never resendable in-process"
+        );
+        let later = Input::with_state(RecordingSink::default().held(false, 8), state);
+        assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(later.sink().events().is_empty(), "never resent");
+        release.send(()).expect("the held post is still waiting");
+
+        // One that confirms in time is settled.
+        let state = owing(8);
+        let left = settle_for_exit(
+            Arc::clone(&state),
+            || Ok(RecordingSink::default().held(false, 8)),
+            Duration::from_secs(5),
+        );
+        assert!(left.is_empty(), "{left:?}");
+        assert!(state.unconfirmed_releases().is_empty());
+
+        // No connection: nothing was submitted, so it stays a plain owed release.
+        let state = owing(9);
+        let left = settle_for_exit(
+            Arc::clone(&state),
+            || Err::<RecordingSink, _>(err("no display", ErrorCode::CapabilityDeferred)),
+            Duration::from_secs(5),
+        );
+        assert_eq!(left, ["keycode 9"]);
+        assert!(!state.owing().debt[0].ambiguous);
+
+        // Nothing owed: no attempt.
+        let left = settle_for_exit(
+            Arc::new(InputState::default()),
+            || -> Result<RecordingSink, ProtocolError> { panic!("must not connect") },
+            Duration::from_secs(5),
+        );
+        assert!(left.is_empty());
+    }
+
+    #[test]
+    fn first_post_ack_lost_is_uncertain_and_owed() {
+        // The press is applied but its acknowledgment is lost, and cleanup is rejected.
+        let state = Arc::new(InputState::default());
+        let sink = RecordingSink::default().lose_ack(0, true).fail_post(1);
+        let input = Input::with_state(sink, Arc::clone(&state));
+        input.keypress(&["control"]).unwrap_err();
+        assert_eq!(trace(&input), [("key+", 8, true)]);
+        assert_eq!(input.delivered_units(), 0);
+        assert!(input.delivery_uncertain());
+        assert_eq!(state.unconfirmed_releases(), ["keycode 8"]);
+
+        // The press was never confirmed, yet the next request releases it first.
+        let next = Input::with_state(RecordingSink::default().held(false, 8), Arc::clone(&state));
+        next.settle().unwrap();
+        assert_eq!(trace(&next), [("key-", 8, false)]);
+    }
+
+    #[test]
+    fn an_ambiguous_release_is_never_resent_blindly() {
+        // The release was applied but unacknowledged: cleanup sees control up and stops.
+        let input = Input::with_sink(RecordingSink::default().lose_ack(1, true));
+        input.keypress(&["control"]).unwrap_err();
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, true)]);
+        assert!(input.delivery_uncertain());
+        assert!(input.state().unconfirmed_releases().is_empty());
+
+        // Not applied: control is still down, but it may belong to another client now.
+        let state = Arc::new(InputState::default());
+        let sink = RecordingSink::default().lose_ack(1, false);
+        let input = Input::with_state(sink, Arc::clone(&state));
+        input.keypress(&["control"]).unwrap_err();
+        assert_eq!(trace(&input), [("key+", 8, true)]);
+        assert_eq!(state.unconfirmed_releases(), ["keycode 8"]);
+        let held = Input::with_state(RecordingSink::default().held(false, 8), Arc::clone(&state));
+        assert_eq!(held.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(held.sink().events().is_empty(), "never resent");
+        let up = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        up.settle().unwrap();
+        assert!(state.unconfirmed_releases().is_empty());
+
+        // A failed query during cleanup keeps an ambiguous release owed.
+        let input = Input::with_sink(RecordingSink::default().query_fails());
+        let mut held = Held::new(&input);
+        held.owed.push(Owed {
+            event: KEY_RELEASE_EVENT,
+            detail: 9,
+            ambiguous: true,
+        });
+        drop(held);
+        assert_eq!(input.state().unconfirmed_releases(), ["keycode 9"]);
+        assert!(input.sink().events().is_empty());
+    }
+
+    #[test]
+    fn a_panic_with_input_held_still_releases_every_owed_input() {
+        // The second press panics with control down: both are released on unwind.
+        let input = Input::with_sink(RecordingSink::default().panic_post(1));
+        let outcome = catch_unwind(AssertUnwindSafe(|| input.keypress(&["control", "a"])));
+        assert!(outcome.is_err());
+        assert_eq!(
+            trace(&input),
+            [("key+", 8, true), ("key-", 9, false), ("key-", 8, false)]
+        );
+
+        // A panic inside one cleanup release does not skip the next.
+        let input = Input::with_sink(
+            RecordingSink::default()
+                .refuse_admission_after(2)
+                .panic_post(2),
+        );
+        let error = input.keypress(&["control", "shift", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        assert_eq!(
+            trace(&input),
+            [("key+", 8, true), ("key+", 9, true), ("key-", 8, false)]
+        );
+        assert_eq!(input.state().unconfirmed_releases(), ["keycode 9"]);
+    }
+
+    #[test]
+    fn unobservable_buttons_never_settle_debt_by_query() {
+        // Horizontal scroll buttons have no core pointer state: the momentary press and
+        // release still run, since no state can prove another client holds them.
+        let input = Input::with_sink(RecordingSink::default().held(true, 7));
+        input.scroll(0, 0, 1.0, 0.0).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 7, true),
+                ("button-", 7, true)
+            ]
+        );
+
+        // A release whose delivery is unknown is never settled by a query that cannot see it.
+        let state = Arc::new(InputState::default());
+        let sink = RecordingSink::default().lose_ack(2, true);
+        let input = Input::with_state(sink, Arc::clone(&state));
+        input.scroll(0, 0, 1.0, 0.0).unwrap_err();
+        assert_eq!(state.unconfirmed_releases(), ["button 7"]);
+        let later = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(later.sink().events().is_empty(), "never resent");
+        assert_eq!(state.unconfirmed_releases(), ["button 7"]);
+
+        // An owed release that was never submitted settles only by a confirmed post.
+        let state = Arc::new(InputState::default());
+        state.owing().debt.push(Owed {
+            event: BUTTON_RELEASE_EVENT,
+            detail: 6,
+            ambiguous: false,
+        });
+        let settled = Input::with_state(RecordingSink::default(), Arc::clone(&state));
+        settled.settle().unwrap();
+        assert_eq!(trace(&settled), [("button-", 6, false)]);
+        assert!(state.unconfirmed_releases().is_empty());
+    }
+
+    #[test]
+    fn observability_follows_the_pointer_mapping() {
+        assert_eq!(observable_button(&[1, 2, 3, 4, 5, 6, 7], 5), Some(5));
+        assert_eq!(observable_button(&[1, 2, 3, 4, 5, 6, 7], 7), None);
+        assert_eq!(observable_button(&[3, 2, 1], 1), Some(3), "left-handed");
+        assert_eq!(observable_button(&[1, 0, 3], 2), None, "disabled");
+        assert_eq!(observable_button(&[1, 2, 3], 4), None, "unmapped");
+        assert_eq!(observable_button(&[1, 2, 3], 0), None, "no button 0");
+
+        // Physical 7 maps to logical 5 and physical 5 to logical 7.
+        let swapped = [1, 2, 3, 4, 7, 6, 5];
+        // Physical 7 is observable here, so a hold by another client refuses the press.
+        let input = Input::with_sink(
+            RecordingSink::default()
+                .pointer_mapping(&swapped)
+                .held(true, 7),
+        );
+        let error = input.scroll(0, 0, 1.0, 0.0).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe, "{}", error.message);
+        assert_eq!(trace(&input), [("move", 0, true)]);
+        // Physical 5 is not: its momentary press runs although another client holds it.
+        let input = Input::with_sink(
+            RecordingSink::default()
+                .pointer_mapping(&swapped)
+                .held(true, 5),
+        );
+        input.scroll(0, 0, 0.0, 1.0).unwrap();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 5, true),
+                ("button-", 5, true)
+            ]
+        );
+        // And a delivery-unknown release of it is never settled by a query.
+        let state = Arc::new(InputState::default());
+        state.owing().debt.push(Owed {
+            event: BUTTON_RELEASE_EVENT,
+            detail: 5,
+            ambiguous: true,
+        });
+        let later = Input::with_state(
+            RecordingSink::default().pointer_mapping(&swapped),
+            Arc::clone(&state),
+        );
+        assert_eq!(later.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert_eq!(state.unconfirmed_releases(), ["button 5"]);
+    }
+
+    #[test]
+    fn panic_after_normal_release_is_not_resent() {
+        // The release reached the server, then the post panicked: delivery is unknown,
+        // so cleanup observes control up instead of releasing it a second time.
+        let input = Input::with_sink(RecordingSink::default().panic_after_post(1));
+        let outcome = catch_unwind(AssertUnwindSafe(|| input.keypress(&["control"])));
+        assert!(outcome.is_err());
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, true)]);
+        assert!(input.state().unconfirmed_releases().is_empty());
+
+        // The record turns ambiguous before the sink runs, so a panic cannot leave it
+        // looking unsent.
+        let input = Input::with_sink(RecordingSink::default().panic_after_post(1));
+        let mut held = Held::new(&input);
+        held.press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, 8).unwrap();
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let _ = held.release();
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(held.owed.len(), 1);
+        assert!(held.owed[0].ambiguous, "marked before the sink ran");
+    }
+
+    #[test]
+    fn cancellation_stops_before_the_next_unit_and_releases() {
+        let state = Arc::new(InputState::default());
+        let sink = RecordingSink::default().cancel_after(1, Arc::clone(&state));
+        let input = Input::with_state(sink, Arc::clone(&state));
+        let error = input.keypress(&["control", "a"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+        assert_eq!(trace(&input), [("key+", 8, true), ("key-", 8, false)]);
+        assert!(state.unconfirmed_releases().is_empty());
+        let later = Input::with_state(RecordingSink::default(), state);
+        assert_eq!(
+            later.move_pointer(1, 1).unwrap_err().code,
+            ErrorCode::Cancelled
+        );
+        assert!(later.sink().events().is_empty());
+    }
+
+    #[test]
+    fn drag_rechecks_each_destination_at_effect() {
+        // Three prevalidated points, then the third is covered after the first motion.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(6));
+        let error = input.drag(&[(1, 1), (2, 2), (3, 3)], "left").unwrap_err();
+        assert_eq!(error.code, ErrorCode::OccludedTarget);
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 1, true),
+                ("move", 0, true),
+                ("button-", 1, false),
+            ]
+        );
+        assert_eq!(input.sink().events()[2].x, 2);
+    }
+
+    #[test]
+    fn drag_rechecks_start_before_press() {
+        // The start is covered after the whole-path preflight: nothing posts.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(3));
+        let error = input.drag(&[(1, 1), (2, 2), (3, 3)], "left").unwrap_err();
+        assert_eq!(error.code, ErrorCode::OccludedTarget);
+        assert!(input.sink().events().is_empty());
+
+        // Covered after the start motion: the button never goes down.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(3));
+        input.drag(&[(1, 1), (2, 2)], "left").unwrap_err();
+        assert_eq!(trace(&input), [("move", 0, true)]);
+
+        // Clicks and scrolls recheck their point before each press too.
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(2));
+        input.click(1, 1, "left", 1).unwrap_err();
+        assert_eq!(trace(&input), [("move", 0, true)]);
+        let input = Input::with_sink(RecordingSink::default().cover_points_after(3));
+        input.scroll(1, 1, 0.0, 3.0).unwrap_err();
+        assert_eq!(
+            trace(&input),
+            [
+                ("move", 0, true),
+                ("button+", 5, true),
+                ("button-", 5, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn input_already_held_by_another_client_is_refused() {
+        let input = Input::with_sink(RecordingSink::default().held(false, 8));
+        let error = input.keypress(&["control"]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+        assert!(error.message.contains("keycode 8"), "{}", error.message);
+        assert!(input.sink().events().is_empty());
+
+        let input = Input::with_sink(RecordingSink::default().held(true, 1));
+        assert_eq!(
+            input.click(1, 1, "left", 1).unwrap_err().code,
+            ErrorCode::InputUnsafe
+        );
+        assert_eq!(trace(&input), [("move", 0, true)]);
+
+        let input = Input::with_sink(RecordingSink::default().query_fails());
+        assert_eq!(
+            input.keypress(&["control"]).unwrap_err().code,
+            ErrorCode::InternalError
+        );
+        assert!(input.sink().events().is_empty());
+    }
+
+    #[test]
+    fn rejected_input_posts_nothing() {
+        let input = Input::with_sink(RecordingSink::default());
+        assert_eq!(
+            input.type_text("a\u{e9}").unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.keypress(&["control", "nope"]).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.keypress(&[]).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.keypress(&["control", "Ctrl"]).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.drag(&[(1, 1)], "left").unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        assert_eq!(
+            input.click(1, 1, "fourth", 1).unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+        let blocked = Input::with_sink(RecordingSink::default().refuse_points());
+        assert_eq!(
+            blocked.click(1, 1, "left", 1).unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert_eq!(
+            blocked.drag(&[(1, 1), (2, 2)], "left").unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert_eq!(
+            blocked.scroll(1, 1, 1.0, 0.0).unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert_eq!(
+            blocked.move_pointer(1, 1).unwrap_err().code,
+            ErrorCode::CoordinateBlocked
+        );
+        assert!(input.sink().events().is_empty() && blocked.sink().events().is_empty());
+        assert_eq!(input.delivered_units() + blocked.delivered_units(), 0);
+    }
+
     #[test]
     fn decode_limits() {
         assert_eq!(
@@ -1082,5 +2749,424 @@ mod tests {
             vec![3, 2, 1, 255]
         );
         assert!(decode(&[0; 2], 1, 1, 16, ImageOrder::LSB_FIRST).is_err());
+    }
+}
+
+/// `windows_of` against a scripted X server on a socket pair: real x11rb wire traffic, with
+/// a dropped connection or an X11 error injected at one named request.
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use x11rb::protocol::xproto::{BackingStore, Screen, Setup};
+    use x11rb::rust_connection::DefaultStream;
+    use x11rb::x11_utils::Serialize;
+
+    const ROOT: Window = 0x100;
+
+    /// How the server answers the faulted request.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Fault {
+        /// Close the connection instead of replying.
+        Disconnect,
+        /// Reply with `BadWindow`, keeping the connection.
+        Error,
+    }
+
+    /// A client window; `None` properties are genuinely absent (a successful empty reply).
+    struct Fake {
+        id: Window,
+        pid: u32,
+        net_name: Option<&'static str>,
+        name: Option<&'static str>,
+        /// `WM_CLASS` as its type and value.
+        class: Option<(Atom, Vec<u8>)>,
+    }
+
+    fn windows(class: Option<(Atom, Vec<u8>)>) -> Vec<Fake> {
+        vec![
+            Fake {
+                id: 0x401,
+                pid: 42,
+                net_name: Some("Vault"),
+                name: None,
+                class: Some((31, b"keepassxc\0KeePassXC\0".to_vec())),
+            },
+            // No `_NET_WM_NAME`, and `class` as `WM_CLASS`: `None` is absent, not failed.
+            Fake {
+                id: 0x402,
+                pid: 43,
+                net_name: None,
+                name: Some("Editor"),
+                class,
+            },
+        ]
+    }
+
+    fn setup() -> Vec<u8> {
+        let mut setup = Setup {
+            status: 1,
+            protocol_major_version: 11,
+            protocol_minor_version: 0,
+            length: 0,
+            release_number: 0,
+            resource_id_base: 0x0400_0000,
+            resource_id_mask: 0x001f_ffff,
+            motion_buffer_size: 0,
+            maximum_request_length: u16::MAX,
+            image_byte_order: ImageOrder::LSB_FIRST,
+            bitmap_format_bit_order: ImageOrder::LSB_FIRST,
+            bitmap_format_scanline_unit: 32,
+            bitmap_format_scanline_pad: 32,
+            min_keycode: 8,
+            max_keycode: 255,
+            vendor: b"fixture".to_vec(),
+            pixmap_formats: Vec::new(),
+            roots: vec![Screen {
+                root: ROOT,
+                default_colormap: 0,
+                white_pixel: 0,
+                black_pixel: 0,
+                current_input_masks: EventMask::NO_EVENT,
+                width_in_pixels: 1920,
+                height_in_pixels: 1080,
+                width_in_millimeters: 500,
+                height_in_millimeters: 300,
+                min_installed_maps: 1,
+                max_installed_maps: 1,
+                root_visual: 0,
+                backing_stores: BackingStore::NOT_USEFUL,
+                save_unders: false,
+                root_depth: 24,
+                allowed_depths: Vec::new(),
+            }],
+        };
+        setup.length = u16::try_from((setup.serialize().len() - 8).div_ceil(4)).unwrap();
+        setup.serialize()
+    }
+
+    /// A reply packet: `body` fills bytes 8..32, `extra` follows, padded to 4 bytes.
+    fn reply(seq: u16, data: u8, body: &[u8], extra: &[u8]) -> Vec<u8> {
+        let padded = extra.len().div_ceil(4) * 4;
+        let mut out = vec![1, data];
+        out.extend(seq.to_ne_bytes());
+        out.extend(u32::try_from(padded / 4).unwrap().to_ne_bytes());
+        out.extend(body);
+        out.resize(32, 0);
+        out.extend(extra);
+        out.resize(32 + padded, 0);
+        out
+    }
+
+    /// A `GetProperty` reply to a request for type `wanted` (0: any) of at most `longs`
+    /// 32-bit units, as X11 answers: `None` is a missing property, another type than
+    /// `wanted` carries no value, and a longer value is cut short with `bytes_after` set.
+    fn property(seq: u16, wanted: Atom, longs: u32, value: Option<(Atom, u8, Vec<u8>)>) -> Vec<u8> {
+        raw(
+            seq,
+            wanted,
+            longs,
+            value.map(|(kind, format, bytes)| (kind, format, bytes, 0)),
+        )
+    }
+
+    /// A property value as type, format, bytes, and extra `bytes_after` the server claims it
+    /// left unread: a reply no conforming request of `u32::MAX` units gets.
+    type Raw = (Atom, u8, Vec<u8>, u32);
+
+    /// [`property`] with `value`'s extra `bytes_after` added.
+    fn raw(seq: u16, wanted: Atom, longs: u32, value: Option<Raw>) -> Vec<u8> {
+        let (kind, format, bytes, after) = value.unwrap_or((0, 0, Vec::new(), 0));
+        let max = if wanted != 0 && wanted != kind {
+            0
+        } else {
+            usize::try_from(longs).unwrap().saturating_mul(4)
+        };
+        let sent = &bytes[..bytes.len().min(max)];
+        let units = if format == 0 {
+            0
+        } else {
+            sent.len() / usize::from(format / 8)
+        };
+        let mut body = kind.to_ne_bytes().to_vec();
+        body.extend((u32::try_from(bytes.len() - sent.len()).unwrap() + after).to_ne_bytes());
+        body.extend(u32::try_from(units).unwrap().to_ne_bytes());
+        reply(seq, format, &body, sent)
+    }
+
+    fn words(values: &[u32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_ne_bytes()).collect()
+    }
+
+    /// Serve `fakes` on `stream` until the client hangs up, answering a property labelled in
+    /// `overrides` with its value on every window, and the first request labelled `fault.0`
+    /// with `fault.1`. Returns each request's label.
+    fn serve(
+        mut stream: UnixStream,
+        fakes: Vec<Fake>,
+        overrides: Vec<(&'static str, Option<Raw>)>,
+        fault: Option<(&'static str, Fault)>,
+    ) -> Vec<String> {
+        let mut request = [0u8; 12];
+        stream.read_exact(&mut request).unwrap();
+        stream.write_all(&setup()).unwrap();
+        let mut atoms = HashMap::<Atom, String>::new();
+        let mut labels = Vec::new();
+        let mut fault = fault;
+        for seq in 1u16.. {
+            let mut header = [0u8; 4];
+            if stream.read_exact(&mut header).is_err() {
+                break;
+            }
+            let length = usize::from(u16::from_ne_bytes([header[2], header[3]])) * 4;
+            let mut body = vec![0u8; length - 4];
+            stream.read_exact(&mut body).unwrap();
+            let full = [header.to_vec(), body].concat();
+            let word = |at: usize| u32::from_ne_bytes(full[at..at + 4].try_into().unwrap());
+            let label = match full[0] {
+                16 => "intern".to_owned(),
+                20 => match word(8) {
+                    67 => "WM_CLASS".to_owned(),
+                    39 => "WM_NAME".to_owned(),
+                    atom => atoms.get(&atom).cloned().unwrap_or_default(),
+                },
+                14 => "geometry".to_owned(),
+                40 => "translate".to_owned(),
+                opcode => format!("unexpected opcode {opcode}"),
+            };
+            labels.push(label.clone());
+            match fault {
+                Some((at, how)) if at == label => {
+                    fault = None;
+                    if how == Fault::Disconnect {
+                        break;
+                    }
+                    let mut error = vec![0, 3];
+                    error.extend(seq.to_ne_bytes());
+                    error.extend(word(4).to_ne_bytes());
+                    error.extend([0, 0, full[0]]);
+                    error.resize(32, 0);
+                    stream.write_all(&error).unwrap();
+                    continue;
+                }
+                _ => {}
+            }
+            let window = word(4);
+            let fake = fakes.iter().find(|fake| fake.id == window);
+            let text = |text: Option<&str>| text.map(|t| (31, 8, t.as_bytes().to_vec()));
+            let answer = |value| property(seq, word(12), word(20), value);
+            let overridden = overrides.iter().find(|(at, _)| *at == label);
+            let packet = match (full[0], label.as_str()) {
+                (20, _) if overridden.is_some() => {
+                    raw(seq, word(12), word(20), overridden.unwrap().1.clone())
+                }
+                (16, _) => {
+                    let len = usize::from(u16::from_ne_bytes([full[4], full[5]]));
+                    let name = String::from_utf8(full[8..8 + len].to_vec()).unwrap();
+                    let atom = 0x200 + u32::try_from(atoms.len()).unwrap();
+                    atoms.insert(atom, name);
+                    reply(seq, 0, &atom.to_ne_bytes(), &[])
+                }
+                (14, _) => reply(
+                    seq,
+                    24,
+                    &[
+                        ROOT.to_ne_bytes().as_slice(),
+                        &words(&[0, 100 | (80 << 16), 0]),
+                    ]
+                    .concat(),
+                    &[],
+                ),
+                (40, _) => reply(
+                    seq,
+                    1,
+                    &[0u32.to_ne_bytes(), (10u32 | (20 << 16)).to_ne_bytes()].concat(),
+                    &[],
+                ),
+                (_, "_NET_ACTIVE_WINDOW") => answer(Some((33, 32, words(&[0x401])))),
+                (_, "_NET_CLIENT_LIST_STACKING" | "_NET_CLIENT_LIST") => {
+                    let ids = fakes.iter().map(|fake| fake.id).collect::<Vec<_>>();
+                    answer(Some((33, 32, words(&ids))))
+                }
+                (_, "_NET_WM_PID") => answer(fake.map(|fake| (6, 32, words(&[fake.pid])))),
+                (_, "_NET_WM_NAME") => {
+                    let utf8 = atoms.iter().find(|(_, name)| *name == "UTF8_STRING");
+                    let name = text(fake.and_then(|fake| fake.net_name));
+                    answer(
+                        name.zip(utf8)
+                            .map(|((_, format, name), (&utf8, _))| (utf8, format, name)),
+                    )
+                }
+                (_, "WM_NAME") => answer(text(fake.and_then(|fake| fake.name))),
+                (_, "WM_CLASS") => answer(
+                    fake.and_then(|fake| fake.class.clone())
+                        .map(|(kind, class)| (kind, 8, class)),
+                ),
+                // `_NET_WM_STATE` and anything unscripted: absent.
+                _ => answer(None),
+            };
+            stream.write_all(&packet).unwrap();
+        }
+        labels
+    }
+
+    /// `windows_of` over a fresh scripted server, and the requests it made.
+    fn listing(
+        fault: Option<(&'static str, Fault)>,
+    ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
+        scripted(None, Vec::new(), fault)
+    }
+
+    /// [`listing`] with `class` as the second window's `WM_CLASS`.
+    fn classed(
+        class: Option<(Atom, Vec<u8>)>,
+        fault: Option<(&'static str, Fault)>,
+    ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
+        scripted(class, Vec::new(), fault)
+    }
+
+    /// [`classed`] with `overrides` answering the properties they label.
+    fn scripted(
+        class: Option<(Atom, Vec<u8>)>,
+        overrides: Vec<(&'static str, Option<Raw>)>,
+        fault: Option<(&'static str, Fault)>,
+    ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
+        let (client, server) = UnixStream::pair().unwrap();
+        let served = std::thread::spawn(move || serve(server, windows(class), overrides, fault));
+        let (stream, _) = DefaultStream::from_unix_stream(client).unwrap();
+        let listed = RustConnection::connect_to_stream(stream, 0)
+            .map_err(xerr)
+            .and_then(|conn| windows_of(&conn, 0));
+        (listed, served.join().unwrap())
+    }
+
+    #[test]
+    fn complete_listing_reads_class_and_keeps_an_absent_class_absent() {
+        let (listed, labels) = listing(None);
+        let listed = listed.unwrap();
+        assert!(
+            !labels.iter().any(|l| l.starts_with("unexpected")),
+            "{labels:?}"
+        );
+        let by_id = |id| listed.iter().find(|w| w.id == id).unwrap();
+        let vault = by_id(0x401);
+        assert_eq!(
+            vault.wm_class,
+            Some(("keepassxc".to_owned(), "KeePassXC".to_owned()))
+        );
+        assert_eq!(
+            (vault.pid, vault.title.as_str(), vault.focused),
+            (42, "Vault", true)
+        );
+        assert_eq!(
+            vault.frame,
+            Rect {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 80
+            }
+        );
+        // A successful reply without `WM_CLASS` is absence: the window still lists.
+        let editor = by_id(0x402);
+        assert_eq!(editor.wm_class, None);
+        assert_eq!((editor.pid, editor.title.as_str()), (43, "Editor"));
+    }
+
+    #[test]
+    fn disconnect_after_atoms_fails_the_listing() {
+        let (listed, labels) = listing(Some(("_NET_ACTIVE_WINDOW", Fault::Disconnect)));
+        assert_eq!(labels.iter().filter(|l| *l == "intern").count(), 8);
+        let error = listed.unwrap_err();
+        assert_eq!(error.code, ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn any_failed_read_fails_the_whole_listing() {
+        for at in [
+            "intern",
+            "_NET_ACTIVE_WINDOW",
+            "_NET_CLIENT_LIST_STACKING",
+            "geometry",
+            "translate",
+            "_NET_WM_STATE",
+            "WM_CLASS",
+            "_NET_WM_PID",
+            "_NET_WM_NAME",
+            "WM_NAME",
+        ] {
+            for how in [Fault::Disconnect, Fault::Error] {
+                let (listed, labels) = listing(Some((at, how)));
+                assert!(labels.iter().any(|l| l == at), "{at} never requested");
+                assert!(listed.is_err(), "{at} {how:?} still listed {listed:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_class_read_incompletely_fails_the_listing() {
+        // A `UTF8_STRING` class, and one past the 4 KiB read: unread, never absent.
+        let long = [b"vault\0".as_slice(), &[b'K'; 4096], b"\0"].concat();
+        // `UTF8_STRING` is the eighth atom `Atoms::new` interns.
+        for class in [(0x200 + 7, b"vault\0Vault\0".to_vec()), (31, long)] {
+            let (listed, _) = classed(Some(class.clone()), None);
+            assert!(listed.is_err(), "{class:?} listed {listed:?}");
+        }
+        // A whole but malformed class is read, and attributes nothing.
+        let (listed, _) = classed(Some((31, b"Vault".to_vec())), None);
+        assert_eq!(
+            listed
+                .unwrap()
+                .iter()
+                .find(|w| w.id == 0x402)
+                .unwrap()
+                .wm_class,
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_pid_refuses_listing() {
+        // A present `_NET_WM_PID` of another type, another format, or not read whole is
+        // unread, never absent: as absent its window would pair with no root (#1311).
+        for (case, pid) in [
+            ("wrong type", (31, 32, words(&[43]), 0)),
+            // Another type with an empty value: only the type tells it from absence.
+            ("wrong type, empty", (31, 32, Vec::new(), 0)),
+            ("wrong format", (6, 16, 43u16.to_ne_bytes().to_vec(), 0)),
+            ("truncated", (6, 32, words(&[43]), 4)),
+        ] {
+            let (listed, labels) = scripted(None, vec![("_NET_WM_PID", Some(pid))], None);
+            assert!(
+                labels.iter().any(|l| l == "_NET_WM_PID"),
+                "{case}: {labels:?}"
+            );
+            let error = listed.expect_err(case);
+            assert_eq!(error.code, ErrorCode::InternalError, "{case}");
+        }
+        // A genuinely missing `_NET_WM_PID` stays absent by design: the windows still list,
+        // pairing with no root, so a root of their process stays `unpaired`.
+        let (listed, _) = scripted(None, vec![("_NET_WM_PID", None)], None);
+        let listed = listed.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|w| w.pid == 0), "{listed:?}");
+    }
+
+    #[test]
+    fn client_list_fallback_lists_and_fails_closed() {
+        // No `_NET_CLIENT_LIST_STACKING`: the listing falls back to `_NET_CLIENT_LIST`.
+        let absent = || vec![("_NET_CLIENT_LIST_STACKING", None)];
+        let (listed, labels) = scripted(None, absent(), None);
+        assert!(labels.iter().any(|l| l == "_NET_CLIENT_LIST"), "{labels:?}");
+        let mut ids = listed.unwrap().iter().map(|w| w.id).collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, [0x401, 0x402]);
+        for how in [Fault::Disconnect, Fault::Error] {
+            let (listed, labels) = scripted(None, absent(), Some(("_NET_CLIENT_LIST", how)));
+            assert!(labels.iter().any(|l| l == "_NET_CLIENT_LIST"), "{labels:?}");
+            assert!(listed.is_err(), "fallback {how:?} still listed {listed:?}");
+        }
     }
 }

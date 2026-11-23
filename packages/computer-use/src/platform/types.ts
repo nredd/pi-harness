@@ -38,13 +38,23 @@ export interface PlatformReadyState {
 export interface PlatformRootQuery {
 	pid?: number;
 	title?: string;
+	/**
+	 * The caller reads a missing root as closed. The macOS backend then fails with `inventory_incomplete` unless the
+	 * helper reported the listing `complete`; a reply without the field (an older external helper) fails closed.
+	 */
+	authoritative?: boolean;
 }
 
 interface PlatformAppIdentity {
-	/** Host app identifier. Linux currently reports an untrusted AT-SPI name (#1180). */
+	/** Host app identifier: macOS bundle id, Windows or Linux executable basename. */
 	appId?: string;
 	/** macOS alias for the bundle identifier. */
 	bundleId?: string;
+	/**
+	 * Linux block-only names: the X11 `WM_CLASS` instance and class, and a literal `exe` link name
+	 * ending in ` (deleted)`. A match refuses the root; these names never admit or identify one.
+	 */
+	blockAliases?: string[];
 }
 
 export interface PlatformApp extends PlatformAppIdentity {
@@ -73,15 +83,27 @@ export interface PlatformRoot extends PlatformAppIdentity {
 	zOrder: number;
 	framePoints: FramePoints;
 	scaleFactor: number;
-	isOnscreen: boolean;
-	isFocused: boolean;
-	isMinimized: boolean;
+	/**
+	 * State flags: `undefined` means the platform did not read the flag (the macOS helper omits an unread one), never
+	 * `false`. Ranking and modal selection in `root-selection.ts` treat unknown as no evidence either way.
+	 */
+	isOnscreen?: boolean;
+	isFocused?: boolean;
+	isMinimized?: boolean;
 	/** Best-effort; platforms without a main-window concept may mirror `isFocused`. */
-	isMain: boolean;
+	isMain?: boolean;
 	/** Platform-reported modality fact, including platform-specific modal/dialog/sheet signals. */
 	isModal: boolean;
+	/** Windows: discovery could not bind this root to a verifiable window instance, so it is refused. */
+	instanceUnavailable?: true;
 	metadata?: Record<string, unknown>;
 }
+
+/**
+ * A root listing. `complete: false` (macOS) marks one the helper could not read completely: a root it omits is
+ * unknown, not closed, and a saved root resolves from it only by its verified identity, never a lookalike.
+ */
+export type PlatformRootList = PlatformRoot[] & { complete?: boolean };
 
 export interface PlatformFrontmostResult extends PlatformAppIdentity {
 	appName: string;
@@ -220,17 +242,31 @@ export interface PlatformWaitForResponse {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
+	/**
+	 * A `gone` wait whose last walk could not read the whole scope: absence is unknown. The macOS backend also sets it
+	 * for a `gone` reply without the helper's `complete` field, e.g. from an older external helper.
+	 */
+	incomplete?: boolean;
 	nodeCount?: number;
 }
 
 export interface ComputerUsePlatformBackend {
 	name: PlatformName;
-	/** Release process-local resources when the Pi session is torn down. */
-	shutdown?(): void | Promise<void>;
+	/**
+	 * Release process-local resources when the Pi session is torn down. May resolve to a warning the user must
+	 * see, e.g. that a helper exited with keys or buttons possibly still held.
+	 */
+	shutdown?(): void | Promise<void> | Promise<string | undefined>;
 	setActivity?(active: boolean): void | Promise<void>;
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
-	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]>;
+	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRootList>;
+	/**
+	 * The roots of every process in `pids` from one inventory, for a filtered `find_roots` that matched several apps,
+	 * e.g. one X11 window listing on Linux rather than one per app queued behind a stalled X server. A PID-scoped
+	 * failure fails the whole call, as one call per process would. Without it, each process is listed alone.
+	 */
+	listRootsOfPids?(pids: readonly number[], signal?: AbortSignal): Promise<PlatformRoot[]>;
 	/** Explain why no roots are visible on this host (e.g. a WSL2 guest), appended to empty `find_roots` text. */
 	emptyRootsHint?(): string | undefined;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
@@ -249,6 +285,12 @@ export interface ComputerUsePlatformBackend {
 		args: PlatformReadTextRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformReadTextResponse>;
+	/**
+	 * The live root of a retained native look, found by the native identity the look holds rather than an inventory
+	 * handle: `undefined` only when the lookup proved it absent; an incomplete lookup, the helper's or the client's
+	 * deadline, rejects with code `timeout`, and a malformed reply rejects too (Linux, #1300).
+	 */
+	lookRoot?(lookId: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformRoot | undefined>;
 	waitFor(
 		args: PlatformWaitForRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },

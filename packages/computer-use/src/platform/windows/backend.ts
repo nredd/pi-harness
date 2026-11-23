@@ -86,6 +86,7 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			isMinimized: toBoolean(raw?.isMinimized),
 			isMain: toBoolean(raw?.isMain ?? raw?.isFocused),
 			isModal: toBoolean(raw?.isModal),
+			...(raw?.instanceUnavailable === true ? { instanceUnavailable: true as const } : {}),
 			metadata: raw?.metadata,
 		};
 	});

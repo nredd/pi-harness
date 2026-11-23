@@ -24,6 +24,8 @@ import type { KeyId } from "@earendil-works/pi-tui";
 import { applyAgentEvent, applyOtherSessionSurvivor, clearElsewhere, forgetAgents, setForkLineage } from "./agents.ts";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { applyMonitorEvent, forgetMonitors, keepLinks } from "./monitors.ts";
+import { type PreviousSession, previousSessionOf, recordOutgoing } from "./plan/carryover.ts";
+import type { ToolCompletion } from "./plan/empty-reminder.ts";
 import { registerPlanHooks } from "./plan/hooks.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
 import { forkAncestry } from "./state/lineage.ts";
@@ -215,14 +217,26 @@ export default function (
 		requeryOtherSurvivors,
 		{ homeDir: options.homeDir },
 	);
+	// Model-issued completions by call id, kept for one turn. Core emits a batch's tool_execution_end events before
+	// its tool-result message_end events, and no message_end handler can rewrite these fields.
+	const completions = new Map<string, ToolCompletion>();
+	pi.on("turn_start", () => completions.clear());
 	// Reads getTodos() at render time; do NOT call replayFromBranch here
 	// (branch is stale -- message_end runs after tool_execution_end).
-	pi.on("tool_execution_end", async (event, ctx) => {
-		// Parallel tool completions must update the counter in event order.
-		planHooks.toolFinished(event, ctx);
+	pi.on("tool_execution_end", async (event) => {
+		if (event.parentToolCallId === undefined) {
+			completions.set(event.toolCallId, { toolName: event.toolName, isError: event.isError });
+		}
 		if (event.toolName !== TOOL_NAME || event.isError) return;
 		// The tool itself succeeded, so a transient overlay-load failure is not an extension error.
 		await refreshTodoOverlay();
+	});
+	// Tool results arrive here serially in assistant source order, unlike parallel completions.
+	// The order comes from here, the tool name and outcome from the completion when one matches.
+	pi.on("message_end", (event, ctx) => {
+		const { message } = event;
+		if (message.role !== "toolResult") return;
+		planHooks.toolFinished(completions.get(message.toolCallId) ?? message, ctx);
 	});
 
 	// Collapse/expand hotkey for the todo overlay. The key is resolved once at
@@ -251,13 +265,17 @@ export default function (
 	// event, so `ctx` may be a dead proxy whose getters throw) keeps current state —
 	// the replacement session's session_start replays it. Other errors are real replay
 	// bugs and must propagate. The render is sid-gated so a child never refreshes the
-	// foreground overlay.
+	// foreground overlay. `onReplayed` runs after a successful replay and BEFORE the
+	// overlay await, so a failed refresh or a shutdown during it cannot undo or
+	// outlive its effect; a stale ctx never calls it.
 	const replayAndRefresh = async (
 		ctx: Parameters<typeof sid>[0] & Parameters<typeof replayFromBranch>[0],
+		onReplayed?: (sessionId: string) => void,
 	): Promise<void> => {
 		let isForeground = false;
+		let id: string;
 		try {
-			const id = sid(ctx);
+			id = sid(ctx);
 			const before = getState(id);
 			const after = replayFromBranch(ctx);
 			replaceState(id, after);
@@ -268,14 +286,18 @@ export default function (
 			isForeground = id === getActiveRenderSession();
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
+			return;
 		}
+		onReplayed?.(id);
 		if (isForeground) await updateTodoOverlay();
 	};
 
 	pi.on("session_start", async (event, ctx) => {
 		let id: string;
+		let previous: PreviousSession | undefined;
 		try {
 			id = sid(ctx);
+			previous = previousSessionOf(event, ctx.sessionManager);
 			contextSessions.set(ctx, id);
 			managerSessions.set(ctx.sessionManager, id);
 			// Every session replays into its OWN data slot (Phase 1 isolation).
@@ -293,6 +315,8 @@ export default function (
 		// Only a process restart provably kills every child; /new, /resume, /fork and /reload
 		// detach live agents that pi-subagents re-announces below.
 		await planHooks.sessionStarted(id, event.reason === "startup", ctx.sessionManager.getBranch(), ctx.mode);
+		// A fresh session surfaces, never imports, the open todos its predecessor left.
+		if (previous) planHooks.sessionFresh(id, previous, ctx.mode);
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
 		if (!ctx.hasUI) {
@@ -321,18 +345,21 @@ export default function (
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
-		await replayAndRefresh(ctx);
+		// The compacted context no longer carries the list: restore it on the next request.
+		await replayAndRefresh(ctx, planHooks.sessionCompacted);
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
 		await replayAndRefresh(ctx);
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
+	pi.on("session_shutdown", async (event, ctx) => {
 		let s = contextSessions.get(ctx);
 		let manager: object | undefined;
 		try {
 			manager = ctx.sessionManager;
+			// `/new` hands the live branch's open todos to the session it starts.
+			recordOutgoing(event, ctx.sessionManager);
 			s ??= managerSessions.get(manager) ?? sid(ctx);
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;

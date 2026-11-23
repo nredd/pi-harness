@@ -34,8 +34,9 @@ The native source is `native/windows/bridge-rs/`. This source change is a siblin
 opt-in WSL transport (#981), not a second transport. It does not enable WSL interop,
 install a helper, change accessibility settings or grant privileges. #673 remains release-gating.
 
-- Protocol `5` (from `4`: `uiaReadText` and `uiaWaitFor` require the admitted `pid` and `windowId`,
-  so a v4 helper or client fails the version check) and architecture `1`. Diagnostics advertise
+- Protocol `6` (from `5`: native root refs are per window instance and `uiaWaitFor` without a look
+  requires `rootRef`; protocol `5` added the admitted `pid` and `windowId` to `uiaReadText` and
+  `uiaWaitFor`. An older helper or client fails the version check) and architecture `1`. Diagnostics advertise
   `capabilities: ["fail-closed-live-target-v1"]`. The coordinated WSL client must require this
   capability before accepting a helper; an owner-pinned SHA alone does not make an older executable safe.
   The literal is a STATIC claim in `diagnostics()`, not derived at runtime from the routes. It is guarded
@@ -169,7 +170,7 @@ All platforms retain `find_roots`, `observe_ui`, `search_ui`, `expand_ui`, `insp
 `read_text`, `wait_for`, `launch_browser`, `navigate_browser`, and `evaluate_browser`.
 macOS additionally registers `desktop_screenshot` and `desktop_input` (including app activation and
 plain-text clipboard access). Desktop tools require `desktop_control: true` and `headless: false`.
-Common terminals, password managers and system authentication agents are blocked by default on macOS and Windows (`app_blocked`, config `blocked_apps`). Linux matching is disabled pending trusted identity (#1180); `/computer-use` lists configured entries but reports the Linux blocklist as inactive (including WSLg). The macOS helper refuses UI commands while the session is locked (`screen_locked`); see the [configuration reference](#preserved-configuration).
+Common terminals, password managers and system authentication agents are blocked by default (`app_blocked`, config `blocked_apps`): by bundle id on macOS and by executable basename on Windows and Linux (including WSLg). A Windows or Linux root whose executable cannot be determined is refused. The macOS helper refuses UI commands while the session is locked (`screen_locked`); see the [configuration reference](#preserved-configuration).
 They share a scoped physical-input lock with `act_ui`; background semantic work stays independent.
 
 The normal loop is find a root, observe it, then query or act from the returned immutable `stateId`.
@@ -194,7 +195,7 @@ the observation epoch advances. Desktop ref movement is unchanged.
 These rules apply to every OS and transport. They describe required behavior, not current parity.
 
 1. Admit at effect. Before each logical unit (e.g. a keystroke or drag step), verify pinned delivery still reaches the selected target and global delivery cannot reach a blocked target. No slow work between check and post.
-2. Stop on refusal or cancellation before the next unit. Admission is not a lease for the rest of the action.
+2. Stop on refusal or cancellation before the next unit. Admission is not a lease for the rest of the action. A transport that cannot cancel a request already sent reports its lost reply as `unknown`, never as a failure to retry.
 3. On every exit, release any owed button or modifier through a cleanup path admission cannot refuse, and restore temporary clipboard contents.
 4. If delivery stops after any unit was posted, report `unknown`, never `didnt`, with `evidence.deliveredUnits` and the refusal code. A post alone does not prove success.
 5. Never automatically retry refused, partial or uncertain delivery.
@@ -207,12 +208,12 @@ Current implementation:
 
 | Rules | macOS native desktop delivery | Windows native desktop delivery | Linux native desktop delivery |
 | --- | --- | --- | --- |
-| 1, 2, 8: admission, stop and routing | PID delivery targets the selected process. HID checks focus and blocked apps, but web text fallback and multi-key input have stale-check gaps (#1173). | UIA and HWND delivery resolve the selected root; foreground `SendInput` uses target/focus guards but has no helper blocklist. | AT-SPI is target-scoped; X11 XTEST is global and checks the active window, not the blocklist. Per-unit conformance is unproven; #1183 tracks the test seam. |
-| 3, 4: cleanup and partial delivery | Paste restores the previous pasteboard contents only if no newer write intervenes. Drag reserves mouse-up. Release timestamps and unmatched-release coverage are open (#1174); no general partial-delivery count guarantee. | The helper attempts to release buttons after interrupted clicks and drags and keys after interrupted chords. Unicode typing sends down/up pairs in a single batch and does not attempt a release after partial insertion. No clipboard handling or general partial-delivery count guarantee. | X11 can leave held inputs on error (#1181) and report partial delivery as `didnt` (#1182). |
-| 5: retry | The bridge still retries some foreground refusals and checked `didnt` results outside strict headless; uncertain delivery is not blindly replayed. | Shared fallback; no conformance guarantee. | Shared fallback; #1182 means `didnt` does not always prove no input posted. |
-| 6: strict headless | Prohibits synthesized input, focus and cursor movement; input requiring foreground returns `foreground_required`. | Prohibits raw input and forced focus; raw-input refusal can be `coordinate_blocked`. | Prohibits XTEST and EWMH focus. Physical fallback refusal can be `coordinate_blocked` (X11 or no graphical session) or `capability_deferred` (Wayland). |
-| 7: root selection | Enforced by bundle id. | Enforced by executable basename. Unidentified roots are listed as blocked and refused with `app_blocked`. | Disabled: helper `processName` is the app-supplied AT-SPI accessible Name, not an executable basename or `WM_CLASS` (#1180). |
-| 9: codes | Uses contract codes where applicable. | Platform-specific codes remain, including the strict-headless divergence above. | Platform-specific codes remain, including the strict-headless divergence above. |
+| 1, 2, 8: admission, stop and routing | PID delivery targets the selected process. HID checks focus and blocked apps. Web `setText` rechecks after the focus write, value read and selection write, and before `cmd+a` and the replacement text; `typeText` and `keypress` admit every key-down and always send its key-up. Gap: AX key focus is probed on a cadence (up to eight units or 64 ms), so a blocked app that takes key focus without becoming frontmost can receive keys until the next probe (#1173). | UIA and HWND delivery resolve the selected root; foreground `SendInput` uses target/focus guards but has no helper blocklist. | AT-SPI is target-scoped; X11 XTEST is global and checks the active window before every event, not the blocklist, and rechecks the pointer point before every motion and button press, drag start included. A press of a key or button that is already down is refused with `input_unsafe`. SIGTERM, SIGINT or stdin EOF stop admission before the next event, even while every request worker is busy and more requests wait; requests read but not started are answered with `cancelled`. Every action or batch that holds the action lock once shutdown began answers `cancelled` without starting, whether it waited for the lock or got it at once, semantic (AT-SPI) actions included, and so do `focusWindow` and `openBrowserLocation`. A `focusWindow` or foreground activation admitted before shutdown checks again after its blocking X11 connection setup and atom lookup, right before sending `_NET_ACTIVE_WINDOW`, and answers `cancelled` without sending. A semantic action admitted before shutdown checks again right before `DoAction` or `SetTextContents`, after its preparatory AT-SPI reads, and answers `cancelled` without mutating; a mutation already sent finishes and is never replayed. A batch stops before its next step, keeping the outcomes of steps that ran. The helper posts what it owes and exits, and the client waits `HELPER_TERMINATE_GRACE_MS` (750 ms) before SIGKILL. A request still running 300 ms after shutdown began, e.g. stuck on an X11 reply that never comes, is not waited for: the helper exits with status 3 naming on stderr every owed release and every input a running action registered before submitting its press, or with status 0 when there are none. A TS abort or timeout only stops waiting: the protocol has no cancel message, so the action runs to its end or next refusal, and its lost reply is `unknown` with `reply_lost`. An event already submitted is never interrupted. The XTEST sequencer runs headless against a recording sink in tests; the live XTEST adapter and the shared conformance runner have no automated run. |
+| 3, 4: cleanup and partial delivery | Paste restores the previous pasteboard contents only if no newer write intervenes. Drag reserves mouse-up before any input and stamps every pointer event from a monotonic clock when it posts, so the reserved release never predates the down; a failed move or mouse-down allocation posts no unmatched release. No general partial-delivery count guarantee. | The helper attempts to release buttons after interrupted clicks and drags and keys after interrupted chords. Unicode typing sends down/up pairs in a single batch and does not attempt a release after partial insertion. No clipboard handling or general partial-delivery count guarantee. | X11 attempts every owed release, newest first and without admission, on refusal, failure, panic or shutdown; a panic in one release does not skip the rest. A release that cannot be confirmed is reported in `evidence.unconfirmedReleases` and blocks further physical input with `input_unsafe` until a later request confirms it: an input seen up settles, a definitely rejected release is resent, and one whose delivery is unknown is never resent, since another client may hold that input now. Core pointer state shows only logical buttons 1 to 5 (after the pointer mapping), so horizontal scroll buttons 6 and 7 are unobservable: their momentary press skips the already-held check, and an owed release of one settles only by a confirmed release post, never by a state query, so one whose delivery is unknown stays owed. A state check and the post after it are separate requests, not atomic: another client can press or release in between. That record lives in this helper process only; nothing persists it. Before a graceful exit the helper tries once, for at most 300 ms, to confirm owed releases on a fresh X11 connection, through the same settlement as a later request; if any stay owed it names them on stderr and exits with status 3. The client reads helper stderr (bounded to its last 8,192 bytes), latches status 3 on the `exit` event, before the pipes close, and rechecks it right before writing each physical command. A physical command sent while a discarded helper's exit status is unknown waits for it, at most `DISCARDED_EXIT_WAIT_MS` (1,750 ms), and a helper that never exits is refused like status 3. So is a helper that died by a signal, e.g. the SIGKILL backstop, after the client attempted to write a physical command to that same helper, whether or not its reply arrived: it skipped its cleanup and exit report, so held keys and buttons are unknown. A request that cannot be serialized is never written and does not count. The signal death of a helper that only observed does not itself latch a refusal, even after an earlier helper of the session took physical input and exited cleanly; a refusal already latched stays. After status 3 the client refuses every later physical command (`act`/`actBatch` not limited to `ax_only`, `focusWindow`) for the session with `input_unsafe` naming the owed inputs and saying to release them by hand and restart Pi, so a respawned helper never continues past a possibly stuck key; semantic and observation commands still respawn it. Session shutdown waits for the same exit status and surfaces that refusal as a UI warning, also written to stderr on `/quit` or without a UI, since Pi stops the TUI before `session_shutdown` on `/quit`. The next session's client holds every physical write until that disposal settles and inherits the refusal first, so a command sent during the reset never reaches a fresh helper before the old status is known; concurrent resets chain the refusal to the newest client, and each disposal starts its own bounded wait when it begins, so concurrent resets overlap their waits instead of stacking them; a disposal resolves once both its own wait and its predecessor's disposal have settled. A release submitted when that wait ends is marked delivery-unknown first and named so, never resent. A reconnect or XTEST negotiation failure while releases are owed is `input_unsafe` naming them. SIGKILL, OOM, a crash or `panic = "abort"` skip cleanup and leave no record of what was held (persisting it is #1256). A rejected press is not owed; one whose reply was lost is. A stop after any posted XTEST event, or after an unconfirmed post, is `unknown` with `evidence.deliveredUnits` (confirmed events, owed releases included), `evidence.deliveryUncertain` and the refusal code. `act_ui` runs no later action and says not to replay; a stopped batch stays `unknown` once an earlier step ran. A strict-headless batch whose reply was lost is `unknown` with no step index, an abort during the follow-up observation keeps the stop text and its `unknown` trace on the thrown error, and a matching observed `setText` value never upgrades a stopped transaction to `worked`. A `didnt` refusal after an earlier step, e.g. a semantic step after a physical one, records `stoppedAt` even with no error and keeps the transaction `unknown`; so does an `input_unsafe` or `cancelled` thrown after an earlier step, keeping the checked prefix and stop index. Any stop, an errorless first-step `didnt` included, skips `expect` verification and value upgrades. No clipboard handling. |
+| 5: retry | The bridge still retries `foreground_required` refusals outside strict headless. Result-based keyboard resend (a background `typeText` or `keypress` resent in the foreground after a `didnt` reporting `evidence.postedUnits: 0`) is currently inactive: no backend emits that result. A `typeText` is `worked` only when two successful readbacks differ; otherwise it is `unknown` with `evidence.deliveryUnknown`. An `AXPress` failure other than a dead element or a refused action (e.g. `cannotComplete`) is `unknown` with `ax_delivery_unknown`: no second press, no pointer fallback. A non-web accepted `AXValue` write whose readback is stale or failed is `unknown` with `evidence.deliveryUnknown`, never `foreground_required`, so the bridge does not automatically resend it (#1290). Each stops the transaction (#1240, #1241). | Shared fallback; a `didnt` without `evidence.postedUnits: 0` is not resent. | Shared fallback; a `didnt` without `evidence.postedUnits: 0` is not resent. X11 reports `didnt` or an error only when no input was posted or may have been. |
+| 6: strict headless | Prohibits synthesized input, focus and cursor movement; input requiring foreground returns `foreground_required`. | Prohibits raw input and forced focus; raw-input refusal can be `coordinate_blocked`. | Prohibits XTEST and EWMH focus. A physical-only request (a coordinate target, an element action AT-SPI cannot perform semantically, or `focusWindow`) returns `foreground_required` right after request-shape validation, before any look, target or root lookup and before connecting to AT-SPI, so an unknown handle or an unavailable bus never masks it. An element `press`, `click`, `setText` or `typeText` tries AT-SPI first and is refused the same way only when it would fall back. This holds on X11, Wayland and with no graphical session, batch steps included (#1298). |
+| 7: root selection | Enforced by bundle id. | Enforced by executable basename. Unidentified roots are listed as blocked and refused with `app_blocked`. | Enforced by executable basename: the `/proc/<pid>/exe` of the process that owns the root's own AT-SPI bus connection (a unique `:1.N` name), as reported by the bus. A window listed on another connection than its application entry never inherits that entry's identity, and a snapshot never reads a descendant on another connection (it stays `truncated`). X11 `WM_CLASS` (root `metadata.wmClass`) can only add a block. It is attributed only from an unambiguous window pairing: when another window of the same PID ranks equally (e.g. two same-title, same-bounds windows), the root reports no `wmClass`, and every tied window's class becomes a block-only alias, so a blocked sibling refuses the root conservatively (#1300). The app-supplied accessible app name is not used for `blocked_apps`; Linux `browser_use` still classifies by it (#1295). Unidentified roots (unreadable `exe`, unknown PID, a foreign or well-known connection, or a Flatpak app behind the shared `xdg-dbus-proxy` connection) are listed as blocked and refused with `app_blocked`. `read_text` first looks up the exact root that owns the look by the AT-SPI bus name and object path the look retains, not its `@w` inventory handle or X11 window, so observing another app in between does not stale it. The lookup reads only the registry and that root's own application, and refuses the root when it is gone or under another PID (`root_stale`), unidentified, blocked or owned by a changed executable (`app_blocked`). Its X11 pairing ranks against the root's own live AT-SPI name and extents, never the frame or title the look saved, and the X11 listing it pairs from is bounded at 2 s (`metadata.x11Pairing`: `paired`, `ambiguous`, `unpaired`, `absent` or `unavailable`). Only a missing X display (`DISPLAY` unset or empty: no X11 session and no XWayland) is `absent`, confirmed absence of class evidence, and the read proceeds. With an X display, a listing that fails or passes the 2 s bound is `unavailable`: the window's `WM_CLASS` might be blocked, so `read_text` refuses with `inventory_incomplete` rather than treat the missing aliases as a clean policy check, and so does any other or missing status. One X11 listing runs at a time, shared by `listRoots` and `atspiLookRoot`: concurrent requests take turns within the 2 s bound, one absolute deadline per request that is checked again once the request has the slot (a request past it starts no listing) and once the reply is read (a reply read past it is `unavailable`), a listing stuck past it keeps its thread and X11 connection until it returns (x11rb has no per-request deadline), and every request in the meantime waits out the bound and is `unavailable` without starting another, so a stalled X server never accumulates threads. Discovery applies the same rule (#1311): `listRoots` reports each root's `metadata.x11Pairing` from the same bounded listing, and the Linux backend lists a root with any status other than `paired`, `ambiguous`, `unpaired` or `absent` without its `appId`, so `find_roots` shows it blocked and `unidentified`, and `observe_ui` and every action that resolves it refuse it with `app_blocked`. A listing is `unavailable` as a whole, never partial, when it returns an error, passes its deadline, or any X11 request it makes to enumerate, pair or classify windows fails, by a dropped connection or an X11 error (e.g. a window closed mid-listing): the atoms, the active window, the client list, and each window's geometry, position, `_NET_WM_STATE`, `WM_CLASS`, `_NET_WM_PID` and title. So is a `WM_CLASS` the reply did not carry whole (not a `STRING`, or past its 4 KiB read), and a present 32-bit property (the client lists, active window, `_NET_WM_STATE`, `_NET_WM_PID`) of another type or format or not read whole: unread, never absent, so a malformed `_NET_WM_PID` never leaves its window unpaired. The `_NET_CLIENT_LIST` fallback (no `_NET_CLIENT_LIST_STACKING`) fails the same way. Only a successful reply without the property (type `None`) is absence: a window without `WM_CLASS` has no class, and one without `_NET_WM_PID` pairs with no root, so a root with no window of its PID is `unpaired` and admitted on its executable. A filtered `find_roots` lists every app it matched in one `listRoots` request (`pids`) and one X11 listing, so a stalled X server costs it one 2 s wait rather than one per app queued past the 15 s client deadline. That request reads the apps' AT-SPI entries four at a time (`listRoots` unfiltered too), so up to four slow providers overlap: the accumulated latency drops to about one slow read per four apps, not to one read. Roots keep the registry's application order, and every app is read before the reply, so a PID-scoped request with any failed app read (a timeout, or a read that panicked) fails with the first such app's error in that order, never a partial list (#1320). Limit: more than four slow apps still add up, e.g. 40 apps at 1.7 s each pass the 15 s client deadline. A stalled or broken X server on an X display refuses every Linux root until a listing completes. Limits: a whole `WM_CLASS` that is not two NUL-terminated strings attributes no class, titles (ranking only) are read to 4 KiB, and `WM_CLASS` is app-supplied. A tie is `ambiguous` even when no tied window has a class, so an empty alias list never reads as a clean pairing. A lookup that times out in the helper, or gets no reply by the client deadline, is `inventory_incomplete`, never absence; an abort or a helper exit stays a lost reply. A malformed reply (no root object or no valid PID) is an error, not absence (#1300). The `exe` read counts only when the root's connection still reports the same PID after it, which rejects a reused PID only once the bus has dropped the owner's connection (#1294). The read and that recheck run only for roots a PID-scoped request wants, for every root of an unfiltered `listRoots` and for `atspiLookRoot`: a PID-scoped request skips any other app right after its first PID lookup, so unrelated apps cost one lookup each toward its deadline. Gap: attribution is by PID, not process instance (#1333). |
+| 9: codes | Uses contract codes where applicable. | Platform-specific codes remain, including the strict-headless divergence above. | X11 pointer admission uses `occluded_target` for a covered point and `coordinate_blocked` for one outside the window. Platform-specific codes remain, including `input_unsafe` and `cancelled`. |
 
 | Separate transport | Current delivery |
 | --- | --- |
@@ -226,15 +227,64 @@ no directory stripping or `.exe` synthesis. The defaults include `conhost.exe`, 
 
 Windows saved roots and states retain the owner identity and recheck it against the exact root before live access. Older Windows session records without an identity require `find_roots` and a new observation. Look IDs are scoped to one helper lifetime: after a restart, observe again before reading text.
 The helper requires the admitted HWND and PID to match the owning look before a live UIA text read.
-On Windows, `wait_for` and `act_ui` postconditions check the admitted HWND and PID before every UIA
-poll. A closed HWND, or one now owned by a different PID, fails the next poll with `root_stale`.
-Text reads and each wait poll recheck that owner after acquiring the UIA root, before walking it,
-and again after the walk, discarding the result as `root_stale` if a check detects ownership drift.
-These are samples, not continuous monitoring. A text read whose desktop access check refuses a
-closed or reassigned HWND also reports `root_stale`; `coordinate_blocked` means the owner still
-matched. A replacement that reuses the exact numeric HWND and PID pair passes every check
-(#1231). Semantic `act_ui` delivery
-checks the owner before resolving the element, not after acquiring the UIA root.
+Windows roots and looks are bound to a window instance: the owning PID, that process's creation
+time, and an opaque instance tag the helper stores as the `PiComputerUseWindowInstance-v1` window
+property (written once per window lifetime under a per-helper lock; an existing tag is kept). Windows
+drops window properties when the window is destroyed, so a replacement window that reuses the exact
+HWND, even in the same process, has no tag or a different one, and a reused PID has a different
+creation time. Each root ref names one instance:
+- Discovery issues the native root ref (`@w`) per HWND and tag, and `find_roots` issues the `@r` per
+  native ref, so a same-HWND replacement is listed under a NEW `@r`. A root ref denotes the instance it
+  was issued for; rediscovery never moves an old ref onto the replacement
+- Native root refs are namespaced per helper lifetime: each helper process numbers them from a random
+  nonzero 32-bit nonce in the high half of the ref number. After a helper restart an old `@r` stays
+  `root_stale` even when the same HWND and PID now host an untagged replacement that the new helper
+  tags (nonce collision ~2^-32)
+- An old `@r`, and every look, wait, focus or action that resolves through it, fails with `root_stale`
+  once its instance is gone; call `find_roots` and observe the new `@r`. A look stays bound to the
+  instance it observed, whatever a later discovery lists
+- A root whose owner, process start or tag cannot be verified at discovery (e.g. a UIPI-protected or
+  exited process) is listed as `unbound` and refused with `root_stale` and a "could not be admitted"
+  message, distinct from the stale-instance message
+- Without a look, the helper requires the exact `rootRef` for `uiaWaitFor` and resolves only that ref's
+  binding, never the latest binding of the HWND
+- The extension compares Windows roots by that instance's native ref, never the HWND: after an action
+  the closure probe reports `target_closed` when only a same-HWND replacement is listed, and a new
+  observation never reuses the old instance's outline refs
+
+On Windows, `wait_for` and `act_ui` postconditions check the admitted instance before every UIA
+poll. A closed HWND, a different owning PID or process, or a replacement window fails the next poll
+with `root_stale`. Text reads and each wait poll recheck that instance after acquiring the UIA root,
+before walking it, and again after the walk, discarding the result as `root_stale` if a check
+detects drift. These are samples, not continuous monitoring. Whenever a live call (desktop access
+check, capture, UIA resolution) fails, the helper samples the instance again before returning, so a
+closed or replaced window reports `root_stale`; `coordinate_blocked` means the instance still matched.
+Looks check the instance before capture, again after waiting for the input lease and after capture,
+and discard elements captured across a replacement. Focusing a saved root rechecks after the lease
+wait, before raising it. Point actions recheck after the lease wait, before delivery. Every ref action
+(semantic pattern, focus for typing, occlusion hit test and coordinate fallback) resolves its UIA
+element through that check: the instance is sampled before acquiring the root, after it and after
+the RuntimeId search, so the element a mutation uses is the one validated.
+
+Limits of the instance tag:
+- It detects NON-ADVERSARIAL replacement, not authenticity. Any process UIPI lets write the window
+  (the owner, or an equal or higher integrity process) can copy the admitted tag onto its own
+  replacement or overwrite it; neither is detected
+- A restarted helper accepts a tag that already exists without writing one, including one a previous
+  helper or another process wrote
+- Two helper processes (e.g. two Pi sessions) are not serialized against each other; concurrent first
+  admissions of one window can leave one helper's binding stale, which fails closed with `root_stale`
+- The tag binds the top-level HWND. For a frame-hosted app (e.g. `ApplicationFrameHost.exe`) it binds
+  the host window, not the embedded app, so replacing only the hosted content is not detected
+- Checks are samples between steps; a replacement in the instant between the last check and a
+  mutation is not detected. Two known in-call races (#1284):
+  - Capture: after the post-lease check, the capture's baseline render window and explicit focus
+    validate only the HWND (focus may retry after a sleep), so they can raise a same-HWND replacement;
+    a capture whose foreground outcome was uncertain can then report plain `root_stale`
+  - Raw delivery: the final occlusion hit test (`ElementFromPoint` plus RuntimeId ancestry) is not
+    rechecked against a replacement arriving during it, and raw input can follow: ref click, press,
+    wheel and drag, type, keypress and raw set text, and point click, scroll and drag
+- The hosted native-helper workflow's bootstrap-failure receipt still says `protocol=5` (#1284)
 
 Known blocked desktop roots fail before helper readiness for live operations, including
 `search_ui` OCR and `expand_ui` scoped looks. When `observe_ui` explicitly selects the saved
@@ -309,6 +359,26 @@ The child is reaped before assertions; a source-level guard forbids AX queries/a
 Ordinary regression suites cover window equality, destination ownership, optional flags and child order.
 Its AX traversal fixture returns a fresh equivalent node on the cycle's back edge, so identity-only
 dedupe fails it; the walk dedupes by AX equivalence (hash buckets, then `CFEqual`).
+`native/macos/root_pairing_tests.swift` feeds synthetic CG window lists, detached `LookNode`
+trees and fabricated root snapshots to root ranking, CG candidate and owner filters, AX/CG pairing,
+look rect scaling, OCR placement, root identities and the root snapshot delta. Its only live calls
+are AX title and frame reads on handles for PIDs above the macOS range, so pairing there sees empty
+titles and frames; geometry and title pairing are checked on the scoring functions directly.
+`native/macos/ax_element_tests.swift` runs the AX element accessors, element payload and
+`CGSize`/element decoding on application handles for PIDs above the macOS range. Those reads fail
+at once, so it pins failure handling: a failed read stays failed and a sheet inventory incomplete,
+never an authoritative absence; it holds whether the run is AX-trusted (`cannotComplete`) or not
+(`apiDisabled`) and prints which. `native/macos/root_event_tests.swift` installs observer states keyed by
+plain identity tokens through `installRootObserver` (no `AXObserver`, no trust needed) to check the root
+event log's cap, cursor, routing, LRU eviction and change wait, observed through an injected
+`RootChangeWaiter` so nothing sleeps. One check creates a real `AXObserver` and prints `SKIP:` if the
+caller is refused. `native/macos/image_encoding_tests.swift` downscales and JPEG-encodes in-memory bitmaps;
+a noise bitmap must encode larger at quality 1.0 than at 0.1. `native/macos/look_tests.swift` runs
+`look` past ownership on a stored root ref for such a PID, with an injected owner and an in-memory
+capture: root and scope-ref resolution, downscaled JPEG and frame-sized image spaces, the scale factor,
+the truncated outline root, the stored look record and base-look ref transfer across eviction. It
+never requests `readText: always`, so Vision OCR stays unexecuted.
+Successful AX reads, observer registration and real captures stay live-only.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
 
@@ -391,13 +461,71 @@ confirmed foreground modal, so they can disagree with `act_ui` about which root 
 
 ### Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or, when the settled outcome is `unknown` without a stop, say
+`Delivery of the action is unknown` and not to replay the transaction. A transaction that stopped (`stoppedAt`, a
+keyboard stop or an indeterminate step) never reads as delivered, in a terminal or a successor result: one stop
+formatter opens with the stopped action and its literal refusal or error code, e.g. `Stopped at action N (code); whether
+the transaction was delivered is unknown.`, or, after a timed-out or otherwise indeterminate action, `Action N timed out;
+whether it was delivered is unknown.` (with its code, e.g. `ax_delivery_unknown`, when that is not `timeout`). It names
+earlier actions that may have delivered input, keeps the root observation of a terminal result on its own line, and
+gives the replay decision once. Only a first action refused with a code or `0` posted units, with no uncertain delivery
+or unconfirmed release, says `nothing was posted, so a retry is safe`; an errorless `didnt` does not prove that, and
+every other stop says not to replay the transaction (#1281). A successor result of an unstopped transaction reads
+`Executed N checked UI actions`. An abort during the follow-up observation of a stopped transaction throws the same stop
+text with its `execution` trace. The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new window, dialog or sheet
   roots of the same pid appeared and are still live (menus and popovers do not count). Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: the root is still listed but the helper answers
   `root_not_found` for its ref (matched on the error code, not the message). A failed probe stays generic. Rediscover with `find_roots`.
+- The identity probe proves `target_closed` only from a complete listing: it asks for an authoritative
+  listing, and a probe that fails leaves the outcome `post_action_observation_failed`, even after an
+  empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
+  reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
+  their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
+  process has exited. A failed size read is retried once unless the window's paired CG bounds already
+  admit it, and the window is filtered on the retry's value. A partial listing still resolves the roots
+  it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
+  identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
+  `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
+  `observe_ui` without a root does the same for an omitted frontmost window. The macOS client fails an
+  authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
+  an older external helper that has no `complete` field, and reads such a reply as partial.
+  Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
+  `focused` only after one. It matches a root across listings by its CG window id, or without one by
+  kind, role, title and frame. A root whose key may differ from one listing to the next is left out of
+  that comparison and makes its listing incomplete, so it never shows up as `closed` plus a new
+  `appeared` root (#1287): one whose CG pairing read its title or frame unsuccessfully (a later
+  successful read does not vouch for that pairing), and an unpaired one whose title, role, subrole,
+  position or size read failed (a sheet without its own title takes its window's, read or not). Apart
+  from that, a key two roots share is ambiguous: both are left out the same way, whether two unpaired
+  roots read alike or two roots carry one CG window id. One rule keeps the pairing heuristic itself from
+  deciding the comparison: a root claims a CG window when it scores 0 or more for it, or when its own
+  pairing read failed (an unread title or frame could score anything), and a root is keyed by its CG
+  window id only when it claims exactly one that no other root claims. Every claimant of a CG window two
+  roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
+  failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
+  stacked within a few points of each other can therefore report no `closed` or `appeared` change at
+  all. Discovery and target resolution still list every such root. `focused` compares only read focus. The native helper
+  payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a
+  `CFBoolean`; a failed, absent or non-boolean (e.g. numeric `0`) reply leaves the field out, never
+  `false`, and an unpaired window whose minimized read was left out omits `isOnscreen` too. A sheet's
+  `isMain` and `isMinimized` are constant `false`, not reads, and its `isFocused` is its window's read
+  focus, as before: the native helper derives a sheet's flags unchanged, and selection, `find_roots`
+  details and ref records show a sheet with its window's focus, not its own (unknown, not `false`, when
+  that focus was unread). Only `rootDelta` uses a sheet's own `AXFocused`, kept apart as `ownFocus`. A root
+  present in both listings reports `focused` only when its own focus read `false` before and `true`
+  after (a window's `isFocused`, a sheet's `ownFocus`); unread focus on either side reports none
+  (#1303), so a failed read can hide a real focus change but never invents one. A root new since a
+  complete listing whose own focus reads `true` reports both `appeared` and `focused`. A popup menu's
+  `isFocused` is stamped `true`, never read, so a new menu reports only `appeared`. The macOS TS client keeps an omitted or non-boolean flag `undefined` through `listRoots`, `find_roots` details
+  (left out of the stored result) and restored ref records (#1314): ranking gives the not-minimized bonus only for an
+  explicit boolean `false` and the focused, main and onscreen bonuses only for an explicit boolean `true` (a menu's
+  stamped focus and a sheet's inherited focus count), `find_roots` orders a root by focus only when it is an explicit
+  `true`, and a modal takes over the target only when it is explicitly onscreen, not explicitly minimized and in front
+  by explicit focus or z-order. An unknown minimized state alone never costs such a modal the takeover. Windows listings carry no completeness information, so an empty listing from
+  them is still read as closure.
 
 ### Ref lifecycle
 
@@ -407,7 +535,7 @@ Measured, not assumed:
   Window refs persist until their AX element dies or the helper restarts. The daemon does not exit when idle.
 - Refs carry a per-process epoch, so a ref from before a helper restart never resolves; it used to be possible
   for `w3` from an old helper to name a different window in a new one.
-- Helper restarts happen on reinstall, protocol/binary mismatch, permission relaunch. The extension's `@rN`
+- Helper restarts happen on reinstall and permission relaunch; a protocol or executable mismatch is refused, not restarted. The extension's `@rN`
   records survive them, so `@rN` can outlive its native ref: expect `root_not_found` / "stale", then rediscover
   with `find_roots`. Refs from earlier sessions, pids and state ids are stale.
 - Root deltas in `act_ui` results carry helper-native refs until `normalizeRootDeltaRefs()` maps them, once per
@@ -427,11 +555,14 @@ Measured, not assumed:
 ### Helper lifecycle
 
 The helper daemon outlives pi, so a reinstall alone leaves old code running. Two guards:
-- `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces the bundle
+- `scripts/setup-helper.mjs` stops the running helper (`pkill -f '<bridge> serve'`) whenever it replaces or re-signs the bundle, and changes nothing inside the bundle until `pgrep` reports no match (exit 1). Each `pkill`/`pgrep` probe is killed after 1 s or 64 KiB of output. A probe error, timeout or overflow, or a helper still matched by 20 `pgrep` checks 100 ms apart (about 2 s; up to ~23 s if every probe runs to its deadline), refuses the replacement. A refusal is final for that run: setup does not fall back to a source build and retry. Its message ends with the repair: quit the helper, then run `node scripts/setup-helper.mjs --runtime`. npm `--postinstall` never stops a helper: when one is running, or `pgrep` fails, it warns and leaves the bundle as is
+- Limit (#1285): `pgrep -f` matches the literal command line. A helper launched through a symlinked app path has a different one, so setup can miss it and replace its bundle while it runs. Matching the kernel's executable identity needs the shared lifecycle machinery in #1285
+- Automatic setup (`--postinstall`, `--runtime`) with a `PI_COMPUTER_USE_HELPER_APP_PATH` override replaces only nothing or this helper's own bundle: the bundle, its parent directory, `Contents` and `Contents/Info.plist` must be real entries, not symlinks, and `plutil -extract CFBundleIdentifier raw -expect string -n` must print the plist's (XML or binary) `CFBundleIdentifier` as a string that is byte for byte `com.injaneity.pi-computer-use`; a dictionary keyed by that ID is refused. Anything else, or anything it cannot inspect, is refused and left untouched; the refusal says to remove that entry, or correct or unset the override, then run `node scripts/setup-helper.mjs --runtime`. It rechecks right before changing the bundle, and signing reuses the identity resolved before that recheck, so no `security` lookup runs between the recheck and `codesign`. An operator run without those flags keeps replacing the destination
+- Limit (#1285): the identifier guard prevents accidental overwrites; it is not authentication and does not stop a hostile bundle. Only the destination's parent is checked for a symlink, and a concurrent retarget of a symlinked ancestor between the final check and the recursive removal is not closed: that needs a private quarantine rename under a trusted parent
 - The macOS client checks the daemon build on every managed connection before sending anything else. The helper reports its compiled package version and SHA-256 of the Swift sources `build:native` compiles (line endings normalized; any other `.swift` file in the checkout is ignored). A different or missing build is refused with `stale_helper`; the client never reinstalls, restarts or stops it. `/computer-use` shows the last reported build, or the reported and expected build after a refusal; a malformed build string shows as `unrecognized`
 - The client launches the daemon or runs setup only on positive absence: `ENOENT` or `ECONNREFUSED` before connecting. A resident that answers diagnostics slowly is retried for up to 8 s (4 s per probe) and never relaunched; once a probe timed out, a later absence is not proof either, only a verified reply is. A timeout past that budget, a malformed or non-object reply, a disconnect or a connect error such as `EACCES` fails closed with `helper_inconclusive`: nothing is launched or installed
-- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
-- After the build matches, `ensureProtocol()` can restart a daemon whose process started before the installed binary was written (`helperPredatesBinary`)
+- `PI_CU_SOCKET_PATH` can point to an externally managed socket. Its helper must speak the expected protocol, checked with `diagnostics` on every connection before its first command, the activity glow's included (`helper_protocol`); its build, path and age are not checked, and the client never installs, launches or restarts it. Each connection rechecks the override against the default socket, by name in the canonical directory and by inode, so an alias of the default socket gets the build check, and `ensureProtocol()`'s protocol and executable checks. The override is classified before and at connect, and stays exempt only when both agree; the result is fixed at connect, so retargeting it while a reply is pending changes nothing. An override that cannot be inspected, or that vanished after the connection was made, also gets it
+- After the build matches, `ensureProtocol()` refuses a managed daemon with `helper_mismatch` when it reports another protocol, no executable path or another executable. It never shuts down, relaunches or stops that daemon: quit it, and the next command launches the installed app. It does not compare the daemon's start time with the installed binary; the build check refuses stale code
 
 ### Whole-desktop control
 
@@ -539,9 +670,7 @@ Notes: desktop tools and `act_ui` share one lock. An `act_ui` transaction takes 
 (physical HID) step (the `needsForeground`/current-focus case, the side-effect-free foreground retry, the
 `foreground_required` fallback) and keeps it until the transaction ends, so a later step relying on focus set by an
 earlier one is never interleaved with `desktop_input`. Transactions that stay background/pid/AX never take it. Lock order is window write lock, then
-desktop lock; the desktop tools take only the desktop lock. A queued call that is aborted never runs. A restart is triggered when the
-helper process started before the installed binary's `ctime`, so anything that touches the binary's metadata
-costs one helper restart (and invalidates native refs) at the next session start.
+desktop lock; the desktop tools take only the desktop lock. A queued call that is aborted never runs.
 
 ## License
 
@@ -842,13 +971,13 @@ whether the condition was newly verified, already present before delivery, or
 failed. A failed postcondition changes the execution outcome to `didnt`; event
 delivery alone is never treated as semantic success.
 
-One action is represented by an array of length one. A multi-action transaction is appropriate only when no intermediate observation is needed. The runtime validates one base state, acquires one resource lane, and sends the steps as one native helper transaction. The helper captures one pre-transaction root baseline, executes and verifies steps in order, and stops on the first failed or invalidated step. Partial results include `stoppedAt`, so callers know the exact checked boundary and must re-observe before continuing. The helper performs one final root-delta settle and the bridge produces one final observation. There is no alternate sequential protocol. This is not a mechanism for parallel actions within one UI resource.
+One action is represented by an array of length one. A multi-action transaction is appropriate only when no intermediate observation is needed. The runtime validates one base state, acquires one resource lane, and sends the steps as one native helper transaction. The helper captures one pre-transaction root baseline, executes and verifies steps in order, and stops on the first failed or invalidated step, or the first step whose delivery is explicitly indeterminate (a timeout, `ax_delivery_unknown` or `evidence.deliveryUnknown`). Observation never settles such a step: its postcondition is skipped, its outcome stays `unknown`, and the successor and terminal text name it and say not to replay the transaction. Partial results include `stoppedAt`, so callers know the exact checked boundary and must re-observe before continuing. The helper performs one final root-delta settle and the bridge produces one final observation. There is no alternate sequential protocol. This is not a mechanism for parallel actions within one UI resource.
 
 The bridge resolves model intent; the backend/helper owns grounding, preflight, delivery, and evidence. Accessibility capabilities choose an initial strategy but are not treated as proof that the intended result occurred. Editable-region clicks establish foreground focus for following unscoped keyboard steps in the same transaction. Raw coordinates are tied to the image-bearing state that produced them. Web-backed editable controls use atomic keyboard events and web-backed buttons use pointer events so application state receives normal input events rather than only a changed AX value. A helper result reports `worked`, `didnt`, or `unknown`, including evidence and shallow root changes where available. The [macOS implementation reference](../reference/platforms/macos/actions.mdx) documents that backend's exact Accessibility, web-control, and synthesized-event paths.
 
-With `headless: true`, native desktop delivery must not activate or raise an application, change the user's focused window, move the global cursor, post synthesized input, or display the agent cursor or activity glow. See the [CDP exception](#input-delivery-safety-contract) for synthesized page events. On macOS, the helper rejects any action that would need synthesized pointer or keyboard input with `foreground_required`, and the bridge returns that error instead of retrying in the foreground ([macOS actions reference](../reference/platforms/macos/actions.mdx#headless-policy)). With `headless: false` (the default), credible semantic activation may begin in the background, editable clicks preserve the focus they establish for following unscoped keyboard input, and keyboard input with a checked `didnt` result may retry in the foreground because the first attempt proved side-effect-free. Focus-preserving native keyboard requests do not raise or re-focus the outer window between semantic activation and event delivery; canvas editors such as PowerPoint otherwise collapse an inner text editor back to placeholder selection. Ambiguous pointer outcomes are never replayed. On macOS, `cursor_overlay` schedules a visual, noninteractive overlay separately from action delivery for non-headless background pointer actions; foreground HID actions use only the physical cursor, and the overlay is currently main-display-only ([macOS implementation reference](../reference/platforms/macos/actions.mdx#agent-cursor-overlay)). With `activity_glow: true` (default `false`), non-headless macOS sessions hold a persistent helper connection that owns a click-through border on each screen until the agent run ends. The helper combines active connections and removes their state on disconnect.
+With `headless: true`, native desktop delivery must not activate or raise an application, change the user's focused window, move the global cursor, post synthesized input, or display the agent cursor or activity glow. See the [CDP exception](#input-delivery-safety-contract) for synthesized page events. On macOS, the helper rejects any action that would need synthesized pointer or keyboard input with `foreground_required`, and the bridge returns that error instead of retrying in the foreground ([macOS actions reference](../reference/platforms/macos/actions.mdx#headless-policy)). With `headless: false` (the default), credible semantic activation may begin in the background, editable clicks preserve the focus they establish for following unscoped keyboard input, and keyboard input may retry in the foreground only when the helper's `didnt` reports `evidence.postedUnits: 0`, proving the first attempt posted nothing (currently inactive: no backend emits that result). Focus-preserving native keyboard requests do not raise or re-focus the outer window between semantic activation and event delivery; canvas editors such as PowerPoint otherwise collapse an inner text editor back to placeholder selection. Ambiguous pointer outcomes are never replayed. On macOS, `cursor_overlay` schedules a visual, noninteractive overlay separately from action delivery for non-headless background pointer actions; foreground HID actions use only the physical cursor, and the overlay is currently main-display-only ([macOS implementation reference](../reference/platforms/macos/actions.mdx#agent-cursor-overlay)). With `activity_glow: true` (default `false`), non-headless macOS sessions hold a persistent helper connection that owns a click-through border on each screen until the agent run ends. The helper combines active connections and removes their state on disconnect.
 
-The `headless` configuration option determines whether foreground execution is prohibited. Fallback-capable multi-action calls execute one checked action at a time, retain click-established focus, and stop on a checked `didnt`; strict-headless calls retain native transactional batching.
+The `headless` configuration option determines whether foreground execution is prohibited. Fallback-capable multi-action calls execute one checked action at a time, retain click-established focus, and stop on a checked `didnt` or an explicitly indeterminate delivery; strict-headless calls retain native transactional batching.
 
 ## Successor diffs
 
@@ -864,7 +993,7 @@ Browser pages are roots, not a second agent-facing context hierarchy. `launch_br
 
 The macOS socket server and Windows line protocol accept multiple in-flight requests and correlate responses by request id. macOS protects shared AX ref/look stores and the root-event sequence; Windows uses a fixed worker pool and initializes UIA per worker thread. Both platforms keep eight immutable native look records and serialize global synthesized input. Target focus, bounded occlusion preflight, and event delivery share that same critical section; another worker cannot change the foreground between validation and delivery. UIA-only Windows batches do not acquire the global input lock, while any batch that may fall back to pointer or keyboard delivery holds it for the complete transaction. Further event-delivery and occlusion details live in the [macOS implementation reference](../reference/platforms/macos/implementation.mdx) and [Windows bridge reference](../reference/platforms/windows.mdx).
 
-The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. The helper validates numeric AT-SPI `GetRole` IDs, not role names. It treats password, invalid, unknown, extended, unrecognized and unavailable roles as secure and suppresses their accessible names, descriptions and text. Snapshot and explicit text reads check the live role before `GetText` and discard the reply if the role changes or cannot be confirmed afterward. Root discovery likewise rechecks each application and window role after reading its names and redacts them unless the same readable role is confirmed. These are separate calls: the recheck narrows the race but cannot catch a role that changes and switches back between checks. Observations can return partial trees, but `wait_for` with `gone` cannot confirm absence from incomplete data. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and a batch stops at that step with outcome `unknown`. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
+The Linux helper is a local JSON-lines child process with correlated concurrent requests. It snapshots roots over AT-SPI2 and attempts semantic `Action`/`EditableText` delivery first. Each AT-SPI2 D-Bus request has a two-second deadline. The deadline applies per request, not to the whole traversal. The helper validates numeric AT-SPI `GetRole` IDs. It treats password, invalid, unknown, extended, unrecognized and unavailable roles as secure and suppresses their accessible names, descriptions and text. A readable role whose `GetRoleName` contradicts it (`unknown`, `invalid` or `password text`, any case) is treated the same way, and text content is read only when the role name is also nonblank: an explicit `read_text` refuses a blank or failed role name, and a snapshot leaves that node's text empty and `truncated`. Snapshot and explicit text reads check the live numeric role and role name before `GetText` and discard the reply if either changes or cannot be confirmed afterward. Root discovery likewise rechecks each application and window role after reading its names and redacts them unless the same readable role is confirmed. These are separate calls: the recheck narrows the race but cannot catch a role that changes and switches back between checks. A protected node protects its subtree (#1233): a snapshot never reads the children of a node it protected (a password, unclassified or unavailable role, or a contradicting role name) or of a node whose `GetRoleName` is blank or fails, and marks that node `truncated` when it has any. A snapshot reads a child only while the node that listed it still reports the readable role it was read with and the child's live `Parent` is the listing node; otherwise the child is unread (an inconsistent `GetChildren` edge is never an alternate route) and the listing node is `truncated`. A `Parent` read that fails or times out does not confirm the edge; only a provider that replies `UnknownProperty` (does not implement `Parent`) keeps its `GetChildren` edges. Before returning, the snapshot also re-reads every node's live `Parent` once and drops a node that moved away from its listing node, or whose `Parent` can no longer be read, with its subtree, marking the listing node `truncated`. Before returning, a snapshot re-reads every node whose children it read, once each, and a node whose role or role name changed meanwhile is redacted to `[protected]`, `truncated`, and its whole subtree dropped. A scoped look and a scoped `wait_for` refuse with `secure_text_unreadable` unless their scope node itself, a scope at the root included, has a readable numeric role and a nonblank, non-contradicting role name (a protected scope refuses instead of returning a redacted node; an unscoped look still redacts). Before and again after reading, a scoped look, a scoped `wait_for` and an explicit `read_text` also follow the live AT-SPI `Parent` links from their start node up to the look's root, at most 256 links, and refuse with `secure_text_unreadable` unless every node reached on the way, the root included, is on the root's bus connection with a readable numeric role and a nonblank, non-contradicting role name; a result read meanwhile is discarded. A `GetRole`, `GetRoleName` or `Parent` read of the scope or an ancestor that fails or times out refuses with its own error. Observations can return partial trees. The helper marks a node `truncated` when one of its interface, name, description or text reads timed out, when its role is unclassified or unavailable (a password role is secure but not unread), when a readable role's `GetRoleName` is blank or fails (`wait_for` matches role names, so a blank one cannot prove absence; a contradicting one redacts, see above), when a child is on another bus connection than the root (never read), when a protected node, or one whose role name is blank or failed, has children (never read), when a child's `GetChildren` edge could not be confirmed or the node turned protected during the snapshot (see above), when its live role could not be reconfirmed after a read, when `GetChildren` failed, or when the node or depth bound skipped one of its children. Other field errors still default to empty without the mark, and a failed geometry read never marks a node. The bridge reads a Linux node sent without the marker as `truncated` too. `wait_for` with `gone` cannot confirm absence from incomplete data. A PID-scoped root listing that times out fails instead of returning an empty inventory, so it never proves a window closed. A semantic action timeout means delivery is indeterminate: the helper does not fall back to physical input or retry, and the transaction stops at that step with outcome `unknown` and `stoppedAt`, whether the helper returned the step (a batch) or rejected a single `act` with code `timeout`. Later actions do not run, the completed prefix is kept, and a later postcondition, observed value or closed root does not change that outcome. `act_ui` names the timed-out action and says not to replay the transaction, and the returned state's note marks the region `acted here; delivery unknown (action N timed out)` for every later call on that state. On X11, EWMH enriches root identity/focus, XComposite (with `GetImage` fallback) supplies PNG capture, and non-headless policies may use serialized XTEST physical input. Strict headless/background policy blocks XTEST and focus. Wayland diagnostics only reads portal version and capability properties; no portal session, capture, or input path is implemented. The [Linux support guide](../how-to-guides/linux.mdx) lists the exact capability matrix.
 
 Windows UIA extraction is bounded. When the native limit omits descendants, the nearest retained ancestors are marked `truncated`; `expand_ui` performs a scoped look and the helper carries forward the untouched refs into the new immutable look record. Windows root deltas combine an event journal with authoritative before/after snapshots. `SetWinEventHook` accelerates settling and retains short-lived root transitions, while snapshots remain the source of truth for persistent state.
 
@@ -1118,6 +1247,24 @@ The runtime is state-scoped and outline-first:
 
 - `observe_ui` returns a compact control list and running note; `detail: "outline"` returns the folded outline.
 - `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
+- Retained outline text is bounded by what the current snapshot can classify (#1234). A node is protected when it is a macOS secure text field, has the Linux `password text` or `unknown` role, carries the helper's `[protected]` marker, or has no role at all. Covered:
+  - Protected node metadata: on parse and restore its title reads `[protected]` and its description, identifier, value and OCR text are dropped, so search, folds, diffs and serialized details never see them. Role, subrole, refs and geometry stay.
+  - Scoped `expand_ui` grafts: when the scoped look contains a protected node, preserved children it did not confirm keep their refs and role but lose title, description, identifier, value and OCR text (`[redacted]`), and are marked `unconfirmed`.
+  - Running notes: `search_ui`, `expand_ui` and `inspect_ui` rebuild each node region's key and label from the node now at its ref, so a protected node reads `[protected]`, an unconfirmed one `[redacted]`, and a missing one is redacted. Root-listing and capture-pairing regions carry typed provenance and pass through. A legacy region without provenance is reclassified by its ref, or redacted.
+  - OCR placement (#1263): on parse, restore and graft, an OCR `text` box on a readable node, or a readable `pictureOnly` node, that overlaps the rect of a protected, unconfirmed or unread (`truncated`) node is dropped, and the picture-only node reads `[protected]`. An unread `pictureOnly` node overlaps its own rect, so its title reads `[protected]` too. An unread node counts because a subtree the walk never read can hold a secure field anywhere in its rect. Every `pictureOnly` title is treated as OCR, including the macOS helper's synthetic `Menu` node for a `cgmenu:` root.
+  - Geometry: a node or box rect is kept only when `x`, `y`, `w` and `h` are all finite numbers; a missing, `null`, `NaN` or non-number field makes it unknown instead of getting a zero origin, and a rect without positive area is unknown too. It fails closed: a protected, unconfirmed or unread node of unknown geometry drops every OCR box and picture-only title in the outline, and while the outline holds any such node, a box or picture-only node of unknown geometry is dropped too.
+  - Stored format: `serializeOutline` stamps `formatVersion` (`OUTLINE_FORMAT_VERSION`, now `1`). An outline stored without it (or with another version) came from a writer that turned a missing rect origin into `0`, so restore cannot tell a real zero origin from an invented one: if it holds any protected, unconfirmed or unread node, every OCR box and picture-only title in it is dropped. A legacy outline with no such node restores unchanged.
+  - Grafts: a scoped look's coordinates are not in the full look's space. A fresh target that is protected loses its cached full-look rect (unplaced, so the rule above drops all OCR until the next full look), and the target's own boxes lose theirs, so neither stale nor scoped coordinates are compared with full-look rects. A readable target keeps its cached rect for actions.
+  - The one exception is Linux own-value text: the Linux backend tags a box `source: "value"` when its string equals the node's own AT-SPI value (the helper derives the box from it, not from pixels), and such a box enclosed by its readable node's rect under the unreadable ancestor stays. macOS Vision OCR attached to a readable node by its centre is never exempt, and a stored box without the tag is OCR. AX titles, descriptions and values of readable nodes are not OCR and stay.
+  - The previous look's `image` a scoped `expand_ui` keeps is never attached to a result. Coordinate actions check only that its `jpegBase64` is nonempty (the bytes are not read) and that the point is inside its width and height; focused keyboard input uses its centre. Saved states hold the bytes in memory only; a state restored from the session has an empty `jpegBase64`, so coordinate actions there are refused until a fresh `observe_ui`.
+- Not covered:
+  - A scoped look with no protected node keeps preserved, unconfirmed children as is.
+  - Older `stateId`s: each answers `search_ui`, `expand_ui` and `inspect_ui` from its own snapshot, so a state taken while a node was readable still shows its label after a later look saw it protected (#1263). Revocation across retained states is #1279.
+  - `@o` pages a state produced before a graft saw protection stay readable (#1279).
+  - Session restore reads the outline saved by `observe_ui`/`act_ui`; a scoped graft is not persisted, so a restart restores the pre-graft text under the same `stateId` (#1279).
+  - Windows password edits carry no protection signal on the wire, so none of the above triggers for them (#1263).
+  - Screenshots and OCR pixels: the macOS helper does not mask protected rects before OCR or image encoding, so an attached screenshot can still show them, and a box placed outside a protected node whose rect is wrong escapes the overlap check (#1263). Masking is native work.
+  - `read_text` reads live text from the helper, independent of retained outlines, and error `@o` pages are not tied to a state.
 - `act_ui` is the state-scoped desktop action entrypoint. The carried macOS `desktop_input` tool is a separately gated physical fallback with a shared transaction lock.
 - UI observations are immutable records; request-local hydration replaces global current state.
 - Cached queries bypass scheduling; live work is ordered per physical resource.
@@ -1224,7 +1371,7 @@ Run Pi as the same user and inside the same graphical session as the target appl
 ~/.pi/agent/helpers/pi-computer-use/linux-bridge
 ```
 
-The npm package ships no Linux binary. It ships the locked Rust crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`), and building it is opt-in. On every Pi load an existing helper at that path is probed (`diagnostics`: protocol version 4 and the shared architecture invariants) and used as-is when it passes, with no setup and no compiler. A missing, non-executable, wrong-architecture or stale helper is replaced by setup (a `prebuilt/linux/<arch>/linux-bridge`, if the install has one, else the source build) and probed again.
+The npm package ships no Linux binary. It ships the locked Rust crate source (`native/linux/bridge-rs`: `Cargo.toml`, `Cargo.lock`, `src/*.rs`), and building it is opt-in. On every Pi load an existing helper at that path is probed (`diagnostics`: protocol version 10 and the shared architecture invariants) and used as-is when it passes, with no setup and no compiler. Protocol 10 makes a protected AT-SPI node protect its descendants (#1233) (protocol 9 confirmed a root's bus connection PID again after its `/proc/<pid>/exe` read; protocol 8 reported each `listRoots` root's `metadata.x11Pairing`, which discovery requires, and took `pids` to list several processes in one request; protocol 7 added `atspiLookRoot`, the exact look-root lookup `read_text` revalidates with; protocol 6 reported the executable-basename `appId` per root, protocol 5 marked the owed-release record and the point rechecks of the input safety contract): an older helper is rejected and replaced, never used. A missing, non-executable, wrong-architecture or stale helper is replaced by setup (a `prebuilt/linux/<arch>/linux-bridge`, if the install has one, else the source build) and probed again.
 
 The source build needs `cargo` (Rust toolchain via [rustup](https://rustup.rs)) and a C linker (e.g. `build-essential`), and runs only when you opt in:
 
@@ -1383,7 +1530,8 @@ There is no portal session, PipeWire frame, input dispatch, or restore-token imp
 
 - The helper is a local stdin/stdout child process and opens no helper network listener.
 - It can inspect applications exposed on the current user's AT-SPI bus; run only trusted agents and extensions in that session.
-- The helper suppresses accessible names, descriptions and text values when AT-SPI reports a password role or cannot provide a recognized role. This depends on the application reporting its role correctly. The checks are not atomic with the name or `GetText` reads. Root discovery protects each application and window by its own role. Snapshot reads also apply protection per node: a protected ancestor does not protect a descendant reported with a readable role (#1233).
+- The helper suppresses accessible names, descriptions and text values when AT-SPI reports a password role or cannot provide a recognized role. This depends on the application reporting its role correctly. The checks are not atomic with the name or `GetText` reads. Root discovery protects each application and window by its own role. A protected node protects its subtree in snapshots, a scope must itself be readable, and reads that start below the root check the live ancestry before and after the read (#1233). Limits: a provider that does not implement `Parent` (`UnknownProperty`) keeps its `GetChildren` edges, so a node it also lists under a readable parent is read there; a provider whose `Parent` disagrees with `GetChildren` loses those children (unread, `truncated`), fail-closed; the end-of-snapshot recheck re-reads each container once, so a container that turns protected and back before it, or turns protected after it, is not caught; the ancestry checks and the read are separate calls, so a container that turns protected and back between them is not caught either. Each read child costs one extra `GetRole` of its parent plus two reads of its own `Parent`, and each container one more `GetRole` and `GetRoleName` at the end. These checks are serial with no overall helper-side deadline, so a provider whose `Parent` stalls on many children can outlast the client's request deadline; a scoped refresh can also keep cached text of a child the helper now leaves unread (#1349).
+- `blocked_apps` identity is the bus connection PID's `/proc/<pid>/exe`, not a process instance. The bus reports the PID a connection had when it connected, so the helper asks again after the `exe` read and counts the read only when the root's unique connection still reports the same PID. That rejects a reused PID only when the bus has already removed the owner's connection; it does not establish that the read reached the owner. A recheck answered with `NameHasNoOwner` (owner gone) fails like the first lookup, a changed PID is unidentified, and a recheck that fails otherwise or times out leaves the owner unknown: an unscoped listing lists the root unidentified, a PID-scoped listing that wants its PID fails, and the `read_text` lookup fails (#1294). A PID-scoped listing reads `exe` and rechecks only the roots whose first-lookup PID it wants; the others are skipped before the read. Residuals (#1333): a bus socket inherited by another process keeps the connection alive past its owner's exit, and a bus can answer before it processes the owner's hangup, so both still return the old PID and a reused PID can pass; an `exe` that changes before the read under two equal replies goes unnoticed; the helper MUST run in the bus daemon's PID namespace (PIDs from another namespace name other processes, and nothing detects it); an `exec` after admission changes the executable; interpreter-hosted apps identify the interpreter. `read_text` looks up the root's live identity before each read, which narrows but does not close that window: the check and the read are separate calls. The lookup identifies the root by bus name and object path; a toolkit that reuses an object path for a new window on the same connection passes it.
 - On X11, capture can read window pixels and non-headless physical fallback can control the global pointer/keyboard and request focus. These are broad desktop capabilities; strict headless/background policy blocks XTEST and focus, but does not make AT-SPI or requested X11 observation private.
 - On Wayland, portal diagnostics are read-only; capture and input are not implemented.
 - CDP is separate: its loopback TCP listener is unauthenticated, not UID-bound. Any local process that can reach the port, including another UID, can discover the websocket at `/json/version`, control pages and request cookies with `Storage.getCookies`. A random port and profile mode `0700` do not authenticate clients. `launch_browser` defaults to a fresh non-default temporary profile, matching modern Chrome's [remote-debugging security policy](https://developer.chrome.com/blog/remote-debugging-port), but opt-in `managed_browser_profile` exposes the reused profile's live sessions. Do not enable persistence on shared or untrusted hosts; a UID-bound pipe is not implemented.
@@ -1456,7 +1604,7 @@ From the installed package root, explicitly repair a missing or stale helper wit
 node scripts/setup-helper.mjs --runtime
 ```
 
-Setup stops the old daemon only when it replaces the bundle. If it reports the app already current but the refusal persists, e.g. a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
+Setup stops the old daemon only when it replaces or re-signs the bundle, and never under npm `--postinstall`. If it reports the app already current but the refusal persists, e.g. `helper_mismatch` for a daemon launched from a legacy path, quit that daemon by hand; the next command launches the installed helper.
 
 For source development, rebuild from this checkout first. Setup prefers an existing prebuilt payload over a source build, so setup alone can reinstall the same stale binary. Move any stale pre-signed `.app` out of this checkout’s `prebuilt/macos` directories before running the installer:
 
@@ -1688,7 +1836,7 @@ expand_ui({ stateId, ref: "@e7", depth: 3 })
 inspect_ui({ stateId, ref: "@e12" })
 ```
 
-`semantic` observation is cheapest, `fused` is the default, and `visual` forces visual text evidence. Search requires at least one of `text`, `role`, or `capability`. It ranks exact, prefix, and substring text before conservative fuzzy matches, returns a fixed top set with the total match count, and asks the caller to refine broad queries. Search can escalate OCR once when the original desktop look omitted it; that refresh is checked against the state's resource epoch.
+`semantic` observation is cheapest, `fused` is the default, and `visual` forces visual text evidence. Search requires at least one of `text`, `role`, or `capability`. It ranks exact, prefix, and substring text before conservative fuzzy matches, returns a fixed top set with the total match count, and asks the caller to refine broad queries. Search can escalate OCR once when the original desktop look omitted it; that refresh is checked against the state's resource epoch. A desktop search with zero matches in an outline that has `truncated` (unread) nodes leads with `Inconclusive: no matches in the part of the outline that could be read; N nodes unread (...)` instead of a zero count; its details keep `totalMatches: 0` and add `inconclusive: true` and `unreadRefs`, the unread refs to `expand_ui`. Both fields are omitted when there is a match or nothing is unread. Likewise an empty `read_text` page from a `truncated` node returns `inconclusive: true` and says the text was not read.
 
 ## Acting and batching
 
@@ -1711,10 +1859,38 @@ act_ui({
 })
 ```
 
-Verification reports `verified`, `preexisting`, or `failed`. A preexisting
-condition means the requested end state holds, but is not evidence that the
-action caused it. Use `ref` for one exact element or `scopeRef` for a subtree;
-role-only conditions must be scoped, and value checks require an exact `ref`.
+Verification reports `verified`, `preexisting`, `failed`, or `inconclusive`. A
+preexisting condition means the requested end state holds, but is not evidence
+that the action caused it. Use `ref` for one exact element or `scopeRef` for a
+subtree; role-only conditions must be scoped, and value checks require an exact
+`ref`.
+
+An `absent` condition holds only on complete evidence. The helper must walk the
+whole scope and read every field the condition tests (the macOS walk stops at
+depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
+without the helper's `complete: true`, e.g. from an older external helper, as
+incomplete. The successor observation, captured from the exact root the wait read
+(its native ref or window id, never a same-title window and never a foreground
+modal that opened meanwhile), must neither show the
+condition nor mark a node `truncated` in the scope, above it or, unless the
+scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
+missing from the successor proves nothing while the condition shows anywhere in
+it. A root closure proven from a complete listing also settles it. Otherwise
+`act_ui` reports the check `inconclusive` with `postcondition_inconclusive`,
+keeping the delivery outcome from before the check (its message claims delivery
+only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
+instead of `gone`, with `unreadRefs` only when the successor has unread nodes
+there. When the root of a claimed absence cannot be observed or resolved by that
+identity afterward, `wait_for` returns `inconclusive: true` with `observationError` and no successor
+state. A `wait_for` that timed out while the helper still saw the condition is a
+failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
+failed successor observation after it, or after any presence wait, is an error.
+The Windows UIA wait still answers `gone` from a truncated walk; only the
+successor's `truncated` root catches that.
+Known gap: `truncated` does not say whether a node's own fields or only its
+descendants are unread, so an exact `ref` scope whose own `AXChildren` read keeps
+failing on macOS stays `inconclusive`, though nothing below it can hold the
+condition (#1310).
 
 Batch steps only when the second step does not need to inspect the result of the first:
 
@@ -1745,7 +1921,7 @@ act_ui({
 
 `secondaryAction` (`ref`, `name`) runs an accessibility action the element advertises, e.g. `AXShowMenu` to open a context menu; `inspect_ui` lists them. `selectText` (`ref`, `start`, `length`) sets the selection of a text element in UTF-16 units (`length` 0 places the caret). `paste` (`text`, optional `ref`) inserts through the pasteboard and cmd+v, then restores the previous clipboard, which suits input methods where per-key typing composes; like `typeText` it is refused in strict headless mode. These three are macOS-only and fail with `unsupported_command` elsewhere; browser (CDP) states do not support them.
 
-The runtime prefers background semantics when they are credible, verifies the result, and escalates side-effect-free failed keyboard input to foreground delivery automatically. Ambiguous pointer actions are never replayed blindly.
+The runtime prefers background semantics when they are credible and verifies the result. It escalates a helper's `foreground_required` refusal to foreground delivery automatically. Result-based keyboard resend, which escalates only failed keyboard input that provably posted nothing (`didnt` with `evidence.postedUnits: 0`), is currently inactive: no backend emits that result. Ambiguous pointer actions are never replayed blindly.
 
 ### Successor views
 
@@ -1757,7 +1933,7 @@ Successor diff (1 change, S1 → S2):
 Use stateId S2 for subsequent actions and queries.
 ```
 
-Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
+Confidently matched elements retain their model-facing refs across resulting states. New nodes receive new refs and removed nodes are named explicitly; a node missing under any surviving ancestor the successor could not read (`truncated`) is not reported as removed. A `search_ui` with zero matches in an outline with `truncated` nodes is `inconclusive` and lists them in `unreadRefs`. The runtime returns the compact control list instead when the root was replaced, identity confidence is low, or the change budget is too large. `search_ui`, `expand_ui`, and `inspect_ui` always query the complete saved state regardless of how it was rendered.
 
 Coordinate fallback uses image pixels from the observed state:
 
@@ -2283,7 +2459,7 @@ This directory holds **live credentials**, cookies and browsing history. Never c
 
 Default: `false`
 
-When `true`, actions must remain in the background. Raw pointer events, raw keyboard events, foreground focus fallback, cursor takeover, the agent cursor overlay, and the activity glow are blocked. On macOS, actions that would need synthesized pointer or keyboard input, including every `typeText`, `paste` and `keypress`, fail with `foreground_required` ([macOS reference](./platforms/macos/actions.mdx#headless-policy)). When `false` (the default), Pi prefers verified semantic activation when it is credible, preserves the focus established by editable clicks for dependent keyboard input, and may retry keyboard input in the foreground when a background attempt conclusively produced no value change. Ambiguous pointer actions are never replayed blindly.
+When `true`, actions must remain in the background. Raw pointer events, raw keyboard events, foreground focus fallback, cursor takeover, the agent cursor overlay, and the activity glow are blocked. On macOS, actions that would need synthesized pointer or keyboard input, including every `typeText`, `paste` and `keypress`, fail with `foreground_required` ([macOS reference](./platforms/macos/actions.mdx#headless-policy)). When `false` (the default), Pi prefers verified semantic activation when it is credible, preserves the focus established by editable clicks for dependent keyboard input, and may retry keyboard input in the foreground only when a background attempt reports it posted nothing (`evidence.postedUnits: 0`; currently inactive: no backend emits that result). Ambiguous pointer actions are never replayed blindly.
 
 ### `cursor_overlay`
 
@@ -2301,9 +2477,9 @@ The activity glow appears in user screen recordings. Single-window `observe_ui` 
 
 ### `blocked_apps`
 
-Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename and X11 `WM_CLASS` once #1180 lands. Never use a display name, path, glob or regex. An unidentified root cannot match.
+Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename (the `/proc/<pid>/exe` of the process owning the root's accessibility bus connection). Never use a display name, path, glob or regex. An unidentified Windows or Linux root is refused rather than matched. On Linux X11 a root whose `WM_CLASS` instance or class matches an entry is also blocked: `WM_CLASS` is app-settable, so it is a hint that can only block more, never admit, identify or unblock a root.
 
-Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux presets cover common terminals, password managers, pinentry executables and polkit agents, but **Linux blocklist matching is disabled** until #1180 supplies a trusted identity. The helper's current `processName` is an app-controlled AT-SPI accessible name.
+Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux defaults cover common terminals (`gnome-terminal-server`, `kgx`, `ptyxis`, `konsole`, `xterm`, `uxterm`, `urxvt`, `alacritty`, `kitty`, `wezterm`, `wezterm-gui`, `foot`, `tilix`, `terminator`, `st`, `xfce4-terminal`, `mate-terminal`, `lxterminal`, `qterminal`, `terminology`, `ghostty`) and password managers (`keepassxc`, `keepass2`, `bitwarden`, `1password`, `enpass`, `seahorse`, `qtpass`, `kwalletmanager5`). pinentry executables, the GNOME and KDE polkit agents, `gcr-prompter` (the GNOME keyring prompt), `ksshaskpass` and `ssh-askpass` are always blocked. The AT-SPI accessible app name is app-controlled: it is never matched for `blocked_apps` (Linux `browser_use` still classifies browsers by it, #1295). A Linux root whose executable cannot be read (another user's or a non-dumpable process, an unknown PID, a window on another bus connection than its application entry, or a Flatpak app behind the shared `xdg-dbus-proxy` connection) is unidentified and refused. Interpreter and multicall basenames (`python3`, `node`, `java`, `electron`, `busybox`, Flatpak or Snap hosts) identify the HOST, not the hosted app: blocking `python3` blocks every Python app, and a hosted app is blocked by its own name only through a matching `WM_CLASS` (#1333). An `exe` link ending in ` (deleted)` reports the name without the suffix, and both names block.
 
 The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 
@@ -2312,7 +2488,7 @@ The system authentication agents `com.apple.SecurityAgent`, `com.apple.loginwind
 On macOS and Windows, `find_roots` marks matching roots `blocked`, and a known blocked root fails with `app_blocked` before helper calls. This is a guard against mistakes, not a sandbox: focus can change between a check and delivery. The helper-side checks below are macOS-only: keyboard delivery checks the frontmost app on every unit but probes AX key focus only on a bounded cadence, so an app that takes key focus without becoming frontmost can receive a few units (up to eight) before the next probe. `act_ui` coordinate input and HID typing are checked more narrowly than `desktop_input`:
 
 - `observe_ui`, `act_ui` and every tool that resolves a root (e.g. `read_text`, `wait_for`) refuse a root owned by a blocked app. `act_ui` re-checks on every call, so adding an app to the list stops a state observed earlier.
-- `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost or holds key focus, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or any drag path vertex) lands on a blocked app's window. Keyboard delivery checks the frontmost app and the request deadline before each key-down. It probes AX key focus at the start, after keyboard layout or activation waits, when focus is ambiguous, or after eight units or 64 ms, whichever comes first. It samples frontmost again after an AX probe. An already posted key-down still gets its matching key-up without another check or activation. On a blocked-app or deadline stop, `evidence.postedUnits` counts key pairs posted in the interrupted action, not text insertion; `act_ui` keeps preceding transaction steps. Do not replay the sequence automatically. A non-frontmost app that takes key focus can receive keys between AX probes, and focus can also change in the short gap between admission and the HID post. This is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
+- `desktop_input` refuses `activateApp` of a blocked app, refuses `typeText` and `keypress` while a blocked app is frontmost or holds key focus, and refuses `moveMouse`, `click`, `scroll` and `drag` whose pointer (or any drag path vertex) lands on a blocked app's window. Keyboard delivery checks the frontmost app and the request deadline before each key-down. It probes AX key focus at the start, after keyboard layout or activation waits, when focus is ambiguous, or after eight units or 64 ms, whichever comes first. It samples frontmost again after an AX probe. An already posted key-down still gets its matching key-up without another check or activation. On a blocked-app or deadline stop, `evidence.postedUnits` counts key pairs posted in the interrupted action, not text insertion; `act_ui` keeps preceding transaction steps. Every failure after a posted prefix carries the count, including a failed event allocation, not only a refusal. A `keypress` sequence is resolved whole before its first key-down, so an unsupported key anywhere in it fails with `invalid_args` and nothing posted. Pi renders a failed tool call from its message alone, so a `desktop_input` keyboard stop restates the code and posted key-pair count in fixed wording per code (never the helper's message, the text or the keys), with a do-not-replay warning when any pair was posted, e.g. `desktop_input stopped (app_blocked): a blocked app was frontmost or held key focus. 1 key pair posted. Do not replay this call; ...`. Do not replay the sequence automatically. The request deadline is carried in the helper's boot-relative clock: `diagnostics` reports `uptimeMs` (protocol `8`), and the client sends `keyboardDeadlineUptimeMs` = that `uptimeMs` + its own socket timeout - 250 ms - the time since the request started, so the deadline value sits at least 250 ms before the client gives up. `desktop_input` bounds it to 30 s, its client's fixed timeout. `act_ui` keeps it unbounded, because its timeout grows with the text (25 ms per character), so a long valid `typeText` is not cut mid-string. A missing deadline falls back to 30 s from receipt, and an `act_ui` transaction resolves its deadline once at entry, so later steps never get a fresh 30 s. A wall-clock step on either side cannot extend typing past the client's timeout; a helper that reports no usable `uptimeMs` gets no keyboard command (`helper_protocol`). A non-frontmost app that takes key focus can receive keys between AX probes, and focus can also change in the short gap between admission and the HID post. This is a guard against mistakes, not a sandbox. Clipboard actions are not input delivery and are not blocked.
 - When a native `act_ui` batch reports a blocked-app or deadline stop without a stop index, the summary omits the action number rather than guessing.
 - `act_ui` re-resolves and checks the target app for every action, so `secondaryAction` and `selectText` (AX-only) cannot reach a blocked app either. `act_ui` with HID delivery refuses a coordinate `click`, `moveMouse`, `scroll` or `drag` whose point (or any drag vertex) lands on a blocked app's window, after it has focused the target and run its occlusion preflight and right before it posts the event, so a blocked window that the target's own focus change uncovers is not a false refusal. Pid (background) delivery skips this pointer check: it targets one app and that app's root is already checked. HID `typeText`, `paste`, `keypress` and the web-content `setText` fallback (which types through `cmd+a` and keystrokes) wait up to 200 ms of wall time for the target to become frontmost and focused, then refuse a blocked focused app; if the target never takes focus the call fails with `focus_not_acquired`. With `preserveFocus` the focus is not moved or awaited and the current focus is checked at once. HID `typeText` and `keypress` use the same per-unit admission and AX cadence as `desktop_input`; web `setText` forces an AX recheck after selection calls and before posting `cmd+a` or replacement text.
 - `find_roots` still lists blocked roots, marked `blocked`, so the model learns why they cannot be used.
@@ -2460,7 +2636,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use t
 
 ## Tree extraction
 
-An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors are marked `truncated` rather than presented as complete.
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
 
 The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
 
@@ -2469,7 +2645,7 @@ The resulting outline preserves native semantics where they are available. It do
 The helper prefers AX operations before synthesized input:
 
 - press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
-- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back;
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field);
 - semantic scrolling walks the target and its ancestors for supported AX scroll actions;
 - foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
 
@@ -2520,7 +2696,7 @@ Actions and the successor capture stay on the root the state belongs to; `act_ui
 
 ## AX delivery
 
-Eligible presses use `AXPress`, text replacement writes `AXValue`, and semantic scrolling searches the target and ancestor chain for AX scroll actions. These paths are described in [Accessibility and AX](./accessibility.mdx).
+Eligible presses use `AXPress`. A failed press is re-pressed on a refreshed element, or falls back to a pointer click, only after an error that proves it was not delivered (a dead element, or an action the element, API or app refused); `cannotComplete`, `failure` and any other error return `unknown` with `error.code` `ax_delivery_unknown` and `evidence.deliveryUnknown`, are never delivered again, and stop the transaction. Non-web text replacement writes `AXValue`; an accepted write is `worked` only when the readback matches, otherwise `unknown` with `evidence.deliveryUnknown`, not automatically resent in the foreground, and it stops the transaction (#1290). Web text replacement posts `cmd+a` (unless the selection write took) and the text; a readback that does not confirm the text is likewise `unknown` with `evidence.deliveryUnknown`, never `didnt` (#1281). Semantic scrolling searches the target and ancestor chain for AX scroll actions. These paths are described in [Accessibility and AX](./accessibility.mdx).
 
 `secondaryAction` runs one named AX action (e.g. `AXShowMenu`) that the element currently advertises; the bridge validates the name against the `inspect_ui` actions, and the helper re-checks it live. `selectText` writes `AXSelectedTextRange` (UTF-16 units) and reads it back. Both are AX-only: they never fall back to coordinates and stay allowed in strict headless mode. `secondaryAction` reports `worked` only when a value, selection or window change is observed, otherwise `unknown` (an AX `cannotComplete` failure is also `unknown`, and only a dead element is retried); an opened menu appears in `rootDelta`. Both are implemented on macOS only; Linux and Windows fail them with `unsupported_command`.
 
@@ -2554,7 +2730,7 @@ Native results distinguish:
 - `didnt`: checked evidence supports that the intended effect did not occur;
 - `unknown`: delivery happened, but available evidence cannot prove the application-level result.
 
-Text writes and text entry can use read-back evidence. Pointer actions often need value, selection, focused-window, sheet, or root-delta changes; a successfully posted event alone is not universal proof. When the source root disappears after delivery, the result reports `target_closed` with its cause, as described in the [root targeting reference](./root-targeting.mdx#post-action-outcomes).
+Text writes and text entry can use read-back evidence. When every action of an `act_ui` transaction is a `setText` whose field shows its text in the successor observation, the outcome becomes `worked`, unless the transaction carries an explicit error (`app_blocked`, `input_deadline_expired`, `postcondition_failed`): a field that already held the text proves nothing about a refused delivery. Pointer actions often need value, selection, focused-window, sheet, or root-delta changes; a successfully posted event alone is not universal proof. When the source root disappears after delivery, the result reports `target_closed` with its cause, as described in the [root targeting reference](./root-targeting.mdx#post-action-outcomes).
 
 ## Agent cursor overlay
 
@@ -2672,13 +2848,13 @@ Discovery combines three sources:
 
 Single-window lookups call `CGWindowListCreateDescriptionFromArray(_:)` for the requested window ID first and fall back to an all-window `CGWindowListCopyWindowInfo` query when that returns no match ([Apple: `CGWindowListCreateDescriptionFromArray`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcreatedescriptionfromarray%28_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3317)).
 
-Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed.
+Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed. A failed title or frame read adds nothing to a pairing score, so it can neither pair a window nor cost it its match. A sheet carries a `windowId` only when it pairs with a CG window no window took, never its window's; and since one helper process never gives two roots one native ref, the client re-identifies a saved root by `windowId` only when the listed root's native ref is from another helper process, never in place of a different ref from the same one, and only as the same kind of root: a saved sheet never re-identifies as a window, nor a saved window as a sheet (a target restored from a session file carries no kind and keeps the `windowId` alone). `rootDelta` keys a paired root by its `windowId` and an unpaired one by kind, role, title and frame; a root whose pairing or identity reads failed, whose key another root shares, or whose CG window claim is not exclusive (it scores 0 or more for, or failed to read for, more than one CG window, or another root claims one of them), is excluded from that comparison and makes the listing incomplete, but it is not removed from discovery: it still resolves as a positive match.
 
 Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are identified by the Accessibility `AXMenu` role and Core Graphics popup-menu window level; a menu with no matching Accessibility element remains an outline-only, `pictureOnly` root ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1232), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3004)).
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first, and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
 
 When an image is requested, the helper:
 
@@ -2725,6 +2901,8 @@ The current overlay is main-display-only because its frame is created from `NSSc
 - ScreenCaptureKit readiness, capture, and the command-line screenshot fallback are separate checks, so one successful check does not guarantee every later window capture.
 - The visual agent cursor only covers the main display.
 - Strict headless mode rejects actions that need synthesized pointer or keyboard input, including every `typeText` and `keypress`.
+- On Linux X11, owed key and button releases are tracked in the helper process only. An exit with status 3 makes the client refuse physical input for the rest of the session, but SIGKILL, OOM or a crash leave no record, and a new Pi session does not know what an earlier one left held. Persisting it is #1256.
+- On Linux X11, a stalled X server can strand a press: a request stuck on its reply cannot release it. The helper exits 3 after 300 ms naming the registered press (0 when nothing is owed or registered), inside the 750 ms SIGKILL grace. Blocking X11 work (XTEST posts, capture, `focusWindow`, the `diagnostics` X11 probe) runs on Tokio's blocking pool, not the request workers, so that deadline, signals and stdin EOF still run with every request stuck on the X server, and a further request waiting for a worker is answered `cancelled` (#1261); at most eight requests run, so at most eight such threads stay stuck, plus the one X11 listing thread. The process test stands in for stuck X11 observation with a sleeping blocking call; no live X server run. Gap: the helper does not know the client's deadline, so physical input waiting behind slow X11 preflight can still be submitted after the client gave up on the reply (#1341).
 
 <details className="reference-provenance">
   <summary>source provenance</summary>
@@ -2783,11 +2961,58 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or say its delivery is unknown when the settled outcome is `unknown` without a stop (and not to replay it). A stopped transaction (`stoppedAt`, a keyboard stop or a timed-out or otherwise indeterminate action) is never called delivered, in a terminal or a successor result: its first line names the stopped action and its literal refusal or error code, the root observation follows on its own line, and the replay decision comes once. Only a first action refused with a code or `0` posted units says nothing was posted and a retry is safe; every other stop says not to replay the transaction (#1281). The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
+- The identity probe proves `target_closed` only from a complete listing: it asks for an authoritative
+  listing, and a probe that fails leaves the outcome `post_action_observation_failed`, even after an
+  empty listing. The Linux helper fails a PID-scoped listing that timed out. Every macOS `listRoots`
+  reply carries `complete`, false when the `AXWindows` list, sheet sources (`AXSheets`, children and
+  their roles) or a skipped window's size could not be read, or the list exceeds 128 windows, unless the
+  process has exited. A failed size read is retried once unless the window's paired CG bounds already
+  admit it, and the window is filtered on the retry's value. A partial listing still resolves the roots
+  it names, e.g. an observed root among an app's first 128 windows, but a saved root only by its verified
+  identity (native ref or window id), never by title or rank: `observe_ui` and `wait_for` fail with
+  `inventory_incomplete` for a saved root the listing omits instead of binding a same-title window, and
+  `observe_ui` without a root does the same for an omitted frontmost window. The macOS client fails an
+  authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
+  an older external helper that has no `complete` field, and reads such a reply as partial.
+  Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
+  `focused` only after one. It matches a root across listings by its CG window id, or without one by
+  kind, role, title and frame. A root whose key may differ from one listing to the next is left out of
+  that comparison and makes its listing incomplete, so it never shows up as `closed` plus a new
+  `appeared` root (#1287): one whose CG pairing read its title or frame unsuccessfully (a later
+  successful read does not vouch for that pairing), and an unpaired one whose title, role, subrole,
+  position or size read failed (a sheet without its own title takes its window's, read or not). Apart
+  from that, a key two roots share is ambiguous: both are left out the same way, whether two unpaired
+  roots read alike or two roots carry one CG window id. One rule keeps the pairing heuristic itself from
+  deciding the comparison: a root claims a CG window when it scores 0 or more for it, or when its own
+  pairing read failed (an unread title or frame could score anything), and a root is keyed by its CG
+  window id only when it claims exactly one that no other root claims. Every claimant of a CG window two
+  roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
+  failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
+  stacked within a few points of each other can therefore report no `closed` or `appeared` change at
+  all. Discovery and target resolution still list every such root. `focused` compares only read focus. The native helper
+  payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a
+  `CFBoolean`; a failed, absent or non-boolean (e.g. numeric `0`) reply leaves the field out, never
+  `false`, and an unpaired window whose minimized read was left out omits `isOnscreen` too. A sheet's
+  `isMain` and `isMinimized` are constant `false`, not reads, and its `isFocused` is its window's read
+  focus, as before: the native helper derives a sheet's flags unchanged, and selection, `find_roots`
+  details and ref records show a sheet with its window's focus, not its own (unknown, not `false`, when
+  that focus was unread). Only `rootDelta` uses a sheet's own `AXFocused`, kept apart as `ownFocus`. A root
+  present in both listings reports `focused` only when its own focus read `false` before and `true`
+  after (a window's `isFocused`, a sheet's `ownFocus`); unread focus on either side reports none
+  (#1303), so a failed read can hide a real focus change but never invents one. A root new since a
+  complete listing whose own focus reads `true` reports both `appeared` and `focused`. A popup menu's
+  `isFocused` is stamped `true`, never read, so a new menu reports only `appeared`. The macOS TS client keeps an omitted or non-boolean flag `undefined` through `listRoots`, `find_roots` details
+  (left out of the stored result) and restored ref records (#1314): ranking gives the not-minimized bonus only for an
+  explicit boolean `false` and the focused, main and onscreen bonuses only for an explicit boolean `true` (a menu's
+  stamped focus and a sheet's inherited focus count), `find_roots` orders a root by focus only when it is an explicit
+  `true`, and a modal takes over the target only when it is explicitly onscreen, not explicitly minimized and in front
+  by explicit focus or z-order. An unknown minimized state alone never costs such a modal the takeover. Windows listings carry no completeness information, so an empty listing from
+  them is still read as closure.
 
 ## Ref lifecycle
 
@@ -2812,13 +3037,13 @@ description: 'Windows backend contract, UIA behavior, refs, actions, deltas, pro
 
 {/* This file is generated by scripts/docs-generators/generate-source-references.mjs. Do not edit it directly. */}
 
-`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **5**.
+`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **6**.
 
 ## Backend contract
 
 The TypeScript Windows backend is intentionally stateless. It forwards root-forest seam calls to the Rust helper:
 
-- `listRoots({ pid? })`: cheap HWND metadata only. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
+- `listRoots({ pid? })`: cheap HWND metadata only, plus `instanceUnavailable` when the window could not be bound to a verifiable instance. `rootRef` is issued per HWND and instance tag. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
 - `look`: atomic observe result with `lookId`, outline, window payload (`rootRef`, `kind`, frame, scale), and optional image. Menu/outline-only roots omit `image`; coordinate acts against those roots fail with `coordinate_unavailable_for_root`.
 - `act`: forwards the typed `PlatformActRequest` whole. The helper validates `lookId`, resolves refs from helper-owned look state, applies policy, executes, and returns honest outcome/evidence plus `performed.deltaSource` and shallow `rootDelta`.
 - `uiaReadText` / `uiaWaitFor`: helper-side live UIA reads/polls. No TypeScript screenshot polling or module-level element state is used.
@@ -2843,7 +3068,7 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND still belongs to that PID before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`, and `waitFor` without `lookId` also requires the exact `rootRef`; each read and poll checks that the HWND is still the window instance that ref or the owning look was issued for (PID, process creation time and instance tag) before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 
@@ -2852,13 +3077,13 @@ Root deltas are baselined at act time. The helper polls a cheap top-level HWND s
 Request envelope:
 
 ```json
-{ "protocolVersion": 5, "id": "req_1", "cmd": "listRoots", "args": {} }
+{ "protocolVersion": 6, "id": "req_1", "cmd": "listRoots", "args": {} }
 ```
 
 Response envelope:
 
 ```json
-{ "protocolVersion": 5, "id": "req_1", "ok": true, "result": { } }
+{ "protocolVersion": 6, "id": "req_1", "ok": true, "result": { } }
 ```
 
 Diagnostics (`cmd: "diagnostics"`) returns the protocol version and helper process metadata. The TypeScript backend rejects a mismatched version with a “Restart Pi …” error.
