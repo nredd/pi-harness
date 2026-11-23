@@ -67,6 +67,15 @@ or use `true` to allow all declaring packages. Remove `packageAgents: false`; Pi
 filters do not control agents. The manifest already declares `pi.skills: ["./skills"]` for
 Pi and `pi.subagents.agents: ["./agents"]` for pi-subagents. No copying is needed.
 
+While local copies and the widened selection overlap, the copies stay in charge: a global skill of the same
+name wins and Pi reports the packaged one as a `collision` diagnostic, and a global agent file
+(`<agentDir>/agents/<name>.md`) silently replaces the packaged agent of that name. Once the copy
+is removed the packaged definition loads. Both rules are tested in `tests/discovery.test.ts`.
+So widening the selection before the copies go changes nothing those copies define, while
+retiring copies before the widened release is selected removes those agents and skills.
+After cutover, discovery is duplicate-free only when the skill diagnostics contain no `collision`
+and no global or project agent file shares a packaged agent's name.
+
 Retire duplicate generic definitions through the deployment's configuration manager only
 when the selected release is published and available. Keep machine-local agents, skills,
 third-party skill installs and `AGENTS.md` local. Do not remove working local copies before
