@@ -325,7 +325,7 @@ describe("stats CLI", () => {
 		process.exitCode = 0; // Bun cannot restore an unset exit code left by an earlier test
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		const log = vi.spyOn(console, "log").mockImplementation(() => {});
-		const warning = "redundant recovery file removal failed (the next export prunes them): EACCES=1";
+		const warning = "redundant recovery file removal failed (they stay protected): EACCES=1";
 		vi.resetModules();
 		vi.doMock("../../src/stats/snapshot.ts", () => ({
 			cleanRecovery: async () => ({

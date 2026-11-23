@@ -1585,13 +1585,13 @@ export type KeptReason = "active" | "missing" | "legacy" | "unreadable" | "not c
 export interface CleanupResult {
 	machineId: string;
 	snapshotDir: string;
-	/** Frozen files proven redundant, dropped from the recovery set, and now gone (unlinked or already absent). */
+	/** Frozen files proven redundant and now gone (unlinked or already absent), then dropped from the recovery set. */
 	removed: string[];
-	/** Frozen files proven redundant and dropped from the recovery set whose unlink failed: still on disk, unprotected. */
+	/** Frozen files proven redundant whose unlink failed: still on disk and still in the recovery set. */
 	failed: string[];
 	/**
-	 * Frozen files that stay, with why. `changed`: the active manifest changed during cleanup, so it stopped before
-	 * unlinking this file.
+	 * Frozen files that stay, with why. `changed`: the active manifest or this file changed during cleanup, so it
+	 * stopped before unlinking this file.
 	 */
 	kept: { file: string; reason: KeptReason }[];
 	warnings?: string[];
@@ -1618,6 +1618,18 @@ function coveredBy(active: readonly CompactShard[]): (shard: CompactShard) => bo
 		);
 }
 
+/** The frozen `.json.gz` `file`, authenticated as this machine's v3 shard of its month (never through a symlink). */
+async function frozenShard(snapshotDir: string, manifest: Manifest, file: string): Promise<Shard> {
+	// The name is the only reference a frozen file has: `<month>-<sha256>.json.gz` (`SHARD_FILE`).
+	const ref = {
+		month: file.slice(0, 7),
+		file,
+		sha256: file.slice(8, 72),
+		bytes: (await lstat(join(snapshotDir, file))).size,
+	};
+	return (await readShard(snapshotDir, manifest, ref, MAX_BYTES)).shard;
+}
+
 /** `undefined` when the frozen `file` is an authenticated v3 shard of this machine the active snapshot covers. */
 async function keptReason(
 	snapshotDir: string,
@@ -1628,14 +1640,7 @@ async function keptReason(
 	if (!file.endsWith(".json.gz")) return "legacy";
 	let shard: Shard;
 	try {
-		// The name is the only reference a frozen file has: `<month>-<sha256>.json.gz` (`SHARD_FILE`).
-		const ref = {
-			month: file.slice(0, 7),
-			file,
-			sha256: file.slice(8, 72),
-			bytes: (await lstat(join(snapshotDir, file))).size,
-		};
-		shard = (await readShard(snapshotDir, manifest, ref, MAX_BYTES)).shard;
+		shard = await frozenShard(snapshotDir, manifest, file);
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
 	}
@@ -1647,10 +1652,11 @@ async function keptReason(
  * and only when its active v3 manifest and every shard it references authenticate and its own bookkeeping records
  * a recovery set with no lost harness, a frozen file the manifest does not reference is removed only if it
  * authenticates as this machine's v3 shard and the active snapshot holds every row of it. Everything else stays
- * frozen, with a reason. The set shrinks before any unlink, so an interruption leaves only redundant files.
- * Right before each unlink the manifest is authenticated again; if it changed, cleanup stops and re-protects the
- * rest. That recheck only narrows the window for writers that skip the export lock (a manual restore into the
- * outbox): they must be quiescent while cleanup runs.
+ * frozen, with a reason. Every candidate stays in the recovery set until its unlink succeeds; the set shrinks
+ * once, after the unlinks, so a crash or failed bookkeeping write leaves only stale names of absent files, which
+ * are harmless, never an unprotected frozen file. Right before each unlink the manifest is authenticated and
+ * reread and the file authenticated again; on any change cleanup stops. That recheck only narrows the window for
+ * writers that skip the export lock (a manual restore into the outbox): they must be quiescent while cleanup runs.
  */
 export async function cleanRecovery(dir: string, output: string): Promise<CleanupResult> {
 	const identity = await machineIdentity(dir);
@@ -1699,41 +1705,48 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 		}
 		const warnings: string[] = [];
 		const failed: string[] = [];
+		const expected = JSON.stringify(previous.manifest);
+		/** Whether the manifest and `file` are still what cleanup judged, checked as late as possible before its unlink. */
+		const unchanged = async (file: string): Promise<boolean> => {
+			const now = await authenticated();
+			if (now === undefined || JSON.stringify(now.manifest) !== expected) return false;
+			// Reread after the shard pass: a restore that swapped manifest.json during it is otherwise unseen.
+			const manifest = await jsonFile(join(snapshotDir, "manifest.json")).then(validateManifest, () => undefined);
+			if (manifest === undefined || JSON.stringify(manifest) !== expected) return false;
+			return frozenShard(snapshotDir, previous.manifest, file).then(
+				() => true,
+				() => false,
+			);
+		};
+		const errors = new Map<string, number>();
+		const candidates = removed.splice(0);
+		for (const [i, file] of candidates.entries()) {
+			// A writer that skips the lock may have installed a manifest referencing `file`: any change stops cleanup.
+			if (!(await unchanged(file))) {
+				const stopped = candidates.slice(i);
+				kept.push(...stopped.map((file) => ({ file, reason: "changed" as const })));
+				warnings.push(
+					`recovery cleanup stopped: the active manifest changed; ${stopped.length} redundant files left in place`,
+				);
+				break;
+			}
+			if ((await removeFiles(snapshotDir, [file], errors)).length > 0) failed.push(file);
+			else removed.push(file);
+		}
+		warnings.push(...errnoWarning("redundant recovery file removal failed (they stay protected)", errors));
 		if (removed.length > 0) {
-			const recoveryFiles = own.recoveryFiles.filter((file) => !removed.includes(file));
-			// Unprotect first: a crash or failed unlink then leaves only redundant files, which the next export prunes.
-			await recordOutbox(statePath, {
+			// Unprotect only what is gone. Failing here leaves stale names of absent files, which export ignores.
+			const gone = new Set(removed);
+			const recoveryFiles = own.recoveryFiles.filter((file) => !gone.has(file));
+			const recorded = await recordOutbox(statePath, {
 				...own,
 				recoveryFiles,
 				recoveryPending: own.recoveryPending && recoveryFiles.length > 0,
-			});
-			const errors = new Map<string, number>();
-			const candidates = removed.splice(0);
-			for (const [i, file] of candidates.entries()) {
-				// A writer that skips the lock may have installed a manifest referencing `file`: any change stops cleanup.
-				const now = await authenticated();
-				if (now === undefined || JSON.stringify(now.manifest) !== JSON.stringify(previous.manifest)) {
-					const stopped = candidates.slice(i);
-					kept.push(...stopped.map((file) => ({ file, reason: "changed" as const })));
-					warnings.push(
-						`recovery cleanup stopped: the active manifest changed; ${stopped.length} redundant files left in place`,
-					);
-					// Re-protect what was not unlinked; the failed ones stay redundant against the manifest that was checked.
-					const gone = new Set([...removed, ...failed]);
-					const restored = await recordOutbox(statePath, {
-						...own,
-						recoveryFiles: own.recoveryFiles.filter((file) => !gone.has(file)),
-					}).then(
-						() => true,
-						() => false,
-					);
-					if (!restored) warnings.push("recovery set not restored: files left in place are unprotected");
-					break;
-				}
-				if ((await removeFiles(snapshotDir, [file], errors)).length > 0) failed.push(file);
-				else removed.push(file);
-			}
-			warnings.push(...errnoWarning("redundant recovery file removal failed (the next export prunes them)", errors));
+			}).then(
+				() => true,
+				() => false,
+			);
+			if (!recorded) warnings.push("recovery set not updated: removed files stay listed as missing (harmless)");
 		}
 		return {
 			machineId: identity.machineId,

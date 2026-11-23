@@ -277,7 +277,7 @@ describe("cleanRecovery", () => {
 		expect(readFileSync(outboxStatePath(agent, snapshotDir))).toEqual(before);
 	});
 
-	it("unprotects redundant files before unlinking them and warns with errno counts only", async () => {
+	it("keeps a file whose unlink failed protected and warns with errno counts only", async () => {
 		// No quota rows: the follow-up pi export must not refuse a narrower harness set.
 		publish([shard({ events: [event(1), event(2)], sessions: [session()] })]);
 		const kept = write(shard({ events: [event(9)], sessions: [session()] })).file;
@@ -293,24 +293,33 @@ describe("cleanRecovery", () => {
 		const result = await cleanRecovery(agent, out);
 		expect(result.removed).toEqual([gone]);
 		expect(result.failed).toEqual([busy]);
-		expect(result.warnings).toEqual(["redundant recovery file removal failed (the next export prunes them): EACCES=1"]);
-		expect(stateOf().recoveryFiles).toEqual([kept]);
+		expect(result.warnings).toEqual(["redundant recovery file removal failed (they stay protected): EACCES=1"]);
+		expect(stateOf().recoveryFiles).toEqual([kept, busy]);
 		vi.mocked(unlink).mockImplementation(actual.unlink);
 		await exportStats(agent, out);
-		expect(readdirSync(snapshotDir)).not.toContain(busy);
+		expect(readdirSync(snapshotDir)).toContain(busy);
 		expect(readdirSync(snapshotDir)).toContain(kept);
 	});
 
-	it("removes nothing when the shrunken recovery set cannot be recorded", async () => {
-		publish([activeShard()]);
+	it("tolerates the stale name left when the shrunken recovery set cannot be recorded", async () => {
+		// No quota rows: the follow-up pi export must not refuse a narrower harness set.
+		publish([shard({ events: [event(1), event(2)], sessions: [session()] })]);
 		const redundant = write(shard({ events: [event(1)], sessions: [session()] })).file;
 		bookkeeping([redundant]);
 		const before = readFileSync(outboxStatePath(agent, snapshotDir));
 		vi.mocked(rename).mockRejectedValue(Object.assign(new Error("disk full"), { code: "ENOSPC" }));
-		await expect(cleanRecovery(agent, out)).rejects.toThrow("disk full");
-		expect(existsSync(join(snapshotDir, redundant))).toBe(true);
+		const result = await cleanRecovery(agent, out);
+		expect(result).toMatchObject({ removed: [redundant], failed: [], kept: [] });
+		expect(result.warnings).toEqual(["recovery set not updated: removed files stay listed as missing (harmless)"]);
+		expect(existsSync(join(snapshotDir, redundant))).toBe(false);
 		expect(readFileSync(outboxStatePath(agent, snapshotDir))).toEqual(before);
 		expect(existsSync(join(snapshotDir, ".export.lock"))).toBe(false);
+		vi.mocked(rename).mockRestore();
+		expect((await exportStats(agent, out)).warnings).toEqual([
+			"recovery files retained: run clean-recovery to remove those the active snapshot covers",
+		]);
+		expect(stateOf().recoveryFiles).toEqual([redundant]);
+		expect((await cleanRecovery(agent, out)).kept).toEqual([{ file: redundant, reason: "missing" }]);
 	});
 
 	it("surfaces an outbox that cannot be inspected instead of reporting it absent", async () => {
@@ -330,54 +339,94 @@ describe("cleanRecovery", () => {
 		expect(readFileSync(outboxStatePath(agent, snapshotDir))).toEqual(before);
 	});
 
-	it("preserves a shard referenced by a concurrent restore", async () => {
+	/** Run `swap` once, at the recheck's `lstat` of the active shard: after the manifest was read, before the unlink. */
+	async function duringRecheck(swap: () => void): Promise<void> {
+		const active = join(snapshotDir, manifestOf().shards[0]?.file as string);
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		let reads = 0;
+		vi.mocked(lstat).mockImplementation(async (path, options) => {
+			const info = await actual.lstat(path, options);
+			if (String(path) === active && ++reads === 2) swap();
+			return info;
+		});
+	}
+
+	it("preserves a shard a concurrent restore references from a manifest swapped during the recheck", async () => {
 		publish([activeShard()]);
 		const restored = shard({ events: [event(1)], sessions: [session()] });
 		const candidate = write(restored).file;
 		bookkeeping([candidate]);
-		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-		let restores = 0;
-		vi.mocked(rename).mockImplementation(async (from, to) => {
-			await actual.rename(from, to);
-			// A restore that skips the lock installs a valid manifest referencing the candidate, once.
-			if (String(to) === outboxStatePath(agent, snapshotDir) && restores++ === 0) publish([restored]);
-		});
+		const before = readFileSync(outboxStatePath(agent, snapshotDir));
+		// A restore that skips the lock installs a valid manifest referencing the candidate; every shard stays intact.
+		await duringRecheck(() => publish([restored]));
 		const result = await cleanRecovery(agent, out);
 		expect(result).toMatchObject({ removed: [], failed: [], kept: [{ file: candidate, reason: "changed" }] });
 		expect(result.warnings).toEqual([
 			"recovery cleanup stopped: the active manifest changed; 1 redundant files left in place",
 		]);
 		expect(existsSync(join(snapshotDir, candidate))).toBe(true);
-		expect(stateOf()).toMatchObject({ recoveryPending: true, recoveryFiles: [candidate] });
+		expect(readFileSync(outboxStatePath(agent, snapshotDir))).toEqual(before);
 		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 	});
 
-	it("stops mid-cleanup at an unreadable manifest and warns when the rest cannot be re-protected", async () => {
+	it("stops when the manifest turns unreadable during the recheck", async () => {
 		publish([activeShard()]);
+		const candidate = write(shard({ events: [event(1)], sessions: [session()] })).file;
+		bookkeeping([candidate]);
+		await duringRecheck(() => writeFileSync(join(snapshotDir, "manifest.json"), "corrupt"));
+		expect(await cleanRecovery(agent, out)).toMatchObject({
+			removed: [],
+			kept: [{ file: candidate, reason: "changed" }],
+		});
+		expect(existsSync(join(snapshotDir, candidate))).toBe(true);
+		expect(stateOf().recoveryFiles).toEqual([candidate]);
+	});
+
+	it("keeps a candidate replaced during the recheck", async () => {
+		publish([activeShard()]);
+		const candidate = write(shard({ events: [event(1)], sessions: [session()] })).file;
+		bookkeeping([candidate]);
+		await duringRecheck(() => writeFileSync(join(snapshotDir, candidate), "replaced"));
+		expect(await cleanRecovery(agent, out)).toMatchObject({
+			removed: [],
+			kept: [{ file: candidate, reason: "changed" }],
+		});
+		expect(readFileSync(join(snapshotDir, candidate), "utf8")).toBe("replaced");
+		expect(stateOf().recoveryFiles).toEqual([candidate]);
+	});
+
+	it("keeps survivors protected through the next export after a crash following some unlinks", async () => {
+		// No quota rows: the follow-up pi export must not refuse a narrower harness set.
+		publish([shard({ events: [event(1), event(2)], sessions: [session()] })]);
 		const first = write(shard({ events: [event(1)], sessions: [session()] })).file;
 		const second = write(shard({ events: [event(2)], sessions: [session()] })).file;
 		bookkeeping([first, second]);
 		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		let unlinked = false;
 		vi.mocked(unlink).mockImplementation(async (path) => {
 			await actual.unlink(path);
-			writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
+			unlinked = true;
+			// A restore installs a valid manifest that does not cover `second`.
+			publish([shard({ events: [event(9)], sessions: [session()] })]);
 		});
-		let renames = 0;
+		// Every bookkeeping write after an unlink fails, as a crash there would.
 		vi.mocked(rename).mockImplementation(async (from, to) => {
-			if (renames++ > 0) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+			if (unlinked && String(to) === outboxStatePath(agent, snapshotDir))
+				throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
 			await actual.rename(from, to);
 		});
 		const result = await cleanRecovery(agent, out);
 		expect(result).toMatchObject({ removed: [first], failed: [], kept: [{ file: second, reason: "changed" }] });
-		expect(result.warnings).toEqual([
-			"recovery cleanup stopped: the active manifest changed; 1 redundant files left in place",
-			"recovery set not restored: files left in place are unprotected",
-		]);
-		expect(existsSync(join(snapshotDir, second))).toBe(true);
-		expect(stateOf()).toMatchObject({ recoveryPending: false, recoveryFiles: [] });
+		expect(stateOf()).toMatchObject({ recoveryPending: true, recoveryFiles: [first, second] });
+		vi.mocked(unlink).mockImplementation(actual.unlink);
+		vi.mocked(rename).mockImplementation(actual.rename);
+		await exportStats(agent, out);
+		expect(manifestOf().shards.map((ref) => ref.file)).not.toContain(second);
+		expect(readdirSync(snapshotDir)).toContain(second);
+		expect(stateOf().recoveryFiles).toContain(second);
 	});
 
-	it("re-protects only the files cleanup did not unlink", async () => {
+	it("keeps protecting the files a stopped cleanup did not unlink", async () => {
 		publish([activeShard()]);
 		const kept = write(shard({ events: [event(9)], sessions: [session()] })).file;
 		const first = write(shard({ events: [event(1)], sessions: [session()] })).file;

@@ -774,15 +774,20 @@ within the merged active session's span and child marker, and each quota reading
 fresh reading of the same window that resets no earlier (the reading `mergeQuota` would pick
 anyway). Everything else stays frozen and is listed in `kept` with a reason: `active`, `missing`,
 `legacy` (a v1/v2 `.json` shard, never compared), `unreadable` (including a symlink, never
-followed) or `not covered`. Removed names leave `recoveryFiles` first, and `recoveryPending` clears
-once the set is empty; only then are the files unlinked, so an interruption or an unlink failure
-(warned as `redundant recovery file removal failed (the next export prunes them): <errno counts>`)
-leaves only redundant, unprotected files for the next export to prune. `removed` lists files now gone
-(unlinked or already absent); `failed` lists files whose unlink failed, still on disk and unprotected.
-Right before each unlink the active manifest is authenticated again; if it changed, cleanup stops,
-lists that file and the rest in `kept` as `changed`, re-protects them in `recoveryFiles`, warns
-`recovery cleanup stopped: the active manifest changed; N redundant files left in place` and exits 1.
-That recheck narrows the window, it is not exclusion: a writer that skips the export lock (e.g. a
+followed) or `not covered`. Every candidate stays in `recoveryFiles` until its unlink succeeds (or
+finds it already absent); the set shrinks once, after the unlinks, and `recoveryPending` clears once
+it is empty. So a crash or a failed bookkeeping write (warned as `recovery set not updated: removed
+files stay listed as missing (harmless)`) leaves only stale names of absent files, which exports
+ignore and later cleanups keep as `missing` (so `recoveryPending` stays set), never an unprotected
+frozen file. `removed` lists files
+now gone (unlinked or already absent); `failed` lists files whose unlink failed (warned as
+`redundant recovery file removal failed (they stay protected): <errno counts>`), still on disk and
+still protected. Right before each unlink the active manifest is authenticated again, then reread
+after that shard pass, and the candidate is authenticated again (regular file, bytes matching its
+name); on any change cleanup stops, lists that file and the rest in `kept` as `changed` (still
+protected), warns `recovery cleanup stopped: the active manifest changed; N redundant files left in
+place` and exits 1. That recheck narrows the window, it does not eliminate it: checkout and restore
+writers do not take the export lock yet ([#1331](https://github.com/nredd/pi-harness/issues/1331)), so a writer that skips it (e.g. a
 manual restore into the outbox) must be quiescent while cleanup runs. Coverage is judged against
 the active snapshot as it is now: once removed, those rows are as protected as any other published
 history, no more. Shard files outside the frozen set are left to export pruning.
