@@ -6,10 +6,14 @@
  * - `/new`: the session `/new` replaced, as its live branch stood at `session_shutdown`. Core can move
  *   that branch's leaf (`/tree` without a summary) without writing anything, so its file is not read.
  *   The capture lives in this module, which the extension loader keeps across `/new`; a `/new` with
- *   no capture, a different predecessor, or a predecessor whose header has another cwd shows nothing.
+ *   no capture, a different predecessor, or a predecessor whose header has another (or no) cwd shows
+ *   nothing. At most `CAPTURE_LIMIT` captures wait unconsumed (a replacement without todo never
+ *   takes its own); the oldest is dropped first.
  * - Process `startup`: the most recently written `.jsonl` in the session directory whose header
  *   has this cwd and no `parentSession` (persisted subagents and forks carry one). With parallel
  *   sessions in one cwd that is whichever wrote last, so the list names it and says it may still run.
+ *   The file is read once and replayed only when the header in those same bytes still names the
+ *   chosen session, in this cwd, with no `parentSession`.
  */
 
 import { open, readdir, readFile, stat } from "node:fs/promises";
@@ -48,6 +52,9 @@ interface Outgoing {
 /** Captures keyed by the new session's file, which `session_shutdown` names as its target. */
 const outgoing = new Map<string, Outgoing>();
 
+/** Unconsumed captures kept; a Map iterates in insertion order, so the first key is the oldest. */
+const CAPTURE_LIMIT = 8;
+
 function openTodosOf(sessionId: string, branch: readonly unknown[]): CarriedTodos | undefined {
 	const state = replayFromBranch({ sessionManager: { getBranch: () => branch } });
 	const tasks = state.tasks.filter((t) => t.status === "pending" || t.status === "in_progress");
@@ -68,7 +75,9 @@ export function recordOutgoing(
 		const file = manager.getSessionFile?.();
 		if (!file) return;
 		const carried = openTodosOf(manager.getSessionId(), manager.getBranch());
+		outgoing.delete(event.targetSessionFile);
 		outgoing.set(event.targetSessionFile, { file, cwd: manager.getHeader?.()?.cwd, carried });
+		if (outgoing.size > CAPTURE_LIMIT) outgoing.delete(outgoing.keys().next().value as string);
 	} catch {
 		// A disposed or stale manager: no capture, so the fresh session gets no list.
 	}
@@ -97,13 +106,18 @@ export function previousSessionOf(
 	if (manager.getBranch().length || manager.getHeader?.()?.parentSession) return undefined;
 	if (event.reason === "new") {
 		// Refuse rather than guess: the capture must be of this `/new`'s predecessor, in this cwd.
-		if (!capture?.carried || capture.file !== event.previousSessionFile || capture.cwd !== manager.getCwd?.())
+		const cwd = manager.getCwd?.();
+		if (!capture?.carried || capture.file !== event.previousSessionFile || !isPath(cwd) || capture.cwd !== cwd)
 			return undefined;
 		return { carried: capture.carried };
 	}
 	const sessionDir = manager.getSessionDir?.();
 	const cwd = manager.getCwd?.();
 	return sessionDir && cwd ? { sessionDir, cwd, currentId: manager.getSessionId() } : undefined;
+}
+
+function isPath(value: unknown): value is string {
+	return typeof value === "string" && value !== "";
 }
 
 /** Header lines are short; one that does not fit here is not a session file this reads. */
@@ -166,15 +180,25 @@ async function newestSibling(
 	for (const { path } of candidates) {
 		// An unreadable entry is skipped here; once one is chosen, a failed read never falls back.
 		const header = await readHeader(path).catch(() => undefined);
-		if (!header || header.id === currentId || header.cwd !== cwd || header.parentSession) continue;
+		if (!header || header.id === currentId || !isChosen(header, header.id, cwd)) continue;
 		return { path, id: header.id };
 	}
 	return undefined;
 }
 
-/** The persisted branch of a session file: the last entry and its ancestors, root first. */
-function branchOf(text: string): unknown[] {
+/** Whether `header` is the chosen top-level session `id` in `cwd`. */
+function isChosen(header: Header | undefined, id: string, cwd: string): boolean {
+	return header?.id === id && header.cwd === cwd && !header.parentSession;
+}
+
+/**
+ * The persisted branch of a session file: the last entry and its ancestors, root first. Empty
+ * unless the header in these same bytes is the chosen session, so a file replaced after the scan
+ * read its header never lends its entries to that session's id.
+ */
+function branchOf(text: string, id: string, cwd: string): unknown[] {
 	const lines = text.split("\n").filter(Boolean).map(parseLine);
+	if (!isChosen(asHeader(lines[0]), id, cwd)) return [];
 	const byId = new Map<string, { id: string; parentId?: unknown }>();
 	let leaf: string | undefined;
 	for (const entry of lines.slice(1)) {
@@ -200,11 +224,14 @@ function branchOf(text: string): unknown[] {
  * Read the previous session's open todos. `undefined` when there is no such session, it has none
  * open, or it cannot be read: a fresh session then gets no list, never a claim that none were open.
  */
-export async function loadPreviousOpenTodos(previous: PreviousSession): Promise<CarriedTodos | undefined> {
+export async function loadPreviousOpenTodos(
+	previous: PreviousSession,
+	readText: (path: string) => Promise<string> = (path) => readFile(path, "utf8"),
+): Promise<CarriedTodos | undefined> {
 	if ("carried" in previous) return previous.carried;
 	try {
 		const sibling = await newestSibling(previous.sessionDir, previous.cwd, previous.currentId);
-		return sibling && openTodosOf(sibling.id, branchOf(await readFile(sibling.path, "utf8")));
+		return sibling && openTodosOf(sibling.id, branchOf(await readText(sibling.path), sibling.id, previous.cwd));
 	} catch {
 		// Best effort: a missing directory, a file removed mid-scan or an unreadable file shows nothing.
 		return undefined;

@@ -20,6 +20,7 @@ import {
 } from "@nredd/pi-test-lib/harness";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, expect, it, onTestFinished } from "vitest";
+import { replayFromBranch } from "../../src/state/replay.ts";
 import { getState } from "../../src/state/store.ts";
 import { CARRYOVER_LIST_MESSAGE_TYPE } from "../../src/tool/types.ts";
 import registerTodo from "../fixtures/home-fixtures.ts";
@@ -146,4 +147,9 @@ it("lists the live branch /new replaced, after /tree moved its leaf without writ
 	await runtime.session.prompt("Continue");
 	expect(seen[0]).toContain(`(${first.sessionManager.getSessionId()}) last recorded`);
 	expect(seen[0]).toContain("- #1 pending Ship widgets\n");
+	// Disk disagrees: reopened, the outgoing file's last entry has #1 completed (the update was accepted).
+	const reopened = SessionManager.open(first.sessionManager.getSessionFile() as string, sessionDir);
+	expect(replayFromBranch({ sessionManager: reopened }).tasks).toEqual([
+		expect.objectContaining({ id: 1, status: "completed" }),
+	]);
 });

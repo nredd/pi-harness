@@ -193,11 +193,15 @@ todos the new request still needs. It is never persisted and later requests do n
 is the replaced session's live branch as it stood at `session_shutdown`, so a `/tree` move without a
 summary (which writes nothing) still counts. That capture is in memory: when it is missing, names
 another predecessor, or the predecessor's header cwd differs from the new session's cwd (e.g. after
-a resume with a cwd override), `/new` shows nothing rather than guess. At startup the previous
+a resume with a cwd override) or either cwd is missing, `/new` shows nothing rather than guess. At
+most 8 unconsumed captures are kept (a replacement session without todo never takes its own); the
+oldest is dropped first. At startup the previous
 session is the most recently written `.jsonl` in the session directory whose header has this cwd
 and no `parentSession`; entries that vanish or cannot be read during that scan are skipped. With
 parallel sessions in one cwd that is whichever wrote last, so the message names its session id and
-says it may still be running. A chosen session with nothing open, or one that cannot be read,
+says it may still be running. The chosen file is read once and its todos are replayed only when the
+header in those same bytes still has its session id, this cwd and no `parentSession`, so a file
+replaced after the scan shows nothing. A chosen session with nothing open, or one that cannot be read,
 shows nothing; the scan never falls back to an older session. Like the compaction list, the pending
 read lives in memory, so a session switch before the first request drops it. Headless parents get
 no list yet ([#1321](https://github.com/nredd/pi-harness/issues/1321)).

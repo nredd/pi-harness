@@ -118,10 +118,27 @@ describe("previousSessionOf", () => {
 			},
 		});
 		expect(previousSessionOf(started, manager())).toBeUndefined();
+	});
+
+	it("refuses a /new capture unless both cwds are nonempty strings", () => {
+		const live = [snapshot("e1", null, OPEN)];
+		// Two missing cwds are no match.
 		recordOutgoing(shutdown, { ...outgoingManager(live), getHeader: undefined });
-		expect(previousSessionOf(started, manager({ getCwd: () => undefined }))).toEqual(
-			expect.objectContaining({ carried: expect.objectContaining({ sessionId: "prev" }) }),
-		);
+		expect(previousSessionOf(started, manager({ getCwd: () => undefined }))).toBeUndefined();
+		recordOutgoing(shutdown, outgoingManager(live, ""));
+		expect(previousSessionOf(started, manager({ getCwd: () => "" }))).toBeUndefined();
+		recordOutgoing(shutdown, outgoingManager(live));
+		expect(previousSessionOf(started, manager({ getCwd: undefined }))).toBeUndefined();
+	});
+
+	it("keeps at most 8 unconsumed /new captures, dropping the oldest", () => {
+		const live = [snapshot("e1", null, OPEN)];
+		const target = (n: number) => `/sessions/t${n}.jsonl`;
+		// A replacement without todo never consumes its capture.
+		for (let n = 0; n < 9; n++) recordOutgoing({ reason: "new", targetSessionFile: target(n) }, outgoingManager(live));
+		const take = (n: number) => previousSessionOf(started, manager({ getSessionFile: () => target(n) }));
+		expect(take(0)).toBeUndefined();
+		for (let n = 1; n < 9; n++) expect(take(n)).toEqual(expect.objectContaining({ carried: expect.anything() }));
 	});
 
 	it("scans the session directory at process startup", () => {
@@ -176,6 +193,26 @@ describe("loadPreviousOpenTodos", () => {
 			100,
 		);
 		expect(await loadPreviousOpenTodos(scan(dir))).toEqual({ sessionId: "prev", tasks: [OPEN[1], OPEN[2]] });
+	});
+
+	it("replays only bytes whose own header is the chosen session, never falling back", async () => {
+		const dir = makeTestTempDir("todo-carryover-", onTestFinished);
+		writeSession(dir, "a.jsonl", [header("older"), snapshot("e1", null, OPEN)], 100);
+		const chosen = writeSession(dir, "b.jsonl", [header("prev"), snapshot("e1", null, OPEN)], 200);
+		const body = (first: unknown) =>
+			`${[first, snapshot("e1", null, OPEN)].map((l) => JSON.stringify(l)).join("\n")}\n`;
+		// The file is replaced between the scan's header read and the body read.
+		for (const replacement of [
+			{ type: "message" },
+			header("other"),
+			header("prev", { cwd: "/other" }),
+			header("prev", { parentSession: "/p.jsonl" }),
+		]) {
+			const read = vi.fn(async () => body(replacement));
+			expect(await loadPreviousOpenTodos(scan(dir), read)).toBeUndefined();
+			expect(read).toHaveBeenCalledExactlyOnceWith(chosen);
+		}
+		expect((await loadPreviousOpenTodos(scan(dir), async () => body(header("prev"))))?.sessionId).toBe("prev");
 	});
 
 	it("returns a captured /new list as is", async () => {
