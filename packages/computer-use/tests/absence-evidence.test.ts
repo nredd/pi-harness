@@ -101,6 +101,13 @@ test.for([
 		unread: ["@e2"],
 	},
 	{
+		// The successor binds the scope's public ref structurally: no native identity proves the waited node (#1338).
+		name: "an exact scope whose children alone are unread",
+		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
+		condition: { ref: "@e2" },
+		unread: ["@e2"],
+	},
+	{
 		name: "a protected exact scope whose children are unread",
 		tree: () => [wireNode("outer", "AXGroup", "Outer", { ...CHILDREN_UNREAD, subrole: "AXSecureTextField" })],
 		condition: { ref: "@e2" },
@@ -149,11 +156,6 @@ test.for([
 		condition: { ref: "@e2" },
 	},
 	{ name: "a vanished scope", tree: () => [wireButton("b1", "Other")], condition: { scopeRef: "@e3" } },
-	{
-		name: "an exact scope whose children alone are unread",
-		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
-		condition: { ref: "@e2" },
-	},
 ])("a helper's gone is corroborated with $name", async ({ tree, condition }, { onTestFinished }) => {
 	const fake = await installFakeDesktop(onTestFinished);
 	fake.tree = [wireNode("outer", "AXGroup", "Outer", { children: [wireNode("inner", "AXGroup", "Inner")] })];
@@ -738,28 +740,62 @@ test("a Linux exact scope sent without a truncated marker stays unread despite c
 	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
 });
 
-test.for([
-	{ name: "children-unread", marker: CHILDREN_UNREAD, status: "verified" },
-	{ name: "bare truncated", marker: UNREAD, status: "inconclusive" },
-])("act_ui checks an exact ref absence on a $name successor node", async ({ marker, status }, { onTestFinished }) => {
-	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+test("a remapped exact scope whose children alone are unread cannot corroborate a gone value", async ({
+	onTestFinished,
+}) => {
 	const fake = await installFakeDesktop(onTestFinished);
-	fake.tree = [wireButton("go", "Go")];
+	fake.tree = [wireNode("a", "AXButton", "Save", { value: "Go" })];
 	const { stateId } = await fake.observe();
-	fake.actBatchResult = {
-		outcome: "worked",
-		performed: { delivery: "ax", transaction: true, actionCount: 1 },
-		steps: [{ outcome: "worked", performed: { delivery: "ax" } }],
-	};
-	// The node stops showing "Go" while its `AXChildren` read keeps failing; the native exact wait says `gone`.
+	// The wait read A's value as "Stop"; A then moved under a same-role, same-label B in its old slot and went back
+	// to "Go". The successor carries A's public ref onto B, whose unread children hide A.
 	fake.waitFor = async () => {
-		fake.tree = [wireButton("go", "Stop", marker)];
+		fake.tree = [
+			wireNode("b", "AXButton", "Save", {
+				value: "Stop",
+				...CHILDREN_UNREAD,
+				children: [],
+			}),
+		];
 		return { found: true, gone: true, nodeCount: 1 };
 	};
-	const result = await fake.call(fake.bridge.executeAct, {
+	const result = await fake.call(fake.bridge.executeWaitFor, {
 		stateId,
-		actions: [{ action: "press", ref: "@e2" }],
-		expect: { ref: "@e2", text: "Go", until: "absent", timeoutMs: 250 },
+		text: "Save",
+		value: "Go",
+		until: "absent",
+		ref: "@e2",
 	});
-	assert.equal(result.details.execution.verification.status, status);
+	assert.deepEqual(
+		[fake.waits.at(-1)?.request.scopeRef, result.details.gone, result.details.inconclusive, result.details.unreadRefs],
+		["a", undefined, true, ["@e2"]],
+	);
 });
+
+test.for([
+	{ name: "children-unread", marker: CHILDREN_UNREAD },
+	{ name: "bare truncated", marker: UNREAD },
+])(
+	"act_ui keeps an exact ref absence on a $name successor node inconclusive",
+	async ({ marker }, { onTestFinished }) => {
+		vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+		const fake = await installFakeDesktop(onTestFinished);
+		fake.tree = [wireButton("go", "Go")];
+		const { stateId } = await fake.observe();
+		fake.actBatchResult = {
+			outcome: "worked",
+			performed: { delivery: "ax", transaction: true, actionCount: 1 },
+			steps: [{ outcome: "worked", performed: { delivery: "ax" } }],
+		};
+		// The node stops showing "Go" while its `AXChildren` read keeps failing; the native exact wait says `gone`.
+		fake.waitFor = async () => {
+			fake.tree = [wireButton("go", "Stop", marker)];
+			return { found: true, gone: true, nodeCount: 1 };
+		};
+		const result = await fake.call(fake.bridge.executeAct, {
+			stateId,
+			actions: [{ action: "press", ref: "@e2" }],
+			expect: { ref: "@e2", text: "Go", until: "absent", timeoutMs: 250 },
+		});
+		assert.equal(result.details.execution.verification.status, "inconclusive");
+	},
+);
