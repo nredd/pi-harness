@@ -179,10 +179,11 @@ async function atomicContents(path: string, contents: string | Uint8Array): Prom
 }
 
 /**
- * Why an export cannot succeed until the owner acts: retrying it unchanged never helps. Each is a fixed
- * refusal site, never inferred from a message; anything else, contention, I/O and a refusal that clears
- * with time included, has no code. `watermark-ahead` is clock-dependent: a lead just over 366 days clears
- * as the clock advances, so callers should bound their wait on it rather than stop for good.
+ * Why an export or a recovery cleanup cannot succeed until the owner acts: retrying it unchanged never helps.
+ * Each is a fixed refusal site, never inferred from a message; anything else, contention, I/O and a refusal
+ * that clears with time included, has no code. `watermark-ahead` is clock-dependent: a lead just over 366 days
+ * clears as the clock advances, so callers should bound their wait on it rather than stop for good. The
+ * `recovery-` codes come only from `cleanRecovery`, which removes nothing when it refuses.
  */
 export type RefusalCode =
 	| "watermark-ahead"
@@ -191,9 +192,13 @@ export type RefusalCode =
 	| "manifest-missing"
 	| "harness-set-narrowed"
 	| "harness-set-unknown"
-	| "export-state-invalid";
+	| "export-state-invalid"
+	| "recovery-outbox-missing"
+	| "recovery-snapshot-unverified"
+	| "recovery-set-unrecorded"
+	| "recovery-harness-lost";
 
-/** An export refused before publishing; `refusal` is the stable code callers may act on. */
+/** An export refused before publishing, or a cleanup before removing; `refusal` is the stable code callers may act on. */
 export class ExportRefusal extends Error {
 	readonly refusal: RefusalCode;
 	constructor(refusal: RefusalCode, message: string, options?: ErrorOptions) {
@@ -1045,15 +1050,15 @@ interface Revisions {
 	months: Set<string>;
 	/** Ids of sealed events a corrected call replaces. */
 	supersededEventIds: Set<string>;
-	/** Ids of sealed sessions whose start or child attribution changed. */
-	supersededSessionIds: Set<string>;
+	/** The scan's corrected row for each sealed session id whose start or child attribution changed. */
+	supersededSessions: Map<string, SnapshotSession>;
 }
 
 /** Retire sealed generations only when a physical call or session identity was corrected. */
 function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revisions {
 	const revised = new Set<string>();
 	const supersededEventIds = new Set<string>();
-	const supersededSessionIds = new Set<string>();
+	const supersededSessions = new Map<string, SnapshotSession>();
 	const entries = new Map<string, { id: string; month: string }[]>();
 	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.entryId]);
 	for (const shard of previous.shards)
@@ -1079,26 +1084,97 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 		for (const prior of shard.sessions) {
 			const current = sessions.get(prior.id);
 			if (current && (current.startMs !== prior.startMs || current.child !== prior.child)) {
-				supersededSessionIds.add(prior.id);
+				supersededSessions.set(prior.id, current);
 				revised.add(shard.month);
 				revised.add(monthOf(current.startMs));
 			}
 		}
-	return { months: revised, supersededEventIds, supersededSessionIds };
+	return { months: revised, supersededEventIds, supersededSessions };
+}
+
+/**
+ * The sealed ends of superseded sessions, under the scan's corrected start and child attribution, as carry
+ * shards in the corrected start month: one per retired shard and month, so no shard repeats a session.
+ * Carried: every distinct sealed end at or after the corrected start and before the active month. An end
+ * before the corrected start is dominated by the scan's own end; one in the active month is not carried,
+ * because that month is rebuilt from the scan (a deleted call there takes its end with it). Then each
+ * corrected session is floored at its latest sealed call that is published under it (any sealed shard,
+ * wherever its old metadata was), in one more carry shard per month, so it never ends before its own call.
+ */
+function rebasedEnds(
+	retired: ReadonlyMap<string, readonly CompactShard[]>,
+	sealed: readonly CompactShard[],
+	fresh: ReadonlyMap<string, CompactShard>,
+	revisions: Revisions,
+	current: string,
+): CompactShard[] {
+	const corrections = revisions.supersededSessions;
+	if (corrections.size === 0) return [];
+	const out: CompactShard[] = [];
+	const carried = new Map<string, number>();
+	for (const shards of retired.values())
+		for (const shard of shards) {
+			const byMonth = new Map<string, CompactShard>();
+			for (const prior of shard.sessions) {
+				const corrected = corrections.get(prior.id);
+				if (!corrected || prior.endMs < corrected.startMs || monthOf(prior.endMs) >= current) continue;
+				const month = monthOf(corrected.startMs);
+				const target = byMonth.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+				target.sessions.push({ ...corrected, endMs: prior.endMs });
+				byMonth.set(month, target);
+				carried.set(prior.id, Math.max(carried.get(prior.id) ?? 0, prior.endMs));
+			}
+			out.push(...byMonth.values());
+		}
+	// Sealed shards hold only calls before the active month. An unrevised month keeps its shards verbatim;
+	// `regenerateMonth` publishes the scan first, then each unsuperseded sealed event whose id is not yet
+	// published, so a sealed row a fresh row (maybe under another session) replaces floors nothing.
+	const published = new Map<string, Set<string>>();
+	const floors = new Map<string, { corrected: SnapshotSession; endMs: number; shard: CompactShard }>();
+	for (const shard of sealed)
+		for (const event of shard.events) {
+			if (revisions.supersededEventIds.has(event.id)) continue;
+			if (retired.has(shard.month)) {
+				let ids = published.get(shard.month);
+				if (!ids) {
+					ids = new Set(fresh.get(shard.month)?.events.map((e) => e.id));
+					published.set(shard.month, ids);
+				}
+				if (ids.has(event.id)) continue;
+				ids.add(event.id);
+			}
+			const corrected = corrections.get(event.sessionId);
+			if (!corrected) continue;
+			const endMs = Math.max(floors.get(event.sessionId)?.endMs ?? 0, event.ms);
+			floors.set(event.sessionId, { corrected, endMs, shard });
+		}
+	const floored = new Map<string, CompactShard>();
+	for (const [id, { corrected, endMs, shard }] of floors) {
+		// A floor above the published ends lies after the corrected start, so before the active month too.
+		if (endMs <= Math.max(corrected.endMs, carried.get(id) ?? 0)) continue;
+		const month = monthOf(corrected.startMs);
+		const target = floored.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+		target.sessions.push({ ...corrected, endMs });
+		floored.set(month, target);
+	}
+	out.push(...floored.values());
+	return out;
 }
 
 /**
  * Regenerate a revised sealed month from the clean scan, then carry what its retired shards held that the
  * scan no longer reproduces (archived calls and sessions, every distinct session end, quota readings) in
- * delta shards. Only the superseded rows themselves are dropped. Past the shard limit the carries are packed
- * losslessly into the fresh shard and as few more as validation allows; if even that does not fit,
- * publication is refused rather than dropping a sealed row.
+ * delta shards, plus the `rebased` sealed ends of sessions whose corrected start falls in this month. Only
+ * the superseded rows themselves are dropped. Past the shard limit the carries are packed losslessly into
+ * the fresh shard and as few more as validation allows; if even that does not fit, publication is refused
+ * rather than dropping a sealed row.
  */
 function regenerateMonth(
 	month: string,
 	full: CompactShard | undefined,
 	retired: readonly CompactShard[],
 	revisions: Revisions,
+	rebased: readonly CompactShard[],
 ): CompactShard[] {
 	const shards = full ? [full] : [];
 	for (const shard of retired) {
@@ -1106,11 +1182,15 @@ function regenerateMonth(
 			{
 				...shard,
 				events: shard.events.filter((event) => !revisions.supersededEventIds.has(event.id)),
-				sessions: shard.sessions.filter((session) => !revisions.supersededSessionIds.has(session.id)),
+				sessions: shard.sessions.filter((session) => !revisions.supersededSessions.has(session.id)),
 			},
 			shards,
 			true,
 		);
+		if (carry) shards.push(carry);
+	}
+	for (const shard of rebased) {
+		const carry = monthDelta(shard, shards, true);
 		if (carry) shards.push(carry);
 	}
 	if (shards.length <= MAX_SEALED_SHARDS) return shards;
@@ -1238,35 +1318,58 @@ function monthDelta(full: CompactShard, old: readonly CompactShard[], exactEnds 
 	return nonempty(delta) ? delta : undefined;
 }
 
-/** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
-async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
-	const cleanupErrors = new Map<string, number>();
-	const recordCleanupError = (error: unknown): void => {
-		const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
-		const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
-		cleanupErrors.set(code, (cleanupErrors.get(code) ?? 0) + 1);
-	};
-	const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
-		recordCleanupError(error);
-		return [];
-	});
-	for (const entry of entries) {
-		if (entry.isFile() && SHARD_FILE.test(entry.name) && !keep.has(entry.name)) {
-			try {
-				await unlink(join(snapshotDir, entry.name));
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") recordCleanupError(error);
-			}
+/** Count a failure by its safe errno code only: never a path or message. */
+function countErrno(errors: Map<string, number>, error: unknown): void {
+	const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
+	const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
+	errors.set(code, (errors.get(code) ?? 0) + 1);
+}
+
+/**
+ * Best-effort, per-file unlink in `snapshotDir`; an already absent file is not a failure. Returns the files whose
+ * unlink failed, so they are still on disk.
+ */
+async function removeFiles(
+	snapshotDir: string,
+	files: readonly string[],
+	errors: Map<string, number>,
+): Promise<string[]> {
+	const failed: string[] = [];
+	for (const file of files) {
+		try {
+			await unlink(join(snapshotDir, file));
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException | null | undefined)?.code === "ENOENT") continue;
+			countErrno(errors, error);
+			failed.push(file);
 		}
 	}
-	return cleanupErrors.size
+	return failed;
+}
+
+/** One warning with sorted errno counts, or none. */
+const errnoWarning = (what: string, errors: ReadonlyMap<string, number>): string[] =>
+	errors.size
 		? [
-				`obsolete shard cleanup failed: ${[...cleanupErrors]
+				`${what}: ${[...errors]
 					.sort(([a], [b]) => codeUnits(a, b))
 					.map(([code, count]) => `${code}=${count}`)
 					.join(", ")}`,
 			]
 		: [];
+
+/** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
+async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
+	const cleanupErrors = new Map<string, number>();
+	const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
+		countErrno(cleanupErrors, error);
+		return [];
+	});
+	const obsolete = entries
+		.filter((entry) => entry.isFile() && SHARD_FILE.test(entry.name) && !keep.has(entry.name))
+		.map((entry) => entry.name);
+	await removeFiles(snapshotDir, obsolete, cleanupErrors);
+	return errnoWarning("obsolete shard cleanup failed", cleanupErrors);
 }
 
 /** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
@@ -1286,6 +1389,17 @@ export async function exportStats(
 ): Promise<ExportResult> {
 	const identity = await machineIdentity(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
+	return withExportLock(snapshotDir, () => publishStats(dir, snapshotDir, root, options, identity));
+}
+
+/**
+ * Run `work` holding the outbox's exclusive export lock. A lock release failure after `work` succeeded is a
+ * warning on its result; after it failed, both errors are reported.
+ */
+async function withExportLock<T extends { warnings?: string[] }>(
+	snapshotDir: string,
+	work: () => Promise<T>,
+): Promise<T> {
 	const lock = join(snapshotDir, ".export.lock");
 	await mkdir(snapshotDir, { recursive: true });
 	// The portable kit cannot import the dev-tools lock. Fail closed on contention or a
@@ -1311,9 +1425,9 @@ export async function exportStats(
 				: `Export lock is held at ${details}; retry after the other export finishes. If this persists, verify no export is running before removing the lock directory`;
 		throw Object.assign(new Error(message, { cause: error }), { code: error.code, path: lock });
 	});
-	let outcome: { ok: true; result: ExportResult } | { ok: false; error: unknown };
+	let outcome: { ok: true; result: T } | { ok: false; error: unknown };
 	try {
-		outcome = { ok: true, result: await publishStats(dir, snapshotDir, root, options, identity) };
+		outcome = { ok: true, result: await work() };
 	} catch (error) {
 		outcome = { ok: false, error };
 	}
@@ -1360,7 +1474,9 @@ async function publishStats(
 	const exportedAt = Math.max(now, publishedAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
 	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
-	// cache or publication writes. Within years 0000-9999 a later instant never seals an earlier month.
+	// cache or publication writes. This runs under the outbox lock `exportStats` holds; its release after
+	// the refusal is best effort and can fail. Within
+	// years 0000-9999 a later instant never seals an earlier month.
 	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
 		throw new ExportRefusal(
 			"watermark-ahead",
@@ -1372,7 +1488,8 @@ async function publishStats(
 		);
 	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
 	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
-	// later export could not tell them from months a clock-ahead export sealed: refuse (nothing written).
+	// later export could not tell them from months a clock-ahead export sealed: refuse (no cache or
+	// publication writes; this also runs under the outbox lock).
 	// A replacement seals nothing from the previous generation, so it may publish there. No refusal code:
 	// this clears by itself once the clock reaches that month, so callers keep retrying it.
 	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
@@ -1560,7 +1677,7 @@ async function publishStats(
 	const current = monthOf(exportedAt);
 	const revisions: Revisions = sealed
 		? detectRevisions(sealed, snapshot)
-		: { months: new Set(), supersededEventIds: new Set(), supersededSessionIds: new Set() };
+		: { months: new Set(), supersededEventIds: new Set(), supersededSessions: new Map() };
 	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
 	const retired = new Map<string, CompactShard[]>();
 	if (sealed)
@@ -1580,12 +1697,20 @@ async function publishStats(
 			prior.set(shard.month, refs);
 		}
 	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
+	const rebased = rebasedEnds(
+		retired,
+		(sealed?.shards ?? []).filter((shard) => shard.month < current) as CompactShard[],
+		fresh,
+		revisions,
+		current,
+	);
 	const publishedShards: CompactShard[] = [];
 	const writes: { file: string; bytes: Buffer }[] = [];
 	let remaining = MAX_BYTES;
 	for (const month of [...new Set([...prior.keys(), ...retired.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
+		const moved = rebased.filter((shard) => shard.month === month);
 		const replaced = retired.get(month);
 		const delta =
 			full &&
@@ -1593,7 +1718,8 @@ async function publishStats(
 				full,
 				old.map(({ shard }) => shard),
 			);
-		let deltas = replaced ? regenerateMonth(month, full, replaced, revisions) : delta ? [delta] : [];
+		let deltas =
+			replaced || moved.length ? regenerateMonth(month, full, replaced ?? [], revisions, moved) : delta ? [delta] : [];
 		if (old.length + deltas.length > MAX_SEALED_SHARDS) {
 			const base = nth(old, 0);
 			const rest = [...old.slice(1).map(({ shard }) => shard), ...deltas];
@@ -1639,7 +1765,8 @@ async function publishStats(
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
 	const warnings = [...clockWarning];
-	if (recoveryPending) warnings.push("recovery files retained: explicit replacement required");
+	if (recoveryPending)
+		warnings.push("recovery files retained: run clean-recovery to remove those the active snapshot covers");
 	if (unaccounted.length > 0)
 		warnings.push(
 			`no bookkeeping for this outbox: froze ${unaccounted.length} unaccounted shard files as recovery files; ` +
@@ -1673,6 +1800,210 @@ async function publishStats(
 		...(external.length ? { harnesses: report } : {}),
 		...(warnings.length ? { warnings } : {}),
 	};
+}
+
+/**
+ * Why `cleanRecovery` kept a frozen recovery file: the active manifest references it, it is gone, it is a
+ * legacy `.json` shard, it does not authenticate as this machine's v3 shard, or the active snapshot lacks
+ * some of its rows.
+ */
+export type KeptReason = "active" | "missing" | "legacy" | "unreadable" | "not covered" | "changed";
+/** What an explicit recovery cleanup did. */
+export interface CleanupResult {
+	machineId: string;
+	snapshotDir: string;
+	/** Frozen files proven redundant and now gone (unlinked or already absent), then dropped from the recovery set. */
+	removed: string[];
+	/** Frozen files proven redundant whose unlink failed: still on disk and still in the recovery set. */
+	failed: string[];
+	/**
+	 * Frozen files that stay, with why. `changed`: the active manifest or this file changed during cleanup, so it
+	 * stopped before unlinking this file.
+	 */
+	kept: { file: string; reason: KeptReason }[];
+	warnings?: string[];
+}
+
+/** Whether the active snapshot already holds every row of `shard`, so a viewer would see nothing more. */
+function coveredBy(active: readonly CompactShard[]): (shard: CompactShard) => boolean {
+	const events = new Map(active.flatMap((s) => s.events.map((e) => [e.id, JSON.stringify(e)] as const)));
+	const sessions = mergeSessionMetadata(
+		active.flatMap((s) => s.sessions.map((x) => ({ path: x.id, startMs: x.startMs, endMs: x.endMs, child: x.child }))),
+	);
+	const quota = active.flatMap((s) => s.quota);
+	return (shard) =>
+		shard.events.every((e) => events.get(e.id) === JSON.stringify(e)) &&
+		shard.sessions.every((s) => {
+			const merged = sessions.get(s.id);
+			return (
+				merged !== undefined && merged.startMs <= s.startMs && merged.endMs >= s.endMs && (merged.child || !s.child)
+			);
+		}) &&
+		// Same rule as `compactDeltas`: an at-least-as-fresh reading that resets no earlier always wins `mergeQuota`.
+		shard.quota.every((q) =>
+			quota.some((a) => quotaKey(a) === quotaKey(q) && compareFreshness(a, q) >= 0 && a.resetAt >= q.resetAt),
+		);
+}
+
+/** The frozen `.json.gz` `file`, authenticated as this machine's v3 shard of its month (never through a symlink). */
+async function frozenShard(snapshotDir: string, manifest: Manifest, file: string): Promise<Shard> {
+	// The name is the only reference a frozen file has: `<month>-<sha256>.json.gz` (`SHARD_FILE`).
+	const ref = {
+		month: file.slice(0, 7),
+		file,
+		sha256: file.slice(8, 72),
+		bytes: (await lstat(join(snapshotDir, file))).size,
+	};
+	return (await readShard(snapshotDir, manifest, ref, MAX_BYTES)).shard;
+}
+
+/** `undefined` when the frozen `file` is an authenticated v3 shard of this machine the active snapshot covers. */
+async function keptReason(
+	snapshotDir: string,
+	manifest: Manifest,
+	file: string,
+	covered: (shard: CompactShard) => boolean,
+): Promise<KeptReason | undefined> {
+	if (!file.endsWith(".json.gz")) return "legacy";
+	let shard: Shard;
+	try {
+		shard = await frozenShard(snapshotDir, manifest, file);
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
+	}
+	return covered(shard as CompactShard) ? undefined : "not covered";
+}
+
+/**
+ * Explicit, recovery-only cleanup of frozen shard files; no export ever runs it. Under the outbox's export lock,
+ * and only when its active v3 manifest and every shard it references authenticate and its own bookkeeping records
+ * a recovery set with no lost harness, a frozen file the manifest does not reference is removed only if it
+ * authenticates as this machine's v3 shard and the active snapshot holds every row of it. Everything else stays
+ * frozen, with a reason. Every candidate stays in the recovery set until its unlink succeeds; the set shrinks
+ * once, after the unlinks, so a crash or failed bookkeeping write leaves only stale names of absent files, which
+ * are harmless, never an unprotected frozen file. Right before each unlink the manifest is authenticated and
+ * reread and the file authenticated again; on any change cleanup stops. That recheck only narrows the window for
+ * writers that skip the export lock (a manual restore into the outbox): they must be quiescent while cleanup runs.
+ */
+export async function cleanRecovery(dir: string, output: string): Promise<CleanupResult> {
+	const identity = await machineIdentity(dir);
+	const snapshotDir = join(output, "machines", identity.machineId);
+	// Each refusal waits on the owner or a later export, never on a retry of this cleanup: all are coded.
+	const refused = (code: RefusalCode, why: string): ExportRefusal =>
+		new ExportRefusal(code, `Recovery cleanup refused: ${why}; nothing was removed`);
+	// Only absence is "no outbox"; any other error (EACCES, EIO) is the operator's to fix, so it surfaces as is.
+	const outbox = await lstat(snapshotDir).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	});
+	if (!outbox?.isDirectory())
+		throw refused("recovery-outbox-missing", `no outbox for this machine at ${JSON.stringify(snapshotDir)}`);
+	/** `loaded` when it authenticates as this machine's v3 snapshot. */
+	const verified = (loaded: Previous | Damaged): Exclude<Previous, null | "unreadable"> | undefined =>
+		loaded === null ||
+		loaded === "unreadable" ||
+		"damaged" in loaded ||
+		loaded.manifest.version !== 3 ||
+		loaded.manifest.machineId !== identity.machineId
+			? undefined
+			: loaded;
+	const authenticated = async () => verified(await loadPrevious(snapshotDir));
+	return withExportLock(snapshotDir, async () => {
+		// Transient I/O reading the active snapshot (EIO, EMFILE, a denied shard) throws uncoded: retry it.
+		const loaded = await loadPrevious(snapshotDir);
+		// An ordinary export refuses these too (`manifest-missing`, `history-unreadable`), and its override would
+		// drop the history: only restoring the files or read access helps.
+		if (loaded === null || (loaded !== "unreadable" && "damaged" in loaded))
+			throw refused(
+				"recovery-snapshot-unverified",
+				"the active manifest or a shard it references is missing, denied or damaged; " +
+					"restore the manifest, the referenced shards or read access, then retry",
+			);
+		const previous = verified(loaded);
+		if (previous === undefined)
+			throw refused(
+				"recovery-snapshot-unverified",
+				"the active manifest does not authenticate as this machine's v3 snapshot; export first",
+			);
+		const statePath = await outboxStateFile(dir, snapshotDir);
+		await privateOutboxes(dirname(statePath));
+		const own = await ownOutbox(statePath);
+		if (own === null || own.recoveryFiles === null)
+			throw refused(
+				"recovery-set-unrecorded",
+				"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first",
+			);
+		if (own.lostHarnesses.length > 0)
+			throw refused(
+				"recovery-harness-lost",
+				`recovery of lost ${own.lostHarnesses.join(", ")} history is pending and may need frozen files`,
+			);
+		const referenced = new Set(previous.manifest.shards.map((ref) => ref.file));
+		const covered = coveredBy(previous.shards as CompactShard[]);
+		const removed: string[] = [];
+		const kept: CleanupResult["kept"] = [];
+		for (const file of own.recoveryFiles) {
+			const reason = referenced.has(file) ? "active" : await keptReason(snapshotDir, previous.manifest, file, covered);
+			if (reason === undefined) removed.push(file);
+			else kept.push({ file, reason });
+		}
+		const warnings: string[] = [];
+		const failed: string[] = [];
+		const expected = JSON.stringify(previous.manifest);
+		/** Whether the manifest and `file` are still what cleanup judged, checked as late as possible before its unlink. */
+		const unchanged = async (file: string): Promise<boolean> => {
+			// Any failure here, transient I/O included, stops cleanup with everything left protected.
+			const now = await authenticated().catch(() => undefined);
+			if (now === undefined || JSON.stringify(now.manifest) !== expected) return false;
+			// Reread after the shard pass: a restore that swapped manifest.json during it is otherwise unseen.
+			const manifest = await jsonFile(join(snapshotDir, "manifest.json"))
+				.then(validateManifest)
+				.catch(() => undefined);
+			if (manifest === undefined || JSON.stringify(manifest) !== expected) return false;
+			return frozenShard(snapshotDir, previous.manifest, file).then(
+				() => true,
+				() => false,
+			);
+		};
+		const errors = new Map<string, number>();
+		const candidates = removed.splice(0);
+		for (const [i, file] of candidates.entries()) {
+			// A writer that skips the lock may have installed a manifest referencing `file`: any change stops cleanup.
+			if (!(await unchanged(file))) {
+				const stopped = candidates.slice(i);
+				kept.push(...stopped.map((file) => ({ file, reason: "changed" as const })));
+				warnings.push(
+					`recovery cleanup stopped: the active manifest changed; ${stopped.length} redundant files left in place`,
+				);
+				break;
+			}
+			if ((await removeFiles(snapshotDir, [file], errors)).length > 0) failed.push(file);
+			else removed.push(file);
+		}
+		warnings.push(...errnoWarning("redundant recovery file removal failed (they stay protected)", errors));
+		if (removed.length > 0) {
+			// Unprotect only what is gone. Failing here leaves stale names of absent files, which export ignores.
+			const gone = new Set(removed);
+			const recoveryFiles = own.recoveryFiles.filter((file) => !gone.has(file));
+			const recorded = await recordOutbox(statePath, {
+				...own,
+				recoveryFiles,
+				recoveryPending: own.recoveryPending && recoveryFiles.length > 0,
+			}).then(
+				() => true,
+				() => false,
+			);
+			if (!recorded) warnings.push("recovery set not updated: removed files stay listed as missing (harmless)");
+		}
+		return {
+			machineId: identity.machineId,
+			snapshotDir,
+			removed,
+			failed,
+			kept,
+			...(warnings.length ? { warnings } : {}),
+		};
+	});
 }
 
 const globalPath = (dir: string): string => join(dir, "pi-session-kit", "stats-global.json");

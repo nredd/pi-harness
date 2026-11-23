@@ -183,7 +183,7 @@ Limits: the stale-list and empty-list nudges stay parent-TUI-only (#1195), so he
 (JSON, RPC, print) get neither. Only the compaction list reaches every session mode.
 
 A fresh session starts with an empty list, even when the session before it in the same cwd ended
-with open todos. So in a parent TUI session started by `/new` or at process startup, with an empty
+with open todos. So in a parent TUI or RPC session started by `/new` or at process startup, with an empty
 branch and no `parentSession`, the first model request outside Plan mode gets one hidden
 `rpiv-todo-carryover-list` message listing the previous session's `pending` and `in_progress`
 todos as it last recorded them, with their old ids and former owners. Nothing is imported: the new
@@ -203,8 +203,13 @@ says it may still be running. The chosen file is read once and its todos are rep
 header in those same bytes still has its session id, this cwd and no `parentSession`, so a file
 replaced after the scan shows nothing. A chosen session with nothing open, or one that cannot be read,
 shows nothing; the scan never falls back to an older session. Like the compaction list, the pending
-read lives in memory, so a session switch before the first request drops it. Headless parents get
-no list yet ([#1321](https://github.com/nredd/pi-harness/issues/1321)).
+read lives in memory, so a session switch before the first request drops it. RPC startup accepts
+the same live-sibling risk as TUI startup: the scan can select a still-running same-cwd sibling, and
+the same-bytes header check confirms its id, cwd and missing `parentSession`, not that it ended.
+The client's ability to issue `/new` does not make that scan safer. The line between modes is what
+the session is for: a client-driven TUI or RPC session can use a read-only handoff, while a one-shot
+print or JSON run is scripted output and should not get unrelated todos in its model context, so it
+never gets the list ([#1321](https://github.com/nredd/pi-harness/issues/1321)).
 
 ### Session switches and survivors
 

@@ -13,15 +13,23 @@
  * keys, so it is not an expected value. Calls are recognized as `.toMatchObject(...)` or
  * `["toMatchObject"](...)`.
  *
- * A name (or shorthand property) is followed into its initializer only under ONE conservative rule (#1302):
- * the file binds that name exactly once, as a plain `const name = ...` statement directly in the file or
- * a block, and that scope contains the use. Anything else (`let`, `var`, `using`, destructuring, a
- * second binding anywhere that could shadow it, a case clause or namespace scope, a free global) is not
- * followed, so shadowing can only cause a miss. A `const` fixes the binding, not its contents: a name that
- * appears in a write target anywhere in the file (assignment, `++`/`--`, `delete`, the first argument of
- * `Object.assign`, `defineProperty`, `defineProperties` or `fromEntries`) and any use inside a `with` body
- * are not followed either. A write through an alias or a call is not tracked, so a regex later overwritten
- * that way can still be reported. A regex reached through a helper call, `new RegExp(...)` or another
+ * A name (or shorthand property) is followed into its initializer only under ONE conservative rule (#1302,
+ * #1315): the nearest binding in scope is a plain `const name = ...` statement directly in the file, a block
+ * or a `switch` case block, and no other binding of the name inside that scope could be visible at the use.
+ * A `let`, `const` or `using` statement there binds exactly that scope. Every other binding (`var`, parameter,
+ * catch, `for` header, destructuring, function, class, import, enum, namespace member) counts as visible
+ * throughout its nearest enclosing function or the file, a superset of its real scope, so a binding the
+ * resolver does not model precisely can only cause a miss, never a finding. A reused name (`const expected`
+ * in each test) resolves per scope; a namespace-block `const`, `let`, `var`, `using`, destructuring and free
+ * globals are not followed. `arguments` is never followed: every ordinary function binds it implicitly. A
+ * `const` fixes the binding, not its contents: a name that appears in a write target anywhere in the file
+ * (assignment, `++`/`--`, `delete`, the first argument of `Object.assign`, `defineProperty`,
+ * `defineProperties` or `fromEntries`, under any of its bindings) and a use anywhere inside a `with` statement
+ * nested in the chosen scope are not followed either: in its body the object may shadow the name, and its
+ * object expression is skipped too although it is evaluated before that (conservative, only a miss).
+ * Syntactic, so the temporal dead zone is not modeled: a `const` used in a different `switch` clause than its
+ * initializer may be uninitialized at runtime, and the guard still reports it. A write through an alias or a call is not tracked,
+ * so a regex later overwritten that way can still be reported. A regex reached through a helper call, `new RegExp(...)` or another
  * module is not seen. Each initializer is walked at most once per matcher call and stored mode, so shared
  * initializers (`const a2 = [a1, a1]`) cost linear work and a revisit adds no finding.
  *
@@ -31,27 +39,35 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Expression, Identifier, Node, SourceFile } from "typescript/unstable/ast";
+import type { Expression, Identifier, Node, SourceFile, VariableDeclaration } from "typescript/unstable/ast";
 import { NodeFlags, SyntaxKind } from "typescript/unstable/ast";
 import {
 	isArrayLiteralExpression,
+	isArrowFunction,
 	isAsExpression,
 	isBinaryExpression,
 	isBindingElement,
 	isBlock,
 	isCallExpression,
+	isCaseBlock,
+	isCaseClause,
 	isClassDeclaration,
 	isClassExpression,
 	isConditionalExpression,
+	isConstructorDeclaration,
+	isDefaultClause,
 	isDeleteExpression,
 	isElementAccessExpression,
 	isEnumDeclaration,
+	isEnumMember,
 	isFunctionDeclaration,
 	isFunctionExpression,
+	isGetAccessorDeclaration,
 	isIdentifier,
 	isImportClause,
 	isImportEqualsDeclaration,
 	isImportSpecifier,
+	isMethodDeclaration,
 	isModuleDeclaration,
 	isNamespaceImport,
 	isNonNullExpression,
@@ -64,6 +80,7 @@ import {
 	isPropertyAssignment,
 	isRegularExpressionLiteral,
 	isSatisfiesExpression,
+	isSetAccessorDeclaration,
 	isShorthandPropertyAssignment,
 	isSourceFile,
 	isSpreadAssignment,
@@ -105,8 +122,55 @@ const BINDS = [
 	isNamespaceImport,
 	isImportEqualsDeclaration,
 	isEnumDeclaration,
+	isEnumMember,
 	isModuleDeclaration,
 ];
+
+/** Nodes that bound every `var`, parameter and function declaration inside them (sloppy block functions included). */
+const FUNCTIONS = [
+	isFunctionDeclaration,
+	isFunctionExpression,
+	isArrowFunction,
+	isMethodDeclaration,
+	isConstructorDeclaration,
+	isGetAccessorDeclaration,
+	isSetAccessorDeclaration,
+];
+
+/** A `let`, `const` or `using` statement binding with the exact scope it binds in. */
+interface Lexical {
+	declaration: VariableDeclaration;
+	scope: Node;
+	constant: boolean;
+}
+
+/** `binding` as a `let`, `const` or `using` statement in the file, a block or a case block, else undefined. */
+function lexical(binding: Node): Lexical | undefined {
+	if (!isVariableDeclaration(binding)) return undefined;
+	const list = binding.parent;
+	const statement = list.parent;
+	const kind = list.flags & (NodeFlags.Let | NodeFlags.Const | NodeFlags.Using);
+	if (!isVariableDeclarationList(list) || kind === 0 || !isVariableStatement(statement)) return undefined;
+	const parent = statement.parent;
+	const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
+	if (!isSourceFile(scope) && !isBlock(scope) && !isCaseBlock(scope)) return undefined;
+	return { declaration: binding, scope, constant: kind === NodeFlags.Const };
+}
+
+/**
+ * A node containing every place a binding other than a lexical statement may be visible: its nearest enclosing
+ * function (starting above the binding, so a function's own name counts outside it) or the file.
+ */
+function visibleRegion(binding: Node): Node {
+	let node = binding.parent;
+	while (!isSourceFile(node) && !FUNCTIONS.some((bounds) => bounds(node))) node = node.parent;
+	return node;
+}
+
+/** Whether `outer` spans `inner`. */
+function spans(outer: Node, inner: Node): boolean {
+	return inner.pos >= outer.pos && inner.end <= outer.end;
+}
 
 /**
  * `Object` methods whose first argument counts as written. `fromEntries` never writes its argument; listing
@@ -114,15 +178,33 @@ const BINDS = [
  */
 const OBJECT_WRITERS = new Set(["assign", "defineProperty", "defineProperties", "fromEntries"]);
 
-/** Every identifier the file binds, by name and wherever it is bound, and every name in a write target. */
+/** A binding the resolver does not model exactly, with the region it may be visible in. */
+interface Loose {
+	binding: Node;
+	region: Node;
+}
+
+/**
+ * Every binding the file holds, classified once: `let`/`const`/`using` statements by exact scope and name,
+ * the rest by name with their over-approximated regions, and every name in a write target.
+ */
 interface FileNames {
-	bindings: Map<string, Node[]>;
+	scoped: Map<Node, Map<string, Lexical[]>>;
+	loose: Map<string, Loose[]>;
 	written: Set<string>;
+}
+
+/** Append `value` to the list under `key` in `map`. */
+function append<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+	const list = map.get(key);
+	if (list) list.push(value);
+	else map.set(key, [value]);
 }
 
 /** Collect the bindings and the syntactically written names of `file` in one walk. */
 function namesOf(file: SourceFile): FileNames {
-	const bindings = new Map<string, Node[]>();
+	const scoped = new Map<Node, Map<string, Lexical[]>>();
+	const loose = new Map<string, Loose[]>();
 	const written = new Set<string>();
 
 	/** Mark the base name of `target` (`a` in `(a.b[c]!) as T`), or every name inside a destructuring pattern. */
@@ -146,9 +228,13 @@ function namesOf(file: SourceFile): FileNames {
 	function scan(node: Node): void {
 		const bound = BINDS.some((binds) => binds(node)) ? (node as Node & { name?: Node }).name : undefined;
 		if (bound !== undefined && isIdentifier(bound)) {
-			const existing = bindings.get(bound.text);
-			if (existing) existing.push(node);
-			else bindings.set(bound.text, [node]);
+			const exact = lexical(node);
+			if (exact === undefined) append(loose, bound.text, { binding: node, region: visibleRegion(node) });
+			else {
+				const byName = scoped.get(exact.scope) ?? new Map<string, Lexical[]>();
+				scoped.set(exact.scope, byName);
+				append(byName, bound.text, exact);
+			}
 		}
 		if (isBinaryExpression(node)) {
 			const operator = node.operatorToken.kind;
@@ -171,7 +257,7 @@ function namesOf(file: SourceFile): FileNames {
 		node.forEachChild(scan);
 	}
 	scan(file);
-	return { bindings, written };
+	return { scoped, loose, written };
 }
 
 /** Report every bare regex literal reachable through literals in the arguments of a `toMatchObject` call. */
@@ -191,32 +277,31 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 	}
 
 	/**
-	 * The initializer of the single plain `const` binding `use` names, when its scope contains `use`, nothing
-	 * in the file writes into it, and `use` is outside any `with` body (whose object could supply the name).
+	 * The initializer `use` resolves to. Walking out from `use`, the first scope holding a `let`, `const` or
+	 * `using` statement binding of the name decides: it is followed only when it is a `const` with an
+	 * initializer and no other binding of the name that may be visible at `use` lies inside that scope. The real
+	 * binding of `use` lies inside its own scope and may be visible there, so a nearer binding the walk does not
+	 * model is caught by that check. A `with` statement passed on the way (whose object could supply the name)
+	 * and a name anything in the file writes into are never followed, nor is `arguments` (implicitly bound by
+	 * every ordinary function). A lexical binding is visible at `use` exactly when its scope is an ancestor, so
+	 * the only other lexical bindings that matter are duplicates in the chosen scope: per use, the work is the
+	 * walk to the root plus the name's loose bindings, never every same-named `const` in the file.
 	 */
 	function constInitializer(use: Identifier): { declaration: Node; initializer: Expression } | undefined {
 		names ??= namesOf(file);
-		if (names.written.has(use.text)) return undefined;
-		for (let node: Node = use; !isSourceFile(node); node = node.parent) {
+		if (use.text === "arguments" || names.written.has(use.text)) return undefined;
+		const loose = (names.loose.get(use.text) ?? []).filter(({ region }) => spans(region, use));
+		for (let node: Node = use; ; node = node.parent) {
 			if (isWithStatement(node)) return undefined;
+			const here = names.scoped.get(node)?.get(use.text);
+			if (here !== undefined) {
+				const { declaration, constant } = here[0] as Lexical;
+				const shadowed = here.length > 1 || loose.some(({ binding }) => spans(node, binding));
+				if (!constant || declaration.initializer === undefined || shadowed) return undefined;
+				return { declaration, initializer: declaration.initializer };
+			}
+			if (isSourceFile(node)) return undefined;
 		}
-		const [declaration, ...others] = names.bindings.get(use.text) ?? [];
-		if (declaration === undefined || others.length > 0 || !isVariableDeclaration(declaration)) return undefined;
-		const list = declaration.parent;
-		const statement = list.parent;
-		const scope = statement.parent;
-		if (
-			declaration.initializer === undefined ||
-			!isVariableDeclarationList(list) ||
-			(list.flags & (NodeFlags.Let | NodeFlags.Const | NodeFlags.Using)) !== NodeFlags.Const ||
-			!isVariableStatement(statement) ||
-			!(isSourceFile(scope) || isBlock(scope)) ||
-			use.pos < scope.pos ||
-			use.end > scope.end
-		) {
-			return undefined;
-		}
-		return { declaration, initializer: declaration.initializer };
 	}
 
 	/**
