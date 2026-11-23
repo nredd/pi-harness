@@ -169,11 +169,63 @@ test("leaves a name alone unless one const binding in scope holds it (#1302)", a
 		"const spread = /h/;",
 		"switch (k) { case 1: const cased = /i/; expect(x).toMatchObject({ m: cased }); }",
 		"declare const ambient: RegExp;",
+		"expect(x).toMatchObject({ m: early });",
+		"{ const early = /j/; }",
+		"for (const looped = /k/; ; ) { expect(x).toMatchObject({ m: looped }); break; }",
+		"for (const each of [/l/]) expect(x).toMatchObject({ m: each });",
 		"expect(x).toMatchObject({ mutable, hoisted, disposable, hidden, picked, ambient, imported, global });",
 		"expect(x).toMatchObject({ loop, ping, ...spread });",
 		'import { imported } from "./other";',
 	].join("\n");
 	expect(await scan(source)).toEqual([]);
+});
+
+/** `const a0 = /x/` and `depth` levels of `const aN = [aN-1, aN-1]`, matched on the last: 2^depth paths, one regex. */
+function doubling(depth: number): string {
+	const lines = ["const a0 = /x/;"];
+	for (let level = 1; level <= depth; level++) lines.push(`const a${level} = [a${level - 1}, a${level - 1}];`);
+	lines.push(`expect(x).toMatchObject(a${depth});`);
+	return lines.join("\n");
+}
+
+test("walks each shared initializer once per matcher call and stored mode (#1302)", async () => {
+	// The shallow chain fails fast (8 copies) if initializers are rewalked; the deep one would never finish.
+	expect(await scan(doubling(3))).toEqual(["a.test.ts:1:12: bare /x/ in toMatchObject via `a3` at 5:25"]);
+	expect(await scan(doubling(40))).toEqual(["a.test.ts:1:12: bare /x/ in toMatchObject via `a40` at 42:25"]);
+	const source = [
+		"const re = /y/;",
+		"expect(x).toMatchObject({ ...re, m: re, n: re });",
+		"expect(x).toMatchObject([re]);",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:12: bare /y/ in toMatchObject via `re` at 2:37",
+		"a.test.ts:1:12: bare /y/ in toMatchObject via `re` at 3:26",
+	]);
+});
+
+test("does not follow a const the file writes into, or a name used inside a with body (#1302)", async () => {
+	const source = [
+		"const assigned = { m: /a/ }; assigned.m = 'ok';",
+		"const element = [/b/]; element[0] = 'ok';",
+		"const compound = { m: /c/ }; compound.n += 1;",
+		"const merged = { m: /d/ }; Object.assign(merged, { m: 'ok' });",
+		"const defined = { m: /e/ }; Object.defineProperty((defined satisfies object)!, 'm', { value: 'ok' });",
+		"const removed = { m: /f/ }; delete removed.m;",
+		"const counted = { m: /g/ }; counted.n++;",
+		"const lowered = { m: /h/ }; --(lowered as { n: number }).n;",
+		"const pattern = { m: /i/ }; [pattern.m] = ['ok'];",
+		"const nested = { m: { n: /j/ } }; nested.m.n = 'ok';",
+		"const kept = { m: /k/ }; -kept.n; kept.n + 1; 'n' in kept; Object.keys(kept); Object.assign(); other.m = 1;",
+		"with ({ re: 'ok' }) { expect(x).toMatchObject({ m: re }); }",
+		"const re = /l/;",
+		"expect(x).toMatchObject({ assigned, element, compound, merged, defined, removed, counted, lowered });",
+		"expect(x).toMatchObject({ pattern, nested });",
+		"expect(x).toMatchObject({ kept, m: re });",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:11:19: bare /k/ in toMatchObject via `kept` at 16:27",
+		"a.test.ts:13:12: bare /l/ in toMatchObject via `re` at 16:36",
+	]);
 });
 
 test("checks JavaScript sources and reports syntax errors instead of trusting a partial parse", async () => {

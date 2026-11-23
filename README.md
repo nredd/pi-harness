@@ -108,13 +108,19 @@ make help                    # every target
   binds that name exactly once, as a plain `const` directly in the file or a block whose scope contains
   the use (#1302), e.g. `const re = /x/; expect(a).toMatchObject({ message: re })`. `let`/`var`/`using`,
   destructuring, any second binding of the name, case-clause or namespace scopes, helper calls,
-  `new RegExp(...)` and imports are not followed.
+  `new RegExp(...)` and imports are not followed, so shadowing can only cause a miss. A `const`
+  fixes the binding, not its contents, so a name that appears in a write target anywhere in the file
+  (`expected.m = ...`, `expected[0] += ...`, `++`/`--`, `delete`, the first argument of
+  `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`) is not followed, nor is a use
+  inside a `with` body. Mutation through aliases or calls is not tracked: this can still produce a
+  finding for a value later overwritten; fix the test by naming the regex differently or asserting
+  directly. Each initializer is walked once per matcher call, so shared initializers stay linear.
   The scan uses the `tsgo` parser on the same owned JS/TS test sources as the temp directory check,
   recognizes `.toMatchObject(...)` and `["toMatchObject"](...)` calls, follows object and array
   literals (spreads, parentheses, `as`, `satisfies`, conditional branches) inside the call, and
   fails on a syntax error. A regex spread into an object (`{ ...(/x/) }`) adds no keys and is not
-  flagged. Limits: a regex held in a variable or `const` (`const re = /x/; toMatchObject({ message:
-  re })`), returned by a helper, or built with `new RegExp(...)` is NOT detected (#1302). No baseline.
+  flagged. Limits: a regex held in anything but the followed `const` above, returned by a helper, or
+  built with `new RegExp(...)` is NOT detected (#1302, #1315). No baseline.
 - Scripts that use `node ../../scripts/run-vitest.ts` give Vitest and its subprocesses a private
   `TMPDIR`, `TMP` and `TEMP`. The launcher removes the sandbox after the child exits, even on test
   failure. Direct Vitest and Bun invocations bypass this cleanup. `SIGINT` or `SIGTERM` delivered

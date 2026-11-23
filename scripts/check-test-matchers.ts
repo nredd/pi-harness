@@ -17,7 +17,13 @@
  * the file binds that name exactly once, as a plain `const name = ...` statement directly in the file or
  * a block, and that scope contains the use. Anything else (`let`, `var`, `using`, destructuring, a
  * second binding anywhere that could shadow it, a case clause or namespace scope, a free global) is not
- * followed. A regex reached through a helper call, `new RegExp(...)` or another module is not seen.
+ * followed, so shadowing can only cause a miss. A `const` fixes the binding, not its contents: a name that
+ * appears in a write target anywhere in the file (assignment, `++`/`--`, `delete`, the first argument of
+ * `Object.assign`, `defineProperty`, `defineProperties` or `fromEntries`) and any use inside a `with` body
+ * are not followed either. A write through an alias or a call is not tracked, so a regex later overwritten
+ * that way can still be reported. A regex reached through a helper call, `new RegExp(...)` or another
+ * module is not seen. Each initializer is walked at most once per matcher call and stored mode, so shared
+ * initializers (`const a2 = [a1, a1]`) cost linear work and a revisit adds no finding.
  *
  * CLI: `node scripts/check-test-matchers.ts` checks every owned JS/TS test source and exits 1 on findings.
  */
@@ -26,16 +32,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Expression, Identifier, Node, SourceFile } from "typescript/unstable/ast";
-import { NodeFlags } from "typescript/unstable/ast";
+import { NodeFlags, SyntaxKind } from "typescript/unstable/ast";
 import {
 	isArrayLiteralExpression,
 	isAsExpression,
+	isBinaryExpression,
 	isBindingElement,
 	isBlock,
 	isCallExpression,
 	isClassDeclaration,
 	isClassExpression,
 	isConditionalExpression,
+	isDeleteExpression,
 	isElementAccessExpression,
 	isEnumDeclaration,
 	isFunctionDeclaration,
@@ -46,9 +54,12 @@ import {
 	isImportSpecifier,
 	isModuleDeclaration,
 	isNamespaceImport,
+	isNonNullExpression,
 	isObjectLiteralExpression,
 	isParameterDeclaration,
 	isParenthesizedExpression,
+	isPostfixUnaryExpression,
+	isPrefixUnaryExpression,
 	isPropertyAccessExpression,
 	isPropertyAssignment,
 	isRegularExpressionLiteral,
@@ -61,6 +72,7 @@ import {
 	isVariableDeclaration,
 	isVariableDeclarationList,
 	isVariableStatement,
+	isWithStatement,
 } from "typescript/unstable/ast/is";
 import { API } from "typescript/unstable/async";
 import { listOwnedTestSources } from "./check-test-tempdirs.mjs";
@@ -96,9 +108,40 @@ const BINDS = [
 	isModuleDeclaration,
 ];
 
-/** Count every identifier the file binds, by name, wherever it is bound. */
-function bindingsByName(file: SourceFile): Map<string, Node[]> {
+/**
+ * `Object` methods whose first argument counts as written. `fromEntries` never writes its argument; listing
+ * it only makes the rule more conservative, which can cause a miss and never a finding.
+ */
+const OBJECT_WRITERS = new Set(["assign", "defineProperty", "defineProperties", "fromEntries"]);
+
+/** Every identifier the file binds, by name and wherever it is bound, and every name in a write target. */
+interface FileNames {
+	bindings: Map<string, Node[]>;
+	written: Set<string>;
+}
+
+/** Collect the bindings and the syntactically written names of `file` in one walk. */
+function namesOf(file: SourceFile): FileNames {
 	const bindings = new Map<string, Node[]>();
+	const written = new Set<string>();
+
+	/** Mark the base name of `target` (`a` in `(a.b[c]!) as T`), or every name inside a destructuring pattern. */
+	function write(target: Node): void {
+		let base = target;
+		while (
+			isParenthesizedExpression(base) ||
+			isAsExpression(base) ||
+			isSatisfiesExpression(base) ||
+			isNonNullExpression(base) ||
+			isPropertyAccessExpression(base) ||
+			isElementAccessExpression(base)
+		) {
+			base = base.expression;
+		}
+		if (isIdentifier(base)) written.add(base.text);
+		else base.forEachChild(write);
+	}
+
 	function visit(node: Node): void {
 		const bound = BINDS.some((binds) => binds(node)) ? (node as Node & { name?: Node }).name : undefined;
 		if (bound !== undefined && isIdentifier(bound)) {
@@ -106,28 +149,57 @@ function bindingsByName(file: SourceFile): Map<string, Node[]> {
 			if (existing) existing.push(node);
 			else bindings.set(bound.text, [node]);
 		}
+		if (isBinaryExpression(node)) {
+			const operator = node.operatorToken.kind;
+			if (operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment) write(node.left);
+		} else if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)) {
+			if (node.operator === SyntaxKind.PlusPlusToken || node.operator === SyntaxKind.MinusMinusToken) {
+				write(node.operand);
+			}
+		} else if (isDeleteExpression(node)) {
+			write(node.expression);
+		} else if (
+			isCallExpression(node) &&
+			isPropertyAccessExpression(node.expression) &&
+			isIdentifier(node.expression.expression) &&
+			node.expression.expression.text === "Object" &&
+			OBJECT_WRITERS.has(node.expression.name.text)
+		) {
+			for (const target of node.arguments.slice(0, 1)) write(target);
+		}
 		node.forEachChild(visit);
 	}
 	visit(file);
-	return bindings;
+	return { bindings, written };
 }
 
 /** Report every bare regex literal reachable through literals in the arguments of a `toMatchObject` call. */
 export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 	const problems: string[] = [];
-	let bindings: Map<string, Node[]> | undefined;
-	/** Declarations being followed right now, so a self-referencing initializer cannot loop. */
-	const following = new Set<Node>();
+	let names: FileNames | undefined;
+	/**
+	 * Declarations already walked for the current matcher call, by stored mode (index 1 = stored). A revisit
+	 * reaches the same regex locations again, so skipping it loses no finding, breaks cycles
+	 * (`const loop = { m: loop }`), and keeps shared initializers (`const a2 = [a1, a1]`) linear.
+	 */
+	const walked = [new Set<Node>(), new Set<Node>()];
 
 	function at(node: Node): string {
 		const { line, character } = file.getLineAndCharacterOfPosition(node.getStart(file));
 		return `${line + 1}:${character + 1}`;
 	}
 
-	/** The initializer of the single plain `const` binding `use` names, when its scope contains `use`. */
+	/**
+	 * The initializer of the single plain `const` binding `use` names, when its scope contains `use`, nothing
+	 * in the file writes into it, and `use` is outside any `with` body (whose object could supply the name).
+	 */
 	function constInitializer(use: Identifier): { declaration: Node; initializer: Expression } | undefined {
-		bindings ??= bindingsByName(file);
-		const [declaration, ...others] = bindings.get(use.text) ?? [];
+		names ??= namesOf(file);
+		if (names.written.has(use.text)) return undefined;
+		for (let node: Node = use; !isSourceFile(node); node = node.parent) {
+			if (isWithStatement(node)) return undefined;
+		}
+		const [declaration, ...others] = names.bindings.get(use.text) ?? [];
 		if (declaration === undefined || others.length > 0 || !isVariableDeclaration(declaration)) return undefined;
 		const list = declaration.parent;
 		const statement = list.parent;
@@ -157,10 +229,10 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 			problems.push(`${name}:${at(node)}: bare ${node.text} in ${MATCHER}${route} ${FIX}`);
 		} else if (isIdentifier(node)) {
 			const resolved = constInitializer(node);
-			if (resolved === undefined || following.has(resolved.declaration)) return;
-			following.add(resolved.declaration);
+			const seen = walked[Number(stored)] as Set<Node>;
+			if (resolved === undefined || seen.has(resolved.declaration)) return;
+			seen.add(resolved.declaration);
 			expected(resolved.initializer, stored, via ?? node);
-			following.delete(resolved.declaration);
 		} else if (
 			isParenthesizedExpression(node) ||
 			isAsExpression(node) ||
@@ -195,6 +267,7 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 
 	function visit(node: Node): void {
 		if (isCallExpression(node) && isMatcher(node.expression)) {
+			for (const seen of walked) seen.clear();
 			for (const argument of node.arguments) expected(argument);
 		}
 		node.forEachChild(visit);
