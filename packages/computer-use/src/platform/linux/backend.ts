@@ -214,8 +214,9 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 				},
 				options,
 			),
-			// The AT-SPI2 helper marks every node; a node without the marker was not proven read.
-			{ unmarkedNodesUnread: true },
+			// The AT-SPI2 helper marks every node; a node without the marker was not proven read. Its text boxes repeat
+			// the node's own value (`atspi.rs`), they are not OCR.
+			{ unmarkedNodesUnread: true, ownValueText: true },
 		);
 	},
 	async act(

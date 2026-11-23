@@ -413,8 +413,9 @@ test("inspect_ui reports geometry, actions, capabilities and annotations", async
 
 	const rich = await fake.call(executeInspectUi, { stateId, ref: "@e2" });
 	const lines = fake.text(rich).split("\n");
+	// An unread picture-only title is OCR that may show unread pixels, so it reads `[protected]` (#1263).
 	assert.deepEqual(lines.slice(1), [
-		'path: AXWindow/AXStandardWindow "Main" ▸ AXTextField "Rich"',
+		'path: AXWindow/AXStandardWindow "Main" ▸ AXTextField "[protected]"',
 		'rect: {"x":10,"y":10,"w":50,"h":20}',
 		"actions: AXPress,AXShowMenu",
 		"capabilities: press,focus,setValue,scroll,increment,decrement,textInput",

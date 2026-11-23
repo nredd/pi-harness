@@ -136,14 +136,24 @@ describe("parseLookResponse fallbacks", () => {
 			children: [null, 3, { ref: "c", role: "AXButton" }],
 		}).outline;
 		assert.equal(root.title, "", "non-string title becomes empty");
-		assert.deepEqual(root.rect, { x: 1, y: 0, w: 0, h: 0 });
+		assert.equal(root.rect, undefined, "an incomplete rect is unknown geometry, never a made-up origin (#1263)");
 		assert.deepEqual(root.scrollExtent, { seen: 3, total: 0 });
 		assert.deepEqual(root.actions, ["AXPress", "AXShowMenu"]);
 		assert.equal(root.canPress, false, "only literal true is truthy");
 		assert.equal(root.focused, true);
-		assert.deepEqual(root.text, [
+		// The malformed children parse as blank-role nodes: protected, with no known area, so no OCR box is placed (#1263).
+		assert.deepEqual(root.text, []);
+		const childless = look({
+			ref: "r",
+			role: "AXGroup",
+			text: [
+				{ string: "hi", confidence: 9, rect: { x: 1, y: 2, w: 3, h: 4 } },
+				{ string: "lo", confidence: -1 },
+			],
+		}).outline;
+		assert.deepEqual(childless.text, [
 			{ string: "hi", confidence: 1, rect: { x: 1, y: 2, w: 3, h: 4 } },
-			{ string: "lo", confidence: 0, rect: { x: 0, y: 0, w: 0, h: 0 } },
+			{ string: "lo", confidence: 0 },
 		]);
 		assert.equal(root.children.length, 3, "malformed children still occupy a slot as empty nodes");
 		assert.equal(root.children[2].wireRef, "c");
@@ -320,7 +330,7 @@ const graftBase = () =>
 		],
 	});
 
-const scopedLook = () =>
+const scopedLook = (over = {}) =>
 	outlineOf({
 		ref: "pane",
 		role: "AXList",
@@ -361,6 +371,7 @@ const scopedLook = () =>
 			},
 			{ role: "AXRow", title: "No wire ref" },
 		],
+		...over,
 	});
 
 describe("graftScopedOutline", () => {
@@ -375,7 +386,8 @@ describe("graftScopedOutline", () => {
 		const outline = graftBase();
 		const target = outline.nodes[1];
 		const originalRect = { ...target.rect };
-		const scoped = scopedLook();
+		// Readable: an unread picture-only root's title is OCR over unread pixels, which the last check covers.
+		const scoped = scopedLook({ pictureOnly: false });
 		scoped.root.wireRef = "pane-scoped";
 		const returned = graftScopedOutline(outline, "@e2", scoped);
 		assert.equal(returned, target);
@@ -414,16 +426,24 @@ describe("graftScopedOutline", () => {
 			"isTextInput",
 			"focused",
 			"offscreen",
-			"pictureOnly",
 		])
 			assert.equal(target[flag], true, flag);
 		assert.equal(target.truncated, true, "a scoped root that is still unread stays truncated (#1190)");
 		assert.deepEqual(target.scrollExtent, { seen: 2, total: 9 });
-		assert.deepEqual(target.text, [{ string: "scoped text", confidence: 0.5, rect: { x: 1, y: 1, w: 2, h: 2 } }]);
+		// The box is in scoped space, so its rect is cleared; the target is still unread, so the unplaced box goes (#1263).
+		assert.deepEqual(target.text, []);
+		const picture = graftBase();
+		const unreadPicture = graftScopedOutline(picture, "@e2", scopedLook());
+		assert.deepEqual(
+			[unreadPicture.pictureOnly, unreadPicture.title, unreadPicture.rect],
+			[true, "[protected]", undefined],
+			"an unread picture-only target's own title is redacted and it is unplaced (#1263)",
+		);
 	});
 
 	test("target without a rect stays rectless; scoped text without rect stays rectless", () => {
-		const outline = outlineOf({ ref: "win", children: [{ ref: "t", role: "AXGroup" }] });
+		// A readable window: with no protected node, a rectless box has nothing to overlap and stays.
+		const outline = outlineOf({ ref: "win", role: "AXWindow", children: [{ ref: "t", role: "AXGroup" }] });
 		outline.nodes[1].rect = undefined;
 		const scoped = outlineOf({ ref: "t", role: "AXGroup", children: [] });
 		scoped.root.rect = { x: 9, y: 9, w: 9, h: 9 };
@@ -437,7 +457,8 @@ describe("graftScopedOutline", () => {
 	test("reuses matching wire refs, numbers new nodes after the max ref, preserves unreused", () => {
 		const outline = graftBase();
 		const before = Object.fromEntries(outline.nodes.map((node) => [node.wireRef, node]));
-		graftScopedOutline(outline, "@e2", scopedLook());
+		// A readable scoped root: an unread picture-only one is protected and would redact the preserved children.
+		graftScopedOutline(outline, "@e2", scopedLook({ pictureOnly: false }));
 		const pane = outline.nodes[1];
 		const byWire = (wire) => outline.nodes.find((node) => node.wireRef === wire);
 
@@ -509,11 +530,13 @@ describe("graftScopedOutline", () => {
 
 	test("grafted descendants lose their rects; reused node rects are cleared too; text rects too", () => {
 		const outline = graftBase();
-		graftScopedOutline(outline, "@e2", scopedLook());
+		// A read target: with nothing unreadable in the outline, unplaced boxes stay.
+		graftScopedOutline(outline, "@e2", scopedLook({ truncated: false }));
 		const byWire = (wire) => outline.nodes.find((node) => node.wireRef === wire);
 		for (const wire of ["keep", "fresh", "fresh-kid", "gone"])
 			assert.equal(byWire(wire).rect, undefined, `${wire} rect`);
 		assert.equal(byWire("fresh").text[0].rect, undefined);
+		assert.deepEqual(outline.nodes[1].text, [{ string: "scoped text", confidence: 0.5, rect: undefined }]);
 		assert.equal(outline.nodes[1].rect.w, 300, "the target keeps real geometry");
 		assert.equal(outline.root.rect.w, 800);
 	});
