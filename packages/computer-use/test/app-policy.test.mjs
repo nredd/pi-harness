@@ -284,6 +284,12 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	const postAt = pasteBody.indexOf("try world.postKeyCode(");
 	const recheckAt = pasteBody.indexOf("pid, delivery, admitKeyboard)", postAt);
 	assertLiveActionBindings(swift);
+	// Admission runs per key-down inside the pair post, before the down event is posted.
+	const pairBody = swift.match(/private func postKeyPair\([^)]*\) throws \{[\s\S]*?postEvent\(down, pid: pid, delivery: delivery\)/)?.[0] ?? "";
+	assert.ok(
+		/try beforeKeyDown\(true\)\s*\n\s*postEvent\(down/.test(pairBody),
+		"postKeyPair must run the keyboard admission immediately before it posts the key-down",
+	);
 	assert.ok(
 		lookupAt > 0 && postAt > lookupAt && recheckAt > postAt,
 		"paste must look up the layout key first and re-check the focused app immediately before cmd+v",
