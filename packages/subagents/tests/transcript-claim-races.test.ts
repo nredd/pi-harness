@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { claimTranscript, openClaimed, type TranscriptClaim, WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
-import { EXITED_PID, holderBody, stubExited } from "./fixtures/writer-claim.ts";
+import { EXITED_PID, holderBody, stubExited, stubVerifiedDomain } from "./fixtures/writer-claim.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
@@ -18,7 +18,9 @@ vi.mock("node:fs", async (importOriginal) => {
 	const statSync = vi.fn(actual.statSync);
 	const realpathSync = vi.fn(actual.realpathSync);
 	const lstatSync = vi.fn(actual.lstatSync);
-	const spies = { openSync, linkSync, writeFileSync, statSync, realpathSync, lstatSync };
+	// A copy a test can strip a flag from, as a platform without it would.
+	const constants = { ...actual.constants };
+	const spies = { openSync, linkSync, writeFileSync, statSync, realpathSync, lstatSync, constants };
 	return { ...actual, default: { ...actual, ...spies }, ...spies };
 });
 
@@ -49,6 +51,7 @@ function setup(stale: boolean): { dir: string; file: string; claimPath: string }
 	const claimPath = `${file}${WRITER_CLAIM_SUFFIX}`;
 	if (stale) {
 		stubExited();
+		stubVerifiedDomain();
 		actual.writeFileSync(claimPath, holderBody(EXITED_PID));
 	}
 	return { dir, file, claimPath };
@@ -140,6 +143,7 @@ it("leaves no partial claim or takeover lock when writing one fails", () => {
 
 	// The same during a takeover's lock: the stale claim stays, the next takeover proceeds.
 	stubExited();
+	stubVerifiedDomain();
 	actual.writeFileSync(claimPath, holderBody(EXITED_PID));
 	// The first write is the fresh publish that meets the stale claim; the second is the lock.
 	failWrites(2);
@@ -193,4 +197,137 @@ it("passes a takeover lock probe error through", () => {
 		return actual.lstatSync(path);
 	}) as never);
 	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "EACCES" }));
+});
+
+it("refuses a fresh claim when a takeover lock appears just before it is published", () => {
+	const { file, claimPath } = setup(false);
+	const lockPath = `${claimPath}.takeover`;
+	const refusal = `another process is taking over this child session's stale writer claim, or one crashed doing so; remove ${lockPath} if none is: ${file}`;
+	// A taker locks and drops the stale claim after this process's lock probe, then crashes.
+	const lockBefore = (nth: number) => {
+		let publishes = 0;
+		vi.mocked(fs.linkSync).mockImplementation((existing, target) => {
+			if (target === claimPath && ++publishes === nth) actual.writeFileSync(lockPath, "{}");
+			if (target === claimPath && publishes < nth) throw failure("EEXIST");
+			return actual.linkSync(existing, target);
+		});
+	};
+	lockBefore(1);
+	expect(() => claimTranscript(file)).toThrow(refusal);
+	// Only the claim this process just published is dropped; the lock stays for whoever owns it.
+	expect(actual.existsSync(claimPath)).toBe(false);
+	expect(actual.existsSync(lockPath)).toBe(true);
+	// The same on the retry after a holder released between the create and the read.
+	actual.unlinkSync(lockPath);
+	lockBefore(2);
+	expect(() => claimTranscript(file)).toThrow(refusal);
+	expect(actual.existsSync(claimPath)).toBe(false);
+});
+
+it("publishes in place on a volume without hard links, never leaving a partial claim of its own", () => {
+	const { dir, file, claimPath } = setup(false);
+	const unreadable = `child session is in use (unreadable writer claim; remove ${claimPath}`;
+	// exFAT and friends: an exclusive create works, a link does not.
+	vi.mocked(fs.linkSync).mockImplementation(() => {
+		throw failure("ENOTSUP");
+	});
+	const claim = claimTranscript(file);
+	expect(JSON.parse(actual.readFileSync(claimPath, "utf8"))).toMatchObject({ pid: process.pid });
+	expect(actual.readdirSync(dir).sort()).toEqual(["child.jsonl", "child.jsonl.writer"]);
+	expect(() => claimTranscript(file)).toThrow(`writer claim held by pid ${process.pid} (this process)`);
+	claim.release();
+	expect(actual.readdirSync(dir)).toEqual(["child.jsonl"]);
+	// A claim cut short (a writer that crashed mid-write) refuses: it cannot name its holder.
+	actual.writeFileSync(claimPath, holderBody(EXITED_PID).slice(0, 12));
+	expect(() => claimTranscript(file)).toThrow(unreadable);
+	actual.unlinkSync(claimPath);
+
+	// Out of space in place: the partial claim this call created is removed.
+	const failInPlace = (then: () => void) => {
+		vi.mocked(fs.writeFileSync).mockImplementation((target, ...rest) => {
+			if (typeof target === "number" && actual.existsSync(claimPath)) {
+				then();
+				throw failure("ENOSPC");
+			}
+			return actual.writeFileSync(target, ...rest);
+		});
+	};
+	failInPlace(() => {});
+	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "ENOSPC" }));
+	expect(actual.readdirSync(dir)).toEqual(["child.jsonl"]);
+	// Replaced meanwhile by another process's claim: that one is not this call's to remove.
+	failInPlace(() => {
+		actual.unlinkSync(claimPath);
+		actual.writeFileSync(claimPath, holderBody(process.ppid));
+	});
+	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "ENOSPC" }));
+	expect(actual.readFileSync(claimPath, "utf8")).toBe(holderBody(process.ppid));
+	actual.unlinkSync(claimPath);
+	// Already gone: nothing to remove.
+	failInPlace(() => actual.unlinkSync(claimPath));
+	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "ENOSPC" }));
+	expect(actual.readdirSync(dir)).toEqual(["child.jsonl"]);
+
+	// Any other error creating it passes through.
+	vi.mocked(fs.writeFileSync).mockImplementation(actual.writeFileSync);
+	vi.mocked(fs.openSync).mockImplementation(((path: fs.PathLike, flags: fs.OpenMode) => {
+		if (path === claimPath && flags === "wx") throw failure("EACCES");
+		return actual.openSync(path, flags);
+	}) as never);
+	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "EACCES" }));
+});
+
+it("takes over a stale claim on a volume without hard links", () => {
+	const { file, claimPath } = setup(true);
+	vi.mocked(fs.linkSync).mockImplementation(() => {
+		throw failure("EOPNOTSUPP");
+	});
+	const claim = claimTranscript(file);
+	expect(JSON.parse(actual.readFileSync(claimPath, "utf8")).pid).toBe(process.pid);
+	expect(actual.existsSync(`${claimPath}.takeover`)).toBe(false);
+	claim.release();
+});
+
+it("reads a claim swapped for another file between its lstat and its open as unreadable", () => {
+	const { dir, file, claimPath } = setup(true);
+	// The claim it inspects names a live holder; the one swapped in, a gone one.
+	actual.writeFileSync(claimPath, holderBody(process.ppid));
+	const swapped = join(dir, "swapped");
+	actual.writeFileSync(swapped, holderBody(EXITED_PID));
+	vi.mocked(fs.openSync).mockImplementation(((path: fs.PathLike, flags: fs.OpenMode) => {
+		if (path === claimPath && actual.existsSync(swapped)) actual.renameSync(swapped, claimPath);
+		return actual.openSync(path, flags);
+	}) as never);
+	expect(() => claimTranscript(file)).toThrow(`child session is in use (unreadable writer claim; remove ${claimPath}`);
+	expect(actual.readFileSync(claimPath, "utf8")).toBe(holderBody(EXITED_PID));
+
+	// Swapped for a link instead: the no-follow open refuses it where the platform has one.
+	actual.writeFileSync(claimPath, holderBody(process.ppid));
+	const link = join(dir, "link");
+	actual.symlinkSync(join(dir, "elsewhere"), link);
+	let linked = false;
+	vi.mocked(fs.openSync).mockImplementation(((path: fs.PathLike, flags: fs.OpenMode) => {
+		if (path === claimPath && !linked) {
+			linked = true;
+			actual.renameSync(link, claimPath);
+		}
+		return actual.openSync(path, flags);
+	}) as never);
+	expect(() => claimTranscript(file)).toThrow(`child session is in use (unreadable writer claim; remove ${claimPath}`);
+});
+
+it("never opens a linked claim where the platform cannot open without following links", () => {
+	const { dir, file, claimPath } = setup(true);
+	// Windows: no `O_NOFOLLOW`, so an open would follow the link to a gone holder's claim.
+	const real = join(dir, "real-claim");
+	actual.renameSync(claimPath, real);
+	actual.symlinkSync(real, claimPath);
+	const noFollow = fs.constants.O_NOFOLLOW;
+	Reflect.deleteProperty(fs.constants, "O_NOFOLLOW");
+	onTestFinished(() => {
+		Object.assign(fs.constants, { O_NOFOLLOW: noFollow });
+	});
+	expect(() => claimTranscript(file)).toThrow(`child session is in use (unreadable writer claim; remove ${claimPath}`);
+	expect(vi.mocked(fs.openSync).mock.calls.filter(([path]) => path === claimPath)).toEqual([]);
+	expect(actual.readlinkSync(claimPath)).toBe(real);
 });

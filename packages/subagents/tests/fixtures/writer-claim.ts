@@ -14,6 +14,19 @@ export function writeHolder(claimPath: string, pid: number, overrides: Record<st
 	writeFileSync(claimPath, holderBody(pid, overrides));
 }
 
+/** A Linux PID domain as `pidDomainOf` reads it: namespace link plus boot id. */
+export const VERIFIED_DOMAIN = "pid:[4026531836] boot 6f1d2c1e-test-boot";
+
+/**
+ * Make this process report a verified PID domain (`VERIFIED_DOMAIN` unless
+ * given) for the rest of the test, as Linux does, so a gone holder can be
+ * taken over on any test host. Call it before writing the holder.
+ */
+export function stubVerifiedDomain(domain = VERIFIED_DOMAIN): void {
+	const spy = vi.spyOn(claimHost, "pidDomain").mockReturnValue(domain);
+	onTestFinished(() => spy.mockRestore());
+}
+
 /** Above any `pid_max`, so never a real process; `stubExited` makes it read as gone. */
 export const EXITED_PID = 2 ** 30;
 

@@ -28,7 +28,14 @@ import {
 	WRITER_CLAIM_SUFFIX,
 	writerClaimHolder,
 } from "../src/transcript-claim.ts";
-import { EXITED_PID, holderBody, stubExited, writeHolder } from "./fixtures/writer-claim.ts";
+import {
+	EXITED_PID,
+	holderBody,
+	stubExited,
+	stubVerifiedDomain,
+	VERIFIED_DOMAIN,
+	writeHolder,
+} from "./fixtures/writer-claim.ts";
 
 const CHILD = new URL("./fixtures/transcript-claim-child.ts", import.meta.url).pathname;
 /** A pid `stubExited` answers `EPERM` for: alive, not ours to signal. */
@@ -50,21 +57,21 @@ function transcript(): { dir: string; file: string; claimPath: string } {
 }
 
 describe("pidDomainOf", () => {
-	it("names the PID namespace and boot on Linux and the platform elsewhere", () => {
+	it("names the PID namespace and boot on Linux and no domain elsewhere", () => {
 		const fail = () => {
 			throw new Error("not read");
 		};
-		expect(pidDomainOf("darwin", fail, fail)).toBe("darwin");
-		expect(pidDomainOf("win32", fail, fail)).toBe("win32");
-		expect(
-			pidDomainOf(
-				"linux",
-				(path) => `${path === "/proc/self/ns/pid" ? "pid:[4026531836]" : "?"}`,
-				(path) => Buffer.from(path === "/proc/sys/kernel/random/boot_id" ? "b00t\n" : "?"),
-			),
-		).toBe("pid:[4026531836] boot b00t");
-		// Unreadable (a locked-down /proc): unknown, so never taken over automatically.
-		expect(pidDomainOf("linux", fail, () => "b00t")).toBeUndefined();
+		const ns = (path: string) => `${path === "/proc/self/ns/pid" ? "pid:[4026531836]" : "?"}`;
+		const boot = (path: string) => Buffer.from(path === "/proc/sys/kernel/random/boot_id" ? "b00t\n" : "?");
+		// A platform name is not a PID domain: two Macs with one host name would share it.
+		expect(pidDomainOf("darwin", ns, boot)).toBeUndefined();
+		expect(pidDomainOf("win32", ns, boot)).toBeUndefined();
+		expect(pidDomainOf("linux", ns, boot)).toBe("pid:[4026531836] boot b00t");
+		// Unreadable (a locked-down /proc) or not what Linux reports: unknown, so never taken over automatically.
+		expect(pidDomainOf("linux", fail, boot)).toBeUndefined();
+		expect(pidDomainOf("linux", ns, fail)).toBeUndefined();
+		expect(pidDomainOf("linux", ns, () => " \n")).toBeUndefined();
+		expect(pidDomainOf("linux", () => "", boot)).toBeUndefined();
 		expect(claimHost.pidDomain()).toBe(pidDomainOf(process.platform, readlinkSync, readFileSync));
 	});
 });
@@ -74,11 +81,9 @@ describe("claimTranscript", () => {
 		const { file, claimPath } = transcript();
 		const claim = claimTranscript(file);
 		expect(claim.file).toBe(file);
-		expect(JSON.parse(readFileSync(claimPath, "utf8"))).toMatchObject({
-			pid: process.pid,
-			host: hostname(),
-			domain: claimHost.pidDomain(),
-		});
+		const written = JSON.parse(readFileSync(claimPath, "utf8"));
+		expect(written).toMatchObject({ pid: process.pid, host: hostname() });
+		expect(written.domain).toBe(claimHost.pidDomain());
 		expect(() => claimTranscript(file)).toThrow(
 			`child session is in use (writer claim held by pid ${process.pid} (this process)): ${file}`,
 		);
@@ -154,23 +159,49 @@ describe("claimTranscript", () => {
 		expect(readFileSync(claimPath, "utf8")).toBe('{"pid":7}');
 	});
 
-	it("never takes over a gone pid from another or an unknown PID namespace", () => {
+	it("never takes over a gone pid from another or an unverified PID namespace", () => {
 		stubExited();
+		stubVerifiedDomain();
 		const { file, claimPath } = transcript();
-		const refusal = `child session is in use (writer claim held by pid ${EXITED_PID} in another or unknown PID namespace; remove ${claimPath} once it has exited): ${file}`;
+		const another = (pid: number) =>
+			`child session is in use (writer claim held by pid ${pid} in another PID namespace; remove ${claimPath} once it has exited): ${file}`;
+		const unverified = `child session is in use (writer claim held by pid ${EXITED_PID} in an unverified PID namespace (automatic takeover needs Linux); remove ${claimPath} once it has exited): ${file}`;
 		// Another container sharing this host name and session directory: its pid is invisible here.
 		writeHolder(claimPath, EXITED_PID, { domain: "pid:[4026532999] boot other" });
-		expect(() => claimTranscript(file)).toThrow(refusal);
-		// A claim that names no domain, or a process that cannot read its own.
+		expect(() => claimTranscript(file)).toThrow(another(EXITED_PID));
+		// The same namespace number on another boot (another host): not this one, even for a live-looking pid.
+		writeHolder(claimPath, process.ppid, { domain: "pid:[4026531836] boot another-host" });
+		expect(() => claimTranscript(file)).toThrow(another(process.ppid));
+		// A claim that names no domain (macOS, Windows, an unreadable /proc).
 		writeHolder(claimPath, EXITED_PID, { domain: undefined });
-		expect(() => claimTranscript(file)).toThrow(refusal);
-		writeHolder(claimPath, EXITED_PID);
+		expect(() => claimTranscript(file)).toThrow(unverified);
+		// This process cannot verify its own (macOS, Windows): "gone here" proves nothing.
 		const domain = vi.spyOn(claimHost, "pidDomain").mockReturnValue(undefined);
-		onTestFinished(() => domain.mockRestore());
-		expect(() => claimTranscript(file)).toThrow(refusal);
-		expect(writerClaimHolder(file)).toContain("in another or unknown PID namespace");
-		domain.mockRestore();
+		for (const holder of [VERIFIED_DOMAIN, undefined]) {
+			writeHolder(claimPath, EXITED_PID, { domain: holder });
+			expect(() => claimTranscript(file)).toThrow(unverified);
+			expect(writerClaimHolder(file)).toContain("in an unverified PID namespace");
+		}
+		// A live holder still reads as one.
+		writeHolder(claimPath, process.ppid, { domain: undefined });
+		expect(() => claimTranscript(file)).toThrow(`writer claim held by pid ${process.ppid}): ${file}`);
+		domain.mockReturnValue(VERIFIED_DOMAIN);
+		// Same verified namespace and boot: taken over.
+		writeHolder(claimPath, EXITED_PID);
 		claimTranscript(file).release();
+	});
+
+	it("takes over a gone pid only where this host verifies its PID domain", () => {
+		stubExited();
+		const { file, claimPath } = transcript();
+		// The real domain: Linux with a readable /proc, never macOS or Windows.
+		writeHolder(claimPath, EXITED_PID);
+		if (pidDomainOf(process.platform, readlinkSync, readFileSync) === undefined) {
+			expect(() => claimTranscript(file)).toThrow("in an unverified PID namespace");
+			expect(JSON.parse(readFileSync(claimPath, "utf8")).pid).toBe(EXITED_PID);
+		} else {
+			claimTranscript(file).release();
+		}
 	});
 
 	it("reads a link, a FIFO, a directory or an oversized file as an unreadable claim", () => {
@@ -200,6 +231,7 @@ describe("claimTranscript", () => {
 
 	it("takes over a claim whose holder on this host and PID namespace has exited", () => {
 		stubExited();
+		stubVerifiedDomain();
 		const { file, claimPath } = transcript();
 		writeHolder(claimPath, EXITED_PID);
 		expect(writerClaimHolder(file)).toBeUndefined();
@@ -349,7 +381,7 @@ class Recoverer {
 	private waiting: (() => void) | undefined;
 
 	constructor(file: string) {
-		this.child = spawn(process.execPath, [CHILD, file]);
+		this.child = spawn(process.execPath, [CHILD, file, VERIFIED_DOMAIN]);
 		createInterface({ input: this.child.stdout }).on("line", (line) => {
 			this.lines.push(line);
 			this.waiting?.();
@@ -394,6 +426,7 @@ describe("two recovering processes", { timeout: 30_000 }, () => {
 	}
 
 	it("lets one of two processes write a transcript both judged free", async () => {
+		stubVerifiedDomain();
 		const { file, claimPath } = transcript();
 		const { winner, refusals } = await race(file);
 		expect(refusals[0]).toMatch(/^refused child session is in use \(/);
@@ -408,6 +441,8 @@ describe("two recovering processes", { timeout: 30_000 }, () => {
 
 	it("lets one of two processes take over a crashed writer's claim", async () => {
 		const { file, claimPath } = transcript();
+		// Each process stands in for a Linux one with this verified PID domain.
+		stubVerifiedDomain();
 		writeFileSync(claimPath, holderBody(exitedPid()));
 		const { winner } = await race(file);
 		expect(JSON.parse(readFileSync(claimPath, "utf8")).pid).toBe(winner.child.pid);

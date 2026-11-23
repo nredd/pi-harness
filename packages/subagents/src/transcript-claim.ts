@@ -2,14 +2,15 @@
  * Exclusive writer ownership of a child transcript across pi processes (#1247).
  *
  * A claim is a small file beside the transcript, published atomically with an
- * exclusive `link`, that names the writing process (pid, host, PID domain and a
- * per-claim token). Every run that writes a persisted child transcript holds
- * one for the whole run and removes it when the run settles. A claim left by a
- * crash is taken over only when its holder is verifiably gone: same host, same
- * PID domain (Linux PID namespace and boot) and `kill(pid, 0)` reports `ESRCH`.
- * Anything else (another host or namespace, a live or unknown pid, an
- * unreadable claim, a takeover lock left in place, a hard-linked transcript)
- * refuses the run: in doubt, nobody writes.
+ * exclusive `link` (or, on a volume without hard links, an exclusive create),
+ * that names the writing process (pid, host, PID domain and a per-claim token).
+ * Every run that writes a persisted child transcript holds one for the whole
+ * run and removes it when the run settles. A claim left by a crash is taken
+ * over only when its holder is verifiably gone: same host, same verified PID
+ * domain (Linux only: PID namespace and boot id) and `kill(pid, 0)` reports
+ * `ESRCH`. Anything else (another host, another or unverified PID domain, a
+ * live pid, an unreadable claim, a takeover lock left in place, a hard-linked
+ * transcript) refuses the run: in doubt, nobody writes.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -37,8 +38,8 @@ export const WRITER_CLAIM_SUFFIX = ".writer";
 export const TAKEOVER_SUFFIX = ".takeover";
 /** A claim is a few dozen bytes; anything larger is not one this code wrote. */
 const CLAIM_MAX_BYTES = 4096;
-/** Never block on a FIFO, never follow a planted link. Absent flags (Windows) read as 0. */
-const CLAIM_READ_FLAGS = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+/** `link` errors that mean the volume has no hard links (exFAT, some network shares), not a race. */
+const NO_HARD_LINKS = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
 
 /** A held claim; `release` removes it only while it is still this claim. */
 export interface TranscriptClaim {
@@ -54,19 +55,24 @@ interface ClaimHolder {
 }
 
 /**
- * What a pid is relative to: on Linux the PID namespace plus the boot (two
- * containers sharing a host name and a session directory see different pids),
- * elsewhere the platform alone. Undefined when it cannot be read: a claim from
- * an unknown domain is never taken over automatically.
+ * What a pid is relative to, verified: on Linux the PID namespace plus the
+ * boot id (two containers sharing a host name and a session directory see
+ * different pids; two hosts can share a namespace number, never a boot id).
+ * Undefined everywhere else, and on Linux when either cannot be read: a
+ * platform name does not identify a PID domain (two Macs with one host name
+ * sharing a sessions volume both say `darwin`), and a claim from an unknown
+ * domain is never taken over automatically.
  */
 export function pidDomainOf(
 	platform: NodeJS.Platform,
 	readLink: (path: string) => string,
 	readText: (path: string) => { toString(): string },
 ): string | undefined {
-	if (platform !== "linux") return platform;
+	if (platform !== "linux") return undefined;
 	try {
-		return `${readLink("/proc/self/ns/pid")} boot ${readText("/proc/sys/kernel/random/boot_id").toString().trim()}`;
+		const namespace = readLink("/proc/self/ns/pid");
+		const boot = readText("/proc/sys/kernel/random/boot_id").toString().trim();
+		return /^pid:\[\d+\]$/.test(namespace) && boot !== "" ? `${namespace} boot ${boot}` : undefined;
 	} catch {
 		return undefined;
 	}
@@ -89,11 +95,20 @@ function removeQuietly(path: string): void {
 	}
 }
 
+/** `dev:ino` of a stat result. */
+function fileId(stats: { dev: number; ino: number }): string {
+	return `${stats.dev}:${stats.ino}`;
+}
+
 /**
  * Publish `body` at `path` only if nothing is there yet; false when something
  * is. The body is written to a private staging file first and linked into
  * place, so a failed write (`ENOSPC`) never leaves a partial claim: at worst a
- * stray staging file this attempt created. Other errors pass through.
+ * stray staging file this attempt created. On a volume without hard links the
+ * body is written in place with an exclusive create instead (never an
+ * overwriting rename): a partial one reads as unreadable, so it refuses, and
+ * a failed write removes it while it is still the file this call created.
+ * Other errors pass through.
  */
 function createExclusive(path: string, body: string): boolean {
 	const staging = `${path}.${randomUUID()}.tmp`;
@@ -108,29 +123,63 @@ function createExclusive(path: string, body: string): boolean {
 		return true;
 	} catch (error) {
 		if (errorCode(error) === "EEXIST") return false;
+		if (NO_HARD_LINKS.has(errorCode(error) as string)) return createInPlace(path, body);
 		throw error;
 	} finally {
 		removeQuietly(staging);
 	}
 }
 
-/**
- * The claim's raw text, undefined when it no longer exists, or "" (unreadable)
- * for a link, a non-regular file or one over `CLAIM_MAX_BYTES`. Opened without
- * blocking or following links and checked on the descriptor, so a FIFO or a
- * planted link cannot stall or redirect the read. Other errors pass through.
- */
-function readClaim(path: string): string | undefined {
+/** `createExclusive` without a link: an exclusive create of `path` itself. */
+function createInPlace(path: string, body: string): boolean {
 	let fd: number;
 	try {
-		fd = openSync(path, CLAIM_READ_FLAGS);
+		fd = openSync(path, "wx");
+	} catch (error) {
+		if (errorCode(error) === "EEXIST") return false;
+		throw error;
+	}
+	const created = fileId(fstatSync(fd));
+	try {
+		writeFileSync(fd, body);
+	} catch (error) {
+		try {
+			if (fileId(lstatSync(path)) === created) unlinkSync(path);
+		} catch {
+			/* left in place: unreadable, so it refuses */
+		}
+		throw error;
+	} finally {
+		closeSync(fd);
+	}
+	return true;
+}
+
+/**
+ * The claim's raw text, undefined when it no longer exists, or "" (unreadable)
+ * for a link, a non-regular file or one over `CLAIM_MAX_BYTES`. Only a path
+ * `lstat` shows as a regular file is opened, without blocking or following
+ * links where the platform can (absent flags, e.g. on Windows, read as 0),
+ * and the descriptor must be that same file (`dev:ino`), so a FIFO or a
+ * planted or swapped-in link cannot stall or redirect the read even without
+ * `O_NOFOLLOW`. Other errors pass through.
+ */
+function readClaim(path: string): string | undefined {
+	let before: string;
+	let fd: number;
+	try {
+		const stats = lstatSync(path);
+		if (!stats.isFile()) return "";
+		before = fileId(stats);
+		fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return undefined;
 		if (errorCode(error) === "ELOOP") return "";
 		throw error;
 	}
 	try {
-		if (!fstatSync(fd).isFile()) return "";
+		const stats = fstatSync(fd);
+		if (!stats.isFile() || fileId(stats) !== before) return "";
 		const buffer = Buffer.alloc(CLAIM_MAX_BYTES + 1);
 		const length = readSync(fd, buffer, 0, buffer.length, 0);
 		return length > CLAIM_MAX_BYTES ? "" : buffer.toString("utf8", 0, length);
@@ -182,13 +231,19 @@ function holderReason(raw: string, claimPath: string): string | undefined {
 	if (holder.host !== hostname()) {
 		return `writer claim held by pid ${holder.pid} on host ${holder.host}; remove ${claimPath} once it has exited`;
 	}
-	// A pid from another (or an unknown) PID namespace says nothing about this one's.
+	// A pid from another PID namespace says nothing about this one's.
 	const domain = claimHost.pidDomain();
-	if (domain === undefined || holder.domain !== domain) {
-		return `writer claim held by pid ${holder.pid} in another or unknown PID namespace; remove ${claimPath} once it has exited`;
+	if (domain !== undefined && holder.domain !== undefined && holder.domain !== domain) {
+		return `writer claim held by pid ${holder.pid} in another PID namespace; remove ${claimPath} once it has exited`;
 	}
-	if (!processAlive(holder.pid)) return undefined;
-	return `writer claim held by pid ${holder.pid}${holder.pid === process.pid ? " (this process)" : ""}`;
+	if (processAlive(holder.pid)) {
+		return `writer claim held by pid ${holder.pid}${holder.pid === process.pid ? " (this process)" : ""}`;
+	}
+	// Gone here, but without a verified domain on both sides "here" may not be where it ran.
+	if (domain === undefined || holder.domain !== domain) {
+		return `writer claim held by pid ${holder.pid} in an unverified PID namespace (automatic takeover needs Linux); remove ${claimPath} once it has exited`;
+	}
+	return undefined;
 }
 
 function inUse(reason: string, file: string): string {
@@ -221,6 +276,32 @@ function takeOver(claimPath: string, stale: string, body: string, file: string):
 		// A lock that cannot be removed keeps refusing claims, which is the safe side.
 		removeQuietly(lockPath);
 	}
+}
+
+/** Remove the claim at `claimPath` only while it is still `body`. */
+function releaseOwn(claimPath: string, body: string): void {
+	try {
+		if (readClaim(claimPath) === body) unlinkSync(claimPath);
+	} catch {
+		/* left in place */
+	}
+}
+
+/**
+ * A fresh (not takeover) publish of `body` at `claimPath`; false when a claim
+ * is already there. A takeover lock that appeared since the caller's probe (a
+ * taker that dropped the stale claim, then crashed or is about to publish)
+ * means this claim may sit where the taker's belongs: it is dropped again and
+ * the run refused.
+ */
+function publishFresh(claimPath: string, body: string, file: string): boolean {
+	if (!createExclusive(claimPath, body)) return false;
+	const lockPath = `${claimPath}${TAKEOVER_SUFFIX}`;
+	if (present(lockPath)) {
+		releaseOwn(claimPath, body);
+		throw takeoverRefusal(lockPath, file);
+	}
+	return true;
 }
 
 /**
@@ -268,11 +349,11 @@ export function claimTranscript(file: string): TranscriptClaim {
 		domain: claimHost.pidDomain(),
 		token: randomUUID(),
 	});
-	if (!createExclusive(claimPath, body)) {
+	if (!publishFresh(claimPath, body, file)) {
 		const held = readClaim(claimPath);
 		// Released between the two calls: one more exclusive create decides it.
 		if (held === undefined) {
-			if (!createExclusive(claimPath, body)) {
+			if (!publishFresh(claimPath, body, file)) {
 				throw new Error(`child session was claimed by another process; retry: ${file}`);
 			}
 		} else {
@@ -285,12 +366,8 @@ export function claimTranscript(file: string): TranscriptClaim {
 		file: canonical,
 		release() {
 			// Best effort: a claim left behind names this pid, so it refuses until
-			// this process exits and is then taken over as stale.
-			try {
-				if (readClaim(claimPath) === body) unlinkSync(claimPath);
-			} catch {
-				/* left in place */
-			}
+			// this process exits and is then taken over as stale (Linux) or removed.
+			releaseOwn(claimPath, body);
 		},
 	};
 }

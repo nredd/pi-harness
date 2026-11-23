@@ -23,7 +23,7 @@ import * as agentRunner from "../src/agent-runner.ts";
 import { canonicalChildPath, RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
 import { WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
-import { EXITED_PID, stubExited, writeHolder } from "./fixtures/writer-claim.ts";
+import { EXITED_PID, stubExited, stubVerifiedDomain, writeHolder } from "./fixtures/writer-claim.ts";
 
 let fixture: ScenarioSession;
 
@@ -40,10 +40,12 @@ function settle(file: string | undefined) {
 }
 /**
  * Leave the writer claim a crashed process would: the in-process run still
- * holds `file`, so its claim is handed to a pid that reads as exited (#1247).
+ * holds `file`, so its claim is handed to a pid that reads as exited in a
+ * verified PID domain, where a takeover is allowed (#1247).
  */
 function crashWriter(file: string) {
 	stubExited();
+	stubVerifiedDomain();
 	writeHolder(`${canonicalChildPath(file)}${WRITER_CLAIM_SUFFIX}`, EXITED_PID);
 }
 afterEach(async () => {
