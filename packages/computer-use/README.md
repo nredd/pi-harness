@@ -503,7 +503,11 @@ text with its `execution` trace. The result is also:
   roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
   failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
   stacked within a few points of each other can therefore report no `closed` or `appeared` change at
-  all. Discovery and target resolution still list every such root. Windows listings carry no completeness information, so an empty listing from
+  all. Discovery and target resolution still list every such root. `focused` compares only read focus: a root
+  reports `isFocused`, `isMain` and `isMinimized` only when the AX read returned a boolean, never a
+  failed read as `false`, and a sheet reports its own `AXFocused`, never its window's. A root whose
+  focus read failed on either side reports no `focused` change (#1303), so a failed read can hide a
+  real focus change but never invents one. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ### Ref lifecycle
@@ -2973,7 +2977,11 @@ Terminal `act_ui` results say the action was delivered, or say its delivery is u
   roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
   failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
   stacked within a few points of each other can therefore report no `closed` or `appeared` change at
-  all. Discovery and target resolution still list every such root. Windows listings carry no completeness information, so an empty listing from
+  all. Discovery and target resolution still list every such root. `focused` compares only read focus: a root
+  reports `isFocused`, `isMain` and `isMinimized` only when the AX read returned a boolean, never a
+  failed read as `false`, and a sheet reports its own `AXFocused`, never its window's. A root whose
+  focus read failed on either side reports no `focused` change (#1303), so a failed read can hide a
+  real focus change but never invents one. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ## Ref lifecycle
