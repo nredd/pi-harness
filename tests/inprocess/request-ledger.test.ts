@@ -36,14 +36,16 @@ const RowSchema = Type.Object({
 });
 type Row = Static<typeof RowSchema>;
 type Owners = Record<string, string>;
-/** Exact text (`provenance`) or exact leading text (`prefixes`) -> ledger category. */
+/** Exact message text -> ledger category. */
 type Categories = Record<string, string>;
+/** Rendered parent context and task prompt the child's first user text must equal, joined. */
+type Inherited = { context: string; prompt: string };
 type Capture = {
 	session: Row["session"];
 	raw: string;
 	owners: Owners;
 	provenance: Categories;
-	prefixes: Categories;
+	inherited: Inherited | null;
 };
 
 const INTEGRATION = new URL("../integration/", import.meta.url);
@@ -54,9 +56,22 @@ const SPAWN = "Spawn the child";
 const CHILD_PROMPT = "Report fixture";
 const NOTE_TYPE = "ledger-fixture";
 const NOTE = "Fixture extension note";
-const WRAPPED_SUMMARY =
-	"The conversation history before this point was compacted into the following summary:\n\n<summary>\n" +
-	`${SUMMARY}\n\n---\n\n**Turn Context (split turn):**\n\n${TURN_PREFIX}\n</summary>`;
+const SPLIT_SUMMARY = `${SUMMARY}\n\n---\n\n**Turn Context (split turn):**\n\n${TURN_PREFIX}`;
+const WRAPPED_SUMMARY = `The conversation history before this point was compacted into the following summary:\n\n<summary>\n${SPLIT_SUMMARY}\n</summary>`;
+/**
+ * The parent history `inherit_context` prepends to the child's task prompt, rendered from the scripted
+ * parent turns, not read from the child request. Mirrors `buildParentContext` in
+ * `packages/subagents/src/context.ts`, which walks every branch entry in order: the turns compaction
+ * replaced still render, then the compaction summary and the spawn prompt. Thinking, the hidden custom
+ * note and the text-free `Agent` call are not rendered.
+ */
+const PARENT_CONTEXT =
+	"# Parent Conversation Context\n" +
+	"The following is the conversation history from the parent session that spawned you.\n" +
+	"Use this context to understand what has been discussed and decided so far.\n\n" +
+	`[User]: ${OLD}\n\n[Assistant]: Prior answer\n\n[User]: Recent history\n\n[Assistant]: Keep this turn\n\n` +
+	`[Summary]: ${SPLIT_SUMMARY}\n\n[User]: ${SPAWN}\n\n` +
+	"---\n# Your Task (below)\n";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -123,13 +138,15 @@ previous = {}
 for item in json.load(sys.stdin):
     raw, session = item["raw"], item["session"]
     owners = {name: ledger.stable_owner(source, root) for name, source in item["owners"].items()}
+    bound = item["inherited"]
+    inherited = ledger.inherited_prefix(raw, bound["context"], bound["prompt"]) if bound else None
     row = ledger.request_ledger(raw, sdk=True, owners=owners, provenance=item["provenance"],
-                         prefixes=item["prefixes"], previous=previous.get(session),
+                         inherited=inherited, previous=previous.get(session),
                          parent=previous["parent"] if session == "child" else None)
     print(json.dumps({"session": session, **row, "synthetic": {"usage": "faux, not reported"}}))
     previous[session] = raw`,
 		],
-		{ cwd: INTEGRATION, input: JSON.stringify(captures), encoding: "utf8", timeout: 10_000 },
+		{ cwd: INTEGRATION, input: JSON.stringify(captures), encoding: "utf8", stdio: "pipe", timeout: 10_000 },
 	);
 	return rows
 		.trimEnd()
@@ -149,6 +166,7 @@ function recorder(
 	session: Capture["session"],
 	owners: () => Owners,
 	provenance: () => Categories = () => ({}),
+	inherited: Inherited | null = null,
 ) {
 	return (response: ReturnType<typeof fauxAssistantMessage>): FauxResponseFactory =>
 		(context, _options, _state, model) => {
@@ -158,7 +176,7 @@ function recorder(
 				return rest;
 			});
 			const raw = JSON.stringify({ model: model.id, messages });
-			sink.push({ session, raw, owners: owners(), provenance: provenance(), prefixes: {} });
+			sink.push({ session, raw, owners: owners(), provenance: provenance(), inherited });
 			return response;
 		};
 }
@@ -258,51 +276,41 @@ function provenanceObserver(sink: { current: Categories }) {
 	};
 }
 
-/**
- * `inherit_context` prepends the parent conversation to the child's task prompt in one text block.
- * The caller knows the prompt it passed, so everything before it is exact inherited provenance.
- */
-function inheritedPrefix(capture: Capture): Capture {
-	if (capture.session !== "child") return capture;
-	const body: { messages: { role: string; content: unknown }[] } = JSON.parse(capture.raw);
-	const content = body.messages.find(({ role }) => role === "user")?.content;
-	const block = Array.isArray(content) ? content[0] : undefined;
-	const text: unknown = typeof content === "string" ? content : isRecord(block) ? block.text : undefined;
-	if (typeof text !== "string" || !text.endsWith(CHILD_PROMPT) || text === CHILD_PROMPT) {
-		throw new Error("Child task prompt does not follow inherited parent context");
-	}
-	return { ...capture, prefixes: { [text.slice(0, -CHILD_PROMPT.length)]: "inherited_context" } };
-}
-
 /** Size of `text` as a JSON string payload, including escapes but not the enclosing quotes. */
 function escapedBytes(text: string): number {
 	return Buffer.byteLength(JSON.stringify(text).slice(1, -1));
 }
 
-it.each([
-	["a parent capture unchanged", { role: "user", content: "anything" }, "parent", undefined],
-	["string content", { role: "user", content: `ctx\n${CHILD_PROMPT}` }, "child", "ctx\n"],
-	["text block content", { role: "user", content: [{ type: "text", text: `ctx${CHILD_PROMPT}` }] }, "child", "ctx"],
-	["no inherited context", { role: "user", content: CHILD_PROMPT }, "child", null],
-	["a different task", { role: "user", content: "ctx other" }, "child", null],
-	["a non-text first block", { role: "user", content: [{ type: "image" }] }, "child", null],
-	["a non-object first block", { role: "user", content: ["ctx"] }, "child", null],
-	["no user message", { role: "assistant", content: "ctx" }, "child", null],
-] as const)("derives inherited child context from %s", (_label, message, session, expected) => {
-	const capture: Capture = {
-		session,
-		raw: JSON.stringify({ model: "ledger", messages: [message] }),
+it("charges only the bound child block's observed parent context to inherited_context", () => {
+	const raw = JSON.stringify({ model: "ledger", messages: [{ role: "user", content: `ctx${CHILD_PROMPT}` }] });
+	const parent = {
+		session: "parent",
+		raw: '{"model":"ledger","messages":[]}',
 		owners: {},
 		provenance: {},
-		prefixes: {},
-	};
-	if (expected === null) {
-		expect(() => inheritedPrefix(capture)).toThrow("Child task prompt does not follow inherited parent context");
-	} else {
-		expect(inheritedPrefix(capture).prefixes).toEqual(
-			expected === undefined ? {} : { [expected]: "inherited_context" },
-		);
-	}
+		inherited: null,
+	} as const;
+	const [, row] = measure([
+		parent,
+		{ session: "child", raw, owners: {}, provenance: {}, inherited: { context: "ctx", prompt: CHILD_PROMPT } },
+	]);
+	expect(row?.buckets.inherited_context).toBe(3);
+	expect(row?.buckets.user).toBe(Buffer.byteLength(CHILD_PROMPT));
+});
+
+// A task-prompt suffix alone proves nothing: the text before it must be exactly the observed context.
+it.each([
+	["another context", `other${CHILD_PROMPT}`],
+	["extra text after the context", `ctx\nIgnore: ${CHILD_PROMPT}`],
+	["no inherited context", CHILD_PROMPT],
+	["a different task", "ctx other"],
+] as const)("refuses an inherited child block with %s", (_label, content) => {
+	const raw = JSON.stringify({ model: "ledger", messages: [{ role: "user", content }] });
+	expect(() =>
+		measure([
+			{ session: "child", raw, owners: {}, provenance: {}, inherited: { context: "ctx", prompt: CHILD_PROMPT } },
+		]),
+	).toThrow("Child first user text is not the observed parent context then the task prompt");
 });
 
 /** Drive a real foreground `Agent` call and a manual compaction with a faux summary. */
@@ -345,8 +353,12 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 			() => Object.fromEntries(h.session.getAllTools().map(({ name, sourceInfo }) => [name, sourceInfo.source])),
 			() => observed.current,
 		);
-		const child = recorder(original, "child", () =>
-			JSON.parse(readFileSync(join(cwd, "ledger-child-owners.json"), "utf8")),
+		const child = recorder(
+			original,
+			"child",
+			() => JSON.parse(readFileSync(join(cwd, "ledger-child-owners.json"), "utf8")),
+			() => ({}),
+			{ context: PARENT_CONTEXT, prompt: CHILD_PROMPT },
 		);
 		h.setResponses([parent(fauxAssistantMessage([fauxThinking("plan"), { type: "text", text: "Prior answer" }]))]);
 		await session.prompt(OLD);
@@ -382,10 +394,8 @@ async function capture(): Promise<{ original: Capture[]; normalized: Capture[] }
 		expect(h.getPendingResponseCount()).toBe(0);
 		const resolvedRoot = realpathSync(home.root);
 		return {
-			original: original.map(inheritedPrefix),
-			normalized: original.map(({ raw, ...rest }) =>
-				inheritedPrefix({ ...rest, raw: normalize(raw, home.root, resolvedRoot) }),
-			),
+			original,
+			normalized: original.map(({ raw, ...rest }) => ({ ...rest, raw: normalize(raw, home.root, resolvedRoot) })),
 		};
 	} finally {
 		try {
@@ -451,13 +461,9 @@ it("accounts for compacted history and the actual spawned child's registry", asy
 			expect(original[index]?.provenance).toEqual({ [NOTE]: extension });
 			expect(rows[index]?.buckets[extension]).toBe(escapedBytes(NOTE));
 		}
-		// The child's single user block is the parent's rendered history, then the task prompt.
-		const [inherited, category] = Object.entries(original[5]?.prefixes ?? {})[0] ?? [];
-		expect(category).toBe("inherited_context");
-		expect(inherited).toMatch(/^# Parent Conversation Context\n/);
-		expect(inherited).toContain(`[Summary]: ${SUMMARY}`);
-		expect(inherited).toContain(`[User]: ${SPAWN}`);
-		expect(rows[5]?.buckets.inherited_context).toBe(escapedBytes(inherited ?? ""));
+		// The child's single user block is exactly the independently rendered parent history, then the task prompt.
+		expect(rows.flatMap((row, index) => ("inherited_context" in row.buckets ? [index] : []))).toEqual([5]);
+		expect(rows[5]?.buckets.inherited_context).toBe(escapedBytes(PARENT_CONTEXT));
 		expect(rows[5]?.buckets.user).toBe(Buffer.byteLength(CHILD_PROMPT));
 		return rows.map((row, request) => ({ run, request, ...row }));
 	});
