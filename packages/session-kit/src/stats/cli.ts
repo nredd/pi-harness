@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
-import { exportStats, importStats } from "./snapshot.ts";
+import { ExportRefusal, exportStats, importStats } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
@@ -98,12 +98,16 @@ export async function main(): Promise<void> {
 		}
 	} else throw new Error(USAGE);
 }
-/** Run `main`, converting failures to one diagnostic and a nonzero process exit code. */
+/**
+ * Run `main`, converting failures to one diagnostic and a nonzero process exit code. An export refusal
+ * ends with one fixed `pi-stats-refusal: {"code":...}` line; no such line means the cause is unclassified.
+ */
 export async function run(): Promise<void> {
 	try {
 		await main();
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : "Stats operation failed");
+		if (error instanceof ExportRefusal) console.error(`pi-stats-refusal: ${JSON.stringify({ code: error.refusal })}`);
 		process.exitCode = 1;
 	}
 }

@@ -536,7 +536,10 @@ it("reads legacy export state but rejects malformed recovery markers", async () 
 	await exportStats(agent, out);
 	expect(JSON.parse(readFileSync(outbox, "utf8"))).toMatchObject({ harnesses: ["pi"], recoveryPending: false });
 	writeFileSync(path, JSON.stringify({ ...state, recoveryPending: "invalid" }));
-	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		message: `Invalid export state in ${JSON.stringify(path)}: Invalid export state`,
+		refusal: "export-state-invalid",
+	});
 });
 
 it.each([
@@ -555,9 +558,29 @@ it.each([
 	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
 		const state = readFileSync(path, "utf8");
 		writeFileSync(path, JSON.stringify({ ...JSON.parse(state), [String(field)]: value }));
-		await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+		await expect(exportStats(agent, out)).rejects.toMatchObject({
+			message: `Invalid export state in ${JSON.stringify(path)}: Invalid export state`,
+			refusal: "export-state-invalid",
+		});
 		writeFileSync(path, state);
 	}
+});
+
+it("passes a state read I/O error through unclassified, so callers keep retrying it", async () => {
+	const first = await exportStats(agent, out);
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
+		const failure = Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+		vi.mocked(readFile).mockImplementation(async (file, options) => {
+			if (file === path) throw failure;
+			return actual.readFile(file, options);
+		});
+		const error = await exportStats(agent, out).catch((cause: unknown) => cause);
+		expect(error).toBe(failure);
+		expect(error).not.toHaveProperty("refusal");
+		vi.mocked(readFile).mockRestore();
+	}
+	await expect(exportStats(agent, out)).resolves.toHaveProperty("machineId");
 });
 
 it("migrates a legacy boolean recovery marker to a frozen file set once", async () => {
@@ -1220,7 +1243,10 @@ it("clock rollback preserves sealed history", async () => {
 	rmSync(path);
 	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
 	vi.mocked(Date.now).mockReturnValue(at("2026-10-25"));
-	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		message: expect.stringMatching(/^Clock is behind the last published export/),
+		refusal: "clock-behind",
+	});
 	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(sealed);
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
@@ -1322,11 +1348,13 @@ it.each(["bookkeeping kept", "bookkeeping lost", "no shards"])(
 		expect(files.length > 0 || variant === "no shards").toBe(true);
 		const state = variant === "bookkeeping lost" ? undefined : readFileSync(statePath);
 		vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
-		await expect(exportStats(agent, out)).rejects.toThrow(
-			`Published usage manifest is missing from ${JSON.stringify(first.snapshotDir)}, but this outbox published ` +
+		await expect(exportStats(agent, out)).rejects.toMatchObject({
+			message:
+				`Published usage manifest is missing from ${JSON.stringify(first.snapshotDir)}, but this outbox published ` +
 				"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 				"or pass --replace-harnesses to publish without that history",
-		);
+			refusal: "manifest-missing",
+		});
 		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 		if (state) expect(readFileSync(statePath)).toEqual(state);
 		else expect(existsSync(statePath)).toBe(false);
@@ -1371,9 +1399,10 @@ it.each(["corrupt", "missing"])("keeps the active manifest when one shard among 
 	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
 	const files = readdirSync(first.snapshotDir).sort();
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
-	await expect(exportStats(agent, out)).rejects.toThrow(
-		`Published usage history is unreadable (${bad.file}); restore it from the sync checkout, or pass --replace-harnesses to publish without it`,
-	);
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		message: `Published usage history is unreadable (${bad.file}); restore it from the sync checkout, or pass --replace-harnesses to publish without it`,
+		refusal: "history-unreadable",
+	});
 	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(before);
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 	// Restoring the shard is enough: the next export publishes over intact history again.
@@ -1404,10 +1433,12 @@ it("reports published history over the expansion budget apart from files to rest
 		.spyOn(Buffer, "byteLength")
 		.mockImplementation((value, encoding) => (value === text ? 128 * 1024 * 1024 + 1 : measure(value, encoding)));
 	try {
-		await expect(exportStats(agent, out)).rejects.toThrow(
-			`Published usage history exceeds the 128 MiB expanded machine budget (from ${ref.file}); those files ` +
+		await expect(exportStats(agent, out)).rejects.toMatchObject({
+			message:
+				`Published usage history exceeds the 128 MiB expanded machine budget (from ${ref.file}); those files ` +
 				"match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
-		);
+			refusal: "history-over-budget",
+		});
 	} finally {
 		spy.mockRestore();
 	}

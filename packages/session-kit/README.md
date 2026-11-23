@@ -568,6 +568,18 @@ locations never enter usage shards or manifests. Bad cached files are re-read to
 deleted/former-root bad records remain fail-closed with an unknown line. Wrappers must explicitly
 forward this bounded protocol; forwarding arbitrary exporter stderr is not safe.
 
+An export refused until the owner acts exits 1 and ends stderr with exactly one
+`pi-stats-refusal: {"code":...}` line after the message. Retrying it unchanged never helps. Codes:
+`clock-behind`, `history-unreadable`, `history-over-budget`, `manifest-missing`,
+`harness-set-narrowed`, `harness-set-unknown` (the safeguards above that only a repair or an explicit
+`--replace-harnesses` gets past) and `export-state-invalid` (export state or outbox bookkeeping that
+reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
+the file, which holds the salt; I/O errors on it are not refusals). Each code comes from one fixed
+refusal site, never from matching a message. No line means the failure is unclassified (lock
+contention, I/O, an incomplete scan, usage, or a refusal whose lock release also failed): treat it
+as retryable. Wrappers may stop retrying on a code; they must never add `--replace-harnesses` on
+their own. Library callers get the same code as `ExportRefusal.refusal`.
+
 CLI results:
 
 - Export: `{ "machineId": "<UUID>", "snapshotDir": "<OUT>/machines/<UUID>" }` on stdout, plus

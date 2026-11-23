@@ -178,6 +178,29 @@ async function atomicContents(path: string, contents: string | Uint8Array): Prom
 	}
 }
 
+/**
+ * Why an export cannot succeed until the owner acts: retrying it unchanged never helps. Each is a fixed
+ * refusal site, never inferred from a message; anything else, contention or I/O included, has no code.
+ */
+export type RefusalCode =
+	| "clock-behind"
+	| "history-unreadable"
+	| "history-over-budget"
+	| "manifest-missing"
+	| "harness-set-narrowed"
+	| "harness-set-unknown"
+	| "export-state-invalid";
+
+/** An export refused before publishing; `refusal` is the stable code callers may act on. */
+export class ExportRefusal extends Error {
+	readonly refusal: RefusalCode;
+	constructor(refusal: RefusalCode, message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = "ExportRefusal";
+		this.refusal = refusal;
+	}
+}
+
 const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 function exact(v: unknown, keys: string[]): asserts v is Record<string, unknown> {
 	if (!record(v) || Object.keys(v).length !== keys.length || !Object.keys(v).every((key) => keys.includes(key)))
@@ -321,10 +344,23 @@ function validateBookkeeping(value: Record<string, unknown>): OutboxState {
 		historyHarnesses: (value.historyHarnesses as Harness[] | null | undefined) ?? null,
 	};
 }
+/**
+ * A state file that was read but does not validate is never replaced, so it refuses until the owner
+ * repairs it. Filesystem errors (with an errno `code`) pass through unchanged. JSON parse errors can
+ * quote the file, which holds the salt, so only a fixed reason is reported.
+ */
+function invalidState(path: string, error: unknown): never {
+	if ((error as NodeJS.ErrnoException).code !== undefined) throw error;
+	const reason = error instanceof SyntaxError ? "not valid JSON" : (error as Error).message;
+	throw new ExportRefusal("export-state-invalid", `Invalid export state in ${JSON.stringify(path)}: ${reason}`, {
+		cause: error,
+	});
+}
 /** Created on first use with a fresh salt and no recorded set. */
 async function exportState(dir: string): Promise<ExportState> {
+	const path = stateFile(dir);
 	return installationFile(
-		stateFile(dir),
+		path,
 		() => ({
 			version: 1,
 			salt: randomBytes(16).toString("hex"),
@@ -336,14 +372,14 @@ async function exportState(dir: string): Promise<ExportState> {
 			historyHarnesses: [],
 		}),
 		validateState,
-	);
+	).catch((error: unknown) => invalidState(path, error));
 }
 /** This outbox's own bookkeeping, `null` when it has none. Corrupt fails. */
 async function ownOutbox(path: string): Promise<OutboxState | null> {
 	try {
 		return validateOutbox(await jsonFile(path));
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") invalidState(path, error);
 		return null;
 	}
 }
@@ -886,12 +922,14 @@ function intactPrevious(previous: Previous | Damaged, replace: boolean): Previou
 	if (replace) return "unreadable";
 	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
 	if (previous.damaged.length === 0 && previous.overBudget !== undefined)
-		throw new Error(
+		throw new ExportRefusal(
+			"history-over-budget",
 			`Published usage history exceeds the 128 MiB expanded machine budget (from ${previous.overBudget}); ` +
 				"those files match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
 		);
 	const what = previous.damaged.length > 0 ? previous.damaged.join(", ") : "shards inconsistent with each other";
-	throw new Error(
+	throw new ExportRefusal(
+		"history-unreadable",
 		`Published usage history is unreadable (${what}); restore it from the sync checkout, ` +
 			"or pass --replace-harnesses to publish without it",
 	);
@@ -1157,7 +1195,8 @@ async function publishStats(
 	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
 	if (exportedAt < publishedAt && !options.replaceHarnesses) {
 		const published = new Date(publishedAt).toISOString();
-		throw new Error(
+		throw new ExportRefusal(
+			"clock-behind",
 			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ${published}); ` +
 				"refusing to reopen sealed months. Fix the clock, or pass --replace-harnesses to publish anyway: " +
 				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot keep " +
@@ -1177,7 +1216,8 @@ async function publishStats(
 			(entry) => entry.isFile() && SHARD_FILE.test(entry.name),
 		);
 		if (own !== null || shards)
-			throw new Error(
+			throw new ExportRefusal(
+				"manifest-missing",
 				`Published usage manifest is missing from ${JSON.stringify(snapshotDir)}, but this outbox published ` +
 					"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 					"or pass --replace-harnesses to publish without that history",
@@ -1192,13 +1232,15 @@ async function publishStats(
 	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);
 	const dropped = HARNESSES.filter((h) => last.has(h) && !wanted.has(h));
 	if (dropped.length > 0 && !options.replaceHarnesses)
-		throw new Error(
+		throw new ExportRefusal(
+			"harness-set-narrowed",
 			`Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); ` +
 				"add them to --harness, or pass --replace-harnesses to drop their history",
 		);
 	// With neither a readable snapshot nor a recorded set, what was last published cannot be established.
 	if (previous === "unreadable" && state.harnesses === null && !options.replaceHarnesses)
-		throw new Error(
+		throw new ExportRefusal(
+			"harness-set-unknown",
 			"Cannot establish which harnesses were last published (unreadable snapshot, no recorded set); " +
 				"pass --replace-harnesses to publish anyway",
 		);

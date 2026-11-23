@@ -595,9 +595,10 @@ describe("exportStats with harnesses", () => {
 				["pi", "claude", "codex"],
 				["claude", "codex", "opencode"],
 			] as const) {
-				await expect(exportStats(agent, repo, undefined, { harnesses, roots, home })).rejects.toThrow(
-					/narrower harness set.*--replace-harnesses/,
-				);
+				await expect(exportStats(agent, repo, undefined, { harnesses, roots, home })).rejects.toMatchObject({
+					message: expect.stringMatching(/narrower harness set.*--replace-harnesses/),
+					refusal: "harness-set-narrowed",
+				});
 			}
 			// refused before anything is read or written
 			expect(readFileSync(join(first.snapshotDir, "manifest.json"), "utf8")).toBe(manifest);
@@ -1136,7 +1137,10 @@ describe("exportStats with harnesses", () => {
 			const first = await run();
 			rmSync(statePath(), { force: true });
 			writeFileSync(join(first.snapshotDir, "manifest.json"), "{");
-			await expect(run()).rejects.toThrow(/Cannot establish which harnesses/);
+			await expect(run()).rejects.toMatchObject({
+				message: expect.stringMatching(/^Cannot establish which harnesses/),
+				refusal: "harness-set-unknown",
+			});
 			// the recorded set alone is enough to keep protecting a narrowing over a corrupt snapshot
 			await expect(run(true)).resolves.toHaveProperty("machineId");
 			writeFileSync(join(first.snapshotDir, "manifest.json"), "{");
@@ -1151,7 +1155,10 @@ describe("exportStats with harnesses", () => {
 			const state = JSON.parse(readFileSync(statePath(), "utf8"));
 			for (const failures of [null, [], { vim: 1 }, { codex: 0 }, { codex: "1" }, { codex: -1 }]) {
 				writeFileSync(statePath(), JSON.stringify({ ...state, failures }));
-				await expect(exportStats(agent, repo, undefined, { home })).rejects.toThrow("Invalid export state");
+				await expect(exportStats(agent, repo, undefined, { home })).rejects.toMatchObject({
+					message: `Invalid export state in ${JSON.stringify(statePath())}: Invalid export state`,
+					refusal: "export-state-invalid",
+				});
 			}
 		});
 	});

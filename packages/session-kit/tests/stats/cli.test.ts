@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -91,6 +91,73 @@ describe("stats CLI", () => {
 		await run();
 		expect(process.exitCode).toBe(0);
 		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
+	});
+
+	it("ends an owner-action refusal with one fixed pi-stats-refusal line, and nothing else with one", async () => {
+		seed(source);
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const wide = ["--agent-dir", source, "--output", output, "--claude-dir", roots.claude, "--harness", "pi,claude"];
+		const attempt = async (args: string[]): Promise<unknown[][]> => {
+			error.mockClear();
+			process.exitCode = 0;
+			process.argv = ["node", "pi-stats-export", ...args];
+			await run();
+			expect(process.exitCode).toBe(1);
+			return error.mock.calls;
+		};
+		const refusal = (code: string): unknown[] => [`pi-stats-refusal: {"code":"${code}"}`];
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+		const manifestPath = join(exported.snapshotDir, "manifest.json");
+		const shard = JSON.parse(readFileSync(manifestPath, "utf8")).shards[0].file as string;
+
+		expect(await attempt(["export", "--agent-dir", source, "--output", output])).toEqual([
+			[expect.stringMatching(/^Refusing to publish a narrower harness set/)],
+			refusal("harness-set-narrowed"),
+		]);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(1);
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Clock is behind the last published export/)],
+			refusal("clock-behind"),
+		]);
+		clock.mockRestore();
+		const bytes = readFileSync(join(exported.snapshotDir, shard));
+		writeFileSync(join(exported.snapshotDir, shard), "corrupt");
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage history is unreadable/)],
+			refusal("history-unreadable"),
+		]);
+		writeFileSync(join(exported.snapshotDir, shard), bytes);
+		// A corrupt state file holds the salt: its contents never reach stderr, only a fixed reason.
+		const state = join(source, "pi-session-kit", "export-state.json");
+		const salt = readFileSync(state);
+		writeFileSync(state, '{"salt":"SECRET-CANARY');
+		expect(await attempt(["export", ...wide])).toEqual([
+			[`Invalid export state in ${JSON.stringify(state)}: not valid JSON`],
+			refusal("export-state-invalid"),
+		]);
+		writeFileSync(state, salt);
+		const manifest = readFileSync(manifestPath);
+		rmSync(manifestPath);
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage manifest is missing/)],
+			refusal("manifest-missing"),
+		]);
+		writeFileSync(manifestPath, manifest);
+
+		// Contention, usage and anything else unclassified carry no code: callers retry those.
+		mkdirSync(join(exported.snapshotDir, ".export.lock"));
+		expect(await attempt(["export", ...wide])).toEqual([[expect.stringMatching(/^Export lock is held/)]]);
+		rmSync(join(exported.snapshotDir, ".export.lock"), { recursive: true });
+		expect(await attempt(["export", "--bogus"])).toEqual([[expect.stringMatching(/^usage: export/)]]);
+		process.exitCode = 0;
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await run();
+		expect(process.exitCode).toBe(0);
+		expect(log).toHaveBeenCalledTimes(2);
 	});
 
 	it("exports sessions from an explicit --sessions-dir instead of the agent directory", async () => {
@@ -273,6 +340,7 @@ describe("stats CLI", () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		vi.resetModules();
 		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			ExportRefusal: class ExportRefusal extends Error {},
 			exportStats: async () => {
 				throw "plain string failure";
 			},
