@@ -49,7 +49,7 @@ async fn main() {
     // Registered before the first read, so a SIGTERM or SIGINT from then on drains
     // instead of killing the helper between a press and its release.
     let mut shutdown = shutdown_signals();
-    let mut lines = stdin_lines();
+    let (mut lines, input_closed) = stdin_lines();
     loop {
         let line = tokio::select! {
             () = shutdown.recv() => break,
@@ -79,14 +79,20 @@ async fn main() {
         if saturated {
             testing_ready("saturated", &request.id);
         }
-        // Every worker may be busy behind a long action: a signal must still cancel it
-        // now, not once a worker frees up.
+        // Every worker may be busy behind a long action, or stuck on a stalled X server: a
+        // signal, stdin EOF or a read error must still cancel it now, not once a worker
+        // frees up. A free worker is taken first, so lines read before EOF still start.
         let permit = tokio::select! {
+            biased;
+            permit = semaphore.clone().acquire_owned() => permit,
             () = shutdown.recv() => {
                 let _ = output.send(Response::err(&request.id, shutting_down()));
                 break;
             }
-            permit = semaphore.clone().acquire_owned() => permit,
+            () = input_closed.notified() => {
+                let _ = output.send(Response::err(&request.id, shutting_down()));
+                break;
+            }
         };
         let Ok(permit) = permit else {
             break;
@@ -159,9 +165,12 @@ fn exit_status(held: Vec<String>) -> i32 {
 
 /// Read stdin lines on their own task, so EOF is seen even while every worker is busy
 /// and the request loop waits for one. EOF or a read error cancels physical input at
-/// once; lines already read stay queued and are still answered.
-fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
+/// once and fires the returned notification, which wakes a request waiting for a worker
+/// into shutdown; lines already read stay queued and are still answered.
+fn stdin_lines() -> (mpsc::UnboundedReceiver<String>, Arc<tokio::sync::Notify>) {
     let (sender, receiver) = mpsc::unbounded_channel();
+    let closed = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::clone(&closed);
     tokio::spawn(async move {
         let mut lines = BufReader::new(tokio::io::stdin()).lines();
         while let Ok(Some(line)) = lines.next_line().await {
@@ -170,8 +179,10 @@ fn stdin_lines() -> mpsc::UnboundedReceiver<String> {
             }
         }
         InputState::shared().cancel();
+        // Stored if nothing waits yet: the next request to wait for a worker sees it.
+        notify.notify_one();
     });
-    receiver
+    (receiver, closed)
 }
 
 fn shutting_down() -> ProtocolError {
@@ -313,7 +324,7 @@ async fn handle_request_with(
             Err(error) => Err(error),
         },
         #[cfg(feature = "testing")]
-        "testingStall" => Ok(testing_stall(&request.id, &request.args).await),
+        "testingStall" => testing_stall(&request.id, &request.args).await,
         "atspiReadText" | "uiaReadText" | "axReadText" => {
             read_text_with(state, &request.args, async |accessible| {
                 connect().await?.read_live_text(accessible).await
@@ -352,9 +363,15 @@ async fn handle_request_with(
 }
 
 async fn diagnostics() -> Value {
+    diagnostics_with(x11::available).await
+}
+
+/// [`diagnostics`] with the X11 availability probe `x11_probe`, run off the request workers;
+/// a probe that did not finish reports X11 unavailable.
+async fn diagnostics_with(x11_probe: impl FnOnce() -> bool + Send + 'static) -> Value {
     let accessibility = AtspiClient::available().await;
     let session = SessionKind::detect();
-    let x11_available = off_worker(x11::available).await;
+    let x11_available = off_worker(move || Ok(x11_probe())).await.unwrap_or(false);
     let wayland_portal = if session == SessionKind::Wayland {
         let probe = match PortalClient::connect().await {
             Ok(client) => client.probe().await,
@@ -607,12 +624,29 @@ async fn bounded<T: Send + 'static>(
 /// blocking pool, never on a request worker: a stalled X server then holds blocking threads
 /// only, and the workers keep reading stdin, signals and the exit deadline, so shutdown still
 /// names a stuck press instead of waiting for the client's SIGKILL (#1261). At most
-/// `REQUEST_WORKERS` requests run, so at most that many such threads stay stuck. A panic
-/// propagates to the request as it did on the worker.
-async fn off_worker<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
-    match tokio::task::spawn_blocking(work).await {
-        Ok(value) => value,
-        Err(error) => std::panic::resume_unwind(error.into_panic()),
+/// `REQUEST_WORKERS` requests run, so at most that many such threads stay stuck. See
+/// [`joined`] for a panic or a cancelled task.
+async fn off_worker<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, ProtocolError> + Send + 'static,
+) -> Result<T, ProtocolError> {
+    joined(tokio::task::spawn_blocking(work).await)
+}
+
+/// The result of joined blocking work. A panic propagates to the request as it did on the
+/// worker; a task Tokio cancelled (e.g. at runtime shutdown) never finished, so it is an
+/// internal error rather than a second panic.
+fn joined<T>(
+    joined: Result<Result<T, ProtocolError>, tokio::task::JoinError>,
+) -> Result<T, ProtocolError> {
+    match joined {
+        Ok(result) => result,
+        Err(error) => match error.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(error) => Err(ProtocolError::new(
+                format!("Blocking X11 work did not finish: {error}"),
+                ErrorCode::InternalError,
+            )),
+        },
     }
 }
 
@@ -620,15 +654,15 @@ async fn off_worker<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static
 /// once inside the blocking call, then hold it for `args.ms`. Only in the dev-only `testing`
 /// build, so process tests can occupy every request worker without a display.
 #[cfg(feature = "testing")]
-async fn testing_stall(id: &str, args: &Value) -> Value {
+async fn testing_stall(id: &str, args: &Value) -> Result<Value, ProtocolError> {
     let id = id.to_owned();
     let stall = Duration::from_millis(args.get("ms").and_then(Value::as_u64).unwrap_or(0));
     off_worker(move || {
         testing_ready("stalling", &id);
         std::thread::sleep(stall);
+        Ok(json!({"stalled": true}))
     })
-    .await;
-    json!({"stalled": true})
+    .await
 }
 
 async fn resolve_root(
@@ -819,6 +853,15 @@ async fn focus_window(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
 ) -> Result<Value, ProtocolError> {
+    focus_window_with(state, args, x11::focus_window).await
+}
+
+/// [`focus_window`] activating through `focus`, run off the request workers.
+async fn focus_window_with(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    focus: impl FnOnce(u32, PhysicalPolicy) -> Result<Value, ProtocolError> + Send + 'static,
+) -> Result<Value, ProtocolError> {
     let reference = args
         .get("rootRef")
         .or_else(|| args.get("windowRef"))
@@ -837,7 +880,7 @@ async fn focus_window(
     let window = root
         .x11_window
         .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
-    off_worker(move || x11::focus_window(window, policy)).await
+    off_worker(move || focus(window, policy)).await
 }
 
 fn open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
@@ -1736,6 +1779,61 @@ mod tests {
             }
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn focus_and_the_x11_probe_run_off_the_request_thread() {
+        ON_REQUEST_THREAD.with(|flag| flag.set(true));
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let (reference, _) = lock(&state).unwrap().replace_roots(vec![observed_root()])[0].clone();
+        let focused = focus_window_with(
+            &state,
+            &json!({"rootRef": reference, "policy": "foreground"}),
+            |window, _| {
+                assert_off_request_thread("focus");
+                Ok(json!({"focused": window}))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(focused, json!({"focused": 71}));
+        let report = diagnostics_with(|| {
+            assert_off_request_thread("the X11 probe");
+            true
+        })
+        .await;
+        assert_eq!(report["x11"], true);
+    }
+
+    fn panicking_work() -> Result<(), ProtocolError> {
+        panic!("x11 work panicked")
+    }
+
+    #[tokio::test]
+    async fn joined_blocking_work_resumes_panics_and_reports_cancellation() {
+        // A task Tokio cancelled is an internal error, not a second panic.
+        let task = tokio::spawn(std::future::pending::<Result<(), ProtocolError>>());
+        task.abort();
+        let cancelled = task.await;
+        assert!(cancelled
+            .as_ref()
+            .is_err_and(tokio::task::JoinError::is_cancelled));
+        let error = joined(cancelled).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert!(
+            error
+                .message
+                .starts_with("Blocking X11 work did not finish"),
+            "{}",
+            error.message
+        );
+        // A panic resumes with its own payload, as it would have on the request worker.
+        let panicked = tokio::spawn(async { panicking_work() }).await;
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| joined(panicked)))
+            .unwrap_err();
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"x11 work panicked"));
+        // Finished work is its own result.
+        assert_eq!(joined(Ok(Ok(7))).unwrap(), 7);
     }
 
     #[tokio::test]

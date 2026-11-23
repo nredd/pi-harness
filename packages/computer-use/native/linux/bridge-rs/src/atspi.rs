@@ -366,12 +366,22 @@ impl AtspiClient {
     /// PID-scoped inventory (`Some`, even of several PIDs) fails rather than skip an app it
     /// timed out reading, since it would prove absence.
     ///
-    /// Applications are read [`LIST_ROOTS_CONCURRENCY`] at a time, each on its own task, and
-    /// every read finishes before the result: roots keep the registry's application order, and
-    /// a failure is the first failed application's in that order, whatever finished first.
+    /// Applications are read [`LIST_ROOTS_CONCURRENCY`] at a time (see [`read_bounded`]):
+    /// roots keep the registry's application order, and a failure, a panicked read included,
+    /// is the first failed application's in that order, whatever finished first.
     pub async fn list_roots(
         &self,
         filter_pids: Option<&[u64]>,
+    ) -> Result<Vec<RootSnapshot>, ProtocolError> {
+        self.list_roots_bounded(filter_pids, LIST_ROOTS_CONCURRENCY)
+            .await
+    }
+
+    /// [`Self::list_roots`], reading at most `bound` applications at a time.
+    async fn list_roots_bounded(
+        &self,
+        filter_pids: Option<&[u64]>,
+        bound: usize,
     ) -> Result<Vec<RootSnapshot>, ProtocolError> {
         let registry = AccessibleRef {
             destination: REGISTRY_DESTINATION.to_owned(),
@@ -379,38 +389,13 @@ impl AtspiClient {
         };
         let applications = self.children(&registry).await?;
         let filter: Option<Arc<[u64]>> = filter_pids.map(Arc::from);
-        let mut results: Vec<Option<Result<Vec<RootSnapshot>, ProtocolError>>> =
-            std::iter::repeat_with(|| None)
-                .take(applications.len())
-                .collect();
-        let mut pending = applications.into_iter().enumerate();
-        let mut reads = tokio::task::JoinSet::new();
-        loop {
-            while reads.len() < LIST_ROOTS_CONCURRENCY {
-                let Some((index, app)) = pending.next() else {
-                    break;
-                };
-                let client = self.clone();
-                let filter = filter.clone();
-                reads.spawn(async move { (index, client.app_roots(app, filter.as_deref()).await) });
-            }
-            let Some(read) = reads.join_next().await else {
-                break;
-            };
-            // A read that panicked returns nothing, so no inventory may stand without it.
-            let (index, result) = read.map_err(|_| {
-                ProtocolError::new(
-                    "An AT-SPI2 application read stopped unexpectedly",
-                    ErrorCode::InternalError,
-                )
-            })?;
-            results[index] = Some(result);
-        }
-        let mut roots = Vec::new();
-        for result in results.into_iter().flatten() {
-            roots.extend(result?);
-        }
-        Ok(roots)
+        let per_app = read_bounded(applications, bound, |app| {
+            let client = self.clone();
+            let filter = filter.clone();
+            async move { client.app_roots(app, filter.as_deref()).await }
+        })
+        .await?;
+        Ok(per_app.into_iter().flatten().collect())
     }
 
     /// The roots of one registry application `app`, or none when `filter_pids` excludes its
@@ -754,6 +739,63 @@ impl AtspiClient {
         let member = "SetTextContents";
         self.request(member, proxy.call(member, &(text))).await
     }
+}
+
+/// Run `read` over `items`, at most `bound` at a time, each on its own task, and wait for
+/// every one: the results keep `items` order, and the error is the first failed item's in
+/// that order, whatever finished first. A read that panicked is an internal error in its own
+/// slot, so it neither aborts the reads still running nor masks an earlier item's error.
+async fn read_bounded<I, T, F, R>(
+    items: Vec<I>,
+    bound: usize,
+    read: F,
+) -> Result<Vec<T>, ProtocolError>
+where
+    I: Send + 'static,
+    T: Send + 'static,
+    F: Fn(I) -> R,
+    R: Future<Output = Result<T, ProtocolError>> + Send + 'static,
+{
+    let mut slots: Vec<Option<Result<T, ProtocolError>>> =
+        std::iter::repeat_with(|| None).take(items.len()).collect();
+    let mut indices = HashMap::new();
+    let mut pending = items.into_iter().enumerate();
+    let mut reads = tokio::task::JoinSet::new();
+    loop {
+        while reads.len() < bound.max(1) {
+            let Some((index, item)) = pending.next() else {
+                break;
+            };
+            indices.insert(reads.spawn(read(item)).id(), index);
+        }
+        let Some(joined) = reads.join_next_with_id().await else {
+            break;
+        };
+        let (id, result) = match joined {
+            Ok((id, result)) => (id, result),
+            Err(error) => (
+                error.id(),
+                Err(ProtocolError::new(
+                    "An AT-SPI2 application read stopped unexpectedly",
+                    ErrorCode::InternalError,
+                )),
+            ),
+        };
+        if let Some(index) = indices.remove(&id) {
+            slots[index] = Some(result);
+        }
+    }
+    slots
+        .into_iter()
+        .map(|slot| {
+            slot.unwrap_or_else(|| {
+                Err(ProtocolError::new(
+                    "An AT-SPI2 application read was never joined",
+                    ErrorCode::InternalError,
+                ))
+            })
+        })
+        .collect()
 }
 
 /// The executable's block-only aliases, then the non-empty names of every ambiguous class
@@ -1703,6 +1745,10 @@ mod tests {
         }
     }
 
+    /// The read bound #1320 asks for, pinned here so a changed `LIST_ROOTS_CONCURRENCY`
+    /// fails the tests instead of moving them along with it.
+    const READ_BOUND: usize = 4;
+
     /// Window paths of the gated applications, one per application.
     const GATED_WINDOWS: [&str; 8] = [
         "/app0/window",
@@ -1716,8 +1762,8 @@ mod tests {
     ];
 
     /// Holds each application `GetChildren` read until its whole wave of `wave` reads has
-    /// arrived (the last wave is whatever is left of `total`), as providers too slow to read
-    /// serially would: only reads overlapped `wave` at a time ever get a reply.
+    /// arrived (the last wave is whatever is left of `total`): only reads overlapped `wave`
+    /// at a time ever get a reply.
     struct ReadGate {
         wave: usize,
         total: usize,
@@ -1748,10 +1794,65 @@ mod tests {
         }
     }
 
-    /// An application whose window inventory replies only through a shared [`ReadGate`].
+    /// Holds each application `GetChildren` read until the test releases it, counting the
+    /// reads outstanding at once: each release round stands in for one provider delay.
+    struct CountingGate {
+        outstanding: tokio::sync::watch::Sender<usize>,
+        finished: tokio::sync::watch::Sender<usize>,
+        most: std::sync::atomic::AtomicUsize,
+        release: tokio::sync::Semaphore,
+    }
+
+    impl CountingGate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                outstanding: tokio::sync::watch::Sender::new(0),
+                finished: tokio::sync::watch::Sender::new(0),
+                most: std::sync::atomic::AtomicUsize::new(0),
+                release: tokio::sync::Semaphore::new(0),
+            })
+        }
+
+        async fn pass(&self) {
+            self.outstanding.send_modify(|outstanding| {
+                *outstanding += 1;
+                self.most
+                    .fetch_max(*outstanding, std::sync::atomic::Ordering::SeqCst);
+            });
+            self.release.acquire().await.unwrap().forget();
+            self.outstanding
+                .send_modify(|outstanding| *outstanding -= 1);
+            self.finished.send_modify(|finished| *finished += 1);
+        }
+
+        /// Release `total` reads in rounds of `wave`, each once a whole wave is outstanding
+        /// and after the previous one finished: the number of rounds, i.e. provider delays
+        /// the listing waits out.
+        async fn release_in_rounds(&self, total: usize, wave: usize) -> usize {
+            let mut outstanding = self.outstanding.subscribe();
+            let mut finished = self.finished.subscribe();
+            let (mut released, mut rounds) = (0, 0);
+            while released < total {
+                let round = wave.min(total - released);
+                outstanding.wait_for(|&n| n >= round).await.unwrap();
+                self.release.add_permits(round);
+                released += round;
+                rounds += 1;
+                finished.wait_for(|&n| n >= released).await.unwrap();
+            }
+            rounds
+        }
+    }
+
+    enum Gate {
+        Wave(Arc<ReadGate>),
+        Counting(Arc<CountingGate>),
+    }
+
+    /// An application whose window inventory replies only through a shared [`Gate`].
     struct GatedApplication {
         window: &'static str,
-        gate: Arc<ReadGate>,
+        gate: Arc<Gate>,
     }
 
     #[zbus::interface(name = "org.a11y.atspi.Accessible")]
@@ -1766,7 +1867,10 @@ mod tests {
         }
 
         async fn get_children(&self) -> Vec<(String, OwnedObjectPath)> {
-            self.gate.pass().await;
+            match &*self.gate {
+                Gate::Wave(gate) => gate.pass().await,
+                Gate::Counting(gate) => gate.pass().await,
+            }
             vec![(
                 ":1.42".to_owned(),
                 OwnedObjectPath::try_from(self.window).unwrap(),
@@ -1774,54 +1878,69 @@ mod tests {
         }
     }
 
-    /// List the roots of eight gated applications, read through [`ReadGate`]s of `wave`.
-    async fn list_gated_roots(
-        wave: usize,
-        request_timeout: Duration,
-    ) -> Result<Vec<RootSnapshot>, ProtocolError> {
-        const APPS: [(&str, &str); 8] = [
-            (":1.42", "/app0"),
-            (":1.42", "/app1"),
-            (":1.42", "/app2"),
-            (":1.42", "/app3"),
-            (":1.42", "/app4"),
-            (":1.42", "/app5"),
-            (":1.42", "/app6"),
-            (":1.42", "/app7"),
-        ];
-        let gate = ReadGate::new(wave, APPS.len());
-        with_peer(
-            |server| {
-                let mut server = server.serve_at(FIXTURE_DBUS_ROOT, MockBus)?.serve_at(
-                    FIXTURE_REGISTRY_ROOT,
+    const GATED_APPS: [(&str, &str); 8] = [
+        (":1.42", "/app0"),
+        (":1.42", "/app1"),
+        (":1.42", "/app2"),
+        (":1.42", "/app3"),
+        (":1.42", "/app4"),
+        (":1.42", "/app5"),
+        (":1.42", "/app6"),
+        (":1.42", "/app7"),
+    ];
+
+    /// Serve eight applications whose `GetChildren` replies pass through `gate`.
+    fn serve_gated(
+        server: zbus::connection::Builder<'static>,
+        gate: Gate,
+    ) -> zbus::Result<zbus::connection::Builder<'static>> {
+        let gate = Arc::new(gate);
+        let mut server = server.serve_at(FIXTURE_DBUS_ROOT, MockBus)?.serve_at(
+            FIXTURE_REGISTRY_ROOT,
+            TreeNode {
+                name: "Registry",
+                role: "desktop",
+                children: &GATED_APPS,
+                has_text: false,
+            },
+        )?;
+        for ((_, app), window) in GATED_APPS.into_iter().zip(GATED_WINDOWS) {
+            server = server
+                .serve_at(
+                    app,
+                    GatedApplication {
+                        window,
+                        gate: Arc::clone(&gate),
+                    },
+                )?
+                .serve_at(
+                    window,
                     TreeNode {
-                        name: "Registry",
-                        role: "desktop",
-                        children: &APPS,
+                        name: window,
+                        role: "frame",
+                        children: &[],
                         has_text: false,
                     },
                 )?;
-                for ((_, app), window) in APPS.into_iter().zip(GATED_WINDOWS) {
-                    server = server
-                        .serve_at(
-                            app,
-                            GatedApplication {
-                                window,
-                                gate: Arc::clone(&gate),
-                            },
-                        )?
-                        .serve_at(
-                            window,
-                            TreeNode {
-                                name: window,
-                                role: "frame",
-                                children: &[],
-                                has_text: false,
-                            },
-                        )?;
-                }
-                Ok(server)
-            },
+        }
+        Ok(server)
+    }
+
+    fn window_paths(roots: &[RootSnapshot]) -> Vec<&str> {
+        roots
+            .iter()
+            .map(|root| root.accessible.path.as_str())
+            .collect()
+    }
+
+    /// List the roots of eight gated applications, read through [`ReadGate`]s of `wave`.
+    async fn list_wave_gated_roots(
+        wave: usize,
+        request_timeout: Duration,
+    ) -> Result<Vec<RootSnapshot>, ProtocolError> {
+        let gate = ReadGate::new(wave, GATED_APPS.len());
+        with_peer(
+            |server| serve_gated(server, Gate::Wave(gate)),
             async |connection| {
                 AtspiClient::from_connection(connection, request_timeout)
                     .list_roots(Some(&[25361]))
@@ -1832,73 +1951,139 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn batched_list_roots_bounds_serial_provider_latency() {
-        // Reads overlapped up to the bound all reply, and roots keep registry order. Serial
-        // reads never pass the gate: the first one times out and fails the PID-scoped inventory.
-        let roots = list_gated_roots(LIST_ROOTS_CONCURRENCY, REQUEST_TIMEOUT)
+    async fn list_roots_never_overlaps_more_reads_than_its_bound() {
+        // Reads overlapped up to the bound all reply, and roots keep registry order.
+        let roots = list_wave_gated_roots(READ_BOUND, REQUEST_TIMEOUT)
             .await
             .unwrap();
-        assert_eq!(
-            roots
-                .iter()
-                .map(|root| root.accessible.path.as_str())
-                .collect::<Vec<_>>(),
-            GATED_WINDOWS
-        );
-        // No more than the bound is ever in flight: a wave one larger never fills, so its
-        // reads time out and the scoped inventory fails rather than skip them.
-        let error = list_gated_roots(LIST_ROOTS_CONCURRENCY + 1, STALLED_REQUEST_TIMEOUT)
+        assert_eq!(window_paths(&roots), GATED_WINDOWS);
+        // A wave one larger never fills, so its reads time out and the scoped inventory
+        // fails rather than skip them.
+        let error = list_wave_gated_roots(READ_BOUND + 1, STALLED_REQUEST_TIMEOUT)
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::Timeout);
         assert_eq!(error.message, "AT-SPI2 GetChildren timed out");
     }
 
-    /// A bus that attributes `:1.40` and stalls the PID lookup of any other connection.
-    struct PartlyStalledBus(StalledReply);
-
-    #[zbus::interface(name = "org.freedesktop.DBus")]
-    impl PartlyStalledBus {
-        #[zbus(name = "GetConnectionUnixProcessID")]
-        async fn get_connection_unix_process_id(&self, name: &str) -> u32 {
-            if name == ":1.40" {
-                return 25361;
-            }
-            self.0.wait().await
-        }
+    /// List the eight counting-gated applications, through `list_roots` (`None`) or at most
+    /// `bound` at a time, releasing their reads in rounds of that bound: the roots, the rounds
+    /// waited out, and the most reads ever outstanding at once.
+    async fn list_counting_gated_roots(bound: Option<usize>) -> (Vec<RootSnapshot>, usize, usize) {
+        let gate = CountingGate::new();
+        let controller = Arc::clone(&gate);
+        let wave = bound.unwrap_or(READ_BOUND);
+        with_peer(
+            |server| serve_gated(server, Gate::Counting(gate)),
+            async |connection| {
+                let client = AtspiClient::from_connection(connection, REQUEST_TIMEOUT);
+                let list = async {
+                    match bound {
+                        Some(bound) => client.list_roots_bounded(Some(&[25361]), bound).await,
+                        None => client.list_roots(Some(&[25361])).await,
+                    }
+                };
+                let (roots, rounds) =
+                    tokio::join!(list, controller.release_in_rounds(GATED_APPS.len(), wave));
+                let most = controller.most.load(std::sync::atomic::Ordering::SeqCst);
+                (roots.unwrap(), rounds, most)
+            },
+        )
+        .await
     }
 
     #[tokio::test]
-    async fn concurrent_list_roots_reports_the_first_failed_app_in_registry_order() {
-        let (owner_stall, _owner_requests) = StalledReply::new();
-        let (children_stall, _children_requests) = StalledReply::new();
-        with_peer(
-            |server| {
-                server
-                    .serve_at(
-                        FIXTURE_REGISTRY_ROOT,
-                        TreeNode {
-                            name: "Registry",
-                            role: "desktop",
-                            children: &[(":1.40", "/app0"), (":1.41", "/app1")],
-                            has_text: false,
-                        },
-                    )?
-                    .serve_at(FIXTURE_DBUS_ROOT, PartlyStalledBus(owner_stall))?
-                    .serve_at("/app0", StalledApplication(children_stall))
-            },
-            async |connection| {
-                // The second app's owner lookup times out first, yet the first app, whose
-                // window read times out after its own owner and name reads, is reported.
-                let error = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT)
-                    .list_roots(Some(&[25361]))
-                    .await
-                    .unwrap_err();
-                assert_eq!(error.code, ErrorCode::Timeout);
-                assert_eq!(error.message, "AT-SPI2 GetChildren timed out");
-            },
-        )
-        .await;
+    async fn batched_list_roots_bounds_serial_provider_latency() {
+        // Each release round stands in for one provider delay (e.g. 1.7 s per `GetChildren`).
+        // Read one at a time, eight apps wait out eight of them.
+        let (roots, rounds, most) = list_counting_gated_roots(Some(1)).await;
+        assert_eq!(window_paths(&roots), GATED_WINDOWS);
+        assert_eq!((rounds, most), (GATED_APPS.len(), 1));
+        // `list_roots` reaches its bound of outstanding reads and never passes it, so the
+        // same eight apps wait out ceil(8 / 4) = 2 delays, and roots keep registry order.
+        let (roots, rounds, most) = list_counting_gated_roots(None).await;
+        assert_eq!(window_paths(&roots), GATED_WINDOWS);
+        assert_eq!(
+            (rounds, most),
+            (GATED_APPS.len().div_ceil(READ_BOUND), READ_BOUND)
+        );
+    }
+
+    type BoxedRead = std::pin::Pin<Box<dyn Future<Output = Result<u8, ProtocolError>> + Send>>;
+
+    fn failed(message: &str) -> Result<u8, ProtocolError> {
+        Err(ProtocolError::new(message, ErrorCode::Timeout))
+    }
+
+    #[tokio::test]
+    async fn bounded_reads_report_the_first_failure_in_registry_order() {
+        // The first read fails only once the second has failed, so the second fails first in
+        // time; the first in registry order is still the one reported.
+        let (second_done, first_gate) = tokio::sync::oneshot::channel();
+        let first: BoxedRead = Box::pin(async move {
+            first_gate.await.unwrap();
+            failed("first app")
+        });
+        let second: BoxedRead = Box::pin(async move {
+            let result = failed("second app");
+            second_done.send(()).unwrap();
+            result
+        });
+        let error = read_bounded(vec![first, second], READ_BOUND, |read| read)
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "first app");
+    }
+
+    /// Releases the read waiting on it once dropped, e.g. by a panic unwinding.
+    struct ReleaseOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            if let Some(release) = self.0.take() {
+                let _ = release.send(());
+            }
+        }
+    }
+
+    fn panicking_read() -> Result<u8, ProtocolError> {
+        panic!("application read panicked")
+    }
+
+    #[tokio::test]
+    async fn list_roots_orders_panics_by_registry_index() {
+        // A later read panics before an earlier one fails: the panic fills only its own slot,
+        // the earlier read still runs to its own error, and that error is reported.
+        let (release, released) = tokio::sync::oneshot::channel();
+        let earlier: BoxedRead = Box::pin(async move {
+            released.await.unwrap();
+            failed("earlier app")
+        });
+        let later: BoxedRead = Box::pin(async move {
+            let _release = ReleaseOnDrop(Some(release));
+            panicking_read()
+        });
+        let error = read_bounded(vec![earlier, later], READ_BOUND, |read| read)
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, "earlier app");
+        // Alone, the panic is an internal error, and later reads still run to completion.
+        let (finished, finished_read) = tokio::sync::oneshot::channel();
+        let reads: Vec<BoxedRead> = vec![
+            Box::pin(async { Ok(1) }),
+            Box::pin(async { panicking_read() }),
+            Box::pin(async move {
+                finished.send(()).unwrap();
+                Ok(3)
+            }),
+        ];
+        let error = read_bounded(reads, 1, |read| read).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert_eq!(
+            error.message,
+            "An AT-SPI2 application read stopped unexpectedly"
+        );
+        assert_eq!(finished_read.await, Ok(()));
     }
 
     struct StalledAction(StalledReply);

@@ -350,31 +350,45 @@ fn a_stalled_press_is_named_at_exit_within_the_kill_grace() {
     }
 }
 
+/// The client's SIGTERM-to-SIGKILL grace: the helper must exit inside it.
+const KILL_GRACE: Duration = Duration::from_millis(750);
+
+/// How long each stalled request below holds its blocking call.
+const STALL: Duration = Duration::from_secs(8);
+
 /// Blocking X11 work stuck on a stalled X server must not hold the Tokio workers that read
-/// signals, stdin EOF and the exit deadline (#1261).
+/// signals, stdin EOF and the exit deadline (#1261), nor may a request waiting for one.
 #[test]
 fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
-    for ending in ["TERM", "EOF"] {
+    let stall_ms = u64::try_from(STALL.as_millis()).expect("stall fits u64");
+    // With a stalled press, and with blocking observations alone.
+    for (ending, press) in [("TERM", true), ("EOF", true), ("TERM", false)] {
         let mut helper = Helper::spawn();
-        // The shift press stalls for 5 s, as an X11 reply that never comes would.
-        helper.send(&typing(
-            "stall",
-            "A",
-            json!({"delayMs": 5000, "announce": "stall"}),
-        ));
-        helper.ready("posting stall 0");
-        // Seven blocking observations take every other request worker; with the press,
-        // all eight are inside a blocking call, as many as the runtime has workers.
-        for n in 0..7 {
+        if press {
+            // The shift press stalls, as an X11 reply that never comes would.
+            helper.send(&typing(
+                "stall",
+                "A",
+                json!({"delayMs": stall_ms, "announce": "stall"}),
+            ));
+            helper.ready("posting stall 0");
+        }
+        // Blocking observations take every other request worker, so all eight are inside
+        // a blocking call, as many as the runtime has workers.
+        let observations = if press { 7 } else { 8 };
+        for n in 0..observations {
             helper.send(&request(
                 &format!("observe-{n}"),
                 "testingStall",
-                json!({"ms": 5000}),
+                json!({"ms": stall_ms}),
             ));
         }
-        for n in 0..7 {
+        for n in 0..observations {
             helper.ready(&format!("stalling observe-{n}"));
         }
+        // A ninth waits in the reader for a worker: shutdown must still begin at once.
+        helper.send(&request("ninth", "testingStall", json!({"ms": stall_ms})));
+        helper.ready("saturated ninth");
         let started = Instant::now();
         if ending == "EOF" {
             helper.close_stdin();
@@ -384,15 +398,21 @@ fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
         let status = helper.wait(DEADLINE);
         let elapsed = started.elapsed();
         let stderr = helper.stderr();
-        // Inside the client's 750 ms SIGTERM-to-SIGKILL grace, with the press named.
+        // The helper gives up on the stuck requests after its 300 ms join limit, inside the
+        // kill grace. This wall clock also counts the test's own scheduling, so it allows 2 s
+        // of slack for a loaded runner: still far below the stall a starved shutdown waits out.
         assert!(
-            elapsed < Duration::from_millis(750),
+            elapsed < KILL_GRACE + Duration::from_secs(2),
             "{ending}: {elapsed:?}"
         );
-        assert_eq!(status.code(), Some(3), "{ending}: {stderr}");
-        assert!(
-            stderr.contains("keycode 8 (held by a running action)"),
-            "{ending}: {stderr}"
-        );
+        if press {
+            assert_eq!(status.code(), Some(3), "{ending}: {stderr}");
+            assert!(
+                stderr.contains("keycode 8 (held by a running action)"),
+                "{ending}: {stderr}"
+            );
+        } else {
+            assert!(status.success(), "{ending}: nothing is held: {stderr}");
+        }
     }
 }
