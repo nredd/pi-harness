@@ -258,7 +258,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 	);
 	assert.match(
 		swift,
-		/gate\.check\(frontmostPid: \{ NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier \}, focusedPid: self\.systemFocusedPid/,
+		/gate\.check\(frontmostPid: \{ NSWorkspace\.shared\.frontmostApplication\?\.processIdentifier \}, focusProbe: self\.systemKeyFocus/,
 		"helper must refuse blocked frontmost or focused apps for keys",
 	);
 	assert.match(

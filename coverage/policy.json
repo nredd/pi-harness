@@ -510,7 +510,7 @@
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 1569, "functions": 396, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 1567, "functions": 396, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
           "reason": "Report full-source headless Swift coverage for #645 without claiming all-native coverage. Swift tests run locally and on macOS main/dispatch, not in PR CI.",

@@ -1165,8 +1165,32 @@ func keyboardTargetRefusalPid(frontmostPid: Int32?, focusedPid: Int32?, isBlocke
 	return nil
 }
 
+/// One system-wide AX key-focus probe: the focused app's pid, no focused app at all (`kAXErrorNoValue`), or a
+/// failed or timed-out probe that leaves the focused app unknown.
+enum KeyFocusProbe: Equatable {
+	case focused(Int32)
+	case noFocus
+	case failed
+
+	/// The focused pid, or nil when no app is focused or the probe failed.
+	var pid: Int32? {
+		if case .focused(let pid) = self { return pid }
+		return nil
+	}
+}
+
+/// Classifies a `kAXFocusedApplicationAttribute` read: only `noValue` confirms nothing is focused; any other
+/// error, e.g. `cannotComplete` from the messaging timeout, or a success without an element pid, is a failed probe.
+func keyFocusProbe(_ error: AXError, focused: CFTypeRef?) -> KeyFocusProbe {
+	if error == .noValue { return .noFocus }
+	var pid: pid_t = 0
+	guard error == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID(),
+		AXUIElementGetPid(focused as! AXUIElement, &pid) == .success else { return .failed }
+	return .focused(pid)
+}
+
 /// Probe AX first: it may stall while the frontmost app changes.
-func sampleKeyboardTargets(frontmostPid: () -> Int32?, focusedPid: () -> Int32?) -> (Int32?, Int32?) {
+func sampleKeyboardTargets(frontmostPid: () -> Int32?, focusedPid: () -> KeyFocusProbe) -> (Int32?, KeyFocusProbe) {
 	let focused = focusedPid()
 	return (frontmostPid(), focused)
 }
@@ -1449,7 +1473,9 @@ func keyboardDeadline(_ request: [String: Any], now: TimeInterval, ceiling: Time
 }
 
 /// Admits each key-down against the deadline and a fresh frontmost and AX key-focus sample. Nothing is cached
-/// between calls: a blocked non-activating app can take key focus without changing the frontmost app.
+/// between calls: a blocked non-activating app can take key focus without changing the frontmost app. A failed
+/// or timed-out probe refuses with `app_blocked` (a hung blocked panel is a likely cause); only a probe that
+/// reports no focused app at all falls back to the frontmost check.
 final class KeyboardAdmission {
 	private let now: () -> TimeInterval
 	private let deadline: TimeInterval
@@ -1465,12 +1491,17 @@ final class KeyboardAdmission {
 		}
 	}
 
-	func check(frontmostPid: () -> Int32?, focusedPid: () -> Int32?, refuse: (Int32) throws -> Void) throws {
+	func check(frontmostPid: () -> Int32?, focusProbe: () -> KeyFocusProbe, refuse: (Int32) throws -> Void) throws {
 		try checkDeadline()
 		if let frontmost = frontmostPid() { try refuse(frontmost) }
-		let (freshFrontmost, focused) = sampleKeyboardTargets(frontmostPid: frontmostPid, focusedPid: focusedPid)
+		let (freshFrontmost, probe) = sampleKeyboardTargets(frontmostPid: frontmostPid, focusedPid: focusProbe)
 		if let freshFrontmost { try refuse(freshFrontmost) }
-		if let focused, focused != freshFrontmost { try refuse(focused) }
+		switch probe {
+		case .focused(let focused) where focused != freshFrontmost: try refuse(focused)
+		case .failed:
+			throw BridgeFailure(message: "Key focus could not be read, so the key was not sent", code: "app_blocked")
+		case .focused, .noFocus: break
+		}
 		try checkDeadline()
 	}
 }
@@ -4700,12 +4731,12 @@ final class Bridge {
 	// MARK: Whole-desktop control (global coordinates, HID delivery)
 
 	/// Throws `app_blocked` when keyboard input would reach a blocked app: the frontmost one, or the system-wide
-	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
+	/// focused one (a non-activating panel can hold key focus), or when the AX focus probe fails or times out.
 	private func keyboardAdmission(blocked: [String]?, deadline: TimeInterval) -> FocusCheck {
 		let gate = KeyboardAdmission(now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
 		return {
 			guard let blocked else { return try gate.checkDeadline() }
-			try gate.check(frontmostPid: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, focusedPid: self.systemFocusedPid) { pid in
+			try gate.check(frontmostPid: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, focusProbe: self.systemKeyFocus) { pid in
 				let app = NSRunningApplication(processIdentifier: pid)
 				if isBlockedBundleId(app?.bundleIdentifier, blocked: blocked) {
 					throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
@@ -4715,16 +4746,14 @@ final class Bridge {
 	}
 
 
-	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
-	private func systemFocusedPid() -> Int32? {
+	/// The system-wide AX focused application: its pid, no focused app, or a failed or timed-out probe.
+	private func systemKeyFocus() -> KeyFocusProbe {
 		var focused: CFTypeRef?
 		let systemWide = AXUIElementCreateSystemWide()
 		// Bound each focus probe: a hung focused app would otherwise block for the default AX messaging timeout.
 		_ = AXUIElementSetMessagingTimeout(systemWide, 0.1)
-		guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
-			let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
-		var pid: pid_t = 0
-		return AXUIElementGetPid(focused as! AXUIElement, &pid) == .success ? pid : nil
+		let error = AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focused)
+		return keyFocusProbe(error, focused: focused)
 	}
 
 	/// One on-screen window list snapshot, front to back, to reuse across the vertices of one action.
@@ -4745,7 +4774,7 @@ final class Bridge {
 	/// settles before the blocked-app check; throws `focus_not_acquired` when it never does.
 	private func requireTargetFocus(pid: Int32) throws {
 		let held = waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: {
-			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), targetPid: pid)
+			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemKeyFocus().pid, targetPid: pid)
 		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(clamping: DispatchTime.now().uptimeNanoseconds / 1_000_000) })
 		if !held { throw BridgeFailure(message: "The target app did not take focus, so keyboard input was not sent", code: "focus_not_acquired") }
 	}

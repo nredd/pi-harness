@@ -1020,7 +1020,7 @@ private func runEventAssertions() throws {
     var downs = 0
     let panelAdmission = KeyboardAdmission(now: { 0 }, deadline: 1)
     nonActivating.admissionOverride = {
-        try panelAdmission.check(frontmostPid: { 1234 }, focusedPid: { focusedPid }, refuse: { pid in
+        try panelAdmission.check(frontmostPid: { 1234 }, focusProbe: { .focused(focusedPid) }, refuse: { pid in
             if pid == 99 { throw BridgeFailure(message: "blocked panel", code: "app_blocked") }
         })
     }
@@ -1032,6 +1032,31 @@ private func runEventAssertions() throws {
     expect(events.map(\.type) == [.keyDown, .keyUp], "a non-activating blocked app taking key focus stops the next key-down: \(events.map(\.type))")
     onHIDPost = { _ in }
 
+    // A failed or timed-out probe fails closed with an allowed frontmost app: a hung blocked panel is a likely
+    // cause. Only a confirmed absence of a focused app (`noValue`) falls back to the frontmost check.
+    let probeFailures = ActFixture(inputSink: sink)
+    var probe = KeyFocusProbe.noFocus
+    let probeAdmission = KeyboardAdmission(now: { 0 }, deadline: 1)
+    probeFailures.admissionOverride = {
+        try probeAdmission.check(frontmostPid: { 1234 }, focusProbe: { probe }, refuse: { pid in
+            if pid != 1234 { throw BridgeFailure(message: "blocked", code: "app_blocked") }
+        })
+    }
+    for failed in [true, false] {
+        events = []; downs = 0; probe = .noFocus
+        onHIDPost = { if $0 == .keyDown { downs += 1; if downs == 2 && failed { probe = .failed } } }
+        if failed {
+            try actionFailure("app_blocked", message: "Key focus could not be read, so the key was not sent", postedUnits: 2) {
+                try probeFailures.act("typeText", coords: true, params: ["text": String(repeating: "a", count: 6)])
+            }
+        } else {
+            _ = try probeFailures.act("typeText", coords: true, params: ["text": String(repeating: "a", count: 6)])
+        }
+        expect(downs == (failed ? 2 : 6) && events.count == downs * 2,
+               "\(failed ? "a failed probe refuses the next down" : "no focused app proceeds on frontmost"): \(events.map(\.type))")
+    }
+    onHIDPost = { _ in }
+
     // A probe that stalls past the deadline stops before its own down, keeping the pairs already posted.
     let slowTyping = ActFixture(inputSink: sink)
     var clock = 0.0
@@ -1039,9 +1064,9 @@ private func runEventAssertions() throws {
     downs = 0
     let admission = KeyboardAdmission(now: { clock }, deadline: 0.15)
     slowTyping.admissionOverride = {
-        try admission.check(frontmostPid: { 1234 }, focusedPid: {
+        try admission.check(frontmostPid: { 1234 }, focusProbe: {
             if downs == 3 && !stalled { stalled = true; clock += 0.200 }
-            return 1234
+            return .focused(1234)
         }, refuse: { _ in })
     }
     events = []
