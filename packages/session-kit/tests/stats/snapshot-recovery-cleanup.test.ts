@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { lstat, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	cleanRecovery,
+	ExportRefusal,
 	encodeShard,
 	eventId,
 	exportStats,
@@ -382,6 +383,26 @@ describe("cleanRecovery", () => {
 		expect(stateOf().recoveryFiles).toEqual([candidate]);
 	});
 
+	it("stops, keeping everything protected, on a transient read error during the recheck", async () => {
+		publish([activeShard()]);
+		const candidate = write(shard({ events: [event(1)], sessions: [session()] })).file;
+		bookkeeping([candidate]);
+		const active = join(snapshotDir, manifestOf().shards[0]?.file as string);
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		let reads = 0;
+		vi.mocked(lstat).mockImplementation(async (path, options) => {
+			if (String(path) === active && ++reads === 2)
+				throw Object.assign(new Error("EIO: i/o error"), { code: "EIO", syscall: "lstat" });
+			return actual.lstat(path, options);
+		});
+		expect(await cleanRecovery(agent, out)).toMatchObject({
+			removed: [],
+			kept: [{ file: candidate, reason: "changed" }],
+		});
+		expect(existsSync(join(snapshotDir, candidate))).toBe(true);
+		expect(stateOf().recoveryFiles).toEqual([candidate]);
+	});
+
 	it("keeps a candidate replaced during the recheck", async () => {
 		publish([activeShard()]);
 		const candidate = write(shard({ events: [event(1)], sessions: [session()] })).file;
@@ -456,10 +477,40 @@ describe("cleanRecovery", () => {
 	});
 
 	it("refuses without an outbox and creates none", async () => {
-		await expect(cleanRecovery(agent, out)).rejects.toThrow(
-			`Recovery cleanup refused: no outbox for this machine at ${JSON.stringify(snapshotDir)}; nothing was removed`,
-		);
+		const error = await cleanRecovery(agent, out).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(ExportRefusal);
+		expect(error).toMatchObject({
+			refusal: "recovery-outbox-missing",
+			message: `Recovery cleanup refused: no outbox for this machine at ${JSON.stringify(snapshotDir)}; nothing was removed`,
+		});
 		expect(existsSync(out)).toBe(false);
+	});
+
+	it("surfaces a transient read of the active snapshot uncoded and changes nothing", async () => {
+		publish([activeShard()]);
+		const frozen = write(shard({ events: [event(1)], sessions: [session()] })).file;
+		bookkeeping([frozen]);
+		const manifest = join(snapshotDir, "manifest.json");
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		vi.mocked(lstat).mockImplementation(async (path, options) => {
+			if (String(path) === manifest)
+				throw Object.assign(new Error("EIO: i/o error"), { code: "EIO", syscall: "lstat" });
+			return actual.lstat(path, options);
+		});
+		const error = await cleanRecovery(agent, out).catch((e: unknown) => e);
+		expect(error).toMatchObject({ code: "EIO", message: "EIO: i/o error" });
+		expect(error).not.toBeInstanceOf(ExportRefusal);
+		expect(existsSync(join(snapshotDir, frozen))).toBe(true);
+		expect(stateOf().recoveryFiles).toEqual([frozen]);
+	});
+
+	it.skipIf(process.getuid?.() === 0)("refuses a denied manifest as unverified", async ({ onTestFinished }) => {
+		publish([activeShard()]);
+		bookkeeping([]);
+		const manifest = join(snapshotDir, "manifest.json");
+		chmodSync(manifest, 0o000);
+		onTestFinished(() => chmodSync(manifest, 0o600));
+		await expect(cleanRecovery(agent, out)).rejects.toMatchObject({ refusal: "recovery-snapshot-unverified" });
 	});
 
 	const refusal = (why: string) => `Recovery cleanup refused: ${why}; nothing was removed`;
@@ -470,7 +521,7 @@ describe("cleanRecovery", () => {
 		"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first",
 	);
 	it.each([
-		["a missing manifest", () => write(activeShard()), unauthenticated],
+		["a missing manifest", () => write(activeShard()), unauthenticated, "recovery-snapshot-unverified"],
 		[
 			"a corrupt manifest",
 			() => {
@@ -478,6 +529,7 @@ describe("cleanRecovery", () => {
 				writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
 			},
 			unauthenticated,
+			"recovery-snapshot-unverified",
 		],
 		[
 			"a damaged referenced shard",
@@ -486,14 +538,16 @@ describe("cleanRecovery", () => {
 				writeFileSync(join(snapshotDir, manifestOf().shards[0]?.file as string), "corrupt");
 			},
 			unauthenticated,
+			"recovery-snapshot-unverified",
 		],
-		["a v2 manifest", () => publish([], { version: 2 }), unauthenticated],
+		["a v2 manifest", () => publish([], { version: 2 }), unauthenticated, "recovery-snapshot-unverified"],
 		[
 			"another machine's manifest",
 			() => publish([], { machineId: "11111111-1111-4111-8111-111111111111" }),
 			unauthenticated,
+			"recovery-snapshot-unverified",
 		],
-		["no own bookkeeping", () => publish([activeShard()]), unaccounted],
+		["no own bookkeeping", () => publish([activeShard()]), unaccounted, "recovery-set-unrecorded"],
 		[
 			"an uncaptured recovery set",
 			() => {
@@ -501,6 +555,7 @@ describe("cleanRecovery", () => {
 				bookkeeping(null);
 			},
 			unaccounted,
+			"recovery-set-unrecorded",
 		],
 		[
 			"a lost harness",
@@ -512,8 +567,18 @@ describe("cleanRecovery", () => {
 				});
 			},
 			refusal("recovery of lost pi, claude history is pending and may need frozen files"),
+			"recovery-harness-lost",
 		],
-	])("refuses with %s and changes nothing", async (_, arrange, message) => {
+		[
+			"invalid own bookkeeping",
+			() => {
+				publish([activeShard()]);
+				bookkeeping([], { recoveryFiles: "not a list" });
+			},
+			"Invalid export state in",
+			"export-state-invalid",
+		],
+	])("refuses with %s and changes nothing", async (_, arrange, message, code) => {
 		arrange();
 		const frozen = write(shard({ events: [event(1)], sessions: [session()] })).file;
 		const listing = () => readdirSync(out, { recursive: true }).map(String).sort();
@@ -523,7 +588,9 @@ describe("cleanRecovery", () => {
 			return existsSync(path) ? readFileSync(path) : undefined;
 		};
 		const recorded = state();
-		await expect(cleanRecovery(agent, out)).rejects.toThrow(message);
+		const error = await cleanRecovery(agent, out).catch((e: unknown) => e);
+		expect(error).toBeInstanceOf(ExportRefusal);
+		expect(error).toMatchObject({ refusal: code, message: expect.stringContaining(message) });
 		expect(listing()).toEqual(before);
 		expect(state()).toEqual(recorded);
 		expect(existsSync(join(snapshotDir, frozen))).toBe(true);

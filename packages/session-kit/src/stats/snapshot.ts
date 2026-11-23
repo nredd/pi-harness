@@ -178,6 +178,47 @@ async function atomicContents(path: string, contents: string | Uint8Array): Prom
 	}
 }
 
+/**
+ * Why an export or a recovery cleanup cannot succeed until the owner acts: retrying it unchanged never helps.
+ * Each is a fixed refusal site, never inferred from a message; anything else, contention, I/O and a refusal
+ * that clears with time included, has no code. `watermark-ahead` is clock-dependent: a lead just over 366 days
+ * clears as the clock advances, so callers should bound their wait on it rather than stop for good. The
+ * `recovery-` codes come only from `cleanRecovery`, which removes nothing when it refuses.
+ */
+export type RefusalCode =
+	| "watermark-ahead"
+	| "history-unreadable"
+	| "history-over-budget"
+	| "manifest-missing"
+	| "harness-set-narrowed"
+	| "harness-set-unknown"
+	| "export-state-invalid"
+	| "recovery-outbox-missing"
+	| "recovery-snapshot-unverified"
+	| "recovery-set-unrecorded"
+	| "recovery-harness-lost";
+
+/** An export refused before publishing, or a cleanup before removing; `refusal` is the stable code callers may act on. */
+export class ExportRefusal extends Error {
+	readonly refusal: RefusalCode;
+	constructor(refusal: RefusalCode, message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = "ExportRefusal";
+		this.refusal = refusal;
+	}
+}
+
+/**
+ * The local scan was incomplete. Its message is the fixed `pi-stats-scan:` protocol: a fixed first line,
+ * then one line per diagnostic holding only JSON-quoted values, so its line breaks are safe to print.
+ */
+export class IncompleteScan extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "IncompleteScan";
+	}
+}
+
 const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 function exact(v: unknown, keys: string[]): asserts v is Record<string, unknown> {
 	if (!record(v) || Object.keys(v).length !== keys.length || !Object.keys(v).every((key) => keys.includes(key)))
@@ -189,6 +230,10 @@ const count = (v: unknown): v is number => typeof v === "number" && Number.isSaf
 const hash = (v: unknown): v is string => typeof v === "string" && HASH.test(v);
 const name = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 1024;
 const monthOf = (ms: number): string => new Date(ms).toISOString().slice(0, 7);
+/** How far a published `exportedAt` may run ahead of this clock before the next export refuses it. */
+const MAX_CLOCK_LEAD_MS = 366 * 86_400_000;
+/** The last instant with a four-digit ISO year, so `YYYY-MM` months still sort chronologically. */
+const LAST_ISO_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
 
 function validateIdentity(value: unknown): Identity {
 	exact(value, ["machineId", "label"]);
@@ -220,12 +265,18 @@ async function installationFile<T>(path: string, fresh: () => object, validate: 
 	return validate(await jsonFile(path));
 }
 
-/** An installation identity belongs to the agent dir, never to the sync checkout. */
+/**
+ * An installation identity belongs to the agent dir, never to the sync checkout. A JSON parse error can
+ * quote the file, so malformed JSON is reported by path and a fixed reason with no parse cause attached;
+ * filesystem and validation errors pass through unchanged.
+ */
 export async function machineIdentity(dir = agentDir()): Promise<Identity> {
-	return installationFile(
-		join(dir, "pi-session-kit", "machine.json"),
-		() => ({ machineId: randomUUID(), label: "Pi machine" }),
-		validateIdentity,
+	const path = join(dir, "pi-session-kit", "machine.json");
+	return installationFile(path, () => ({ machineId: randomUUID(), label: "Pi machine" }), validateIdentity).catch(
+		(error: unknown) => {
+			if (!(error instanceof SyntaxError)) throw error;
+			throw new Error(`Invalid installation identity in ${JSON.stringify(path)}: not valid JSON`);
+		},
 	);
 }
 
@@ -321,10 +372,22 @@ function validateBookkeeping(value: Record<string, unknown>): OutboxState {
 		historyHarnesses: (value.historyHarnesses as Harness[] | null | undefined) ?? null,
 	};
 }
+/**
+ * A state file that was read but does not validate is never replaced, so it refuses until the owner
+ * repairs it. Filesystem errors (with an errno `code`) pass through unchanged. JSON parse errors can
+ * quote the file, which holds the salt, so only a fixed reason is reported and the parse error is not
+ * attached as a cause.
+ */
+function invalidState(path: string, error: unknown): never {
+	if ((error as NodeJS.ErrnoException).code !== undefined) throw error;
+	const reason = error instanceof SyntaxError ? "not valid JSON" : (error as Error).message;
+	throw new ExportRefusal("export-state-invalid", `Invalid export state in ${JSON.stringify(path)}: ${reason}`);
+}
 /** Created on first use with a fresh salt and no recorded set. */
 async function exportState(dir: string): Promise<ExportState> {
+	const path = stateFile(dir);
 	return installationFile(
-		stateFile(dir),
+		path,
 		() => ({
 			version: 1,
 			salt: randomBytes(16).toString("hex"),
@@ -336,14 +399,14 @@ async function exportState(dir: string): Promise<ExportState> {
 			historyHarnesses: [],
 		}),
 		validateState,
-	);
+	).catch((error: unknown) => invalidState(path, error));
 }
 /** This outbox's own bookkeeping, `null` when it has none. Corrupt fails. */
 async function ownOutbox(path: string): Promise<OutboxState | null> {
 	try {
 		return validateOutbox(await jsonFile(path));
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") invalidState(path, error);
 		return null;
 	}
 }
@@ -370,6 +433,8 @@ export function makeSnapshot(
 	exportedAt = Date.now(),
 	quota: readonly QuotaObservation[] = [],
 	lastGoodAt: Manifest["lastGoodAt"] = {},
+	/** Wall clock for quota expiry; `exportedAt` can run ahead of it. */
+	now = exportedAt,
 ): Omit<MachineSnapshot, "shards"> & { shards: CompactShard[] } {
 	checkEntryIds(loaded.calls);
 	const shards = new Map<string, CompactShard>();
@@ -398,7 +463,7 @@ export function makeSnapshot(
 		};
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
-	for (const q of mergeQuota(quota, exportedAt))
+	for (const q of mergeQuota(quota, now))
 		shard(monthOf(q.observedAt)).quota.push({
 			harness: q.harness,
 			provider: q.provider,
@@ -790,10 +855,12 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 export interface ExportOptions {
 	harnesses?: readonly Harness[];
 	/**
-	 * Publish this scan as a replacement generation. Bypasses the narrower-set, clock-rollback,
-	 * unreadable-history and missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
-	 * from the scan, sealed months included. Viewers holding a newer snapshot never import the replacement;
-	 * they accept this machine again only from a later export timestamped at or after the snapshot they hold.
+	 * Publish this scan as a replacement generation. Bypasses the narrower-set, unreadable-history,
+	 * missing-manifest and later-month safeguards and clears frozen recovery files, so it drops published
+	 * history absent from the scan, sealed months included. Like any export it is timestamped after the readable published
+	 * manifest, so viewers holding that manifest import it; viewers holding a snapshot newer than the
+	 * replacement (e.g. with no readable manifest to bound it) keep their copy. It does not bypass the
+	 * implausible-watermark refusal.
 	 */
 	replaceHarnesses?: boolean;
 	roots?: Partial<HarnessRoots>;
@@ -837,18 +904,39 @@ type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unread
 
 /**
  * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
- * invalid), and the first authenticated shard the expansion budget could not hold.
+ * invalid), the first authenticated shard the expansion budget could not hold, and the manifest's own
+ * `exportedAt`, which still bounds the next publication instant. A manifest the owner may not read
+ * (`damaged` is `manifest.json`, `denied` its errno code) has no `exportedAt`: like an unreadable one, it
+ * bounds nothing.
  */
 interface Damaged {
 	damaged: string[];
+	denied?: string;
+	exportedAt?: number;
 	overBudget?: string;
 }
+
+/**
+ * A filesystem call failed for a reason other than absence (EIO, EMFILE, EACCES...). Only Node's
+ * filesystem errors carry `syscall`; parse, digest, zlib and validation failures do not. Such a failure
+ * says nothing about the file, so it is neither damage nor a refusal: the caller sees it and retries.
+ * The one exception is a permission denial on the manifest itself, see `loadPrevious`.
+ */
+const readFailure = (error: unknown): boolean =>
+	typeof (error as NodeJS.ErrnoException).syscall === "string" && (error as NodeJS.ErrnoException).code !== "ENOENT";
 
 async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 	let manifest: Manifest;
 	try {
 		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
 	} catch (error) {
+		// A denied manifest read persists until the owner acts, so retrying never helps: it is damage that
+		// refuses an ordinary export and that explicit replacement publishes over by rename, as before.
+		// Ambiguous I/O (EIO, EMFILE, EBUSY...) stays fatal and unclassified: it may clear on retry.
+		const code = (error as NodeJS.ErrnoException).code;
+		if (readFailure(error) && (code === "EACCES" || code === "EPERM"))
+			return { damaged: ["manifest.json"], denied: code };
+		if (readFailure(error)) throw error;
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
 	const shards: Shard[] = [];
@@ -864,15 +952,16 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
 		} catch (error) {
+			if (readFailure(error)) throw error;
 			if (!(error instanceof OverBudget)) damaged.push(ref.file);
 			else overBudget ??= ref.file;
 		}
 	}
-	if (damaged.length > 0 || overBudget !== undefined) return { damaged, overBudget };
+	if (damaged.length > 0 || overBudget !== undefined) return { damaged, overBudget, exportedAt: manifest.exportedAt };
 	try {
 		validateSnapshot({ manifest, shards });
 	} catch {
-		return { damaged: [] };
+		return { damaged: [], exportedAt: manifest.exportedAt };
 	}
 	return { manifest, shards, expandedSizes };
 }
@@ -884,14 +973,23 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 function intactPrevious(previous: Previous | Damaged, replace: boolean): Previous {
 	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
 	if (replace) return "unreadable";
+	// Restoring read access keeps the archived history a replacement would drop; only the errno code is named.
+	if (previous.denied !== undefined)
+		throw new ExportRefusal(
+			"history-unreadable",
+			`Published usage manifest is not readable (${previous.denied} on manifest.json); restore read access to it ` +
+				"and retry before considering --replace-harnesses, which drops published history absent from this scan",
+		);
 	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
 	if (previous.damaged.length === 0 && previous.overBudget !== undefined)
-		throw new Error(
+		throw new ExportRefusal(
+			"history-over-budget",
 			`Published usage history exceeds the 128 MiB expanded machine budget (from ${previous.overBudget}); ` +
 				"those files match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
 		);
 	const what = previous.damaged.length > 0 ? previous.damaged.join(", ") : "shards inconsistent with each other";
-	throw new Error(
+	throw new ExportRefusal(
+		"history-unreadable",
 		`Published usage history is unreadable (${what}); restore it from the sync checkout, ` +
 			"or pass --replace-harnesses to publish without it",
 	);
@@ -1263,6 +1361,11 @@ async function withExportLock<T extends { warnings?: string[] }>(
 	} catch (unlockError) {
 		const warning = `could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`;
 		// Never turn an already-visible publish into a failure, nor hide the primary publication error.
+		// A refusal keeps its code: the unlock failure is a secondary diagnostic, never a retryable cause.
+		if (!outcome.ok && outcome.error instanceof ExportRefusal)
+			throw new ExportRefusal(outcome.error.refusal, `${outcome.error.message}\n${warning}`, {
+				cause: new AggregateError([outcome.error, unlockError]),
+			});
 		if (!outcome.ok)
 			throw new AggregateError([outcome.error, unlockError], `${String(outcome.error)}\n${warning}`, {
 				cause: outcome.error,
@@ -1281,24 +1384,53 @@ async function publishStats(
 	identity: Identity,
 ): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
-	// One instant, taken first, is both checked and published.
-	const exportedAt = Date.now();
+	// The wall clock is read once, first, so the manifest read cannot move it.
+	const now = Date.now();
 	const loadedPrevious = await loadPrevious(snapshotDir);
-	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
-	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
-	// the active month, be replaced by the scan and pruned. Refuse before the salt, the scan cache or any
-	// bookkeeping can be written.
-	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
-	if (exportedAt < publishedAt && !options.replaceHarnesses) {
-		const published = new Date(publishedAt).toISOString();
-		throw new Error(
-			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ${published}); ` +
-				"refusing to reopen sealed months. Fix the clock, or pass --replace-harnesses to publish anyway: " +
-				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot keep " +
-				"it and never import this replacement; they accept this machine again only from a later export " +
-				`timestamped at or after ${published}`,
+	// The publication instant is monotonic over the readable manifest: strictly after the last published
+	// export, even when this clock is behind it, so viewers holding the published snapshot accept this one
+	// as newer. Without a readable manifest there is nothing to follow.
+	const publishedAt =
+		loadedPrevious === null || loadedPrevious === "unreadable"
+			? 0
+			: "damaged" in loadedPrevious
+				? (loadedPrevious.exportedAt ?? 0)
+				: loadedPrevious.manifest.exportedAt;
+	const exportedAt = Math.max(now, publishedAt + 1);
+	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
+	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
+	// cache or publication writes. Within years 0000-9999 a later instant never seals an earlier month.
+	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
+		throw new ExportRefusal(
+			"watermark-ahead",
+			`Published usage manifest exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
+				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
+				`it (${JSON.stringify(join(snapshotDir, "manifest.json"))}); there is no supported in-place repair ` +
+				"(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one. " +
+				"--replace-harnesses does not bypass this",
 		);
-	}
+	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
+	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
+	// later export could not tell them from months a clock-ahead export sealed: refuse (nothing written).
+	// A replacement seals nothing from the previous generation, so it may publish there. No refusal code:
+	// this clears by itself once the clock reaches that month, so callers keep retrying it.
+	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
+		throw new Error(
+			`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
+				`published one (${new Date(publishedAt).toISOString()}); publishing would seal months this clock has ` +
+				`not left. Fix the clock or wait until ${monthOf(exportedAt)}, or pass --replace-harnesses to publish ` +
+				"without published history absent from this scan",
+		);
+	// Checked after the watermark, so damage never hides a refusal --replace-harnesses cannot bypass.
+	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
+	// Exporting twice within one millisecond is not a clock problem; only a clock behind it is reported.
+	const clockWarning =
+		now < publishedAt
+			? [
+					`clock is behind the last published export (${new Date(now).toISOString()} < ` +
+						`${new Date(publishedAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
+				]
+			: [];
 	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
 	// stale recovery state over this one's.
 	const statePath = await outboxStateFile(dir, snapshotDir);
@@ -1311,7 +1443,8 @@ async function publishStats(
 			(entry) => entry.isFile() && SHARD_FILE.test(entry.name),
 		);
 		if (own !== null || shards)
-			throw new Error(
+			throw new ExportRefusal(
+				"manifest-missing",
 				`Published usage manifest is missing from ${JSON.stringify(snapshotDir)}, but this outbox published ` +
 					"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 					"or pass --replace-harnesses to publish without that history",
@@ -1326,13 +1459,15 @@ async function publishStats(
 	const last = new Set([...(state.harnesses ?? []), ...publishedSet(previous)]);
 	const dropped = HARNESSES.filter((h) => last.has(h) && !wanted.has(h));
 	if (dropped.length > 0 && !options.replaceHarnesses)
-		throw new Error(
+		throw new ExportRefusal(
+			"harness-set-narrowed",
 			`Refusing to publish a narrower harness set than last published (missing: ${dropped.join(", ")}); ` +
 				"add them to --harness, or pass --replace-harnesses to drop their history",
 		);
 	// With neither a readable snapshot nor a recorded set, what was last published cannot be established.
 	if (previous === "unreadable" && state.harnesses === null && !options.replaceHarnesses)
-		throw new Error(
+		throw new ExportRefusal(
+			"harness-set-unknown",
 			"Cannot establish which harnesses were last published (unreadable snapshot, no recorded set); " +
 				"pass --replace-harnesses to publish anyway",
 		);
@@ -1342,6 +1477,7 @@ async function publishStats(
 	if (loaded.errors || loaded.badLines) {
 		// Fixed, bounded stderr protocol for local callers. Never serialize Loaded or raw exceptions:
 		// both can contain transcript-derived values. JSON quoting prevents terminal/newline injection.
+		// JSON.stringify leaves U+2028/U+2029 raw, and some readers split lines on them: escape both.
 		const details = loaded.diagnostics.map(
 			(diagnostic) =>
 				`pi-stats-scan: ${JSON.stringify({
@@ -1349,15 +1485,18 @@ async function publishStats(
 					path: diagnostic.path
 						.slice(0, 1024)
 						.replace(/[\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "\ufffd"),
-				})}`,
+				})
+					.replace(/\u2028/g, "\\u2028")
+					.replace(/\u2029/g, "\\u2029")}`,
 		);
-		throw new Error(
+		throw new IncompleteScan(
 			[`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`, ...details].join("\n"),
 		);
 	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
+	// Harness reads and quota expiry follow the wall clock; publication and sealing follow `exportedAt`.
 	const scans = await loadHarnesses({
-		now: exportedAt,
+		now,
 		harnesses: external,
 		roots: options.roots,
 		env: options.env,
@@ -1408,7 +1547,7 @@ async function publishStats(
 		sessionMetadata.push(...use.sessions);
 		quota.push(...use.quota);
 	}
-	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
+	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt, now);
 	validateSnapshot(snapshot);
 	const reportedLost = EXTERNAL_HARNESSES.filter((h) => report[h]?.failed === "lost");
 	const lostHarnesses = options.replaceHarnesses
@@ -1456,6 +1595,7 @@ async function publishStats(
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
 			? previous
 			: null;
+	// Ordinary exports publish only in this clock's month (above), so this is the wall clock's month.
 	const current = monthOf(exportedAt);
 	const revisions: Revisions = sealed
 		? detectRevisions(sealed, snapshot)
@@ -1537,9 +1677,9 @@ async function publishStats(
 	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
-	const warnings = recoveryPending
-		? ["recovery files retained: run clean-recovery to remove those the active snapshot covers"]
-		: [];
+	const warnings = [...clockWarning];
+	if (recoveryPending)
+		warnings.push("recovery files retained: run clean-recovery to remove those the active snapshot covers");
 	if (unaccounted.length > 0)
 		warnings.push(
 			`no bookkeeping for this outbox: froze ${unaccounted.length} unaccounted shard files as recovery files; ` +
@@ -1661,13 +1801,16 @@ async function keptReason(
 export async function cleanRecovery(dir: string, output: string): Promise<CleanupResult> {
 	const identity = await machineIdentity(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
-	const refused = (why: string): Error => new Error(`Recovery cleanup refused: ${why}; nothing was removed`);
+	// Each refusal waits on the owner or a later export, never on a retry of this cleanup: all are coded.
+	const refused = (code: RefusalCode, why: string): ExportRefusal =>
+		new ExportRefusal(code, `Recovery cleanup refused: ${why}; nothing was removed`);
 	// Only absence is "no outbox"; any other error (EACCES, EIO) is the operator's to fix, so it surfaces as is.
 	const outbox = await lstat(snapshotDir).catch((error: NodeJS.ErrnoException) => {
 		if (error.code === "ENOENT") return undefined;
 		throw error;
 	});
-	if (!outbox?.isDirectory()) throw refused(`no outbox for this machine at ${JSON.stringify(snapshotDir)}`);
+	if (!outbox?.isDirectory())
+		throw refused("recovery-outbox-missing", `no outbox for this machine at ${JSON.stringify(snapshotDir)}`);
 	/** The active snapshot, when it authenticates as this machine's v3 snapshot. */
 	const authenticated = async (): Promise<Exclude<Previous, null | "unreadable"> | undefined> => {
 		const previous = await loadPrevious(snapshotDir);
@@ -1680,9 +1823,11 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 			: previous;
 	};
 	return withExportLock(snapshotDir, async () => {
+		// Transient I/O reading the active snapshot (EIO, EMFILE, a denied shard) throws uncoded: retry it.
 		const previous = await authenticated();
 		if (previous === undefined)
 			throw refused(
+				"recovery-snapshot-unverified",
 				"the active manifest or a shard it references does not authenticate as this machine's v3 snapshot; export first",
 			);
 		const statePath = await outboxStateFile(dir, snapshotDir);
@@ -1690,10 +1835,14 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 		const own = await ownOutbox(statePath);
 		if (own === null || own.recoveryFiles === null)
 			throw refused(
+				"recovery-set-unrecorded",
 				"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first",
 			);
 		if (own.lostHarnesses.length > 0)
-			throw refused(`recovery of lost ${own.lostHarnesses.join(", ")} history is pending and may need frozen files`);
+			throw refused(
+				"recovery-harness-lost",
+				`recovery of lost ${own.lostHarnesses.join(", ")} history is pending and may need frozen files`,
+			);
 		const referenced = new Set(previous.manifest.shards.map((ref) => ref.file));
 		const covered = coveredBy(previous.shards as CompactShard[]);
 		const removed: string[] = [];
@@ -1708,7 +1857,8 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 		const expected = JSON.stringify(previous.manifest);
 		/** Whether the manifest and `file` are still what cleanup judged, checked as late as possible before its unlink. */
 		const unchanged = async (file: string): Promise<boolean> => {
-			const now = await authenticated();
+			// Any failure here, transient I/O included, stops cleanup with everything left protected.
+			const now = await authenticated().catch(() => undefined);
 			if (now === undefined || JSON.stringify(now.manifest) !== expected) return false;
 			// Reread after the shard pass: a restore that swapped manifest.json during it is otherwise unseen.
 			const manifest = await jsonFile(join(snapshotDir, "manifest.json")).then(validateManifest, () => undefined);

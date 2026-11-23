@@ -463,19 +463,19 @@
           "reporters": ["text", "lcov", "json"],
           "mapped_totals": {
             "win32": {
-              "native/windows/bridge-rs/src/capture.rs": { "sha256": "f535c8d13bf1ccbcbcecfd75d5b8b5f881a5e5f7cc128dd61b55e63dce957640", "lines": 416, "functions": 23 },
+              "native/windows/bridge-rs/src/capture.rs": { "sha256": "101fa297daa73b14fb14179d6004a778077fe32e575016d55f7f0fe9b850d0b6", "lines": 416, "functions": 23 },
               "native/windows/bridge-rs/src/desktop.rs": { "sha256": "c508bd42a55f2c2aa17a5f00910acca504c08209d4dcca8843145b94d4557eb0", "lines": 153, "functions": 23 },
               "native/windows/bridge-rs/src/error.rs": { "sha256": "7dcb3fcc6fd7574638cf366dbcdbe080b051f1916b31879190ea40738a9ac9ad", "lines": 39, "functions": 5 },
               "native/windows/bridge-rs/src/freshness.rs": { "sha256": "48b942cd512789d7f9cc01b780135f5392ff7ecfd542c0816f4fb18bebb3b851", "lines": 28, "functions": 4 },
               "native/windows/bridge-rs/src/guard.rs": { "sha256": "fdabf8e34c059199f902e6be999830abd268db4fdea79a6d0dee90bc81ff9aef", "lines": 193, "functions": 16 },
               "native/windows/bridge-rs/src/input.rs": { "sha256": "903cf8e7c64ffc15ad5860d057e53fb5b2d398381ff1fa34c0d44eb6ee091964", "lines": 526, "functions": 69 },
-              "native/windows/bridge-rs/src/lib.rs": { "sha256": "1fe27cc05f94ff60ecd0acdeeb4bd73ed81cd8e212f6e0dc467f4b8eec282525", "lines": 0, "functions": 0 },
-              "native/windows/bridge-rs/src/main.rs": { "sha256": "d5b4529f9cec82d2177f757cc0973a6628d8d64bfb854d56d052dca6f4c268ea", "lines": 2209, "functions": 262 },
-              "native/windows/bridge-rs/src/protocol.rs": { "sha256": "7b864ea69c7f44c6b9f1855ab767738566fedcb870aa778967ae64236d328100", "lines": 18, "functions": 2 },
-              "native/windows/bridge-rs/src/refs.rs": { "sha256": "b9fbe182dadd863b5b13ba562ba750c1ad5d56813c2f8a102d35ebefd4bcb60d", "lines": 109, "functions": 24 },
+              "native/windows/bridge-rs/src/lib.rs": { "sha256": "5e804bdaae133f045e1c6a8ab1e926424af3b418493bf17a1bffaefc9de3afa6", "lines": 0, "functions": 0 },
+              "native/windows/bridge-rs/src/main.rs": { "sha256": "cf567072a05f6b488c78c0031ae95d5b2b009b850e924b61da1038b59d6a33a0", "lines": 2562, "functions": 289 },
+              "native/windows/bridge-rs/src/protocol.rs": { "sha256": "daa8318982877113bbc58f567e2b26cfe50fb2ed1e3b7e3440a82da1b0ba2f9b", "lines": 18, "functions": 2 },
+              "native/windows/bridge-rs/src/refs.rs": { "sha256": "dbf1b26b72929ae406570a135de3809fd299dc6eb8315840e6aafdbb7115311b", "lines": 113, "functions": 24 },
               "native/windows/bridge-rs/src/state.rs": { "sha256": "dc14719c56bcbc352a1232ae10494b657d7deaceb23511cc4af1dbdac20b3add", "lines": 13, "functions": 3 },
-              "native/windows/bridge-rs/src/uia.rs": { "sha256": "4a16bf11c020a4518e2ad9f767a911aea3c758b22575890acbb83f0f70db6aac", "lines": 949, "functions": 125 },
-              "native/windows/bridge-rs/src/window.rs": { "sha256": "0a870b0e975412c392eee7f0c95ed73d6a63ec0ef708792cd15a68e1271e3d68", "lines": 528, "functions": 63 }
+              "native/windows/bridge-rs/src/uia.rs": { "sha256": "ee8dfa05e29241ae576e5d978553a75996ffc264c51251643d359f9d82848126", "lines": 977, "functions": 128 },
+              "native/windows/bridge-rs/src/window.rs": { "sha256": "7413ec574a102b4623e7ebf68e8c8980be3cd417a0dc4d356ad4eee8ce99489c", "lines": 722, "functions": 90 }
             }
           }
         }

@@ -2056,8 +2056,8 @@ def stale_mapped_totals(
 
     A measured file is stale when it has no record or its record hashes other source, e.g. a new
     or edited file. A recorded file this run did not measure is stale when its source changed or
-    was deleted. Accounting does not compare stale files; this stays a warning until #1270 decides
-    whether the gate should fail on them.
+    was deleted. Accounting does not compare stale files; `check_stale_mapped_totals` fails an
+    enforced signal on them.
 
     Parameters:
         root (Path): Source checkout.
@@ -2092,6 +2092,44 @@ def stale_mapped_totals(
                 f"refresh; replay a matching artifact with `--measure`: {sorted(paths)}"
             )
     return stale
+
+
+def check_stale_mapped_totals(
+    policy: Policy, stale: dict[str, dict[str, list[str]]], *, measure: bool = False
+) -> None:
+    """Fail an enforced signal whose mapped denominators no current record guards (#1270).
+
+    A stale record is not compared, so an instrumentation change that drops mapped units of an edited
+    file would pass silently. Failing forces the PR that changes the source to record a refresh from
+    a reviewed `--measure` replay: any shrink becomes a reviewable policy diff (a refreshed record with
+    the new hash and lower total). It does not prove the source edit caused the shrink. Refreshing
+    automatically from this run's own totals would accept the shrink unreviewed. Report-only signals
+    and `--measure` replays keep the warning.
+
+    Parameters:
+        policy (Policy): Policy naming each signal's enforcement.
+        stale (dict[str, dict[str, list[str]]]): `stale_mapped_totals` output for this run.
+        measure (bool): Whether this run is a `--measure` replay proposing the refresh.
+    Returns:
+        None: No enforced signal has stale files, or this run only measures.
+    Raises:
+        ValueError: An enforced signal lists stale files outside a `--measure` replay.
+    """
+    if measure:
+        return
+    unguarded = []
+    for label, platforms in sorted(stale.items()):
+        name, signal_name = label.split("/")
+        if policy.packages[name].signals[signal_name].enforcement == "enforced":
+            unguarded += [f"'{label}/{runner_os}' {paths}" for runner_os, paths in sorted(platforms.items())]
+    if unguarded:
+        raise ValueError(
+            "Stale mapped totals (#1270): replay the matching hosted coverage artifact against the "
+            "source checkout (`scripts/coverage_accounting.py --measure`, see docs/coverage.md), "
+            "review the proposed records and update `mapped_totals` in coverage/policy.json (a "
+            "refresh of new, edited or deleted source needs no `remeasurements` entry): "
+            f"{'; '.join(unguarded)}"
+        )
 
 
 def serialized_mapped_totals(
@@ -2442,8 +2480,13 @@ def main() -> int:
             host=args.host,
             skipped_gates=frozenset(args.skipped_gates.split()),
         )
-        stale = stale_mapped_totals(
-            root, policy, mapped := measured_mapped_totals(root, policy, results, args.os), args.os
+        # Assigned before the check raises, so a failing summary still lists the stale files.
+        check_stale_mapped_totals(
+            policy,
+            stale := stale_mapped_totals(
+                root, policy, mapped := measured_mapped_totals(root, policy, results, args.os), args.os
+            ),
+            measure=args.measure,
         )
     except subprocess.CalledProcessError as error:
         errors.append(f"Git metadata read failed: '{error.output}'")

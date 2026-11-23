@@ -134,6 +134,8 @@ test("unpaired act roots and physical transaction lease", async () => {
 			steps: [{ outcome: "worked" }],
 		}),
 	});
+	// The stub answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 
 	const ctx = {
 		cwd: process.cwd(),

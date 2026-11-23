@@ -257,6 +257,12 @@ export interface ComputerUsePlatformBackend {
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
 	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRootList>;
+	/**
+	 * The roots of every process in `pids` from one inventory, for a filtered `find_roots` that matched several apps,
+	 * e.g. one X11 window listing on Linux rather than one per app queued behind a stalled X server. A PID-scoped
+	 * failure fails the whole call, as one call per process would. Without it, each process is listed alone.
+	 */
+	listRootsOfPids?(pids: readonly number[], signal?: AbortSignal): Promise<PlatformRoot[]>;
 	/** Explain why no roots are visible on this host (e.g. a WSL2 guest), appended to empty `find_roots` text. */
 	emptyRootsHint?(): string | undefined;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;

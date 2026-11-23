@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
-import { cleanRecovery, exportStats, importStats } from "./snapshot.ts";
+import { cleanRecovery, ExportRefusal, exportStats, IncompleteScan, importStats } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
@@ -13,9 +13,10 @@ const USAGE =
 	"clean-recovery --agent-dir DIR --output OUT | subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
 	"  clean-recovery: remove frozen recovery shard files the active snapshot fully covers; never part of an export\n" +
 	"  --replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
-	"clock-rollback, unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
-	"published history absent from the scan (sealed months included), and viewers holding a newer snapshot never import it; " +
-	"they accept this machine again only from a later export timestamped at or after the snapshot they hold";
+	"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
+	"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
+	"the replacement keep it until this machine exports a later one\n" +
+	"  A clock behind the last published export in its month still publishes, just after it, with a warning";
 const FLAGS = [
 	"--agent-dir",
 	"--output",
@@ -93,7 +94,8 @@ export async function main(): Promise<void> {
 	) {
 		const result = await cleanRecovery(dir, resolve(output));
 		console.log(JSON.stringify(result));
-		for (const warning of result.warnings ?? []) console.error(warning);
+		// A cleanup that exits 1 here has no refusal code, so no warning may look like a trailer either.
+		for (const warning of result.warnings ?? []) console.error(oneLine(warning));
 		// A cleanup the manifest changed under did not finish: say so in the exit code too.
 		if (result.kept.some((k) => k.reason === "changed")) process.exitCode = 1;
 	} else if (
@@ -112,12 +114,25 @@ export async function main(): Promise<void> {
 		}
 	} else throw new Error(USAGE);
 }
-/** Run `main`, converting failures to one diagnostic and a nonzero process exit code. */
+/** Escape line breaks and every other control character, so a diagnostic stays one line. */
+const oneLine = (text: string): string =>
+	text.replace(/[\p{Cc}\u2028\u2029]/gu, (c) => {
+		const named: Record<string, string> = { "\n": "\\n", "\r": "\\r", "\t": "\\t" };
+		return named[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+	});
+/**
+ * Run `main`, converting failures to one diagnostic and a nonzero process exit code. An export refusal
+ * ends with one fixed `pi-stats-refusal: {"code":...}` line; no such line means the cause is unclassified.
+ * Diagnostics can quote raw paths, so each is escaped to one line and a path holding a newline cannot
+ * forge the trailer. Only the fixed usage text and the JSON-quoted scan protocol keep their line breaks.
+ */
 export async function run(): Promise<void> {
 	try {
 		await main();
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : "Stats operation failed");
+		const message = error instanceof Error ? error.message : "Stats operation failed";
+		console.error(message === USAGE || error instanceof IncompleteScan ? message : oneLine(message));
+		if (error instanceof ExportRefusal) console.error(`pi-stats-refusal: ${JSON.stringify({ code: error.refusal })}`);
 		process.exitCode = 1;
 	}
 }

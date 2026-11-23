@@ -13,11 +13,13 @@ import {
 } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { inspect } from "node:util";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	decodeShard,
+	ExportRefusal,
 	encodeShard,
 	eventId,
 	exportStats,
@@ -368,6 +370,8 @@ it.each(["deleted state", "moved outbox"])(
 		}
 		const snapshotDir = join(target, "machines", basename(first.snapshotDir));
 		for (let i = 0; i < 2; i++) {
+			// Past every earlier export instant, so no clock warning joins the expected ones.
+			vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + 1000 * (i + 1));
 			seed(9 + i);
 			const result = await exportStats(agent, target);
 			expect(readdirSync(snapshotDir)).toContain(original.file);
@@ -538,7 +542,10 @@ it("reads legacy export state but rejects malformed recovery markers", async () 
 	await exportStats(agent, out);
 	expect(JSON.parse(readFileSync(outbox, "utf8"))).toMatchObject({ harnesses: ["pi"], recoveryPending: false });
 	writeFileSync(path, JSON.stringify({ ...state, recoveryPending: "invalid" }));
-	await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		message: `Invalid export state in ${JSON.stringify(path)}: Invalid export state`,
+		refusal: "export-state-invalid",
+	});
 });
 
 it.each([
@@ -557,8 +564,150 @@ it.each([
 	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
 		const state = readFileSync(path, "utf8");
 		writeFileSync(path, JSON.stringify({ ...JSON.parse(state), [String(field)]: value }));
-		await expect(exportStats(agent, out)).rejects.toThrow("Invalid export state");
+		await expect(exportStats(agent, out)).rejects.toMatchObject({
+			message: `Invalid export state in ${JSON.stringify(path)}: Invalid export state`,
+			refusal: "export-state-invalid",
+		});
 		writeFileSync(path, state);
+	}
+});
+
+it("passes a state read I/O error through unclassified, so callers keep retrying it", async () => {
+	const first = await exportStats(agent, out);
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
+		const failure = Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+		vi.mocked(readFile).mockImplementation(async (file, options) => {
+			if (file === path) throw failure;
+			return actual.readFile(file, options);
+		});
+		const error = await exportStats(agent, out).catch((cause: unknown) => cause);
+		expect(error).toBe(failure);
+		expect(error).not.toHaveProperty("refusal");
+		vi.mocked(readFile).mockRestore();
+	}
+	await expect(exportStats(agent, out)).resolves.toHaveProperty("machineId");
+});
+
+it("keeps malformed state contents out of a refusal, its cause and stack included", async () => {
+	const first = await exportStats(agent, out);
+	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
+		const state = readFileSync(path);
+		writeFileSync(path, '{"salt":XCANARY}');
+		const error = await exportStats(agent, out).catch((cause: unknown) => cause);
+		expect(error).toMatchObject({
+			message: `Invalid export state in ${JSON.stringify(path)}: not valid JSON`,
+			refusal: "export-state-invalid",
+		});
+		expect(inspect(error, { depth: Number.POSITIVE_INFINITY, showHidden: true })).not.toContain("XCANARY");
+		writeFileSync(path, state);
+	}
+});
+
+it.each([
+	["manifest", "lstat"],
+	["manifest", "readFile"],
+	["shard", "lstat"],
+	["shard", "readFile"],
+])("passes a one-shot %s %s I/O error through unclassified, so the next export publishes", async (target, call) => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-10-10"),
+		lines: [assistantLine({ ms: at("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
+	});
+	const first = await exportStats(agent, out);
+	const published = manifest(first.snapshotDir);
+	const ref = published.shards[0];
+	if (!ref) throw new Error("Missing shard");
+	const file = join(first.snapshotDir, target === "shard" ? ref.file : "manifest.json");
+	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
+	const files = readdirSync(first.snapshotDir).sort();
+	// A failed read says nothing about the file: an intact shard must not be reported as damage.
+	const failure = Object.assign(new Error(`EIO: i/o error, ${call} '${file}'`), {
+		code: "EIO",
+		errno: -5,
+		syscall: call === "lstat" ? "lstat" : "read",
+		path: file,
+	});
+	let pending = true;
+	const fail = (path: unknown): void => {
+		if (!pending || path !== file) return;
+		pending = false;
+		throw failure;
+	};
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	if (call === "lstat")
+		vi.mocked(lstat).mockImplementation(async (path, options) => {
+			fail(path);
+			return actual.lstat(path, options);
+		});
+	else
+		vi.mocked(readFile).mockImplementation(async (path, options) => {
+			fail(path);
+			return actual.readFile(path, options);
+		});
+	const error = await exportStats(agent, out).catch((cause: unknown) => cause);
+	expect(error).toBe(failure);
+	expect(error).not.toHaveProperty("refusal");
+	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(before);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	await expect(exportStats(agent, out)).resolves.toHaveProperty("machineId");
+	expect(manifest(first.snapshotDir).shards).toEqual(published.shards);
+});
+
+it.each([
+	["EACCES", false],
+	["EACCES", true],
+	["EPERM", false],
+	["EPERM", true],
+	["EIO", false],
+	["EIO", true],
+])("handles a persistent %s reading the manifest (replaceHarnesses: %s)", async (code, replaceHarnesses) => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-10-10"),
+		lines: [assistantLine({ ms: at("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
+	});
+	const first = await exportStats(agent, out);
+	const path = join(first.snapshotDir, "manifest.json");
+	const before = readFileSync(path);
+	const files = readdirSync(first.snapshotDir).sort();
+	// A later clock and a new call, so a replacement proves it published this scan, not the old manifest.
+	const later = at("2026-11-02") + 60_000;
+	vi.mocked(Date.now).mockReturnValue(later);
+	sessionFile(join(agent, "sessions", "later.jsonl"), {
+		startMs: later,
+		lines: [assistantLine({ ms: later, provider: "physical", model: "fixture", input: 2 })],
+	});
+	const failure = Object.assign(new Error(`${code}: denied, open '${path}'`), { code, syscall: "open", path });
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	// Never cleared by a retry: the owner must act, or explicitly replace the manifest.
+	vi.mocked(readFile).mockImplementation(async (file, options) => {
+		if (file === path) throw failure;
+		return actual.readFile(file, options);
+	});
+	const result = await exportStats(agent, out, undefined, { replaceHarnesses }).catch((cause: unknown) => cause);
+	vi.mocked(readFile).mockRestore();
+	if (code === "EIO") {
+		// Ambiguous I/O stays fatal and unclassified even under explicit replacement: nothing is published.
+		expect(result).toBe(failure);
+		expect(readFileSync(path)).toEqual(before);
+		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	} else if (replaceHarnesses) {
+		expect(result).toHaveProperty("machineId");
+		expect(readFileSync(path)).not.toEqual(before);
+		expect(manifest(first.snapshotDir).exportedAt).toBe(later);
+		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+		expect((await loadCombined(viewer)).calls.map((call) => call.input).sort()).toEqual([1, 2]);
+	} else {
+		// Restoring read access keeps archived history; replacing would drop what the scan lacks.
+		expect(result).toMatchObject({
+			message:
+				`Published usage manifest is not readable (${code} on manifest.json); restore read access to it ` +
+				"and retry before considering --replace-harnesses, which drops published history absent from this scan",
+			refusal: "history-unreadable",
+		});
+		expect((result as Error).message).not.toContain("restore it from the sync checkout");
+		expect(readFileSync(path)).toEqual(before);
+		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 	}
 });
 
@@ -1128,7 +1277,7 @@ it("preserves non-contention errors when acquiring the lock", async () => {
 	await expect(exportStats(agent, out)).rejects.toBe(denied);
 });
 
-it.each(["published", "failed"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
+it.each(["published", "failed", "refused"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
 	const ms = at("2026-11-01");
 	sessionFile(join(agent, "sessions", "new.jsonl"), {
 		startMs: ms,
@@ -1159,6 +1308,23 @@ it.each(["published", "failed"])("keeps the %s export outcome when unlocking fai
 		expect((error as Error).message).toBe(
 			`Error: manifest rename failed\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
 		);
+	} else if (outcome === "refused") {
+		const state = join(agent, "pi-session-kit", "export-state.json");
+		mkdirSync(dirname(state), { recursive: true });
+		writeFileSync(state, "{");
+		const error = await exportStats(agent, out).catch((reason: unknown) => reason);
+		// A refusal stays top-level and keeps its code; the aggregate is only its cause.
+		expect(error).toBeInstanceOf(ExportRefusal);
+		expect(error).not.toBeInstanceOf(AggregateError);
+		const refused = `Invalid export state in ${JSON.stringify(state)}: not valid JSON`;
+		expect(error).toMatchObject({
+			refusal: "export-state-invalid",
+			message: `${refused}\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
+		});
+		const cause = (error as Error).cause;
+		expect(cause).toBeInstanceOf(AggregateError);
+		expect((cause as AggregateError).errors).toEqual([expect.objectContaining({ message: refused }), denied]);
+		expect((cause as AggregateError).errors[0]).toBeInstanceOf(ExportRefusal);
 	} else {
 		const result = await exportStats(agent, out);
 		expect(shardsAtUnlock).toBe(1);
@@ -1209,73 +1375,219 @@ it("keeps unidentified legacy events stable across repeated sealed-month exports
 	expect((await loadCombined(viewer)).calls).toHaveLength(1);
 });
 
+/**
+ * The refusal for an ordinary export whose next instant falls in a later month than its clock. It clears
+ * with time, so it is a plain `Error` with no refusal code: callers retry it.
+ */
+const laterMonth = (now: number, published: number, month: string) => ({
+	name: "Error",
+	message:
+		`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
+		`published one (${new Date(published).toISOString()}); publishing would seal months this clock has ` +
+		`not left. Fix the clock or wait until ${month}, or pass --replace-harnesses to publish ` +
+		"without published history absent from this scan",
+});
+
 it("clock rollback preserves sealed history", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
+	const call = (day: string, input: number) =>
+		assistantLine({ ms: at(day), provider: "physical", model: "fixture", input });
 	vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
-	sessionFile(path, {
-		startMs: at("2026-10-20"),
-		lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
-	});
+	sessionFile(path, { startMs: at("2026-10-20"), lines: [call("2026-10-20", 7)] });
 	const first = await exportStats(agent, out);
 	// November seals October; the archived call then exists only in published history.
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
 	await exportStats(agent, out);
-	const sealed = readFileSync(join(first.snapshotDir, "manifest.json"));
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	const bytes = readFileSync(manifestPath);
 	const files = readdirSync(first.snapshotDir).sort();
 	rmSync(path);
 	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+	// Back in October, a new call: publishing after the November export would seal October while this
+	// clock is in it, so the ordinary export refuses and the published history stays as it was.
 	vi.mocked(Date.now).mockReturnValue(at("2026-10-25"));
-	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
-	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(sealed);
+	sessionFile(join(agent, "sessions", "late.jsonl"), { startMs: at("2026-10-25"), lines: [call("2026-10-25", 8)] });
+	await expect(exportStats(agent, out)).rejects.toMatchObject(
+		laterMonth(at("2026-10-25"), at("2026-11-02"), "2026-11"),
+	);
+	expect(readFileSync(manifestPath)).toEqual(bytes);
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	expect(existsSync(join(agent, "pi-session-kit", "stats-cache.json"))).toBe(false);
+	// An explicit replacement is monotonic: viewers import it, and it drops what the scan lacks.
+	const replaced = await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	expect(replaced.warnings?.[0]).toMatch(/^clock is behind the last published export/);
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
-	// An explicit replacement is the owner's way past a clock that ran ahead.
-	await exportStats(agent, out, undefined, { replaceHarnesses: true });
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-10-25"));
+	expect((await loadCombined(viewer)).calls.map((c) => c.input)).toEqual([8]);
 });
 
-it("refuses a same-month clock rollback before the scan, salt or bookkeeping can write", async () => {
+it("does not prematurely seal a newly seen wall month", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	const watermark = at("2026-11-02") + 300 * 86_400_000;
+	sessionFile(path, {
+		startMs: at("2026-11-01"),
+		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	const manifestPath = join(first.snapshotDir, "manifest.json");
+	writeFileSync(manifestPath, JSON.stringify({ ...manifest(first.snapshotDir), exportedAt: watermark }));
+	const bytes = readFileSync(manifestPath);
+	// Publishing after the watermark would seal November with this call in it, so deleting it later could
+	// never remove it: refused, nothing published.
+	await expect(exportStats(agent, out)).rejects.toMatchObject(laterMonth(at("2026-11-02"), watermark, "2027-08"));
+	expect(readFileSync(manifestPath)).toEqual(bytes);
+	// November stays open while the wall clock is in it: a deleted transcript leaves the next publication.
+	rmSync(path);
+	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+	await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	expect(manifest(first.snapshotDir)).toMatchObject({ exportedAt: watermark + 1, shards: [] });
+});
+
+it("refuses an ordinary export whose next instant crosses into the next month", async () => {
+	const last = Date.UTC(2026, 10, 30, 23, 59, 59, 999);
+	vi.mocked(Date.now).mockReturnValue(last);
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-11-01"),
+		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out);
+	await expect(exportStats(agent, out)).rejects.toMatchObject(laterMonth(last, last, "2026-12"));
+	vi.mocked(Date.now).mockReturnValue(last + 1);
+	expect((await exportStats(agent, out)).warnings).toBeUndefined();
+	expect(manifest(first.snapshotDir).exportedAt).toBe(last + 1);
+});
+
+it("publishes a same-month clock rollback strictly after the last published export", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (input: number) =>
 		assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input });
 	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7)] });
 	const first = await exportStats(agent, out);
-	// Exact equality is not a rollback.
-	await exportStats(agent, out);
-	const files = (): Record<string, Buffer | undefined> => {
-		const read = (file: string) => {
-			try {
-				return readFileSync(file);
-			} catch {
-				return undefined;
-			}
-		};
-		return {
-			cache: read(join(agent, "pi-session-kit", "stats-cache.json")),
-			salt: read(join(agent, "pi-session-kit", "export-state.json")),
-			bookkeeping: read(outboxStatePath(agent, first.snapshotDir)),
-			manifest: read(join(first.snapshotDir, "manifest.json")),
-		};
-	};
-	// A changed transcript would make the loader rewrite its cache, and a missing salt would be created.
-	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7), line(8)] });
-	rmSync(join(agent, "pi-session-kit", "export-state.json"));
-	const before = files();
-	expect(before.cache && before.bookkeeping && before.manifest && !before.salt).toBeTruthy();
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
-	const behind = new Date(at("2026-11-02") - 1).toISOString();
-	const published = new Date(at("2026-11-02")).toISOString();
-	await expect(exportStats(agent, out)).rejects.toThrow(
-		`Clock is behind the last published export (${behind} < ${published}); refusing to reopen sealed months. ` +
-			"Fix the clock, or pass --replace-harnesses to publish anyway: that drops sealed history absent from " +
-			"this scan, and viewers that imported the newer snapshot keep it and never import this replacement; they " +
-			`accept this machine again only from a later export timestamped at or after ${published}`,
-	);
-	expect(files()).toEqual(before);
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
-	await exportStats(agent, out);
 	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02"));
+	// Exporting again within the same millisecond is not a clock problem: no warning, still strictly later.
+	expect((await exportStats(agent, out)).warnings).toBeUndefined();
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7), line(8)] });
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
+	const behind = await exportStats(agent, out);
+	expect(behind.warnings?.[0]).toMatch(/^clock is behind the last published export/);
+	expect(manifest(first.snapshotDir)).toMatchObject({
+		exportedAt: at("2026-11-02") + 2,
+		lastGoodAt: { pi: at("2026-11-02") + 2 },
+	});
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((c) => c.input).sort()).toEqual([7, 8]);
+	// A clock past the published export publishes its own instant again.
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	expect((await exportStats(agent, out)).warnings).toBeUndefined();
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-03"));
+});
+
+it("keeps a replacement over damaged history monotonic", async () => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-11-01"),
+		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const shard = manifest(first.snapshotDir).shards[0];
+	if (!shard) throw new Error("Missing shard");
+	writeFileSync(join(first.snapshotDir, shard.file), "corrupt");
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-01"));
+	await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+});
+
+describe("implausible watermark", () => {
+	const DAY = 86_400_000;
+	/** Seal October, then leave it only in published history, with the manifest's `exportedAt` set to `watermark`. */
+	const sealWith = async (watermark: number): Promise<{ dir: string; files: string[]; bytes: Buffer }> => {
+		const path = join(agent, "sessions", "fixture.jsonl");
+		vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
+		sessionFile(path, {
+			startMs: at("2026-10-20"),
+			lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
+		});
+		const first = await exportStats(agent, out);
+		vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+		await exportStats(agent, out);
+		rmSync(path);
+		rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+		const file = join(first.snapshotDir, "manifest.json");
+		writeFileSync(file, JSON.stringify({ ...manifest(first.snapshotDir), exportedAt: watermark }));
+		return { dir: first.snapshotDir, files: readdirSync(first.snapshotDir).sort(), bytes: readFileSync(file) };
+	};
+	const refusal = (dir: string, watermark: number, now: number) => ({
+		refusal: "watermark-ahead",
+		message:
+			`Published usage manifest exportedAt (${new Date(watermark).toISOString()}) is more than 366 days ahead ` +
+			`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
+			`it (${JSON.stringify(join(dir, "manifest.json"))}); there is no supported in-place repair ` +
+			"(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one. " +
+			"--replace-harnesses does not bypass this",
+	});
+
+	it.each([
+		["year +010000", Date.UTC(10000, 0, 1)],
+		["the JS max timestamp", 8_640_000_000_000_000],
+		["5 years ahead", at("2031-11-02")],
+		["366 days and 1 ms ahead", at("2026-11-02") + 366 * DAY + 1],
+	])("refuses %s, replacement included, and keeps sealed history", async (_, watermark) => {
+		const sealed = await sealWith(watermark);
+		for (const replaceHarnesses of [false, true])
+			await expect(exportStats(agent, out, undefined, { replaceHarnesses })).rejects.toMatchObject(
+				refusal(sealed.dir, watermark, at("2026-11-02")),
+			);
+		expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
+		expect(readdirSync(sealed.dir).sort()).toEqual(sealed.files);
+	});
+
+	it.each([false, true])(
+		"refuses a watermark ahead of damaged history (replaceHarnesses %s)",
+		async (replaceHarnesses) => {
+			const watermark = at("2031-11-02");
+			const sealed = await sealWith(watermark);
+			const shard = manifest(sealed.dir).shards[0];
+			if (!shard) throw new Error("Missing shard");
+			writeFileSync(join(sealed.dir, shard.file), "corrupt");
+			const files = readdirSync(sealed.dir).sort();
+			// The damaged-history policy would recommend --replace-harnesses, which cannot bypass this.
+			await expect(exportStats(agent, out, undefined, { replaceHarnesses })).rejects.toMatchObject(
+				refusal(sealed.dir, watermark, at("2026-11-02")),
+			);
+			expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
+			expect(readdirSync(sealed.dir).sort()).toEqual(files);
+			expect(existsSync(join(agent, "pi-session-kit", "stats-cache.json"))).toBe(false);
+		},
+	);
+
+	it.each([
+		["30 days", 30 * DAY],
+		["exactly 366 days", 366 * DAY],
+	])("refuses an ordinary export behind a watermark %s ahead; a replacement publishes after it", async (_, lead) => {
+		const watermark = at("2026-11-02") + lead;
+		const sealed = await sealWith(watermark);
+		await expect(exportStats(agent, out)).rejects.toMatchObject(
+			laterMonth(at("2026-11-02"), watermark, new Date(watermark + 1).toISOString().slice(0, 7)),
+		);
+		expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
+		expect(readdirSync(sealed.dir).sort()).toEqual(sealed.files);
+		const result = await exportStats(agent, out, undefined, { replaceHarnesses: true });
+		expect(result.warnings?.[0]).toMatch(/^clock is behind the last published export/);
+		expect(manifest(sealed.dir).exportedAt).toBe(watermark + 1);
+	});
+
+	it("refuses a publication instant past year 9999", async () => {
+		const last = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+		vi.mocked(Date.now).mockReturnValue(last);
+		const first = await exportStats(agent, out);
+		const bytes = readFileSync(join(first.snapshotDir, "manifest.json"));
+		await expect(exportStats(agent, out)).rejects.toMatchObject(refusal(first.snapshotDir, last, last));
+		expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(bytes);
+	});
 });
 
 it("checks and publishes one export instant taken before the published manifest is read", async () => {
@@ -1294,7 +1606,11 @@ it("checks and publishes one export instant taken before the published manifest 
 		});
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
 	advanceDuringRead(at("2026-11-03"));
-	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
+	expect((await exportStats(agent, out)).warnings?.[0]).toMatch(/^clock is behind the last published export/);
+	expect(manifest(first.snapshotDir)).toMatchObject({
+		exportedAt: at("2026-11-02") + 1,
+		lastGoodAt: { pi: at("2026-11-02") + 1 },
+	});
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-04"));
 	advanceDuringRead(at("2026-11-05"));
 	await exportStats(agent, out);
@@ -1327,11 +1643,13 @@ it.each(["bookkeeping kept", "bookkeeping lost", "no shards"])(
 		expect(files.length > 0 || variant === "no shards").toBe(true);
 		const state = variant === "bookkeeping lost" ? undefined : readFileSync(statePath);
 		vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
-		await expect(exportStats(agent, out)).rejects.toThrow(
-			`Published usage manifest is missing from ${JSON.stringify(first.snapshotDir)}, but this outbox published ` +
+		await expect(exportStats(agent, out)).rejects.toMatchObject({
+			message:
+				`Published usage manifest is missing from ${JSON.stringify(first.snapshotDir)}, but this outbox published ` +
 				"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 				"or pass --replace-harnesses to publish without that history",
-		);
+			refusal: "manifest-missing",
+		});
 		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 		if (state) expect(readFileSync(statePath)).toEqual(state);
 		else expect(existsSync(statePath)).toBe(false);
@@ -1376,9 +1694,10 @@ it.each(["corrupt", "missing"])("keeps the active manifest when one shard among 
 	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
 	const files = readdirSync(first.snapshotDir).sort();
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
-	await expect(exportStats(agent, out)).rejects.toThrow(
-		`Published usage history is unreadable (${bad.file}); restore it from the sync checkout, or pass --replace-harnesses to publish without it`,
-	);
+	await expect(exportStats(agent, out)).rejects.toMatchObject({
+		message: `Published usage history is unreadable (${bad.file}); restore it from the sync checkout, or pass --replace-harnesses to publish without it`,
+		refusal: "history-unreadable",
+	});
 	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(before);
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
 	// Restoring the shard is enough: the next export publishes over intact history again.
@@ -1409,10 +1728,12 @@ it("reports published history over the expansion budget apart from files to rest
 		.spyOn(Buffer, "byteLength")
 		.mockImplementation((value, encoding) => (value === text ? 128 * 1024 * 1024 + 1 : measure(value, encoding)));
 	try {
-		await expect(exportStats(agent, out)).rejects.toThrow(
-			`Published usage history exceeds the 128 MiB expanded machine budget (from ${ref.file}); those files ` +
+		await expect(exportStats(agent, out)).rejects.toMatchObject({
+			message:
+				`Published usage history exceeds the 128 MiB expanded machine budget (from ${ref.file}); those files ` +
 				"match the manifest, so restoring them will not help: pass --replace-harnesses to publish without it",
-		);
+			refusal: "history-over-budget",
+		});
 	} finally {
 		spy.mockRestore();
 	}

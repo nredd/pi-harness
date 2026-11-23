@@ -107,6 +107,7 @@ import {
 import type { PermissionStatus } from "./permissions.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
+import { LINUX_X11_CHECKED } from "./platform/linux/backend.ts";
 import type {
 	FramePoints,
 	PlatformFrontmostResult as FrontmostResult,
@@ -1100,9 +1101,6 @@ async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise
 	return current;
 }
 
-/** `atspiLookRoot` X11 statuses under which a root's class aliases are complete: see `revalidateLookRoot`. */
-const LINUX_X11_CHECKED = new Set<unknown>(["paired", "ambiguous", "unpaired", "absent"]);
-
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {
 	const current = operationState().currentTarget;
@@ -1712,7 +1710,13 @@ async function collectWindowDetails(
 	config: ReturnType<typeof getComputerUseConfig>,
 	signal?: AbortSignal,
 ): Promise<ListWindowsDetails["windows"]> {
-	const perApp = await Promise.all(apps.map(async (app) => ({ app, windows: await listWindows(app.pid, signal) })));
+	const listOfPids = currentPlatformBackend.listRootsOfPids;
+	const perApp = listOfPids
+		? await listOfPids(
+				apps.map((app) => app.pid),
+				signal,
+			).then((roots) => apps.map((app) => ({ app, windows: roots.filter((root) => root.pid === app.pid) })))
+		: await Promise.all(apps.map(async (app) => ({ app, windows: await listWindows(app.pid, signal) })));
 	return sortWindowDetails(
 		perApp.flatMap(({ app, windows }) => windows.map((window) => windowDetails(app, window, config))),
 	);
