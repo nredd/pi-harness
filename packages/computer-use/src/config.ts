@@ -311,7 +311,8 @@ export function effectiveBlockedBundleIds(): string[] {
 
 /**
  * Compare only the host's policy identity, never the presentation name. Block-only aliases (Linux
- * `WM_CLASS`, an ambiguous `exe` link name) can add a block but never stand in for a missing identity.
+ * `WM_CLASS`, an ambiguous `exe` link name, an interpreter's `cmdline` script or module name) can add a
+ * block but never stand in for a missing identity.
  */
 export function blockedAppId(
 	platform: PlatformName,

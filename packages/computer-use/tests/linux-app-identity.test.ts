@@ -392,6 +392,25 @@ test("Linux WM_CLASS and an ambiguous exe link name can only add a block", async
 	expect(await byPid()).toMatchObject({ 201: { blocked: false }, 202: { blocked: false }, 203: { blocked: false } });
 });
 
+test("Linux interpreter script aliases can only add a block", async ({ onTestFinished }) => {
+	const { userFile, find } = useLinuxRoots(onTestFinished, [
+		linuxRoot(301, "Tool", "python3", { blockAliases: ["tool.py", "tool"] }),
+		linuxRoot(302, "Other", "python3", { blockAliases: ["other.py", "other"] }),
+		// A script alias never identifies a root the helper left unidentified.
+		linuxRoot(303, "Tool", undefined, { blockAliases: ["tool.py", "tool"] }),
+	]);
+	const blocked = async () => Object.fromEntries((await find()).map((root) => [root.pid, root.blocked]));
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["TOOL"] }));
+	expect(await blocked()).toEqual({ 301: true, 302: false, 303: true });
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["tool.py"] }));
+	expect(await blocked()).toEqual({ 301: true, 302: false, 303: true });
+	// The interpreter identity still blocks every script it hosts.
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["python3"] }));
+	expect(await blocked()).toEqual({ 301: true, 302: true, 303: true });
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: [] }));
+	expect(await blocked()).toEqual({ 301: false, 302: false, 303: true });
+});
+
 test("Linux read_text revalidates the exact root that owns the look before every live read", async ({
 	onTestFinished,
 }) => {
