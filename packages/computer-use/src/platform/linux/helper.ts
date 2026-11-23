@@ -35,6 +35,12 @@ export const DISCARDED_EXIT_WAIT_MS = HELPER_TERMINATE_GRACE_MS + 1_000;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
 export const LINUX_HELPER_PROTOCOL_VERSION = 10;
+/**
+ * Helper features the client requires beyond the protocol version, from `diagnostics.features`. A helper
+ * built before a feature shipped speaks the same protocol but lacks it, so it is rejected and replaced like a
+ * protocol mismatch. `snapshot-deadline`: one deadline bounds each AT-SPI snapshot (#1349, #1352).
+ */
+export const LINUX_REQUIRED_HELPER_FEATURES = ["snapshot-deadline"] as const;
 export const LINUX_HELPER_PATH =
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH ||
 	path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
@@ -163,6 +169,20 @@ function reason(error: unknown): string {
 /** `reason` for a probe failure: the restart hint is wrong while setup is about to replace the helper. */
 function probeReason(error: unknown): string {
 	return reason(error).replace(new RegExp(`\\.? ${RESTART_HINT.replace(/\.$/, "")}$`), "");
+}
+
+/**
+ * Require every `LINUX_REQUIRED_HELPER_FEATURES` entry in `diagnostics.features`. A missing or malformed list
+ * lacks them all: a helper that does not report a feature is treated as not having it.
+ */
+export function assertLinuxHelperFeatures(diagnostics: PlatformDiagnostics): void {
+	const reported = new Set(Array.isArray(diagnostics.features) ? diagnostics.features : []);
+	const missing = LINUX_REQUIRED_HELPER_FEATURES.filter((feature) => !reported.has(feature));
+	if (missing.length > 0) {
+		throw new Error(
+			`Linux helper lacks required features: ${missing.join(", ")}. Rebuild it with \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\`.`,
+		);
+	}
 }
 
 async function waitForShared<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -419,6 +439,7 @@ export class LinuxHelperClient {
 			);
 		}
 		assertPlatformArchitecture("Linux", diagnostics);
+		assertLinuxHelperFeatures(diagnostics);
 	}
 
 	private async process(signal?: AbortSignal): Promise<ChildProcessWithoutNullStreams> {

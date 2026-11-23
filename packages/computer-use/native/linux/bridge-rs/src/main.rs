@@ -393,6 +393,9 @@ async fn diagnostics_with(x11_probe: impl FnOnce() -> bool + Send + 'static) -> 
             "concurrent-requests",
             "transactional-batching"
         ],
+        // Linux-only features the client requires beyond the protocol version; a protocol-10 helper
+        // built before one shipped lacks it and is replaced. `snapshot-deadline`: #1349.
+        "features": ["snapshot-deadline"],
         "pid": std::process::id(),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
@@ -1826,6 +1829,7 @@ mod tests {
         })
         .await;
         assert_eq!(report["x11"], true);
+        assert_eq!(report["features"], json!(["snapshot-deadline"]));
     }
 
     fn panicking_work() -> Result<(), ProtocolError> {

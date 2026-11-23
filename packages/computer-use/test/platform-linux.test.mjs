@@ -34,7 +34,7 @@ const readline = require("node:readline");
 const invariants = ["state-scoped-observations","bounded-observation-history","multi-root-forest","progressive-disclosure","atomic-physical-input","concurrent-requests","transactional-batching"];
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line); let result;
-  if (request.cmd === "diagnostics") result = { protocolVersion: 10, architectureVersion: 1, invariants, pid: process.pid, accessibility: true };
+  if (request.cmd === "diagnostics") result = { protocolVersion: 10, architectureVersion: 1, invariants, features: ["snapshot-deadline"], pid: process.pid, accessibility: true };
   else if (request.cmd === "listRoots") result = { roots: [{ kind: "window", rootRef: "root:1", pid: 42, appName: "google-chrome-stable", title: "Linux fixture", framePoints: { x: 10, y: 20, w: 800, h: 600 }, isFocused: true }] };
   else if (request.cmd === "atspiReadText") result = { text: "fixture", offset: 0, limit: 7, totalChars: 7, hasMore: false };
   else if (request.cmd === "atspiWaitFor") result = { found: true };
@@ -128,7 +128,7 @@ const readline = require("node:readline");
 fs.appendFileSync(process.env.PI_TEST_LINUX_START_COUNT, "start\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
-  const result = request.cmd === "diagnostics" ? { protocolVersion: 10, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  const result = request.cmd === "diagnostics" ? { protocolVersion: 10, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)}, features: ["snapshot-deadline"] } : request.args;
   process.stdout.write(JSON.stringify({ protocolVersion: 10, id: request.id, ok: true, result }) + "\\n");
 });
 `,
@@ -194,7 +194,7 @@ fs.appendFileSync(${JSON.stringify(startFile)}, process.pid + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   if (request.cmd === "diagnostics") fs.appendFileSync(${JSON.stringify(`${startFile}.diagnostics`)}, process.pid + "\\n");
-  const result = request.cmd === "diagnostics" ? { protocolVersion: ${protocol}, architectureVersion: ${architecture}, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  const result = request.cmd === "diagnostics" ? { protocolVersion: ${protocol}, architectureVersion: ${architecture}, invariants: ${JSON.stringify(INVARIANTS)}, features: ["snapshot-deadline"] } : request.args;
   /**
    * Write this fixture request's protocol response.
    * @returns {boolean} Stream backpressure result.

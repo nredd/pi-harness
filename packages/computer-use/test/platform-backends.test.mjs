@@ -20,7 +20,8 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 	HELPER_APP_PATH: "/fake/pi-computer-use.app",
 	runProcess: vi.fn(),
 }));
-vi.mock("../src/platform/linux/helper.ts", () => ({
+vi.mock("../src/platform/linux/helper.ts", async (importOriginal) => ({
+	assertLinuxHelperFeatures: (await importOriginal()).assertLinuxHelperFeatures,
 	LINUX_HELPER_PROTOCOL_VERSION: 10,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
@@ -44,7 +45,7 @@ const diagnostics = (over = {}) => ({
 	...over,
 });
 /** The Linux helper speaks its own protocol version (#1300). */
-const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 10, ...over });
+const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 10, features: ["snapshot-deadline"], ...over });
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -678,6 +679,12 @@ describe("Linux backend", () => {
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ invariants: [] }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Linux helper does not satisfy/);
+		// A protocol-10 helper built before the snapshot deadline (#1352) reports no `features`.
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ features: undefined }));
+		await rejectsWith(
+			backend.ensureReady({}, { lastPermissionCheckAt: 0 }),
+			/Linux helper lacks required features: snapshot-deadline\. Rebuild it with `PI_COMPUTER_USE_ALLOW_BUILD=1 node .*setup-helper\.mjs --platform linux`/,
+		);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: false }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /AT-SPI/);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: undefined }));

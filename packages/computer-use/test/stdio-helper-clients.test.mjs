@@ -84,7 +84,10 @@ function envelope(platform, handlers = {}, extra = {}) {
 		protocolVersion: platform === "Linux" ? 10 : 6,
 		platform,
 		handlers,
-		diagnostics: { invariants: REQUIRED_INVARIANTS },
+		diagnostics: {
+			invariants: REQUIRED_INVARIANTS,
+			...(platform === "Linux" ? { features: ["snapshot-deadline"] } : {}),
+		},
 		...extra,
 	});
 }
@@ -620,6 +623,47 @@ describe("Linux helper client", () => {
 			return true;
 		});
 		assert.equal(setupSpawns(spawn).length, 1);
+	});
+
+	test("a protocol 10 helper built before the snapshot deadline is rejected and setup replaces it (#1352)", async () => {
+		install();
+		// The #1346 helper: protocol 10, current architecture and invariants, no `features`.
+		const stale = linuxEngine({
+			diagnostics: ok({ protocolVersion: 10, architectureVersion: 1, invariants: REQUIRED_INVARIANTS, features: undefined }),
+		});
+		const fresh = linuxEngine({ look: ok("fresh") });
+		let generation = 0;
+		const { client, spawn, children } = await linux({
+			setup: () => {
+				generation = 1;
+				return { exitCode: 0 };
+			},
+			helper: (list) => realisticChild(list, { engine: generation ? fresh : stale }),
+		});
+		assert.equal(await client.command("look"), "fresh");
+		assert.equal(setupSpawns(spawn).length, 1);
+		assert.deepEqual(children[0].signals, ["SIGTERM"], "the pre-deadline helper is killed, never reused");
+	});
+
+	test("a helper still lacking a required feature after setup fails validation with the rebuild command", async () => {
+		// A malformed `features` value counts as reporting none.
+		const engine = linuxEngine({
+			diagnostics: ok({
+				protocolVersion: 10,
+				architectureVersion: 1,
+				invariants: REQUIRED_INVARIANTS,
+				features: "snapshot-deadline",
+			}),
+		});
+		const { client } = await linux({ setup: installing, helper: { engine } });
+		await assert.rejects(client.ensureInstalled(), (error) => {
+			assert.ok(error.message.startsWith(`Linux helper installed at ${helperPath} failed validation: `));
+			assert.match(
+				error.message,
+				/failed validation: Linux helper lacks required features: snapshot-deadline\. Rebuild it with `PI_COMPUTER_USE_ALLOW_BUILD=1 node \S*setup-helper\.mjs --platform linux`\. Re-run setup or delete it\.$/,
+			);
+			return true;
+		});
 	});
 
 	test("a rejected helper that setup replaces is re-probed and then used", async () => {
