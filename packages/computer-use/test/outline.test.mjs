@@ -457,8 +457,9 @@ describe("graftScopedOutline", () => {
 	test("reuses matching wire refs, numbers new nodes after the max ref, preserves unreused", () => {
 		const outline = graftBase();
 		const before = Object.fromEntries(outline.nodes.map((node) => [node.wireRef, node]));
-		// A readable scoped root: an unread picture-only one is protected and would redact the preserved children.
-		graftScopedOutline(outline, "@e2", scopedLook({ pictureOnly: false }));
+		// A readable, fully read scoped root: an unread picture-only one is protected and would redact the preserved
+		// children, and an unread one drops them (#1349).
+		graftScopedOutline(outline, "@e2", scopedLook({ pictureOnly: false, truncated: false }));
 		const pane = outline.nodes[1];
 		const byWire = (wire) => outline.nodes.find((node) => node.wireRef === wire);
 
@@ -543,7 +544,7 @@ describe("graftScopedOutline", () => {
 
 	test("indexes are rebuilt breadth-first with consistent wire maps", () => {
 		const outline = graftBase();
-		graftScopedOutline(outline, "@e2", scopedLook());
+		graftScopedOutline(outline, "@e2", scopedLook({ truncated: false }));
 		assert.deepEqual(
 			outline.nodes.map((node) => node.wireRef ?? node.title),
 			["win", "pane", "sibling", "keep", "fresh", "No wire ref", "gone", "nested", "fresh-kid", "gone-kid", "deep"],
@@ -568,6 +569,74 @@ describe("graftScopedOutline", () => {
 			"refs that are not @e<digits> count as 0",
 		);
 		assert.equal(outline.nodes[1].ref, "@e07x");
+	});
+
+	test("an unread scoped node drops every cached node the look did not reuse (#1349)", () => {
+		const titles = (outline) => outline.nodes.map((node) => node.title).filter(Boolean);
+		// The helper refused the target's children: none of the cached ones may come back from cache.
+		const refused = graftBase();
+		// Breadth-first: win, pane, sibling, then the pane's cached subtree.
+		const cachedRefs = refused.nodes.slice(3).map((node) => node.ref);
+		assert.equal(cachedRefs.length, 5);
+		const target = graftScopedOutline(refused, "@e2", outlineOf({ ref: "pane", role: "AXList", truncated: true }));
+		assert.deepEqual(target.children, []);
+		assert.deepEqual(titles(refused), ["Sibling"]);
+		for (const ref of cachedRefs) assert.equal(nodeByRef(refused, ref), undefined, `${ref} is not addressable`);
+		// A deeper unread node is enough: its own cached children and every unseen sibling go too.
+		const deeper = graftBase();
+		graftScopedOutline(
+			deeper,
+			"@e2",
+			outlineOf({ ref: "pane", role: "AXList", children: [{ ref: "nested", role: "AXGroup", truncated: true }] }),
+		);
+		assert.deepEqual(
+			deeper.nodes.map((node) => node.wireRef),
+			["win", "pane", "sibling", "nested"],
+		);
+		assert.ok(!titles(deeper).includes("Deep") && !titles(deeper).includes("Stale child"));
+	});
+
+	test("an unread scoped node's dropped refs are never reissued by a later graft (#1349)", () => {
+		const outline = graftBase();
+		// Breadth-first: win @e1, pane @e2, sibling @e3, then the pane's cached subtree @e4..@e8.
+		assert.equal(nodeByRef(outline, "@e8")?.wireRef, "deep");
+		graftScopedOutline(outline, "@e2", outlineOf({ ref: "pane", role: "AXList", truncated: true }));
+		assert.deepEqual(refs(outline), ["@e1", "@e2", "@e3"], "the refused subtree's refs are gone");
+		// A second graft in the same state introduces a new element: it must not inherit a retired ref.
+		const second = outlineOf({ ref: "pane", role: "AXList", truncated: true, children: [{ ref: "brand-new" }] });
+		graftScopedOutline(outline, "@e2", second);
+		assert.equal(outline.wireRefToRef.get("brand-new"), "@e9");
+		for (const ref of ["@e4", "@e5", "@e6", "@e7", "@e8"]) assert.equal(nodeByRef(outline, ref), undefined, ref);
+		// The mark survives a session round trip, so a restored state keeps the retired refs retired too.
+		const restored = restoreOutline(serializeOutline(outline));
+		assert.equal(restored.refHighWater, 9);
+		graftScopedOutline(restored, "@e2", outlineOf({ ref: "pane", role: "AXList", truncated: true }));
+		graftScopedOutline(restored, "@e2", outlineOf({ ref: "pane", role: "AXList", children: [{ ref: "later" }] }));
+		assert.equal(restored.wireRefToRef.get("later"), "@e10");
+		// A stored mark that is not a nonnegative integer is ignored; the highest restored ref counts instead.
+		for (const refHighWater of [-1, 2.5, "12", Number.NaN]) {
+			const bad = restoreOutline({ ...serializeOutline(graftBase()), refHighWater });
+			assert.equal(bad.refHighWater, undefined, String(refHighWater));
+		}
+	});
+
+	test("an authoritative complete scoped reply drops every cached node it omits (#1349)", () => {
+		// A cached child moved under a protected container outside the target: a complete reply simply omits it.
+		const linux = graftBase();
+		const cachedRef = Object.fromEntries(linux.nodes.map((node) => [node.wireRef, node.ref]));
+		graftScopedOutline(linux, "@e2", scopedLook({ pictureOnly: false, truncated: false }), { authoritative: true });
+		assert.deepEqual(
+			linux.nodes.map((node) => node.wireRef ?? node.title),
+			["win", "pane", "sibling", "keep", "fresh", "No wire ref", "fresh-kid"],
+		);
+		assert.ok(!linux.nodes.some((node) => ["Stale child", "Deep"].includes(node.title)));
+		for (const wire of ["gone", "gone-kid", "nested", "deep"]) {
+			assert.equal(nodeByRef(linux, cachedRef[wire]), undefined, `${wire} ${cachedRef[wire]} is not addressable`);
+		}
+		// macOS and Windows (no option) keep them while the reply has no unread node, see the tests above.
+		const other = graftBase();
+		graftScopedOutline(other, "@e2", scopedLook({ pictureOnly: false, truncated: false }));
+		assert.ok(other.nodes.some((node) => node.wireRef === "gone"));
 	});
 
 	test("target found by wire ref keeps the ref it was addressed by", () => {
