@@ -13,8 +13,9 @@ const USAGE =
 	"subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
 	"  --replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
 	"unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
-	"published history absent from the scan (sealed months included). Without a readable published manifest, " +
-	"viewers holding a newer snapshot keep it until this machine exports a later one";
+	"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
+	"the replacement keep it until this machine exports a later one\n" +
+	"  A clock behind the last published export still publishes, just after it, with a warning";
 const FLAGS = [
 	"--agent-dir",
 	"--output",

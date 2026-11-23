@@ -513,9 +513,10 @@ node ARTIFACT import --agent-dir DIR --input REPO
 `--replace-harnesses` publishes this scan as a replacement generation. It bypasses the
 narrower-set, unreadable-history and missing-manifest safeguards below and unfreezes recovery files,
 so it drops published history absent from the scan, sealed months included. It is timestamped after
-the readable published manifest like any export, so viewers import it; without a readable manifest
-(unreadable or missing) there is no such bound, and viewers holding a newer snapshot keep their copy
-until this machine exports a later `exportedAt`. The usage text says so too.
+the readable published manifest like any export, so viewers holding the manifest it supersedes import
+it. Viewers holding a newer snapshot than the replacement (e.g. when the manifest is unreadable or
+missing, so there is no such bound) keep their copy until this machine exports a later `exportedAt`.
+The usage text says so too.
 
 `--harness` picks what an export reads; the default is `pi` only, so other tools are opt-in. Roots
 default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_DIR` or `~/.claude`,
@@ -608,8 +609,9 @@ CLI results:
   recorded"]`, when the snapshot is out but the outbox's state file could not be written (the next
   export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
-  state, a refused narrower harness set, a clock behind the last published export, or a readable
-  manifest whose history is not. (A harness cache that cannot be written is a failed
+  state, a refused narrower harness set, a published `exportedAt` implausibly far ahead (more than
+  366 days, or past year 9999), or a readable manifest whose history is not. A clock behind the last
+  published export is not one: it publishes just after it and exits 0 with a `warnings` entry. (A harness cache that cannot be written is a failed
   harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits
   nonzero, retaining every failed machine's last-good snapshot; one that only finds stale harnesses
   exits 0 and lists them in `stale`.
@@ -768,14 +770,25 @@ This remains a limitation, not a claimed repair. Old file bytes are not changed,
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 Sealing follows the published `exportedAt`, not the wall clock. The wall clock is read once,
 before the published manifest is read; the export publishes at `max(now, published exportedAt + 1)`.
-A clock behind the published export (e.g. after one that ran ahead) therefore still publishes,
-strictly after it: months the published export sealed stay sealed (never reopened as the active
-month, replaced by the scan or pruned), new calls in them append as late deltas, and viewers holding
-the published snapshot import this one as newer. The export warns `clock is behind the last published
+A clock behind the published export (e.g. after one that ran ahead) therefore still publishes and
+exits 0, strictly after it: months the published export sealed stay sealed (never reopened as the
+active month, replaced by the scan or pruned), new calls in them append as late deltas, and viewers
+holding the published snapshot import this one as newer. What is preserved is SEALED history; the
+active month is rebuilt from the scan as on any export, so its rows the scan no longer has are
+dropped. Sealing by that instant can cross a month boundary: a watermark in December seals November
+while this clock is still in it. The export warns `clock is behind the last published
 export (<now> < <published>); published at <exportedAt> instead`; exporting twice within one
 millisecond advances by 1 ms without a warning. Until the clock passes it, `exportedAt` stays ahead
-of the wall clock and viewers flag the snapshot as a future clock. The bound comes only from the
-readable manifest: with it unreadable or missing, the export uses the wall clock.
+of the wall clock and viewers flag the snapshot as a future clock. Quota expiry and harness reads
+still use the wall clock. The bound comes only from the readable manifest (including one whose shards
+are unreadable): with it unreadable or missing, the export uses the wall clock.
+
+A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000
+(where `YYYY-MM` months stop sorting after sealed ones), is refused before anything is written,
+replacement included: `Published usage manifest exportedAt (<published>) is more than 366 days ahead
+of this clock (<now>) or leaves no instant before year 10000 to publish after it; repair or remove the
+exportedAt in "<dir>/manifest.json". --replace-harnesses does not bypass this`. Removing it makes the
+manifest unreadable, which then needs `--replace-harnesses` as below.
 
 New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
 that limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte

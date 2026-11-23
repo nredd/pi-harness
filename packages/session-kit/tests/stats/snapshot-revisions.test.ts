@@ -15,7 +15,7 @@ import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } fro
 import { basename, dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	decodeShard,
 	encodeShard,
@@ -1282,6 +1282,82 @@ it("keeps a replacement over damaged history monotonic", async () => {
 	await exportStats(agent, out, undefined, { replaceHarnesses: true });
 	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+});
+
+describe("implausible watermark", () => {
+	const DAY = 86_400_000;
+	/** Seal October, then leave it only in published history, with the manifest's `exportedAt` set to `watermark`. */
+	const sealWith = async (watermark: number): Promise<{ dir: string; files: string[]; bytes: Buffer }> => {
+		const path = join(agent, "sessions", "fixture.jsonl");
+		vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
+		sessionFile(path, {
+			startMs: at("2026-10-20"),
+			lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
+		});
+		const first = await exportStats(agent, out);
+		vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+		await exportStats(agent, out);
+		rmSync(path);
+		rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+		const file = join(first.snapshotDir, "manifest.json");
+		writeFileSync(file, JSON.stringify({ ...manifest(first.snapshotDir), exportedAt: watermark }));
+		return { dir: first.snapshotDir, files: readdirSync(first.snapshotDir).sort(), bytes: readFileSync(file) };
+	};
+	const refusal = (dir: string, watermark: number, now: number) =>
+		`Published usage manifest exportedAt (${new Date(watermark).toISOString()}) is more than 366 days ahead ` +
+		`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
+		`it; repair or remove the exportedAt in ${JSON.stringify(join(dir, "manifest.json"))}. ` +
+		"--replace-harnesses does not bypass this";
+
+	it.each([
+		["year +010000", Date.UTC(10000, 0, 1)],
+		["the JS max timestamp", 8_640_000_000_000_000],
+		["5 years ahead", at("2031-11-02")],
+		["366 days and 1 ms ahead", at("2026-11-02") + 366 * DAY + 1],
+	])("refuses %s, replacement included, and keeps sealed history", async (_, watermark) => {
+		const sealed = await sealWith(watermark);
+		for (const replaceHarnesses of [false, true])
+			await expect(exportStats(agent, out, undefined, { replaceHarnesses })).rejects.toThrow(
+				refusal(sealed.dir, watermark, at("2026-11-02")),
+			);
+		expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
+		expect(readdirSync(sealed.dir).sort()).toEqual(sealed.files);
+	});
+
+	it("refuses a watermark ahead of damaged history on the replacement path", async () => {
+		const watermark = at("2031-11-02");
+		const sealed = await sealWith(watermark);
+		const shard = manifest(sealed.dir).shards[0];
+		if (!shard) throw new Error("Missing shard");
+		writeFileSync(join(sealed.dir, shard.file), "corrupt");
+		await expect(exportStats(agent, out, undefined, { replaceHarnesses: true })).rejects.toThrow(
+			refusal(sealed.dir, watermark, at("2026-11-02")),
+		);
+		expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
+	});
+
+	it.each([
+		["30 days", 30 * DAY],
+		["exactly 366 days", 366 * DAY],
+	])("publishes after a watermark %s ahead, warns and keeps October sealed", async (_, lead) => {
+		const watermark = at("2026-11-02") + lead;
+		const sealed = await sealWith(watermark);
+		const october = manifest(sealed.dir).shards.filter((ref) => ref.month === "2026-10");
+		const result = await exportStats(agent, out);
+		expect(result.warnings?.[0]).toMatch(/^clock is behind the last published export/);
+		const after = manifest(sealed.dir);
+		expect(after.exportedAt).toBe(watermark + 1);
+		expect(after.shards).toEqual(expect.arrayContaining(october));
+	});
+
+	it("refuses a publication instant past year 9999", async () => {
+		const last = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+		vi.mocked(Date.now).mockReturnValue(last);
+		const first = await exportStats(agent, out);
+		const bytes = readFileSync(join(first.snapshotDir, "manifest.json"));
+		await expect(exportStats(agent, out)).rejects.toThrow(refusal(first.snapshotDir, last, last));
+		expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(bytes);
+	});
 });
 
 it("checks and publishes one export instant taken before the published manifest is read", async () => {

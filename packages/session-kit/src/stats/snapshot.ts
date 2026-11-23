@@ -189,6 +189,10 @@ const count = (v: unknown): v is number => typeof v === "number" && Number.isSaf
 const hash = (v: unknown): v is string => typeof v === "string" && HASH.test(v);
 const name = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 1024;
 const monthOf = (ms: number): string => new Date(ms).toISOString().slice(0, 7);
+/** How far a published `exportedAt` may run ahead of this clock before the next export refuses it. */
+const MAX_CLOCK_LEAD_MS = 366 * 86_400_000;
+/** The last instant with a four-digit ISO year, so `YYYY-MM` months still sort chronologically. */
+const LAST_ISO_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
 
 function validateIdentity(value: unknown): Identity {
 	exact(value, ["machineId", "label"]);
@@ -370,6 +374,8 @@ export function makeSnapshot(
 	exportedAt = Date.now(),
 	quota: readonly QuotaObservation[] = [],
 	lastGoodAt: Manifest["lastGoodAt"] = {},
+	/** Wall clock for quota expiry; `exportedAt` can run ahead of it. */
+	now = exportedAt,
 ): Omit<MachineSnapshot, "shards"> & { shards: CompactShard[] } {
 	checkEntryIds(loaded.calls);
 	const shards = new Map<string, CompactShard>();
@@ -398,7 +404,7 @@ export function makeSnapshot(
 		};
 		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
 	}
-	for (const q of mergeQuota(quota, exportedAt))
+	for (const q of mergeQuota(quota, now))
 		shard(monthOf(q.observedAt)).quota.push({
 			harness: q.harness,
 			provider: q.provider,
@@ -793,7 +799,9 @@ export interface ExportOptions {
 	 * Publish this scan as a replacement generation. Bypasses the narrower-set, unreadable-history and
 	 * missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
 	 * from the scan, sealed months included. Like any export it is timestamped after the readable published
-	 * manifest, so viewers import it; without one, viewers holding a newer snapshot keep their copy.
+	 * manifest, so viewers holding that manifest import it; viewers holding a snapshot newer than the
+	 * replacement (e.g. with no readable manifest to bound it) keep their copy. It does not bypass the
+	 * implausible-watermark refusal.
 	 */
 	replaceHarnesses?: boolean;
 	roots?: Partial<HarnessRoots>;
@@ -1164,6 +1172,16 @@ async function publishStats(
 				? loadedPrevious.exportedAt
 				: loadedPrevious.manifest.exportedAt;
 	const exportedAt = Math.max(now, publishedAt + 1);
+	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
+	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, before
+	// anything is written. Within years 0000-9999 a later instant never seals an earlier month.
+	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
+		throw new Error(
+			`Published usage manifest exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
+				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
+				`it; repair or remove the exportedAt in ${JSON.stringify(join(snapshotDir, "manifest.json"))}. ` +
+				"--replace-harnesses does not bypass this",
+		);
 	// Exporting twice within one millisecond is not a clock problem; only a clock behind it is reported.
 	const clockWarning =
 		now < publishedAt
@@ -1229,6 +1247,7 @@ async function publishStats(
 		);
 	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
+	// Harness reads and quota expiry follow the wall clock; publication and sealing follow `exportedAt`.
 	const scans = await loadHarnesses({
 		now,
 		harnesses: external,
@@ -1281,7 +1300,7 @@ async function publishStats(
 		sessionMetadata.push(...use.sessions);
 		quota.push(...use.quota);
 	}
-	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt);
+	const snapshot = makeSnapshot({ ...loaded, calls, sessionMetadata }, identity, exportedAt, quota, lastGoodAt, now);
 	validateSnapshot(snapshot);
 	const reportedLost = EXTERNAL_HARNESSES.filter((h) => report[h]?.failed === "lost");
 	const lostHarnesses = options.replaceHarnesses
