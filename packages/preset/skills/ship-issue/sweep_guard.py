@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
@@ -580,28 +581,28 @@ def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
     if any(part in (b"", b".", b"..") for part in (*parents, leaf)):
         raise KeepError(f"unsupported index path: {name!r}")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    walked = [(bytes(root), -1, os.open(root, flags))]
-    try:
+    with ExitStack() as stack:
+        root_fd = os.open(root, flags)
+        stack.callback(os.close, root_fd)
+        walked = [(bytes(root), -1, root_fd)]
         try:
             for part in parents:
-                walked.append(
-                    (part, walked[-1][2], os.open(part, flags, dir_fd=walked[-1][2]))
-                )
+                parent_fd = walked[-1][2]
+                descriptor = os.open(part, flags, dir_fd=parent_fd)
+                stack.callback(os.close, descriptor)
+                walked.append((part, parent_fd, descriptor))
         except OSError as exc:
             raise KeepError(
                 f"cannot open tracked parent without following links: {name!r}"
             ) from exc
         result = leaf_blob(walked[-1][2], leaf, algorithm)
-        for part, parent, descriptor in walked:
+        for part, parent, descriptor in reversed(walked):
             current = os.stat(
                 part, dir_fd=None if parent < 0 else parent, follow_symlinks=False
             )
             if identity(current) != identity(os.fstat(descriptor)):
                 raise KeepError(f"tracked parent changed during hash: {name!r}")
         return result
-    finally:
-        for *_, descriptor in walked:
-            os.close(descriptor)
 
 
 def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
@@ -617,11 +618,15 @@ def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
         KeepError: The opened entry is not regular, or it changed while hashed.
         OSError: The entry cannot be read without following a symlink.
     """
-    mode = entry_mode(os.stat(leaf, dir_fd=directory, follow_symlinks=False))
+    initial = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+    mode = entry_mode(initial)
     if mode == b"120000":
         link = os.readlink(leaf, dir_fd=directory)
-        digest = hashlib.new(algorithm, b"blob %d\0%s" % (len(link), link))
-        return mode, digest.hexdigest()
+        digest = hashlib.new(algorithm, b"blob %d\0%s" % (len(link), link)).hexdigest()
+        current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+        if stamp(initial) != stamp(current):
+            raise KeepError(f"tracked entry changed during hash: {leaf!r}")
+        return mode, digest
     if mode == b"unsupported":
         return mode, ""
     # Never block on a FIFO or follow a symlink swapped in after the stat.
@@ -638,16 +643,17 @@ def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
             size += len(chunk)
             digest.update(chunk)
         after = os.fstat(descriptor)
+        result = digest.hexdigest()
+        current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+        if (
+            size != before.st_size
+            or stamp(before) != stamp(after)
+            or stamp(before) != stamp(current)
+        ):
+            raise KeepError(f"tracked entry changed during hash: {leaf!r}")
+        return entry_mode(before), result
     finally:
         os.close(descriptor)
-    current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
-    if (
-        size != before.st_size
-        or stamp(before) != stamp(after)
-        or identity(current) != identity(before)
-    ):
-        raise KeepError(f"tracked entry changed during hash: {leaf!r}")
-    return entry_mode(before), digest.hexdigest()
 
 
 def stamp(info: os.stat_result) -> tuple[int, ...]:
@@ -656,11 +662,17 @@ def stamp(info: os.stat_result) -> tuple[int, ...]:
     Parameters:
         info: os.stat_result, Open-file stat result.
     Returns:
-        tuple[int, ...]: Device, inode, size, mtime and ctime in nanoseconds
+        tuple[int, ...]: Device, inode, mode, size, mtime and ctime in nanoseconds
     Raises:
         None.
     """
-    return (*identity(info), info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    return (
+        *identity(info),
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
 
 
 def check_eol(data: bytes) -> None:

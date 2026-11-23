@@ -349,8 +349,9 @@ Limits:
   or driver configuration could change after an attribute scan and cause `git status` to run a
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
   `git status` or `git diff` on a retained worktree to fill that gap.
-- The raw content comparison is a snapshot: a write after an entry is hashed is not seen.
-  Its total cost is unbounded: chunked reads bound per-file memory only and there is no time
+- The scan is NOT atomic against concurrent writers. Deepest-first parent revalidation narrows,
+  but does not close, the race window. Any future deletion must separately exclude writers through
+  removal. Its total cost is unbounded: chunked reads bound per-file memory only and there is no time
   budget yet (#1388); measure it before any deletion is enabled.
 - Non-goals here: the raw comparison does not detect a case-only rename under `core.ignorecase` or
   an intent-to-add entry whose file is still empty; the index-vs-`HEAD` check in #1369 covers

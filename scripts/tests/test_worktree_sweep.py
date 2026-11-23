@@ -697,17 +697,26 @@ def test_fifo_swapped_in_after_stat_keeps(tmp_path: Path, monkeypatch: pytest.Mo
     def swap(real: Hook) -> Hook:
         def opened(path: object, flags: int, *args: object, **kwargs: object) -> int:
             if path == b"tracked":
+                assert flags & os.O_NONBLOCK
                 target.unlink()
                 os.mkfifo(target)
             return real(path, flags, *args, **kwargs)
 
         return opened
 
+    def forbid_read(real: Hook) -> Hook:
+        def read(*args: object, **kwargs: object) -> bytes:
+            pytest.fail("read called on swapped FIFO")
+
+        return read
+
     with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry is not a regular file: b'tracked'"):
-        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, open=swap)
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, open=swap, read=forbid_read)
 
 
-@pytest.mark.parametrize("change", ["rewrite consumed chunk", "replace after read"])
+@pytest.mark.parametrize(
+    "change", ["rewrite consumed chunk", "replace after read", "rewrite after fstat", "chmod after fstat"]
+)
 def test_edit_consumed_chunk_during_hash_keeps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
 ) -> None:
@@ -732,9 +741,15 @@ def test_edit_consumed_chunk_during_hash_keeps(
             result = real(descriptor)
             calls["fstat"] += 1
             if calls["fstat"] == 2:
-                copy = tmp_path / "copy"
-                copy.write_bytes(b"0123456789abcdef")
-                copy.replace(target)
+                if change == "replace after read":
+                    copy = tmp_path / "copy"
+                    copy.write_bytes(b"0123456789abcdef")
+                    copy.replace(target)
+                elif change == "rewrite after fstat":
+                    target.write_bytes(b"abcdefghijklmnop")
+                    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns + 1_000_000_000))
+                else:
+                    target.chmod(0o755)
             return result
 
         return fstat
@@ -768,6 +783,74 @@ def test_parent_swap_during_hash_keeps(tmp_path: Path, monkeypatch: pytest.Monke
 
     with pytest.raises(GUARD_MODULE["KeepError"], match="tracked parent changed during hash: b'dir/tracked'"):
         hash_with(tmp_path.resolve(), b"dir/tracked", monkeypatch, open=swap)
+
+
+def test_symlink_replaced_after_readlink_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "tracked"
+    target.symlink_to("same")
+
+    def replace(real: Hook) -> Hook:
+        def readlink(*args: object, **kwargs: object) -> bytes:
+            result = real(*args, **kwargs)
+            target.unlink()
+            target.symlink_to("same")
+            return result
+
+        return readlink
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry changed during hash"):
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, readlink=replace)
+
+
+def test_outer_parent_replaced_during_recheck_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    inner = tmp_path / "outer" / "inner"
+    inner.mkdir(parents=True)
+    (inner / "tracked").write_text("saved")
+
+    def swap(real: Hook) -> Hook:
+        def checked(path: object, *args: object, **kwargs: object) -> os.stat_result:
+            result = real(path, *args, **kwargs)
+            if path == b"inner":
+                (tmp_path / "outer").rename(tmp_path / "moved")
+                (tmp_path / "outer").symlink_to(tmp_path / "moved")
+            return result
+
+        return checked
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked parent changed during hash"):
+        hash_with(tmp_path.resolve(), b"outer/inner/tracked", monkeypatch, stat=swap)
+
+
+def test_directory_cleanup_continues_after_close_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    (directory / "tracked").write_text("saved")
+    opened: list[int] = []
+    closed: list[int] = []
+
+    def record_open(real: Hook) -> Hook:
+        def opened_fd(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            fd = real(path, flags, *args, **kwargs)
+            if flags & os.O_DIRECTORY:
+                opened.append(fd)
+            return fd
+
+        return opened_fd
+
+    def fail_close(real: Hook) -> Hook:
+        def close(fd: int) -> None:
+            closed.append(fd)
+            real(fd)
+            if fd == opened[-1]:
+                raise OSError("injected close failure")
+
+        return close
+
+    with pytest.raises(OSError, match="injected close failure"):
+        hash_with(tmp_path.resolve(), b"dir/tracked", monkeypatch, open=record_open, close=fail_close)
+    assert closed[-2:] == list(reversed(opened))
 
 
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
