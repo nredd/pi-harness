@@ -319,8 +319,11 @@ attributes (including `text=auto`), conversion configuration or mismatched index
 endings also mean keep. The `git ls-files --eol` probe classifies raw bytes without running
 filters. Effective
 `core.filemode=false` means keep because Git status can hide executable-bit changes.
-Staged changes (an index that differs from `HEAD`, including staged deletions and intent-to-add
-entries) mean keep; the cached `git diff-index` compares object IDs and reads no worktree files.
+Staged changes (an index that differs from `HEAD`, including staged deletions, intent-to-add,
+unmerged and gitlink entries, and entries hidden by `skip-worktree` or `assume-unchanged`) mean
+keep, as does a `HEAD` the comparison cannot read; the cached `git diff-index` compares object IDs
+and reads no worktree files. This is defense in depth for a future `eligible` path; today it only
+names the keep reason.
 Limits:
 - Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
   Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
