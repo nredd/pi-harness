@@ -1024,8 +1024,15 @@ describe("exportStats with harnesses", () => {
 				join(repo, "machines", base.machineId, "manifest.json"),
 				JSON.stringify({ ...base, exportedAt: ahead, lastGoodAt: { opencode: ahead } }),
 			);
-			const options = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
-			// A clock behind the published export publishes just after it, so the carried mark stays before it.
+			// A replacement may publish in a later month than this clock's (an ordinary export refuses that); it
+			// still publishes just after the published export, so the carried mark stays before it.
+			const options = {
+				harnesses: ["pi", "opencode"] as Harness[],
+				roots,
+				home,
+				loadSqlite: busyDb(roots),
+				replaceHarnesses: true,
+			};
 			const result = await exportStats(agent, repo, undefined, options);
 			const m = manifestOf(result.snapshotDir);
 			expect(m.exportedAt).toBe(ahead + 1);

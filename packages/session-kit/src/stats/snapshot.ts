@@ -796,9 +796,9 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 export interface ExportOptions {
 	harnesses?: readonly Harness[];
 	/**
-	 * Publish this scan as a replacement generation. Bypasses the narrower-set, unreadable-history and
-	 * missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
-	 * from the scan, sealed months included. Like any export it is timestamped after the readable published
+	 * Publish this scan as a replacement generation. Bypasses the narrower-set, unreadable-history,
+	 * missing-manifest and later-month safeguards and clears frozen recovery files, so it drops published
+	 * history absent from the scan, sealed months included. Like any export it is timestamped after the readable published
 	 * manifest, so viewers holding that manifest import it; viewers holding a snapshot newer than the
 	 * replacement (e.g. with no readable manifest to bound it) keep their copy. It does not bypass the
 	 * implausible-watermark refusal.
@@ -1260,11 +1260,9 @@ async function publishStats(
 	// The wall clock is read once, first, so the manifest read cannot move it.
 	const now = Date.now();
 	const loadedPrevious = await loadPrevious(snapshotDir);
-	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
 	// The publication instant is monotonic over the readable manifest: strictly after the last published
-	// export, even when this clock is behind it. Sealing follows that instant, so months the published
-	// export sealed stay sealed (never reopened, replaced by the scan and pruned), and viewers holding the
-	// published snapshot accept this one as newer. Without a readable manifest there is nothing to follow.
+	// export, even when this clock is behind it, so viewers holding the published snapshot accept this one
+	// as newer. Without a readable manifest there is nothing to follow.
 	const publishedAt =
 		loadedPrevious === null || loadedPrevious === "unreadable"
 			? 0
@@ -1273,15 +1271,29 @@ async function publishStats(
 				: loadedPrevious.manifest.exportedAt;
 	const exportedAt = Math.max(now, publishedAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
-	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, before
-	// anything is written. Within years 0000-9999 a later instant never seals an earlier month.
+	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
+	// cache or publication writes. Within years 0000-9999 a later instant never seals an earlier month.
 	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
 		throw new Error(
 			`Published usage manifest exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
 				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
-				`it; repair or remove the exportedAt in ${JSON.stringify(join(snapshotDir, "manifest.json"))}. ` +
+				`it (${JSON.stringify(join(snapshotDir, "manifest.json"))}); there is no supported in-place repair ` +
+				"(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one. " +
 				"--replace-harnesses does not bypass this",
 		);
+	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
+	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
+	// later export could not tell them from months a clock-ahead export sealed: refuse (nothing written).
+	// A replacement seals nothing from the previous generation, so it may publish there.
+	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
+		throw new Error(
+			`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
+				`published one (${new Date(publishedAt).toISOString()}); publishing would seal months this clock has ` +
+				`not left. Fix the clock or wait until ${monthOf(exportedAt)}, or pass --replace-harnesses to publish ` +
+				"without published history absent from this scan",
+		);
+	// Checked after the watermark, so damage never hides a refusal --replace-harnesses cannot bypass.
+	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
 	// Exporting twice within one millisecond is not a clock problem; only a clock behind it is reported.
 	const clockWarning =
 		now < publishedAt
@@ -1448,6 +1460,7 @@ async function publishStats(
 		previous !== null && previous !== "unreadable" && previous.manifest.version === 3 && !options.replaceHarnesses
 			? previous
 			: null;
+	// Ordinary exports publish only in this clock's month (above), so this is the wall clock's month.
 	const current = monthOf(exportedAt);
 	const revisions: Revisions = sealed
 		? detectRevisions(sealed, snapshot)
