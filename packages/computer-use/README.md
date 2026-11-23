@@ -508,17 +508,19 @@ text with its `execution` trace. The result is also:
   `CFBoolean`; a failed, absent or non-boolean (e.g. numeric `0`) reply leaves the field out, never
   `false`, and an unpaired window whose minimized read was left out omits `isOnscreen` too. A sheet's
   `isMain` and `isMinimized` are constant `false`, not reads, and its `isFocused` is its window's read
-  focus, as before: selection, `find_roots` details and ref records show a sheet with its window's
-  focus, not its own. Only `rootDelta` uses a sheet's own `AXFocused`, kept apart as `ownFocus`. A root
+  focus, as before: the native helper derives a sheet's flags unchanged, and selection, `find_roots`
+  details and ref records show a sheet with its window's focus, not its own (unknown, not `false`, when
+  that focus was unread). Only `rootDelta` uses a sheet's own `AXFocused`, kept apart as `ownFocus`. A root
   present in both listings reports `focused` only when its own focus read `false` before and `true`
   after (a window's `isFocused`, a sheet's `ownFocus`); unread focus on either side reports none
   (#1303), so a failed read can hide a real focus change but never invents one. A root new since a
   complete listing whose own focus reads `true` reports both `appeared` and `focused`. A popup menu's
   `isFocused` is stamped `true`, never read, so a new menu reports only `appeared`. The macOS TS client keeps an omitted or non-boolean flag `undefined` through `listRoots`, `find_roots` details
-  (left out of the stored result) and restored ref records (#1314): ranking gives the not-minimized bonus only for a
-  read `false` and the focused, main and onscreen bonuses only for a read `true`, `find_roots` orders a root by focus
-  only when it read `true`, and a modal takes over the target only when it read onscreen, is not read minimized and is
-  in front by read focus or z-order. Windows listings carry no completeness information, so an empty listing from
+  (left out of the stored result) and restored ref records (#1314): ranking gives the not-minimized bonus only for an
+  explicit boolean `false` and the focused, main and onscreen bonuses only for an explicit boolean `true` (a menu's
+  stamped focus and a sheet's inherited focus count), `find_roots` orders a root by focus only when it is an explicit
+  `true`, and a modal takes over the target only when it is explicitly onscreen, not explicitly minimized and in front
+  by explicit focus or z-order. An unknown minimized state alone never costs such a modal the takeover. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ### Ref lifecycle
@@ -2993,17 +2995,19 @@ Terminal `act_ui` results say the action was delivered, or say its delivery is u
   `CFBoolean`; a failed, absent or non-boolean (e.g. numeric `0`) reply leaves the field out, never
   `false`, and an unpaired window whose minimized read was left out omits `isOnscreen` too. A sheet's
   `isMain` and `isMinimized` are constant `false`, not reads, and its `isFocused` is its window's read
-  focus, as before: selection, `find_roots` details and ref records show a sheet with its window's
-  focus, not its own. Only `rootDelta` uses a sheet's own `AXFocused`, kept apart as `ownFocus`. A root
+  focus, as before: the native helper derives a sheet's flags unchanged, and selection, `find_roots`
+  details and ref records show a sheet with its window's focus, not its own (unknown, not `false`, when
+  that focus was unread). Only `rootDelta` uses a sheet's own `AXFocused`, kept apart as `ownFocus`. A root
   present in both listings reports `focused` only when its own focus read `false` before and `true`
   after (a window's `isFocused`, a sheet's `ownFocus`); unread focus on either side reports none
   (#1303), so a failed read can hide a real focus change but never invents one. A root new since a
   complete listing whose own focus reads `true` reports both `appeared` and `focused`. A popup menu's
   `isFocused` is stamped `true`, never read, so a new menu reports only `appeared`. The macOS TS client keeps an omitted or non-boolean flag `undefined` through `listRoots`, `find_roots` details
-  (left out of the stored result) and restored ref records (#1314): ranking gives the not-minimized bonus only for a
-  read `false` and the focused, main and onscreen bonuses only for a read `true`, `find_roots` orders a root by focus
-  only when it read `true`, and a modal takes over the target only when it read onscreen, is not read minimized and is
-  in front by read focus or z-order. Windows listings carry no completeness information, so an empty listing from
+  (left out of the stored result) and restored ref records (#1314): ranking gives the not-minimized bonus only for an
+  explicit boolean `false` and the focused, main and onscreen bonuses only for an explicit boolean `true` (a menu's
+  stamped focus and a sheet's inherited focus count), `find_roots` orders a root by focus only when it is an explicit
+  `true`, and a modal takes over the target only when it is explicitly onscreen, not explicitly minimized and in front
+  by explicit focus or z-order. An unknown minimized state alone never costs such a modal the takeover. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ## Ref lifecycle

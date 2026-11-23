@@ -87,6 +87,32 @@ test("modal selection needs a read onscreen modal and treats unknown focus as no
 	assert.equal(shouldPreferForegroundModalWindow(current, modal({ zOrder: 3, isFocused: true })), true);
 });
 
+test("an unknown isMinimized does not cost a foreground modal its takeover at the score boundary", () => {
+	// A focused main window scores 252, as does a titled onscreen modal with a window ID once it is not minimized.
+	const current = ranked({
+		windowId: 1,
+		windowRef: "w:1",
+		title: "Main",
+		zOrder: 2,
+		isFocused: true,
+		isMain: true,
+		isMinimized: false,
+		isOnscreen: true,
+	});
+	const dialog = (fields: Partial<PlatformRoot>) =>
+		ranked({ windowId: 2, windowRef: "w:2", title: "Save", zOrder: 1, isOnscreen: true, isModal: true, ...fields });
+	assert.equal(scoreWindow(current), scoreWindow(dialog({ isMinimized: false })));
+	assert.equal(shouldPreferForegroundModalWindow(current, dialog({ isMinimized: false })), true);
+	assert.equal(shouldPreferForegroundModalWindow(current, dialog({})), true, "unknown minimized keeps the takeover");
+	assert.equal(
+		shouldPreferForegroundModalWindow(current, dialog({ isMinimized: true })),
+		false,
+		"a read minimized vetoes",
+	);
+	// Ranking still gives the not-minimized bonus only to a read false.
+	assert.equal(scoreWindow(dialog({ isMinimized: false })) - scoreWindow(dialog({})), 40);
+});
+
 test("find_roots details and restored ref records keep unknown macOS flags unknown", async () => {
 	const fake = await installFakeDesktop(onTestFinished, { platform: "macos" });
 	const unread = Object.fromEntries(FLAGS.map((flag) => [flag, undefined]));
@@ -115,7 +141,9 @@ test("find_roots details and restored ref records keep unknown macOS flags unkno
 	});
 	const restoredUnknown = fake.bridge.testing.storedRootRef(unknown.windowRef);
 	const restoredMixed = fake.bridge.testing.storedRootRef(focused.windowRef);
-	for (const flag of FLAGS) assert.equal(restoredUnknown?.[flag], undefined, `restored ${flag} stays unknown`);
+	assert.ok(restoredUnknown, "the all-unknown record is restored");
+	assert.equal(restoredUnknown.ref, unknown.windowRef);
+	for (const flag of FLAGS) assert.equal(restoredUnknown[flag], undefined, `restored ${flag} stays unknown`);
 	assert.deepEqual(
 		FLAGS.map((flag) => restoredMixed?.[flag]),
 		[undefined, undefined, undefined, true],

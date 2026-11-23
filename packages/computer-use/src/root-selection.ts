@@ -24,12 +24,14 @@ export function scoreWindow(window: RankedRoot): number {
 /**
  * Switch the target to a foreground modal only on read evidence: the modal must read `isOnscreen: true` (unknown
  * disqualifies), an explicit `isMinimized: true` disqualifies (unknown does not, its onscreen read already shows it),
- * and an unknown `isFocused` is not focus, so it is in front only by z-order.
+ * and an unknown `isFocused` is not focus, so it is in front only by z-order. The score comparison awards an unknown
+ * `isMinimized` the not-minimized bonus, so an unread minimized state alone never costs a confirmed foreground modal
+ * its takeover; ranking ({@link scoreWindow}) still gives that bonus only to a read `false`.
  */
 export function shouldPreferForegroundModalWindow(current: RankedRoot, candidate: RankedRoot): boolean {
 	if (candidate.windowId === current.windowId && candidate.windowRef === current.windowRef) return false;
 	if (candidate.isOnscreen !== true || candidate.isMinimized === true || !candidate.isModal) return false;
 	// AXDialog can describe a background main window, so modality alone is insufficient.
 	const candidateIsInFront = candidate.isFocused === true || candidate.zOrder < current.zOrder;
-	return candidateIsInFront && scoreWindow(candidate) >= scoreWindow(current);
+	return candidateIsInFront && scoreWindow({ ...candidate, isMinimized: false }) >= scoreWindow(current);
 }
