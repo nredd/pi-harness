@@ -238,11 +238,13 @@ Decision record: marks need evidence, and a fresh usage read is one of several a
 replaces the old rule that only a fresh read may mark: without it a metered provider, or a
 collected provider used with an API key, never failed over.
 
-Decision records (owner, 2026-11-23), each pinned by a test that fails if the rule is removed:
+Decision records (owner, 2026-11-23). The C9 rule has a test that fails if it is widened or removed;
+the others rest on the named existing tests (S15, the failure classifier rows, the L7 dedupe test):
 
 - C9 (commit only while the requester's selection is current) applies to inferred marks only. A
-  read-confirmed mark is shared provider state and is written after a pin, profile switch or
-  cancellation too, as the ownership suite requires
+  read-confirmed mark is shared provider state and is written whether or not the requester's
+  selection is still current (after a pin or profile switch). A cancelled request (aborted signal)
+  writes no mark of either kind
 - A weak match never reads (S15): it is never confirmed, so a collected provider's read never
   runs for it
 - Unlisted wrapper labels are ignored by design: `Gateway error (503): Daily quota exceeded` is

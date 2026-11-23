@@ -356,7 +356,8 @@ export class Router {
 		if (!decision?.block || signal?.aborted || decision[COLLECTOR_EVIDENCE]?.aborted) return false;
 		// C9 applies to inferred marks only: an inferred mark comes from this requester's failure, so
 		// it is committed only while the requester's selection is still current, checked right before
-		// the write. A read-confirmed mark is shared provider state and is written regardless.
+		// the write. A read-confirmed mark is shared provider state and is written regardless of selection
+		// currency; an aborted signal writes neither kind (the guard above).
 		if (decision.evidence !== undefined && !isCurrent(env)) return false;
 		return this.tracker.record(model, decision) !== undefined;
 	}
