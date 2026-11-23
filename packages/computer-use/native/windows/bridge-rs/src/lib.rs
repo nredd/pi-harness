@@ -21,13 +21,13 @@ pub use protocol::{Request, Response};
 /*
 PI_DOCS_REFERENCE_BEGIN reference/platforms/windows
 
-`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **5**.
+`windows-bridge.exe` is the native helper for the root-forest Windows backend. It is spawned by the TypeScript helper client and speaks stdin/stdout JSON-lines protocol version **6**.
 
 ## Backend contract
 
 The TypeScript Windows backend is intentionally stateless. It forwards root-forest seam calls to the Rust helper:
 
-- `listRoots({ pid? })`: cheap HWND metadata only. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
+- `listRoots({ pid? })`: cheap HWND metadata only, plus `instanceUnavailable` when the window could not be bound to a verifiable instance. `rootRef` is issued per HWND and instance tag. Roots do not fabricate pairing or sheet counts; HWND/class/style diagnostics live under `metadata` when useful.
 - `look`: atomic observe result with `lookId`, outline, window payload (`rootRef`, `kind`, frame, scale), and optional image. Menu/outline-only roots omit `image`; coordinate acts against those roots fail with `coordinate_unavailable_for_root`.
 - `act`: forwards the typed `PlatformActRequest` whole. The helper validates `lookId`, resolves refs from helper-owned look state, applies policy, executes, and returns honest outcome/evidence plus `performed.deltaSource` and shallow `rootDelta`.
 - `uiaReadText` / `uiaWaitFor`: helper-side live UIA reads/polls. No TypeScript screenshot polling or module-level element state is used.
@@ -52,11 +52,11 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. RuntimeId is a
 - `scroll`: `ScrollPattern` where exposed; wheel fallback is raw input and policy-gated.
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
-`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`; each read and poll checks that the HWND still belongs to that PID before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
+`readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`, and `waitFor` without `lookId` also requires the exact `rootRef`; each read and poll checks that the HWND is still the window instance that ref or the owning look was issued for (PID, process creation time and instance tag) before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
 
-Discovery uses a selected-subtree UIA event registration and a bounded raw-view walk, never provider-side `FindAll(Subtree)` or a global screen-reader setting change. UIA connections/transactions have 500-ms limits. Coordinate fallback requires successful live snapshot, valid current bounds within the owning window and successful hit testing. Errors refuse before input; cached screenshot bounds are never used.
+Discovery uses a selected-subtree UIA event registration and a bounded raw-view walk (at most 200 nodes and 64 levels within a 1.5-second traversal budget), never provider-side `FindAll(Subtree)` or a global screen-reader setting change. UIA connections/transactions have 500-ms limits. Coordinate fallback requires successful live snapshot, valid current bounds within the owning window and successful hit testing. Errors refuse before input; cached screenshot bounds are never used.
 
-Window/session/desktop and mandatory-integrity checks precede mutation. Every single action delivery, including semantic UIA admission, takes a session-local named Win32 mutex, as do complete foreground batches. A five-second wait or abandoned owner refuses without replay. This kernel lease is not the WSL transport's persistent uncertain-delivery fence. Diagnostics advertise `fail-closed-live-target-v1`; protocol `5` (owner-bound `uiaReadText`/`uiaWaitFor`) and architecture `1`.
+Window/session/desktop and mandatory-integrity checks precede mutation. Every single action delivery, including semantic UIA admission, takes a session-local named Win32 mutex, as do complete foreground batches. A five-second wait or abandoned owner refuses without replay. This kernel lease is not the WSL transport's persistent uncertain-delivery fence. Diagnostics advertise `fail-closed-live-target-v1`; protocol `6` (window-instance-bound roots, looks and owner-bound `uiaReadText`/`uiaWaitFor`) and architecture `1`.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 

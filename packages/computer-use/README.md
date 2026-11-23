@@ -3062,7 +3062,7 @@ The helper declares per-monitor-v2 DPI awareness at startup and reports `scaleFa
 
 ## Refs, actions, and deltas
 
-Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted actions resolve a live `IUIAutomationElement` first:
+Observed `@e` refs store UIA RuntimeId and AutomationId metadata. RuntimeId is authoritative; a reused AutomationId cannot revive a removed element. Ref-targeted actions resolve a live `IUIAutomationElement` first:
 
 - `press`/`click`: `InvokePattern`, then `TogglePattern`, then `SelectionItemPattern`, then `ExpandCollapsePattern`, then LegacyIAccessible default action; successful pattern grounding reports `grounding: "description"`, `delivery: "ax"`. Coordinate fallback is blocked by `ax_only` and preflights occlusion with `ElementFromPoint`.
 - `setText`: `ValuePattern.SetValue`, then `CurrentValue` read-back for nonpassword targets. Exact read-back is `worked`; a different value is `didnt` with the observed `evidence.value`, not a claim that nothing changed. Password writes return `unknown` without read-back or value evidence. A failed mutating/read-back API is uncertain and never replayed.
@@ -3070,6 +3070,10 @@ Observed `@e` refs store UIA RuntimeId and AutomationId metadata. Ref-targeted a
 - `typeText`, `keypress`, `drag`, `moveMouse`, and coordinate targets remain raw input and report `unknown` unless verified.
 
 `readText` resolves the live element and reads TextPattern → ValuePattern → CurrentName. `waitFor` polls the live UIA subtree at about 150ms intervals. Both require the admitted `pid` and `windowId`, and `waitFor` without `lookId` also requires the exact `rootRef`; each read and poll checks that the HWND is still the window instance that ref or the owning look was issued for (PID, process creation time and instance tag) before acquiring the UIA root, after acquiring it and after the walk, and returns `root_stale` otherwise.
+
+Discovery uses a selected-subtree UIA event registration and a bounded raw-view walk (at most 200 nodes and 64 levels within a 1.5-second traversal budget), never provider-side `FindAll(Subtree)` or a global screen-reader setting change. UIA connections/transactions have 500-ms limits. Coordinate fallback requires successful live snapshot, valid current bounds within the owning window and successful hit testing. Errors refuse before input; cached screenshot bounds are never used.
+
+Window/session/desktop and mandatory-integrity checks precede mutation. Every single action delivery, including semantic UIA admission, takes a session-local named Win32 mutex, as do complete foreground batches. A five-second wait or abandoned owner refuses without replay. This kernel lease is not the WSL transport's persistent uncertain-delivery fence. Diagnostics advertise `fail-closed-live-target-v1`; protocol `6` (window-instance-bound roots, looks and owner-bound `uiaReadText`/`uiaWaitFor`) and architecture `1`.
 
 Root deltas are baselined at act time. The helper polls a cheap top-level HWND signature for early settle (`deltaSource: "win-poll"`), then takes short catch-up snapshots before returning the final full before/after diff. If no change is seen before the cap, it returns the full snapshot timeout path (`"snapshot"`).
 
