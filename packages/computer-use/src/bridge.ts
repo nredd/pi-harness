@@ -2716,8 +2716,8 @@ async function dispatchUiTransaction(
 			steps.push(step);
 			// A later action would run on an unknown state and its outcome would mask the indeterminate delivery.
 			if (isIndeterminateStep(step)) return stoppedTransaction(steps);
-			// The stop index is recorded whether or not the refusal carries an error.
-			if (step.outcome === "didnt") return { ...aggregateExecutions(steps), stoppedAt: steps.length - 1 };
+			// The stop index is recorded whether or not the refusal carries an error; a returned error is kept too.
+			if (step.outcome === "didnt") return stoppedTransaction(steps);
 			// A helper that stopped after posting part of the action reports the count; never run the next action.
 			if (step.error && typeof step.evidence?.deliveredUnits === "number") return stoppedTransaction(steps);
 		} catch (error) {
@@ -3066,48 +3066,105 @@ export async function terminalDesktopActionResult(
 	const rootFate = targetClosed
 		? `closed before a successor observation could be captured.${successorText}`
 		: `could not be observed afterward: ${message}`;
-	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay.
-	// An indeterminate step names itself; any other unknown outcome, e.g. an unproven absence, says so generically.
-	const deliveryUnknown = unknownIndex >= 0 || execution.outcome === "unknown";
-	const unknownLead =
-		unknownIndex >= 0
-			? `${indeterminateSentence(execution, unknownIndex)} Its`
-			: "Delivery of the action is unknown, and its";
-	const result = deliveryUnknown
-		? `${unknownLead} source root ${root} ${rootFate}`
-		: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
-	const next = deliveryUnknown
-		? `Do not replay the transaction: call find_roots, then observe_ui to check whether ${unknownIndex >= 0 ? `action ${unknownIndex + 1}` : "it"} took effect.`
-		: "Call find_roots, then observe_ui to continue.";
+	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay. A stop
+	// (an indeterminate step included) opens with its own sentence, and the root observation follows on its own line.
+	const stop = stopReport(execution);
+	const rootLine = `source root ${root} ${rootFate}`;
+	const result = stop
+		? `${stop.opening}\nIts ${rootLine}\nNo successor state was created. ${observeAgainGuidance(stop)}`
+		: execution.outcome === "unknown"
+			? `Delivery of the action is unknown, and its ${rootLine}\nNo successor state was created. ${observeAgainGuidance({ retrySafe: false, check: "it" })}`
+			: `The action was delivered, ${targetClosed ? "and" : "but"} its ${rootLine}\nNo successor state was created. Call find_roots, then observe_ui to continue.`;
+	return { content: [{ type: "text", text: result }], details };
+}
+
+/** How a stopped transaction reads: its opening sentence and its one replay decision. */
+interface StopReport {
+	/** The stopped action, its refusal or error code and what may have been delivered, without replay guidance. */
+	opening: string;
+	/** The backend established that nothing was posted, so retrying is safe; otherwise the transaction is never replayed. */
+	retrySafe: boolean;
+	/** What to check before retrying: the indeterminate `action N`, or `it`. */
+	check: string;
+}
+
+/**
+ * The one formatter for a stopped transaction, shared by successor, terminal and aborted results: an indeterminate
+ * step, a keyboard stop, or any other defined `stoppedAt`. Undefined for an unstopped transaction.
+ *
+ * Only a first action that stopped as `didnt` with a refusal code or `0` posted units, no uncertain delivery and no
+ * unconfirmed release, establishes that nothing was posted. An errorless `didnt` does not: e.g. a scroll posts
+ * events and then sees no change. Every other stop may have delivered input and is never replayed.
+ */
+function stopReport(execution: ExecutionTrace): StopReport | undefined {
+	const unknownIndex = indeterminateStepIndex(execution);
+	if (unknownIndex >= 0)
+		return {
+			opening: indeterminateSentence(execution, unknownIndex),
+			retrySafe: false,
+			check: `action ${unknownIndex + 1}`,
+		};
+	const index = execution.stoppedAt;
+	const code = execution.error?.code;
+	const evidence = execution.evidence;
+	const units = evidence?.postedUnits;
+	const delivered = evidence?.deliveredUnits;
+	const uncertain = evidence?.deliveryUncertain === true;
+	const held = evidence?.unconfirmedReleases;
+	const stuck = Array.isArray(held) && held.length > 0 ? ` Release of ${held.join(", ")} is unconfirmed.` : "";
+	const keyboard =
+		code === "app_blocked" ||
+		code === "input_deadline_expired" ||
+		(code !== undefined && (typeof delivered === "number" || uncertain));
+	if (!keyboard && index === undefined) return undefined;
+	const postedCount = typeof units === "number" ? units : typeof delivered === "number" ? delivered : undefined;
+	const refusal = code === undefined ? "" : ` (${code})`;
+	const nothingPosted =
+		index === 0 &&
+		execution.outcome === "didnt" &&
+		!uncertain &&
+		!stuck &&
+		(postedCount === 0 || (postedCount === undefined && code !== undefined));
+	if (nothingPosted)
+		return {
+			opening: `Stopped at action 1${refusal}: nothing was posted, so a retry is safe.`,
+			retrySafe: true,
+			check: "it",
+		};
+	const atAction = index === undefined ? "" : ` at action ${index + 1}`;
+	if (keyboard) {
+		const posted =
+			typeof units === "number"
+				? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.`
+				: typeof delivered === "number"
+					? ` ${delivered} input ${delivered === 1 ? "event" : "events"} posted.`
+					: "";
+		const more = uncertain ? " More input may have been delivered." : "";
+		return { opening: `Stopped${atAction}${refusal}.${posted}${more}${stuck}`, retrySafe: false, check: "it" };
+	}
+	const prefix =
+		index === 0
+			? ""
+			: ` ${index === 1 ? "Action 1" : `Actions 1-${index}`} ran before it and may have delivered input.`;
 	return {
-		content: [
-			{
-				type: "text",
-				text: `${keyboardStopSummary(execution) ?? result}\nNo successor state was created. ${next}`,
-			},
-		],
-		details,
+		opening: `Stopped${atAction}${refusal}; whether the transaction was delivered is unknown.${prefix}`,
+		retrySafe: false,
+		check: "it",
 	};
 }
 
-function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
-	const code = execution.error?.code;
-	const delivered = execution.evidence?.deliveredUnits;
-	const uncertain = execution.evidence?.deliveryUncertain === true;
-	const partial = code !== undefined && (typeof delivered === "number" || uncertain);
-	if (code !== "app_blocked" && code !== "input_deadline_expired" && !partial) return undefined;
-	const units = execution.evidence?.postedUnits;
-	const posted =
-		typeof units === "number"
-			? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.`
-			: typeof delivered === "number"
-				? ` ${delivered} input ${delivered === 1 ? "event" : "events"} posted.`
-				: "";
-	const unknown = uncertain ? " More input may have been delivered." : "";
-	const held = execution.evidence?.unconfirmedReleases;
-	const stuck = Array.isArray(held) && held.length > 0 ? ` Release of ${held.join(", ")} is unconfirmed.` : "";
-	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
-	return `Stopped${atAction} (${code}).${posted}${unknown}${stuck} Do not replay the transaction.`;
+/** Next step of a result without a successor state: observe again, and never replay unless nothing was posted. */
+function observeAgainGuidance(stop: Pick<StopReport, "retrySafe" | "check">): string {
+	return stop.retrySafe
+		? "Call find_roots, then observe_ui to continue."
+		: `Do not replay the transaction: call find_roots, then observe_ui to check whether ${stop.check} took effect.`;
+}
+
+/** Next step of a successor result: check the returned state, and never replay unless nothing was posted. */
+function successorGuidance(stop: StopReport, stateId: string): string {
+	return stop.retrySafe
+		? `Returned state ${stateId}.`
+		: `Do not replay the transaction: check state ${stateId} for whether ${stop.check} took effect before retrying it.`;
 }
 
 /** Index of the step whose delivery is indeterminate, or -1: it stays unknown whatever is observed afterward. */
@@ -3120,17 +3177,15 @@ function settledOutcome(execution: ExecutionTrace, settled: ActOutcome): ActOutc
 	return indeterminateStepIndex(execution) < 0 ? settled : execution.outcome!;
 }
 
-/** The numbered indeterminate-delivery sentence plus the completed prefix, shared by successor and terminal results. */
+/**
+ * The numbered indeterminate-delivery sentence, with the step's error code unless that code is the reason itself
+ * (`timeout`), plus the completed prefix.
+ */
 function indeterminateSentence(execution: ExecutionTrace, index: number): string {
+	const step = execution.steps![index]!;
+	const code = step.error && step.error.code !== "timeout" ? ` (${step.error.code})` : "";
 	const prefix = index === 0 ? "" : index === 1 ? " Action 1 completed." : ` Actions 1-${index} completed.`;
-	return `Action ${index + 1} ${indeterminateReason(execution.steps![index]!)}; whether it was delivered is unknown.${prefix}`;
-}
-
-function indeterminateSummary(execution: ExecutionTrace, stateId: string): string | undefined {
-	const index = indeterminateStepIndex(execution);
-	return index < 0
-		? undefined
-		: `${indeterminateSentence(execution, index)} Do not replay the transaction: check state ${stateId} for whether action ${index + 1} took effect before retrying it.`;
+	return `Action ${index + 1} ${indeterminateReason(step)}${code}; whether it was delivered is unknown.${prefix}`;
 }
 
 async function performDesktopTransaction(
@@ -3251,11 +3306,12 @@ async function performDesktopTransaction(
 								: undefined,
 					});
 				}
+				const stop = stopReport(execution);
 				const built = await buildToolResult(
 					"act_ui",
-					keyboardStopSummary(execution) ??
-						indeterminateSummary(execution, capture.capture.stateId) ??
-						`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
+					stop
+						? `${stop.opening} ${successorGuidance(stop, capture.capture.stateId)}`
+						: `Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
 					capture,
 					execution,
 					signal,
@@ -3269,14 +3325,16 @@ async function performDesktopTransaction(
 			} catch (error) {
 				if (signal?.aborted) {
 					clearDesktopOperationState(state);
-					// The abort ends only the follow-up observation: a stopped transaction keeps its unknown outcome.
-					const code = execution.error?.code;
-					const stop = keyboardStopSummary(execution);
-					if (code && stop)
-						throw Object.assign(new ComputerUseError(code, `${stop} The follow-up observation was aborted.`), {
-							execution,
-							cause: error,
-						});
+					// The abort ends only the follow-up observation: a stopped transaction keeps its trace and stop text.
+					const stop = stopReport(execution);
+					if (stop)
+						throw Object.assign(
+							new ComputerUseError(
+								execution.error?.code ?? "aborted",
+								`${stop.opening} The follow-up observation was aborted. ${observeAgainGuidance(stop)}`,
+							),
+							{ execution, cause: error },
+						);
 					throw error;
 				}
 				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition, provisional);

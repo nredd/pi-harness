@@ -1548,23 +1548,36 @@ struct NativeInputSink {
 	static let live = production(activate: activateIfInactive, sleep: { _ = usleep($0) }, post: { $0.post(tap: .cghidEventTap) })
 }
 
-private struct RootAXEvent {
+/// The clock and blocking calls behind `Bridge.waitForRootChange`, injectable so tests observe the bound
+/// without sleeping.
+struct RootChangeWaiter {
+	let now: () -> Date
+	let sleep: (TimeInterval) -> Void
+	/// Wait on a locked condition until a deadline.
+	let wait: (NSCondition, Date) -> Void
+
+	static let live = RootChangeWaiter(now: { Date() }, sleep: { Thread.sleep(forTimeInterval: $0) }, wait: { _ = $0.wait(until: $1) })
+}
+
+struct RootAXEvent {
 	let sequence: UInt64
 	let timestamp: TimeInterval
 	let notification: String
 	let element: AXUIElement?
 }
 
-private final class RootAXObserverState {
+/// One observed root's event log. Only the observer's identity is kept: `recordRootAXEvent` routes a
+/// callback to its log by `CFEqual` on it.
+final class RootAXObserverState {
 	let pid: Int32
-	let observer: AXObserver
+	let observer: CFTypeRef
 	let change = NSCondition()
 	var changeGeneration: UInt64 = 0
 	var events: [RootAXEvent] = []
 	var nextSequence: UInt64 = 1
 	var lastUsed: TimeInterval = Date().timeIntervalSince1970
 
-	init(pid: Int32, observer: AXObserver) {
+	init(pid: Int32, observer: CFTypeRef) {
 		self.pid = pid
 		self.observer = observer
 	}
@@ -3256,14 +3269,7 @@ final class Bridge {
 		}
 		guard registered else { return false }
 
-		rootObserverLock.lock()
-		if rootObservers.count >= maxRootObservers,
-			let evict = rootObservers.values.min(by: { $0.lastUsed < $1.lastUsed })?.pid
-		{
-			rootObservers.removeValue(forKey: evict)
-		}
-		rootObservers[pid] = state
-		rootObserverLock.unlock()
+		installRootObserver(state)
 
 		let source = AXObserverGetRunLoopSource(observer)
 		Thread.detachNewThread {
@@ -3275,7 +3281,19 @@ final class Bridge {
 		return true
 	}
 
-	private func recordRootAXEvent(observer: AXObserver, notification: String, element: AXUIElement) {
+	/// Register `state` under the observer lock, evicting the least recently used root at the cap.
+	func installRootObserver(_ state: RootAXObserverState) {
+		rootObserverLock.lock()
+		if rootObservers.count >= maxRootObservers,
+			let evict = rootObservers.values.min(by: { $0.lastUsed < $1.lastUsed })?.pid
+		{
+			rootObservers.removeValue(forKey: evict)
+		}
+		rootObservers[state.pid] = state
+		rootObserverLock.unlock()
+	}
+
+	func recordRootAXEvent(observer: CFTypeRef, notification: String, element: AXUIElement) {
 		rootObserverLock.lock()
 		let state = rootObservers.values.first { CFEqual($0.observer, observer) }
 		if let state {
@@ -3292,7 +3310,7 @@ final class Bridge {
 		}
 	}
 
-	private func rootChangeGeneration(pid: Int32) -> UInt64 {
+	func rootChangeGeneration(pid: Int32) -> UInt64 {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
@@ -3302,28 +3320,30 @@ final class Bridge {
 		return state.changeGeneration
 	}
 
-	private func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date) {
+	/// Block until `pid`'s change generation moves past `generation`, for at most 200 ms and never past
+	/// `deadline`. An unobserved pid sleeps the same bound instead.
+	func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date, waiter: RootChangeWaiter = .live) {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
 		guard let state else {
-			Thread.sleep(forTimeInterval: min(0.2, max(0, deadline.timeIntervalSinceNow)))
+			waiter.sleep(min(0.2, max(0, deadline.timeIntervalSince(waiter.now()))))
 			return
 		}
 		state.change.lock()
 		if state.changeGeneration == generation {
-			_ = state.change.wait(until: min(deadline, Date().addingTimeInterval(0.2)))
+			waiter.wait(state.change, min(deadline, waiter.now().addingTimeInterval(0.2)))
 		}
 		state.change.unlock()
 	}
 
-	private func rootEventCursor(pid: Int32) -> UInt64 {
+	func rootEventCursor(pid: Int32) -> UInt64 {
 		rootObserverLock.lock()
 		defer { rootObserverLock.unlock() }
 		return rootObservers[pid]?.nextSequence ?? 1
 	}
 
-	private func rootEvents(pid: Int32, since cursor: UInt64) -> [RootAXEvent] {
+	func rootEvents(pid: Int32, since cursor: UInt64) -> [RootAXEvent] {
 		rootObserverLock.lock()
 		defer { rootObserverLock.unlock() }
 		guard let events = rootObservers[pid]?.events else { return [] }
@@ -3677,11 +3697,16 @@ final class Bridge {
 				try keyboard.deliver { try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard) }
 				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
-				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
+				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString)
 				performed["grounding"] = "keyboard-events"
 				performed["delivery"] = delivery
 				performed["selectionGrounding"] = selected ? "ax" : "keyboard"
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The replacement text was posted, so a stale or failed readback may hide text that landed: unknown, never
+				// `didnt`, which would read as not delivered and invite a replay.
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			var targetElement = element
 			var status = world.setAttribute(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
@@ -3692,11 +3717,13 @@ final class Bridge {
 			if status == .success {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
-				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString) ?? ""
-				if value != text && policy != "foreground" {
-					throw BridgeFailure(message: "The background accessibility value write was accepted but did not take effect", code: "foreground_required")
-				}
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString)
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The write was accepted, so a stale or failed readback may hide a value that landed: unknown, never
+				// `didnt` or `foreground_required`, either of which invites a second write (#1290).
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			try executeCoordinates(coordinatePoint())
 		} else if action == "typeText" {
@@ -4103,7 +4130,7 @@ final class Bridge {
 		return output
 	}
 
-	private func focusedWindowSummary(pid: Int32) -> String {
+	func focusedWindowSummary(pid: Int32) -> String {
 		let app = AXUIElementCreateApplication(pid)
 		guard let element = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement) else { return "none" }
 		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
@@ -4111,7 +4138,7 @@ final class Bridge {
 		return "\(role):\(title)"
 	}
 
-	private func scrollPositionSignature(_ element: AXUIElement) -> String {
+	func scrollPositionSignature(_ element: AXUIElement) -> String {
 		let names: [CFString] = ["AXVerticalScrollBar" as CFString, "AXHorizontalScrollBar" as CFString, kAXValueAttribute as CFString]
 		return names.map { String(describing: copyAttribute(element, attribute: $0) ?? "" as CFTypeRef) }.joined(separator: "|")
 	}
@@ -4228,7 +4255,7 @@ final class Bridge {
 		return actions
 	}
 
-	private func supportsAnyScrollAction(_ element: AXUIElement) -> Bool {
+	func supportsAnyScrollAction(_ element: AXUIElement) -> Bool {
 		let actions = Set(actionNames(element))
 		return actions.contains(axScrollDownAction as String) || actions.contains(axScrollUpAction as String) || actions.contains(axScrollLeftAction as String) || actions.contains(axScrollRightAction as String)
 	}
@@ -4391,7 +4418,7 @@ final class Bridge {
 		return ["chrome", "chromium", "brave", "edge", "vivaldi", "opera", "firefox", "helium"].contains { name.contains($0) }
 	}
 
-	private func collectDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXUIElement] {
+	func collectDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXUIElement] {
 		collectDescendantsWithContext(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes).map(\.element)
 	}
 
@@ -4426,14 +4453,14 @@ final class Bridge {
 		return "desktop_ax"
 	}
 
-	private func frameForElement(_ element: AXUIElement) -> CGRect? {
+	func frameForElement(_ element: AXUIElement) -> CGRect? {
 		let origin = pointAttribute(element, attribute: kAXPositionAttribute as CFString)
 		let size = sizeAttribute(element, attribute: kAXSizeAttribute as CFString)
 		guard let origin, let size, size.width > 0, size.height > 0 else { return nil }
 		return CGRect(origin: origin, size: size)
 	}
 
-	private func elementPayload(element: AXUIElement, key: String, score: Double? = nil, source: String? = nil, axVisible: Bool = true) -> [String: Any] {
+	func elementPayload(element: AXUIElement, key: String, score: Double? = nil, source: String? = nil, axVisible: Bool = true) -> [String: Any] {
 		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
 		let subrole = stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
 		let title = stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? ""
@@ -4489,25 +4516,25 @@ final class Bridge {
 		return payload
 	}
 
-	private func pidForElement(_ element: AXUIElement) -> Int32? {
+	func pidForElement(_ element: AXUIElement) -> Int32? {
 		var pid: pid_t = 0
 		let status = AXUIElementGetPid(element, &pid)
 		guard status == .success else { return nil }
 		return Int32(pid)
 	}
 
-	private func parentElement(_ element: AXUIElement) -> AXUIElement? {
+	func parentElement(_ element: AXUIElement) -> AXUIElement? {
 		guard let value = copyAttribute(element, attribute: kAXParentAttribute as CFString) else {
 			return nil
 		}
 		return asAXElement(value)
 	}
 
-	private func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+	func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
 		CFEqual(lhs as CFTypeRef, rhs as CFTypeRef)
 	}
 
-	private func isElement(_ element: AXUIElement, descendantOf ancestor: AXUIElement) -> Bool {
+	func isElement(_ element: AXUIElement, descendantOf ancestor: AXUIElement) -> Bool {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 20 {
@@ -4520,7 +4547,7 @@ final class Bridge {
 		return false
 	}
 
-	private func hasAncestorRole(_ element: AXUIElement, role: String) -> Bool {
+	func hasAncestorRole(_ element: AXUIElement, role: String) -> Bool {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 30 {
@@ -4531,7 +4558,7 @@ final class Bridge {
 		return false
 	}
 
-	private func actionNames(_ element: AXUIElement) -> [String] {
+	func actionNames(_ element: AXUIElement) -> [String] {
 		var actionsValue: CFArray?
 		let status = AXUIElementCopyActionNames(element, &actionsValue)
 		guard status == .success else { return [] }
@@ -4539,7 +4566,7 @@ final class Bridge {
 		return actionsArray.compactMap { $0 as? String }
 	}
 
-	private func supportsAction(_ element: AXUIElement, action: CFString) -> Bool {
+	func supportsAction(_ element: AXUIElement, action: CFString) -> Bool {
 		actionNames(element).contains(action as String)
 	}
 
@@ -4924,7 +4951,7 @@ final class Bridge {
 		return value
 	}
 
-	private func boolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
+	func boolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
 		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
 		if let boolValue = value as? Bool {
 			return boolValue
@@ -4941,11 +4968,11 @@ final class Bridge {
 
 	// Secure fields can expose plaintext through AX value in non-native apps,
 	// and serialized values flow into the model conversation. Never emit them.
-	private func isSecureTextElement(role: String, subrole: String) -> Bool {
+	func isSecureTextElement(role: String, subrole: String) -> Bool {
 		role == "AXSecureTextField" || subrole == "AXSecureTextField"
 	}
 
-	private func displayValue(_ element: AXUIElement, role: String, subrole: String) -> String {
+	func displayValue(_ element: AXUIElement, role: String, subrole: String) -> String {
 		if isSecureTextElement(role: role, subrole: subrole) { return "" }
 		return stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
 	}
@@ -4953,12 +4980,12 @@ final class Bridge {
 	// kAXSheetsAttribute is unsupported (-25205) on recent macOS; sheets are
 	// exposed only as AXSheet-role children. Merge both sources so sheet
 	// discovery works across versions.
-	private func sheetElements(of window: AXUIElement) -> [AXUIElement] {
+	func sheetElements(of window: AXUIElement) -> [AXUIElement] {
 		sheetInventory(of: window).sheets
 	}
 
 	/// Not `complete` when either sheet source or a child's role could not be read: a sheet may be missing.
-	private func sheetInventory(of window: AXUIElement) -> (sheets: [AXUIElement], complete: Bool) {
+	func sheetInventory(of window: AXUIElement) -> (sheets: [AXUIElement], complete: Bool) {
 		let listed = axElementArrayEvidence(window, attribute: "AXSheets" as CFString)
 		let children = axElementArrayEvidence(window, attribute: kAXChildrenAttribute as CFString)
 		var complete = listed != nil && children != nil
@@ -4977,7 +5004,7 @@ final class Bridge {
 	}
 
 	/// `kAXSizeAttribute` with its evidence, decoded from one reply.
-	private func sizeRead(_ element: AXUIElement) -> AXSizeRead {
+	func sizeRead(_ element: AXUIElement) -> AXSizeRead {
 		var value: CFTypeRef?
 		switch axReadEvidence(AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)) {
 		case .failed: return .failed
@@ -4986,7 +5013,7 @@ final class Bridge {
 		}
 	}
 
-	private func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
+	func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
 		var value: CFTypeRef?
 		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
 		case .failed: return .failed
@@ -4996,7 +5023,7 @@ final class Bridge {
 	}
 
 	/// `nil` for a failed read; an unsupported or valueless attribute is an authoritative `[]`.
-	private func axElementArrayEvidence(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+	func axElementArrayEvidence(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
 		var value: CFTypeRef?
 		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
 		case .failed: return nil
@@ -5007,7 +5034,7 @@ final class Bridge {
 		}
 	}
 
-	private func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
+	func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
 		guard let value = copyAttribute(element, attribute: attribute) else { return [] }
 		if let array = value as? [AXUIElement] {
 			return array
@@ -5018,7 +5045,7 @@ final class Bridge {
 		return []
 	}
 
-	private func axElementArrayIfPresent(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+	func axElementArrayIfPresent(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
 		var value: CFTypeRef?
 		let status = AXUIElementCopyAttributeValue(element, attribute, &value)
 		guard status == .success, let value else { return nil }
@@ -5031,18 +5058,18 @@ final class Bridge {
 		return []
 	}
 
-	private func asAXElement(_ value: AnyObject) -> AXUIElement? {
+	func asAXElement(_ value: AnyObject) -> AXUIElement? {
 		let cfValue = value as CFTypeRef
 		guard CFGetTypeID(cfValue) == AXUIElementGetTypeID() else { return nil }
 		return unsafeBitCast(cfValue, to: AXUIElement.self)
 	}
 
-	private func pointAttribute(_ element: AXUIElement, attribute: CFString) -> CGPoint? {
+	func pointAttribute(_ element: AXUIElement, attribute: CFString) -> CGPoint? {
 		decodeAXPoint(copyAttribute(element, attribute: attribute))
 	}
 
 	/// A `CGPoint` AX value, or `nil` for any other value.
-	private func decodeAXPoint(_ value: CFTypeRef?) -> CGPoint? {
+	func decodeAXPoint(_ value: CFTypeRef?) -> CGPoint? {
 		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgPoint else { return nil }
@@ -5070,12 +5097,12 @@ final class Bridge {
 		return (CGRect(origin: origin ?? .zero, size: size), origin != nil && sized != .failed)
 	}
 
-	private func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
+	func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
 		decodeAXSize(copyAttribute(element, attribute: attribute))
 	}
 
 	/// A `CGSize` AX value, or `nil` for any other value.
-	private func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
+	func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
 		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgSize else { return nil }
@@ -5336,7 +5363,7 @@ final class Bridge {
 		throw BridgeFailure(message: "Capture failed", code: "capture_failed")
 	}
 
-	private func jpegData(image: CGImage, quality: Double) -> Data? {
+	func jpegData(image: CGImage, quality: Double) -> Data? {
 		let data = NSMutableData()
 		guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
 		CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
@@ -5344,7 +5371,7 @@ final class Bridge {
 		return data as Data
 	}
 
-	private func downscaledImage(_ image: CGImage, maxDimension: Int?) -> CGImage? {
+	func downscaledImage(_ image: CGImage, maxDimension: Int?) -> CGImage? {
 		guard let maxDimension, max(image.width, image.height) > maxDimension else { return nil }
 		let scale = Double(maxDimension) / Double(max(image.width, image.height))
 		let width = max(1, Int(Double(image.width) * scale))
@@ -5795,7 +5822,7 @@ The resulting outline preserves native semantics where they are available. It do
 The helper prefers AX operations before synthesized input:
 
 - press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
-- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back;
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field);
 - semantic scrolling walks the target and its ancestors for supported AX scroll actions;
 - foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
 
@@ -5955,7 +5982,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or say its delivery is unknown when the settled outcome is `unknown` without a stop (and not to replay it). A stopped transaction (`stoppedAt`, a keyboard stop or a timed-out or otherwise indeterminate action) is never called delivered, in a terminal or a successor result: its first line names the stopped action and its literal refusal or error code, the root observation follows on its own line, and the replay decision comes once. Only a first action refused with a code or `0` posted units says nothing was posted and a retry is safe; every other stop says not to replay the transaction (#1281). The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
