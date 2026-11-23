@@ -19,6 +19,8 @@ testing = []
 
 [dev-dependencies]
 linux-bridge = { path = ".", features = ["testing"] }
+# `test-util` pauses the clock for deadline tests; it adds no crates.
+tokio = { version = "1", features = ["test-util"] }
 zbus = { version = "4", default-features = false, features = ["tokio", "p2p"] }
 
 [lib]
