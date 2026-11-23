@@ -379,6 +379,9 @@ private final class FakeListing {
     /// Windows read `AXWindow`; a sheet's role is absent and falls back to `AXSheet`.
     var roles: [String: AXStringRead] = ["doc": .value("AXWindow")]
     var fail: [String: [Bool]] = [:]
+    /// State replies by `"<root>.<attribute>"`, e.g. `"doc.focused"`, decoded as production does (`rootStateBoolean`);
+    /// a missing one failed.
+    var states: [String: AnyObject] = [:]
     var candidates: [CGWindowCandidate] = []
     static let frame = CGRect(x: 600, y: 100, width: 800, height: 600)
     init(_ windows: [FakeRoot]) { self.windows = windows }
@@ -418,7 +421,8 @@ private final class FakeListing {
             pairingRead: { root in
                 let (frame, read) = self.frameRead(root)
                 return WindowPairingRead(title: self.string(root, .title), frame: frame, frameRead: read)
-            })
+            },
+            state: { rootStateBoolean(self.states["\($0.name).\($1)"]) })
     }
     func classify(_ bridge: Bridge) -> (snapshot: RootInventorySnapshot, windows: [ClassifiedWindow<FakeRoot>], entries: [[String: Any]]) {
         let inventory = world.classify(candidates: candidates)
@@ -428,12 +432,15 @@ private final class FakeListing {
     }
 }
 
+/// `rootDelta` between two snapshots as sorted `"<change>:<ref>"` strings.
+private func refChanges(_ bridge: Bridge, _ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+    bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
+}
+
 /// A failed pairing or identity read, injected below production classification, keeps the root out of `rootDelta`
 /// (#1287): a later successful read of the same field never vouches for the failed one.
 private func assertClassifiedIdentity(_ bridge: Bridge) {
-    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
-        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
-    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
     let doc = FakeRoot("doc")
     func paired(_ fail: [String: [Bool]] = [:]) -> FakeListing {
         let listing = FakeListing([doc])
@@ -481,7 +488,8 @@ private func assertClassifiedIdentity(_ bridge: Bridge) {
 
     let entries = sheeted.entries
     expect(entries.map { $0["rootRef"] as? String } == ["doc", "own", "bare"] && entries.map { $0["windowRef"] as? String } == ["doc", "own", "bare"], "each window is followed by its sheets")
-    expect(entries.map { $0["title"] as? String } == ["", "Save", ""] && entries.map { $0["isFocused"] as? Bool } == [true, false, false], "identity fields override the extras, which carry the rest")
+    expect(entries.map { $0["title"] as? String } == ["", "Save", ""], "identity fields override the extras")
+    expect(entries.allSatisfy { $0["isFocused"] == nil } && entries.first?["isMain"] == nil, "an unread state flag is left out, whatever the extras say")
     expect(entries.allSatisfy { $0["windowId"] == nil } && before.entries.first?["windowId"] as? Int == 7, "only a paired root carries its CG window id")
 
     // A sheet without a CG window of its own: its window's is the only candidate, and the sheet scores for it too.
@@ -508,14 +516,13 @@ private func assertClassifiedIdentity(_ bridge: Bridge) {
     expect(separated.entries.map { $0["windowId"] as? Int } == [7, 8], "a sheet with a CG window of its own pairs with it")
     expect(Set(separated.snapshot.roots.keys) == ["window:7", "window:8"] && separated.snapshot.complete, "exclusive claims key both roots by their CG window ids")
     assertContestedPairings(bridge)
+    assertStateReads(bridge)
 }
 
 /// One conservative rule (`contestedClaims`): a CG candidate claimed by more than one root, or by a root whose pairing
 /// read failed, keys none of its claimants, so neither the listing order nor an unread competitor moves an identity (#1287).
 private func assertContestedPairings(_ bridge: Bridge) {
-    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
-        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
-    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
     let frame = FakeListing.frame
     let titledDoc = CGWindowCandidate(windowId: 9, title: "Doc", bounds: frame, isOnscreen: false, layer: 0, zOrder: 0)
     let farFrame = CGRect(x: 0, y: 0, width: 800, height: 600)
@@ -572,4 +579,90 @@ private func assertContestedPairings(_ bridge: Bridge) {
     expect(Set(forward.snapshot.roots.keys) == ["window:7"] && Set(reverse.snapshot.roots.keys) == ["window:7"], "only the window keeps its identity")
     expect(!forward.snapshot.complete && !reverse.snapshot.complete, "the contested sheets leave both snapshots incomplete")
     expect(changes(forward.snapshot, reverse.snapshot).isEmpty && changes(reverse.snapshot, forward.snapshot).isEmpty, "reordering the sheets reports no change")
+}
+
+/// `AXFocused`, `AXMain` and `AXMinimized` are reported only as read (`RootState`): a failed or non-boolean reply is
+/// left out, never `false`, so `rootDelta` never reports a focus change from it. A sheet shows its window's focus, as
+/// before, and `rootDelta` compares only its own read (`ownFocus`); a menu's stamped focus is never compared (#1303).
+private func assertStateReads(_ bridge: Bridge) {
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
+    let yes: AnyObject = kCFBooleanTrue
+    let no: AnyObject = kCFBooleanFalse
+    expect(rootStateBoolean(yes) == true && rootStateBoolean(no) == false, "a CFBoolean reply is read")
+    expect(rootStateBoolean(true as NSNumber) == true && rootStateBoolean(NSNumber(value: false)) == false, "a bridged Bool is a CFBoolean")
+    expect([0, 1, 2].allSatisfy { rootStateBoolean(NSNumber(value: $0)) == nil }, "a numeric reply, even 0 or 1, is not a boolean")
+    expect(rootStateBoolean(nil) == nil && rootStateBoolean("true" as NSString) == nil, "a missing or non-boolean reply is unknown")
+
+    func snapshot(_ roots: [String: [String: Any]]) -> RootInventorySnapshot { RootInventorySnapshot(roots: roots, complete: true) }
+    let unread: [String: Any] = ["rootRef": "w"]
+    let unfocused: [String: Any] = ["rootRef": "w", "isFocused": false]
+    let focused: [String: Any] = ["rootRef": "w", "isFocused": true]
+    expect(changes(snapshot(["k": unfocused]), snapshot(["k": focused])) == ["focused:w"], "a root read unfocused, then focused, gained focus")
+    expect(changes(snapshot(["k": unread]), snapshot(["k": focused])).isEmpty, "a root whose focus read failed before the action never gained focus")
+    expect(changes(snapshot(["k": focused]), snapshot(["k": unread])).isEmpty && changes(snapshot(["k": unfocused]), snapshot(["k": unread])).isEmpty, "nor does one whose read failed after it")
+    expect(rootOwnFocus(focused) == true && rootOwnFocus(unread) == nil, "a window's own focus is its read `isFocused`")
+
+    // A window paired with its own CG window, so its identity is read on both sides; only its state replies vary.
+    let doc = FakeRoot("doc")
+    let sheet = FakeRoot("sheet")
+    func listing(_ states: [String: AnyObject], onscreen: Bool? = true, sheeted: Bool = true) -> FakeListing {
+        let listing = FakeListing([doc])
+        if sheeted { listing.sheets = ["doc": [sheet]] }
+        listing.titles = ["sheet": .value("Save")]
+        listing.frames = ["sheet": CGRect(x: 700, y: 150, width: 400, height: 300)]
+        if let onscreen { listing.candidates = [CGWindowCandidate(windowId: 7, title: "", bounds: FakeListing.frame, isOnscreen: onscreen, layer: 0, zOrder: 0)] }
+        listing.states = states
+        return listing
+    }
+    let failed = listing(["doc.main": yes]).classify(bridge)
+    expect(failed.windows.first?.root.state == RootState(focused: nil, main: true, minimized: nil), "each state flag keeps its own read")
+    let window = failed.entries.first ?? [:]
+    expect(window["isFocused"] == nil && window["isMinimized"] == nil && window["isMain"] as? Bool == true, "an unread flag is left out of the entry, a read one is kept")
+    expect(failed.snapshot.complete && Set(failed.snapshot.roots.keys) == ["window:7", "meta:sheet:AXSheet:Save:700,150,400,300"], "a failed state read leaves the identity comparable")
+    let read = listing(["doc.focused": no]).classify(bridge)
+    let gained = listing(["doc.focused": yes]).classify(bridge)
+    expect(changes(read.snapshot, gained.snapshot) == ["focused:doc"], "a window read unfocused, then focused, gained focus; its sheet showing that focus did not")
+    expect(changes(failed.snapshot, gained.snapshot).isEmpty, "a failed focus read before the action reports no focus change")
+    expect(changes(gained.snapshot, failed.snapshot).isEmpty, "nor after it")
+    let numeric = listing(["doc.focused": NSNumber(value: 0), "doc.minimized": NSNumber(value: 2)]).classify(bridge)
+    expect(numeric.entries.first.map { $0["isFocused"] == nil && $0["isMinimized"] == nil } == true, "a numeric reply is left out")
+    expect(changes(numeric.snapshot, gained.snapshot).isEmpty, "a numeric 0 before a boolean true reports no focus change")
+
+    // A sheet's `isFocused` is its window's read focus, as root selection has always read it; only its own boolean
+    // `AXFocused` read (`ownFocus`) is focus evidence for `rootDelta`.
+    let sheets = gained.entries.dropFirst()
+    expect(sheets.count == 1 && sheets.allSatisfy { $0["isFocused"] as? Bool == true && $0["ownFocus"] == nil }, "a sheet shows its window's focus; its own unread focus is left out")
+    expect(sheets.allSatisfy { $0["isMain"] as? Bool == false && $0["isMinimized"] as? Bool == false }, "a sheet is never main or minimized")
+    expect(failed.entries.dropFirst().allSatisfy { $0["isFocused"] == nil }, "a sheet of a window whose focus read failed has no `isFocused`")
+    expect(changes(listing(["doc.focused": yes], sheeted: false).classify(bridge).snapshot, gained.snapshot) == ["appeared:sheet"], "a new sheet showing its window's focus appeared but did not gain focus")
+    let ownFocus = listing(["doc.focused": yes, "sheet.focused": no]).classify(bridge)
+    expect(ownFocus.entries.map { $0["isFocused"] as? Bool } == [true, true] && ownFocus.entries.last?["ownFocus"] as? Bool == false, "a sheet read unfocused still shows its window's focus, its own read kept apart")
+    expect(rootOwnFocus(ownFocus.entries.last ?? [:]) == false && rootOwnFocus(gained.entries.last ?? [:]) == nil, "a sheet's own focus is its own read, never its window's")
+    let sheetGained = listing(["doc.focused": yes, "sheet.focused": yes]).classify(bridge)
+    expect(changes(ownFocus.snapshot, sheetGained.snapshot) == ["focused:sheet"], "a sheet read unfocused, then focused, gained focus")
+    expect(changes(ownFocus.snapshot, gained.snapshot).isEmpty && changes(gained.snapshot, sheetGained.snapshot).isEmpty, "a sheet whose own focus read failed on either side did not")
+    let unfocusedDoc = listing(["doc.focused": no, "sheet.focused": no]).classify(bridge)
+    expect(changes(unfocusedDoc.snapshot, ownFocus.snapshot) == ["focused:doc"], "a window gaining focus never makes its sheet, read unfocused, gain focus")
+
+    // A popup menu root as `rootInventory` builds it: `isFocused` is stamped `true` without an AX read, so a new menu
+    // appeared but never gained focus, with or without an AX menu element (#1303).
+    func menu(_ ref: String, confidence: String, score: Int) -> [String: Any] {
+        ["kind": "menu", "rootRef": ref, "windowRef": ref, "windowId": 31, "zOrder": 0, "title": "", "role": "AXMenu", "subrole": "", "isModal": false,
+         "isMinimized": false, "isOnscreen": true, "isMain": false, "isFocused": true,
+         "metadata": ["pairing": ["confidence": confidence, "score": score], "sheetCount": 0], "pid": 5, "appName": "App"]
+    }
+    let cgOnly = menu("cgmenu:31", confidence: "low", score: 0)
+    let axMenu = menu("ax:menu", confidence: "high", score: 100)
+    expect(rootOwnFocus(cgOnly) == nil && rootOwnFocus(axMenu) == nil, "a menu's stamped focus is not a read")
+    expect(changes(snapshot([:]), snapshot(["window:31": cgOnly])) == ["appeared:cgmenu:31"], "a new CG-only popup menu appeared but did not gain focus")
+    expect(changes(snapshot([:]), snapshot(["window:31": axMenu])) == ["appeared:ax:menu"], "nor did one with an AX menu element")
+
+    // `isOnscreen`: the paired CG window's, else the read `isMinimized` negated, else unknown; a sheet without a CG
+    // window of its own takes its window's.
+    expect(gained.entries.map { $0["isOnscreen"] as? Bool } == [true, true], "a paired window and its sheet are on screen as their CG window is")
+    expect(listing([:], onscreen: false).classify(bridge).entries.map { $0["isOnscreen"] as? Bool } == [false, false], "an off-screen CG window is off screen")
+    expect(listing(["doc.minimized": yes], onscreen: nil).classify(bridge).entries.map { $0["isOnscreen"] as? Bool } == [false, false], "an unpaired minimized window is off screen")
+    expect(listing(["doc.minimized": no], onscreen: nil).classify(bridge).entries.map { $0["isOnscreen"] as? Bool } == [true, true], "an unpaired window read not minimized is on screen")
+    let unknown = listing([:], onscreen: nil).classify(bridge).entries
+    expect(unknown.count == 2 && unknown.allSatisfy { $0["isOnscreen"] == nil }, "an unpaired window whose minimized read failed has no `isOnscreen`")
 }
