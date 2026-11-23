@@ -198,6 +198,7 @@ import {
 } from "./settings.ts";
 import { hostStartupErrorClass } from "./startup-error.ts";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix, resumeHint } from "./status-note.ts";
+import { writerClaimHolder } from "./transcript-claim.ts";
 import type {
 	AgentConfig,
 	AgentInvocation,
@@ -1377,7 +1378,17 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		}
 	}
 
-	function savedSessionChecker(ctx: ExtensionContext) {
+	/** A claim that cannot be read is no proof its writer stopped: refuse, carrying the error as it is. */
+	function readWriterClaim(canonicalFile: string): string | undefined {
+		try {
+			return writerClaimHolder(canonicalFile);
+		} catch (err) {
+			return `writer claim unreadable: ${errorMessage(err)}`;
+		}
+	}
+
+	/** `claimed`: the caller already holds the transcript's writer claim, so it is not a sign of another writer. */
+	function savedSessionChecker(ctx: ExtensionContext, claimed = false) {
 		const home = options.homeDir;
 		const agentDir = resolveAgentDir(home);
 		const settings = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: isProjectTrusted() });
@@ -1407,6 +1418,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				savedCwd: note.sessionCwd,
 				boundFile: note.canonicalSessionFile,
 				canonical,
+				writerClaim: claimed ? undefined : readWriterClaim,
 			});
 		};
 	}

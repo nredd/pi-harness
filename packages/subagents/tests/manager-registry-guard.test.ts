@@ -165,6 +165,13 @@ describe("the registry spawn strips internal capabilities", () => {
 		await root.lifecycle.get("session_shutdown")?.();
 	});
 
+	it("refuses a forged reopen recheck, which would wave a transcript through under its writer claim", async () => {
+		const { root, runOpts } = forge({ verifyResumeFile: () => undefined });
+
+		expect(runOpts().verifyResumeFile).toBeUndefined();
+		await root.lifecycle.get("session_shutdown")?.();
+	});
+
 	it("refuses a forged reclaim and allocates a handle the ordinary way", async () => {
 		// reclaim bypasses assignHandle, so a forged value could duplicate a live
 		// agent's name and make `@handle` resolve to either of two records.

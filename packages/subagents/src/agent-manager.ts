@@ -478,6 +478,8 @@ interface SpawnOptions {
 	 * the type's CURRENT config.
 	 */
 	resumeSessionFile?: string;
+	/** Internal, like `resumeSessionFile`: rechecks it under its writer claim before the open. */
+	verifyResumeFile?: () => string | undefined;
 	/**
 	 * Take an evicted agent's names back verbatim instead of allocating fresh
 	 * ones, so a resumed conversation keeps the handle the user just typed —
@@ -1426,6 +1428,7 @@ export class AgentManager {
 			structuredOutput: options.structuredOutput,
 			planGate: record.planGate,
 			resumeSessionFile: options.resumeSessionFile,
+			verifyResumeFile: options.verifyResumeFile,
 			nested: options.parentAgentId !== undefined,
 			workflow: options.workflowId !== undefined,
 			// Worktree wins for the working dir (the agent must run in the copy —

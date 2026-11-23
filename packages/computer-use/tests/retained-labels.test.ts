@@ -179,22 +179,83 @@ test("a removed node's retained region is redacted: its classification is unknow
 	await assertQueriesClean(second.stateId, "@e3");
 });
 
-test("a scoped look with a protected node redacts preserved, unconfirmed children", async () => {
+// macOS and Windows redact a preserved, unconfirmed child; a Linux scoped reply is the whole live subtree, so the
+// graft drops it instead (#1349).
+for (const shape of ["windows missing role", "linux password"] as const)
+	test(`a scoped look with a protected node redacts or drops preserved, unconfirmed children (${shape})`, async () => {
+		const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES[shape]);
+		const group = (children: object[], extra = {}) => wireNode("g", "AXGroup", "Group", { children, ...extra });
+		let kid = wireNode("kid", "AXStaticText", SECRET);
+		fake.lookPayload = (request: { scopeRef?: string }) =>
+			request.scopeRef === "g"
+				? { ...lookPayload({ lookId: "scoped", image: false }), outline: group([kid]) }
+				: lookPayload({ children: [group([kid], { truncated: request.scopeRef === undefined })] });
+		const { stateId, text } = await fake.observe({ detail: "outline" });
+		assert.match(text, new RegExp(SECRET));
+		// The old child reappears under a new wire ref once protected, so the graft cannot reuse it.
+		kid = wireNode("kid2", "password text", PROTECTED_LABEL, { label: "" });
+		const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+		assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+		if (shape === "linux password") {
+			assert.doesNotMatch(fake.text(expanded), /@e3/);
+			await assert.rejects(fake.call(fake.bridge.executeInspectUi, { stateId, ref: "@e3" }), /not available/);
+			await assertQueriesClean(stateId, "@e2");
+		} else {
+			assert.match(fake.text(expanded), /@e3 AXStaticText "\[redacted\]"/);
+			await assertQueriesClean(stateId, "@e3");
+		}
+	});
+
+test("a scoped look that leaves a child unread never brings its cached text or ref back (#1349)", async () => {
 	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
-	const group = (children: object[], extra = {}) => wireNode("g", "AXGroup", "Group", { children, ...extra });
-	let kid = wireNode("kid", "AXStaticText", SECRET);
+	const kid = wireNode("kid", "AXStaticText", SECRET, { value: SECRET_VALUE });
+	const group = (children: object[]) => wireNode("g", "AXGroup", "Group", { children, truncated: true });
+	// The first look read the child; later looks refuse it, e.g. its live `Parent` edge is now unconfirmed.
+	let children = [kid];
 	fake.lookPayload = (request: { scopeRef?: string }) =>
 		request.scopeRef === "g"
-			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group([kid]) }
-			: lookPayload({ children: [group([kid], { truncated: request.scopeRef === undefined })] });
+			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group(children) }
+			: lookPayload({ children: [group(children), wireButton("b", "Keep")] });
 	const { stateId, text } = await fake.observe({ detail: "outline" });
-	assert.match(text, new RegExp(SECRET));
-	// The old child reappears under a new wire ref once protected, so the graft cannot reuse it.
-	kid = wireNode("kid2", "password text", PROTECTED_LABEL, { label: "" });
+	children = [];
+	assert.match(text, new RegExp(SECRET), "precondition: the full look shows the child");
+	assert.match(text, /@e4 AXStaticText/, "precondition: the child is @e4");
 	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+	assert.equal(fake.looks.at(-1).scopeRef, "g", "the truncated group took a scoped look");
 	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
-	assert.match(fake.text(expanded), /@e3 AXStaticText "\[redacted\]"/);
-	await assertQueriesClean(stateId, "@e3");
+	await assert.rejects(
+		fake.call(fake.bridge.executeInspectUi, { stateId, ref: "@e4" }),
+		/not available in the current outline/,
+		"the refused child's cached ref is gone",
+	);
+	await assertQueriesClean(stateId, "@e2");
+});
+
+test("a complete Linux scoped look that omits a moved child drops its cached text and ref (#1349)", async () => {
+	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
+	const kid = wireNode("kid", "AXStaticText", SECRET, { value: SECRET_VALUE });
+	// The child moves under a protected container outside the group: the helper never sees the old edge, so the
+	// scoped reply is complete (nothing `truncated`) and simply omits it.
+	let children = [kid];
+	fake.lookPayload = (request: { scopeRef?: string }) =>
+		request.scopeRef === "g"
+			? { ...lookPayload({ lookId: "scoped", image: false }), outline: wireNode("g", "AXGroup", "Group") }
+			: lookPayload({
+					children: [wireNode("g", "AXGroup", "Group", { children, truncated: true }), wireButton("b", "Keep")],
+				});
+	const { stateId, text } = await fake.observe({ detail: "outline" });
+	children = [];
+	assert.match(text, new RegExp(SECRET), "precondition: the full look shows the child");
+	assert.match(text, /@e4 AXStaticText/, "precondition: the child is @e4");
+	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+	assert.equal(fake.looks.at(-1).scopeRef, "g", "the truncated group took a scoped look");
+	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+	await assert.rejects(
+		fake.call(fake.bridge.executeInspectUi, { stateId, ref: "@e4" }),
+		/not available in the current outline/,
+		"the moved child's cached ref is gone",
+	);
+	await assertQueriesClean(stateId, "@e2");
 });
 
 test("a restored session note from before the fix is redacted by every cached query", async () => {
@@ -232,36 +293,41 @@ test("a restored session note from before the fix is redacted by every cached qu
 	await assertQueriesClean(observed.stateId, "@e2");
 });
 
-test("a redacted top-level graft never echoes the old region label", async () => {
-	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
-	const keep = wireButton("b", "Keep");
-	// The field turns protected and comes back under a new wire ref, so the graft keeps the old one unconfirmed.
-	const protectedField = wireNode("a2", "password text", PROTECTED_LABEL, { label: "" });
-	let turned = false;
-	fake.lookPayload = (request: { scopeRef?: string }) => {
-		if (turned) return lookPayload({ lookId: `turned-${request.scopeRef}`, children: [protectedField, keep] });
-		const full = lookPayload({ children: [wireNode("a", "AXTextField", SECRET, { value: SECRET_VALUE }), keep] });
-		return { ...full, outline: { ...full.outline, truncated: true } };
-	};
-	const { stateId, result } = await fake.observe();
-	assert.ok(
-		result.details.note.regions.some(
-			(region: { ref?: string; label: string }) => region.ref === "@e2" && region.label === SECRET,
-		),
-		"precondition: the top-level field has its own note region",
-	);
-	turned = true;
-	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e1" });
-	assert.equal(fake.looks.at(-1).scopeRef, "w", "the truncated root took a scoped look");
-	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
-	const found = await fake.call(fake.bridge.executeSearchUi, { stateId, text: "Keep" });
-	assertNoSecret(found, fake.text(found), "search_ui");
-	assert.ok(
-		found.details.note.regions.some((region: { label: string }) => region.label === REDACTED_LABEL),
-		"the preserved field's region is redacted",
-	);
-	await assertQueriesClean(stateId, "@e2");
-});
+// macOS and Windows keep the old field redacted; Linux drops it (#1349). Its region is redacted either way.
+for (const shape of ["windows missing role", "linux password"] as const)
+	test(`a redacted top-level graft never echoes the old region label (${shape})`, async () => {
+		const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES[shape]);
+		const keep = wireButton("b", "Keep");
+		// The field turns protected and comes back under a new wire ref, so the graft keeps the old one unconfirmed.
+		const protectedField = wireNode("a2", "password text", PROTECTED_LABEL, { label: "" });
+		let turned = false;
+		fake.lookPayload = (request: { scopeRef?: string }) => {
+			if (turned) return lookPayload({ lookId: `turned-${request.scopeRef}`, children: [protectedField, keep] });
+			const full = lookPayload({ children: [wireNode("a", "AXTextField", SECRET, { value: SECRET_VALUE }), keep] });
+			return { ...full, outline: { ...full.outline, truncated: true } };
+		};
+		const { stateId, result } = await fake.observe();
+		assert.ok(
+			result.details.note.regions.some(
+				(region: { ref?: string; label: string }) => region.ref === "@e2" && region.label === SECRET,
+			),
+			"precondition: the top-level field has its own note region",
+		);
+		turned = true;
+		const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e1" });
+		assert.equal(fake.looks.at(-1).scopeRef, "w", "the truncated root took a scoped look");
+		assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+		const found = await fake.call(fake.bridge.executeSearchUi, { stateId, text: "Keep" });
+		assertNoSecret(found, fake.text(found), "search_ui");
+		assert.ok(
+			found.details.note.regions.some((region: { label: string }) => region.label === REDACTED_LABEL),
+			"the preserved field's region is redacted",
+		);
+		if (shape === "linux password") {
+			await assert.rejects(fake.call(fake.bridge.executeInspectUi, { stateId, ref: "@e2" }), /not available/);
+			await assertQueriesClean(stateId, "@e1");
+		} else await assertQueriesClean(stateId, "@e2");
+	});
 
 test("a restored node without a role expands as protected, not as a crash", async () => {
 	const { fake, restart } = await desktop(PROTECTED_SHAPES["linux password"]);
