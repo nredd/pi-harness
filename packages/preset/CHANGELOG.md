@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Keep worktrees whose index differs from `HEAD`, including staged deletions and intent-to-add entries. The cached `git diff-index` compares object IDs only and reads no worktree files. ([#1175](https://github.com/nredd/pi-harness/issues/1175))
 - Keep worktrees when `gh` returns a PR URL that does not verify the push remote host, when probing an in-progress operation marker fails with anything other than `ENOENT`, or when a prune dry run emits any output, including whitespace only. ([#1126](https://github.com/nredd/pi-harness/issues/1126))
 - Keep worktrees with local refs, reflog-only commits, an in-progress `am`, rebase, merge, cherry-pick, revert or bisect, or unconfirmed clean filters. Verify the PR source branch, repository host and head before removal. Refuse `git worktree prune` while Git reports a prunable worktree, an admin `gitdir` is empty or missing, a `.git` file names another admin dir, or `git worktree prune --dry-run --verbose` prints anything. Fetch with `--no-auto-maintenance`. ([#1057](https://github.com/nredd/pi-harness/issues/1057))
 - Share the same worktree safety checks before creating an issue worktree, after merge, and before no-PR removal. Use the recorded merged PR head when the upstream is gone. Report retained ignored paths and preserve files hidden by index flags. ([#1050](https://github.com/nredd/pi-harness/issues/1050))

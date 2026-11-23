@@ -539,6 +539,41 @@ def test_disabled_trustctime_hides_same_size_edit_with_restored_mtime(wt: Worktr
     keep(wt, "core.trustctime")
 
 
+@pytest.mark.parametrize("kind", ["modified", "deleted", "intent-to-add"])
+def test_staged_change_keeps_under_closed_scope(wt: Worktrees, kind: str) -> None:
+    if kind == "modified":
+        (wt.path / "tracked").write_text("staged only\n")
+        git(wt.path, "add", "tracked")
+    elif kind == "deleted":
+        git(wt.path, "rm", "--quiet", "tracked")
+    else:
+        (wt.path / "new").write_bytes(b"")
+        git(wt.path, "add", "--intent-to-add", "new")
+    assert git(wt.path, "ls-files", "--others") == b""
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert result["reasons"] == ["staged changes: index differs from HEAD"]
+
+
+def test_staged_change_check_runs_no_configured_diff_program(wt: Worktrees) -> None:
+    marker = wt.bin / "diff-program-ran"
+    adapter(wt.bin, "mark-diff", f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    program = quote(str(wt.bin / "mark-diff"))
+    git(wt.path, "config", "diff.external", program)
+    git(wt.path, "config", "diff.mark.textconv", program)
+    (wt.repo / ".git/info").mkdir(exist_ok=True)
+    (wt.repo / ".git/info/attributes").write_text("tracked diff=mark\n")
+    (wt.path / "tracked").write_text("staged only\n")
+    git(wt.path, "add", "tracked")
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert not marker.exists()
+    assert code == 0
+    assert result["reasons"] == ["staged changes: index differs from HEAD"]
+
+
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
     (wt.path / "retained-empty").mkdir()
     quiet(wt)
