@@ -82,6 +82,64 @@ fn malformed_requests_are_rejected_without_coercion() {
     assert_eq!(request.args, json!([null, true]));
 }
 
+/// A request carrying `deadlineMs` and `budgetMs`, or `null` for a missing one.
+fn dated(deadline_ms: Option<u64>, budget_ms: Option<u32>) -> Request {
+    serde_json::from_value(json!({
+        "protocolVersion": PROTOCOL_VERSION, "id": "dated", "cmd": "act", "args": {},
+        "deadlineMs": deadline_ms, "budgetMs": budget_ms
+    }))
+    .unwrap()
+}
+
+#[test]
+fn the_request_deadline_is_the_earlier_of_its_wall_and_budget_estimates() {
+    let wall = std::time::UNIX_EPOCH + Duration::from_millis(1_000_000);
+    let received = Instant::now();
+    let now = received + Duration::from_millis(40);
+    let ms = Duration::from_millis;
+    // The line sat 40 ms in the pipe: the wall estimate counts it, the budget does not.
+    assert_eq!(
+        dated(Some(1_000_060), Some(200)).deadline_at(received, now, wall),
+        Some(now + ms(60))
+    );
+    // The wall clock stepped back: the monotonic budget still bounds the deadline.
+    assert_eq!(
+        dated(Some(9_000_000), Some(100)).deadline_at(received, now, wall),
+        Some(received + ms(100))
+    );
+    // Already past on the wall clock: the deadline is now.
+    assert_eq!(
+        dated(Some(999_000), Some(100)).deadline_at(received, now, wall),
+        Some(now)
+    );
+    // No overflow however far off, and a wall clock before the epoch reads as 0.
+    let before_epoch = std::time::UNIX_EPOCH - ms(5);
+    assert_eq!(
+        dated(Some(u64::MAX), Some(u32::MAX)).deadline_at(received, now, before_epoch),
+        Some(received + ms(u64::from(u32::MAX)))
+    );
+    // Either field missing: no deadline, which the dispatcher refuses.
+    for request in [dated(None, Some(100)), dated(Some(1_000_060), None)] {
+        assert_eq!(request.deadline_at(received, now, wall), None);
+        assert_eq!(request.deadline(received), None);
+    }
+    assert!(dated(Some(u64::MAX), Some(100))
+        .deadline(received)
+        .is_some());
+    // Negative, fractional or oversized values are malformed, not coerced.
+    for (deadline, budget) in [
+        (json!(-1), json!(1)),
+        (json!(1), json!(1.5)),
+        (json!(1), json!(4_294_967_296u64)),
+    ] {
+        let malformed = json!({
+            "protocolVersion": PROTOCOL_VERSION, "id": "x", "cmd": "act", "args": {},
+            "deadlineMs": deadline, "budgetMs": budget
+        });
+        assert!(serde_json::from_value::<Request>(malformed).is_err());
+    }
+}
+
 #[test]
 fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_linux-bridge"))
@@ -96,9 +154,15 @@ fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
             "\n{{\n",
             "{{\"protocolVersion\":{v},\"id\":\"malformed\",\"cmd\":false,\"args\":{{}}}}\n",
             "{{\"protocolVersion\":0,\"id\":\"version\",\"cmd\":\"diagnostics\",\"args\":{{}}}}\n",
-            "{{\"protocolVersion\":{v},\"id\":\"command\",\"cmd\":\"not-a-command\",\"args\":{{}}}}\n"
+            "{{\"protocolVersion\":{v},\"id\":\"command\",\"cmd\":\"not-a-command\",\"args\":{{}},\"deadlineMs\":{wall},\"budgetMs\":60000}}\n",
+            "{{\"protocolVersion\":{v},\"id\":\"undated\",\"cmd\":\"diagnostics\",\"args\":{{}}}}\n"
         ),
-        v = PROTOCOL_VERSION
+        v = PROTOCOL_VERSION,
+        wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            + 60_000
     );
     let written = child.stdin.take().unwrap().write_all(input.as_bytes());
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -126,19 +190,24 @@ fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(responses.len(), 4);
+    assert_eq!(responses.len(), 5);
     for (id, code, message) in [
         ("unknown", "invalid_request", "Invalid request:"),
         ("malformed", "invalid_request", "Invalid request:"),
         (
             "version",
             "invalid_request",
-            "Unsupported Linux helper protocol 0; expected 10.",
+            "Unsupported Linux helper protocol 0; expected 11.",
         ),
         (
             "command",
             "unsupported_command",
             "Unknown command 'not-a-command'",
+        ),
+        (
+            "undated",
+            "invalid_request",
+            "Linux helper requests require deadlineMs and budgetMs",
         ),
     ] {
         let response = responses
@@ -198,6 +267,7 @@ fn every_error_has_the_stable_wire_code_and_display() {
         (ErrorCode::OccludedTarget, "occluded_target"),
         (ErrorCode::InputUnsafe, "input_unsafe"),
         (ErrorCode::Cancelled, "cancelled"),
+        (ErrorCode::InputDeadlineExpired, "input_deadline_expired"),
     ] {
         assert_eq!(serde_json::to_value(code).unwrap(), wire);
         assert_eq!(code.to_string(), wire);

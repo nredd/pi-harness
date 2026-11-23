@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Upper bound for any single wait on the helper process.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -138,22 +138,29 @@ impl Drop for Helper {
     }
 }
 
+/// `request`'s `deadlineMs` and `budgetMs`, `budget` from now.
+fn with_deadline(mut request: Value, budget: Duration) -> Value {
+    let wall = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("after the epoch");
+    request["deadlineMs"] = json!(u64::try_from((wall + budget).as_millis()).expect("fits u64"));
+    request["budgetMs"] = json!(u32::try_from(budget.as_millis()).expect("fits u32"));
+    request
+}
+
+/// A request deadline no test reaches.
+const FAR: Duration = Duration::from_secs(600);
+
 fn diagnostics(id: &str) -> Value {
-    json!({"protocolVersion": PROTOCOL_VERSION, "id": id, "cmd": "diagnostics", "args": {}})
+    request(id, "diagnostics", json!({}))
 }
 
 #[test]
 fn protocol_round_trip_matches_other_helpers() {
-    let request: Request = serde_json::from_value(json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "id": "linux-1",
-        "cmd": "diagnostics",
-        "args": {}
-    }))
-    .unwrap();
+    let request: Request = serde_json::from_value(diagnostics("linux-1")).unwrap();
     let response = Response::ok(&request.id, json!({"backend":"at-spi2"}));
     let value = serde_json::to_value(response).unwrap();
-    assert_eq!(value["protocolVersion"], 10);
+    assert_eq!(value["protocolVersion"], 11);
     assert_eq!(value["id"], "linux-1");
     assert_eq!(value["result"]["backend"], "at-spi2");
 }
@@ -210,16 +217,18 @@ fn termination_signals_drain_and_exit_cleanly() {
 
 /// A `testingAct` request typing `text` through a scripted recording sink.
 fn typing(id: &str, text: &str, sink: Value) -> Value {
-    json!({
-        "protocolVersion": PROTOCOL_VERSION,
-        "id": id,
-        "cmd": "testingAct",
-        "args": {"action": "typeText", "params": {"text": text}, "sink": sink}
-    })
+    request(
+        id,
+        "testingAct",
+        json!({"action": "typeText", "params": {"text": text}, "sink": sink}),
+    )
 }
 
 fn request(id: &str, cmd: &str, args: Value) -> Value {
-    json!({"protocolVersion": PROTOCOL_VERSION, "id": id, "cmd": cmd, "args": args})
+    with_deadline(
+        json!({"protocolVersion": PROTOCOL_VERSION, "id": id, "cmd": cmd, "args": args}),
+        FAR,
+    )
 }
 
 /// A semantic `act` on an element ref; it never reaches XTEST.
@@ -415,4 +424,56 @@ fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
             assert!(status.success(), "{ending}: nothing is held: {stderr}");
         }
     }
+}
+
+/// A press whose post stalls past the request deadline is the last press: nothing after it
+/// is submitted but the release it owes (#1341).
+#[test]
+fn a_press_stalled_past_its_deadline_posts_nothing_after_it() {
+    let mut helper = Helper::spawn();
+    helper.send(&diagnostics("ready"));
+    assert_eq!(helper.reply()["id"], "ready");
+    // Shift is pressed at once and its post stalls 1.5 s, past the 1 s deadline. Without
+    // the deadline, `a` would be pressed and released, then shift released: four posts.
+    let mut late = typing(
+        "late",
+        "A",
+        json!({"delayMs": 1500, "delayPosts": [0], "announce": "late"}),
+    );
+    late = with_deadline(late, Duration::from_secs(1));
+    helper.send(&late);
+    let reply = helper.reply();
+    let result = &reply["result"];
+    assert_eq!(result["outcome"], "unknown", "{reply}");
+    assert_eq!(result["error"]["code"], "input_deadline_expired", "{reply}");
+    assert_eq!(result["evidence"]["deliveredUnits"], 2, "{reply}");
+    assert_eq!(
+        result["evidence"]["events"], 2,
+        "shift press and release only: {reply}"
+    );
+    assert_eq!(
+        result["evidence"]["held"],
+        json!([]),
+        "shift released: {reply}"
+    );
+    // The two posts are the press and its owed release, announced in order.
+    helper.ready("posting late 0");
+    helper.ready("posting late 1");
+    // A request already past its deadline on arrival starts nothing.
+    helper.send(&with_deadline(
+        typing("expired", "a", json!({"announce": "expired"})),
+        Duration::ZERO,
+    ));
+    let expired = helper.reply();
+    assert_eq!(expired["ok"], false, "{expired}");
+    assert_eq!(
+        expired["error"]["code"], "input_deadline_expired",
+        "{expired}"
+    );
+    helper.close_stdin();
+    let status = helper.wait(DEADLINE);
+    let stderr = helper.stderr();
+    assert!(status.success(), "{stderr}");
+    assert!(!stderr.contains("posting expired"), "{stderr}");
+    assert!(!stderr.contains("posting late 2"), "{stderr}");
 }
