@@ -934,7 +934,7 @@ The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` 
 a fold omits pending fragments from the shipped changelog. Run `make fold-changelog`
 during release prep and commit the result before tagging.
 
-The #932 migration moves no historical bullets: all 17 retained `[Unreleased]` bullets lack
+The #932 migration moves no historical bullets: every `[Unreleased]` bullet at migration lacks
 the required matching issue link. Its `## Unreleased` heading becomes `## [Unreleased]`, which
 the fold requires; the bullets, blank lines and unbracketed release headings stay verbatim.
 Historical attribution and released sections are unchanged; no issue IDs are invented.
