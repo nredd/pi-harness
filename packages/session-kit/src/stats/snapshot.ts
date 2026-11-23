@@ -947,9 +947,18 @@ function carried(previous: Previous, harness: Harness): Contribution | null {
 	return out;
 }
 
+/** Sealed months a correction retires, and the sealed event and session rows it supersedes. */
+interface Revisions {
+	months: Set<string>;
+	events: Set<string>;
+	sessions: Set<string>;
+}
+
 /** Retire sealed generations only when a physical call or session identity was corrected. */
-function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<string> {
+function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Revisions {
 	const revised = new Set<string>();
+	const events = new Set<string>();
+	const sessionIds = new Set<string>();
 	const entries = new Map<string, { id: string; month: string }[]>();
 	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.entryId]);
 	for (const shard of previous.shards)
@@ -965,6 +974,7 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 			if (event.entryId === null) continue;
 			for (const prior of entries.get(entryKey(event)) ?? [])
 				if (prior.id !== event.id) {
+					events.add(prior.id);
 					revised.add(prior.month);
 					revised.add(shard.month);
 				}
@@ -974,11 +984,39 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 		for (const prior of shard.sessions) {
 			const current = sessions.get(prior.id);
 			if (current && (current.startMs !== prior.startMs || current.child !== prior.child)) {
+				sessionIds.add(prior.id);
 				revised.add(shard.month);
 				revised.add(monthOf(current.startMs));
 			}
 		}
-	return revised;
+	return { months: revised, events, sessions: sessionIds };
+}
+
+/**
+ * Regenerate a revised sealed month from the clean scan, then carry what its retired shards held that the
+ * scan no longer reproduces (archived calls and sessions, later session ends, quota readings) in delta
+ * shards. Only the superseded rows themselves are dropped.
+ */
+function regenerateMonth(
+	full: CompactShard | undefined,
+	retired: readonly CompactShard[],
+	revisions: Revisions,
+): CompactShard[] {
+	const shards = full ? [full] : [];
+	for (const shard of retired) {
+		const carry = monthDelta(
+			{
+				...shard,
+				events: shard.events.filter((event) => !revisions.events.has(event.id)),
+				sessions: shard.sessions.filter((session) => !revisions.sessions.has(session.id)),
+			},
+			shards,
+		);
+		if (carry) shards.push(carry);
+	}
+	if (shards.length <= MAX_SEALED_SHARDS) return shards;
+	const [base, ...deltas] = shards as [CompactShard, ...CompactShard[]];
+	return [base, ...compactDeltas(base, deltas)];
 }
 
 /** Compact late updates without rewriting the base or consulting the current transcript scan. */
@@ -1323,11 +1361,18 @@ async function publishStats(
 			? previous
 			: null;
 	const current = monthOf(exportedAt);
-	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
+	const revisions: Revisions = sealed
+		? revisedMonths(sealed, snapshot)
+		: { months: new Set(), events: new Set(), sessions: new Set() };
 	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
+	const retired = new Map<string, CompactShard[]>();
 	if (sealed)
 		for (const [i, shard] of sealed.shards.entries()) {
-			if (shard.month >= current || revised.has(shard.month)) continue;
+			if (shard.month >= current) continue;
+			if (revisions.months.has(shard.month)) {
+				retired.set(shard.month, [...(retired.get(shard.month) ?? []), shard as CompactShard]);
+				continue;
+			}
 			const refs = prior.get(shard.month) ?? [];
 			// loadPrevious authenticated and validated every shard against this v3 manifest.
 			refs.push({
@@ -1341,16 +1386,17 @@ async function publishStats(
 	const publishedShards: CompactShard[] = [];
 	const writes: { file: string; bytes: Buffer }[] = [];
 	let remaining = MAX_BYTES;
-	for (const month of [...new Set([...prior.keys(), ...fresh.keys()])].sort()) {
+	for (const month of [...new Set([...prior.keys(), ...retired.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
+		const replaced = retired.get(month);
 		const delta =
 			full &&
 			monthDelta(
 				full,
 				old.map(({ shard }) => shard),
 			);
-		let deltas = delta ? [delta] : [];
+		let deltas = replaced ? regenerateMonth(full, replaced, revisions) : delta ? [delta] : [];
 		if (old.length + deltas.length > MAX_SEALED_SHARDS) {
 			const base = nth(old, 0);
 			deltas = compactDeltas(base.shard, [...old.slice(1).map(({ shard }) => shard), ...deltas]);
