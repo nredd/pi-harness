@@ -3958,6 +3958,111 @@ mod tests {
         }
     }
 
+    /// A readable window that lists `/window/<index>` children, `0..self.0`.
+    struct WideWindow(usize);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl WideWindow {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Window"
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> &str {
+            "frame"
+        }
+
+        fn get_role(&self) -> u32 {
+            23
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            (0..self.0)
+                .map(|index| {
+                    let path = format!("/window/{index}");
+                    (":1.1", OwnedObjectPath::try_from(path).unwrap())
+                })
+                .collect()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            vec![]
+        }
+    }
+
+    /// Serial `Parent` checks that each stall up to the request deadline still end within one
+    /// snapshot deadline, as a snapshot-level `timeout` and never a partial snapshot: unscoped,
+    /// scoped at the root, and scoped below it, where the budget runs out during the ancestry
+    /// checks themselves (#1349).
+    #[tokio::test]
+    async fn snapshot_parent_checks_respect_operation_deadline() {
+        const CHILDREN: usize = 8;
+        // Five times the snapshot deadline, so only a missing deadline reaches it, not a slow
+        // runner; `with_peer` bounds the whole test at 5 s. Unbounded, the edge checks alone
+        // take CHILDREN * 250 ms = 2 s, and the below-root scope a minute.
+        const WATCHDOG: Duration = Duration::from_secs(3);
+        with_peer(
+            |peer| {
+                let mut peer = peer.serve_at("/window", WideWindow(CHILDREN))?;
+                for index in 0..CHILDREN {
+                    let mut child = contained_field(Some(STALLED_PARENT));
+                    child.name = "Child";
+                    peer = peer.serve_at(format!("/window/{index}"), child)?;
+                }
+                Ok(peer)
+            },
+            async |connection| {
+                let root = AccessibleRef {
+                    destination: ":1.1".into(),
+                    path: "/window".into(),
+                };
+                let below = AccessibleRef {
+                    destination: ":1.1".into(),
+                    path: "/window/0".into(),
+                };
+                let snapshot_timeout = Duration::from_millis(600);
+                // Each stalled `Parent` gives up at 250 ms, so only the sum outlasts the snapshot.
+                let client =
+                    AtspiClient::from_connection(connection.clone(), Duration::from_millis(250))
+                        .with_snapshot_timeout(snapshot_timeout);
+                // A per-request deadline past the watchdog: the below-root scope's first ancestry
+                // `Parent` read stalls, so only a snapshot deadline that covers it ends the look.
+                let patient = AtspiClient::from_connection(connection, Duration::from_secs(60))
+                    .with_snapshot_timeout(snapshot_timeout);
+                for case in ["unscoped", "root scope", "below-root scope"] {
+                    let reply = match case {
+                        "unscoped" => {
+                            tokio::time::timeout(WATCHDOG, client.snapshot_from(&root, 64, 4)).await
+                        }
+                        "root scope" => {
+                            let snapshot = client.snapshot_within(&root, &root, 64, 4);
+                            tokio::time::timeout(WATCHDOG, snapshot).await
+                        }
+                        _ => {
+                            let snapshot = patient.snapshot_within(&root, &below, 64, 4);
+                            tokio::time::timeout(WATCHDOG, snapshot).await
+                        }
+                    };
+                    let Ok(reply) = reply else {
+                        panic!("{case}: no snapshot deadline within {WATCHDOG:?}");
+                    };
+                    let Err(error) = reply else {
+                        panic!("{case}: a snapshot past its deadline returned nodes");
+                    };
+                    assert_eq!(error.code, ErrorCode::Timeout, "{case}: {error:?}");
+                    // The snapshot's own deadline, not a single request's (`Parent timed out`).
+                    assert_eq!(error.message, "AT-SPI2 snapshot timed out", "{case}");
+                }
+            },
+        )
+        .await;
+    }
+
     /// A link in a straight chain of readable panels; the leaf has text.
     struct ChainNode {
         parent: String,

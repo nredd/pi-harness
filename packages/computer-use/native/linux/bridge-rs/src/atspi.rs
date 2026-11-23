@@ -34,6 +34,10 @@ const MAX_ATSPI_ACTIONS: usize = 64;
 /// refused. Scoped looks nest, so this is above the 64-level snapshot depth clamp.
 const MAX_ANCESTRY_DEPTH: usize = 256;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// One deadline for a whole snapshot: scope checks, traversal and final validation. Its serial
+/// per-child `Parent` checks, each bounded by `REQUEST_TIMEOUT`, otherwise add up past the
+/// client's 15 s deadline and keep the request slot busy after the caller gave up (#1349).
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many applications one `list_roots` reads at a time. Serial reads of a batched
 /// inventory add up past the client's 15 s deadline (#1320); this many overlap them
 /// without flooding the accessibility bus.
@@ -168,6 +172,8 @@ impl NodeSnapshot {
 pub struct AtspiClient {
     connection: Connection,
     request_timeout: Duration,
+    /// Bounds one snapshot end to end, see `SNAPSHOT_TIMEOUT`.
+    snapshot_timeout: Duration,
     /// Its shutdown flag is checked at each semantic mutation.
     input: Arc<InputState>,
     /// The procfs mount used to attribute root PIDs to executables.
@@ -201,6 +207,7 @@ impl AtspiClient {
         Self {
             connection,
             request_timeout,
+            snapshot_timeout: SNAPSHOT_TIMEOUT,
             input: InputState::shared(),
             proc_root: Arc::from(Path::new(PROC_ROOT)),
         }
@@ -209,6 +216,14 @@ impl AtspiClient {
     /// Check `input`'s shutdown flag at each semantic mutation instead, e.g. in tests.
     pub fn with_input_state(self, input: Arc<InputState>) -> Self {
         Self { input, ..self }
+    }
+
+    /// Bound each snapshot by `snapshot_timeout` instead of `SNAPSHOT_TIMEOUT`, e.g. in tests.
+    pub fn with_snapshot_timeout(self, snapshot_timeout: Duration) -> Self {
+        Self {
+            snapshot_timeout,
+            ..self
+        }
     }
 
     /// Attribute root PIDs through another procfs tree, e.g. a test fixture.
@@ -699,7 +714,8 @@ impl AtspiClient {
     /// `root` is readable, and discard the result unless they still are afterwards: a scope
     /// never escapes its own protection or that of a container above it (#1233). A protected
     /// scope refuses rather than returning a redacted node; an unscoped look uses
-    /// `snapshot_from`, which redacts.
+    /// `snapshot_from`, which redacts. Both checks and the snapshot share one
+    /// `snapshot_timeout`; past it the whole snapshot is a `timeout`, never a partial one.
     pub async fn snapshot_within(
         &self,
         root: &AccessibleRef,
@@ -707,10 +723,29 @@ impl AtspiClient {
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<Snapshot, ProtocolError> {
-        self.confirm_readable_scope(root, start).await?;
-        let snapshot = self.snapshot_from(start, max_nodes, max_depth).await?;
-        self.confirm_readable_scope(root, start).await?;
-        Ok(snapshot)
+        wait_for_reply(self.snapshot_timeout, "snapshot", async {
+            self.confirm_readable_scope(root, start).await?;
+            let snapshot = self.snapshot_impl(start, max_nodes, max_depth).await?;
+            self.confirm_readable_scope(root, start).await?;
+            Ok(snapshot)
+        })
+        .await?
+    }
+
+    /// `snapshot_impl` within one `snapshot_timeout` for traversal and final validation;
+    /// past it the snapshot is a `timeout`, never a partial one whose validation did not run.
+    pub async fn snapshot_from(
+        &self,
+        start: &AccessibleRef,
+        max_nodes: usize,
+        max_depth: usize,
+    ) -> Result<Snapshot, ProtocolError> {
+        wait_for_reply(
+            self.snapshot_timeout,
+            "snapshot",
+            self.snapshot_impl(start, max_nodes, max_depth),
+        )
+        .await?
     }
 
     /// Preserve partial observations without mistaking unread nodes for absent nodes. A
@@ -720,8 +755,9 @@ impl AtspiClient {
     /// (see `parent_is`). Before returning, every container's role and every node's live
     /// `Parent` are re-read once: a container that turned protected meanwhile is redacted and
     /// its subtree dropped, and a node that moved, or whose `Parent` can no longer be read, is
-    /// dropped with its subtree and its listing parent marked `unread`.
-    pub async fn snapshot_from(
+    /// dropped with its subtree and its listing parent marked `unread`. It still has the node,
+    /// depth and per-request bounds but no deadline of its own; `snapshot_from` adds it.
+    async fn snapshot_impl(
         &self,
         start: &AccessibleRef,
         max_nodes: usize,
