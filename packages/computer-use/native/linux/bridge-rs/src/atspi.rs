@@ -376,12 +376,18 @@ impl AtspiClient {
     /// (`NameHasNoOwner`): the owner is gone, as if the first lookup had failed. The inner
     /// result is the identity: unidentified on a changed PID, an error when the recheck itself
     /// failed or timed out, which says nothing about the owner.
+    ///
+    /// A PID outside `scope` is returned unidentified straight after the first lookup, with no
+    /// `exe` read and no recheck, so a PID-scoped inventory spends one lookup per unrelated app.
     async fn bus_owner(
         &self,
         accessible: &AccessibleRef,
+        scope: Option<&[u64]>,
     ) -> Result<(u64, Attribution), ProtocolError> {
         let pid = self.application_pid(accessible).await?;
-        if !accessible.destination.starts_with(':') {
+        if !accessible.destination.starts_with(':')
+            || scope.is_some_and(|wanted| !wanted.contains(&pid))
+        {
             return Ok((pid, Ok(None)));
         }
         let Some(executable) = process_executable(&self.proc_root, pid) else {
@@ -440,8 +446,11 @@ impl AtspiClient {
         filter_pids: Option<&[u64]>,
     ) -> Result<Vec<RootSnapshot>, ProtocolError> {
         // A PID-scoped inventory proves absence, so an app it could not read must fail it.
-        let (pid, attribution) =
-            scoped_inventory(filter_pids, self.bus_owner(&app).await, (0, Ok(None)))?;
+        let (pid, attribution) = scoped_inventory(
+            filter_pids,
+            self.bus_owner(&app, filter_pids).await,
+            (0, Ok(None)),
+        )?;
         if filter_pids.is_some_and(|wanted| !wanted.contains(&pid)) {
             return Ok(Vec::new());
         }
@@ -520,7 +529,7 @@ impl AtspiClient {
         };
         for app in self.children(&registry).await? {
             if app.destination == root.destination && self.children(&app).await?.contains(root) {
-                let (pid, attribution) = self.bus_owner(root).await?;
+                let (pid, attribution) = self.bus_owner(root, None).await?;
                 let executable = attribution?;
                 let name = self
                     .checked_metadata(root, async || {
@@ -2445,14 +2454,20 @@ mod tests {
         Failed,
         /// Never answered.
         Stalled,
+        /// [`Lookup::Failed`], but only once another connection's lookup has failed: a reader
+        /// that waits for this app before reading the others never gets this reply.
+        FailedAfterAnother,
     }
 
     /// One scripted lookup and the `exe` target the fixture PID links to from then on.
     type PidReply = (Lookup, Option<&'static str>);
 
-    /// One connection's scripted PID lookups and the `exe` link of the PID its replies name.
+    /// One connection's scripted PID lookups, how many lookups it was sent, and the `exe` link
+    /// of the PID its replies name.
     struct OwnerScript {
         replies: std::collections::VecDeque<PidReply>,
+        scripted: usize,
+        requests: usize,
         exe: std::path::PathBuf,
     }
 
@@ -2462,6 +2477,8 @@ mod tests {
     /// (#1294).
     struct ScriptedBus {
         scripts: Arc<Mutex<HashMap<String, OwnerScript>>>,
+        /// Set once any [`Lookup::Failed`] reply was sent.
+        failed: tokio::sync::watch::Sender<bool>,
     }
 
     #[zbus::interface(name = "org.freedesktop.DBus")]
@@ -2471,7 +2488,9 @@ mod tests {
             let lookup = {
                 let mut scripts = self.scripts.lock().unwrap();
                 let script = scripts.get_mut(name).expect("unscripted connection");
-                let (lookup, relink) = script.replies.pop_front().expect("unscripted PID lookup");
+                script.requests += 1;
+                // An unscripted lookup fails, and the request count catches it afterwards.
+                let (lookup, relink) = script.replies.pop_front().unwrap_or((Lookup::Failed, None));
                 if let Some(target) = relink {
                     std::fs::remove_file(&script.exe).unwrap();
                     std::os::unix::fs::symlink(target, &script.exe).unwrap();
@@ -2481,8 +2500,16 @@ mod tests {
             match lookup {
                 Lookup::Pid(pid) => Ok(pid),
                 Lookup::Gone => Err(zbus::fdo::Error::NameHasNoOwner(format!("{name} is gone"))),
-                Lookup::Failed => Err(zbus::fdo::Error::Failed("bus overloaded".into())),
+                Lookup::Failed => {
+                    self.failed.send_replace(true);
+                    Err(zbus::fdo::Error::Failed(format!("{name} overloaded")))
+                }
                 Lookup::Stalled => std::future::pending().await,
+                Lookup::FailedAfterAnother => {
+                    let mut failed = self.failed.subscribe();
+                    failed.wait_for(|failed| *failed).await.unwrap();
+                    Err(zbus::fdo::Error::Failed(format!("{name} overloaded")))
+                }
             }
         }
     }
@@ -2507,12 +2534,19 @@ mod tests {
                 .map(|&(connection, pid, _, script)| {
                     let replies = script.iter().copied().collect();
                     let exe = proc.0.join(pid.to_string()).join("exe");
-                    (connection.to_owned(), OwnerScript { replies, exe })
+                    let script = OwnerScript {
+                        replies,
+                        scripted: script.len(),
+                        requests: 0,
+                        exe,
+                    };
+                    (connection.to_owned(), script)
                 })
                 .collect::<HashMap<_, _>>(),
         ));
         let bus = ScriptedBus {
             scripts: Arc::clone(&scripts),
+            failed: tokio::sync::watch::Sender::new(false),
         };
         with_peer(
             |server| {
@@ -2541,8 +2575,11 @@ mod tests {
                     .with_proc_root(&proc.0);
                 let result = exercise(&client).await;
                 let scripts = scripts.lock().unwrap();
+                // Exactly the scripted lookups: none left unasked, none asked beyond them.
                 assert!(
-                    scripts.values().all(|script| script.replies.is_empty()),
+                    scripts
+                        .values()
+                        .all(|script| script.requests == script.scripted),
                     "{owners:?}"
                 );
                 result
@@ -2692,13 +2729,13 @@ mod tests {
     /// Every app read at once rechecks its own owner (#1294): a failed recheck is that app's
     /// error in its registry slot. An unscoped listing keeps that root unidentified beside an
     /// identified one, a PID-scoped listing fails with the first failed app in registry order
-    /// even when a later app failed first, and ignores a failed recheck outside its PIDs.
+    /// even when a later app failed first, and never rechecks an app outside its PIDs.
     #[tokio::test]
     async fn concurrent_reads_recheck_each_bus_owner_in_its_own_slot() {
-        use Lookup::{Failed, Pid, Stalled};
+        use Lookup::{Failed, FailedAfterAnother, Pid};
         const EDITOR: &str = "/usr/bin/fixture-editor";
         const VIEWER: &str = "/usr/bin/fixture-viewer";
-        type Listed = Result<Vec<(u64, Option<String>)>, ErrorCode>;
+        type Listed = Result<Vec<(u64, Option<String>)>, (ErrorCode, String)>;
         let identified = |pid, name: Option<&str>| (pid, name.map(str::to_owned));
         let list = async |editor: &[PidReply], viewer: &[PidReply], filter: Option<&[u64]>| {
             let owners = [
@@ -2715,11 +2752,12 @@ mod tests {
                             .map(|root| (root.pid, executable_name(root).map(str::to_owned)))
                             .collect()
                     })
-                    .map_err(|error| error.code)
+                    .map_err(|error| (error.code, error.message))
             })
             .await;
             listed
         };
+        let code = |listed: Listed| listed.map_err(|(code, _)| code);
         let same = [(Pid(25361), None), (Pid(25361), None)];
         let viewer_same = [(Pid(25362), None), (Pid(25362), None)];
         assert_eq!(
@@ -2730,33 +2768,89 @@ mod tests {
             ])
         );
         assert_eq!(
-            list(
-                &same,
-                &[(Pid(25362), None), (Failed, None)],
-                Some(&[25361, 25362])
-            )
-            .await,
+            code(
+                list(
+                    &same,
+                    &[(Pid(25362), None), (Failed, None)],
+                    Some(&[25361, 25362])
+                )
+                .await
+            ),
             Err(ErrorCode::InternalError)
         );
-        // The viewer's recheck fails at once, the editor's only at its deadline: the editor is
-        // first in registry order, so its timeout is the error.
+        // The editor's recheck fails only once the viewer's has: a reader that finished the
+        // editor before reading the viewer would time out on it instead. The editor is first in
+        // registry order, so its failure is the error though it came second.
+        let (error, message) = list(
+            &[(Pid(25361), None), (FailedAfterAnother, None)],
+            &[(Pid(25362), None), (Failed, None)],
+            Some(&[25361, 25362]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, ErrorCode::InternalError, "{message}");
+        assert!(message.contains(":1.42 overloaded"), "{message}");
+        // The editor is outside the PIDs: one lookup, no recheck.
         assert_eq!(
-            list(
-                &[(Pid(25361), None), (Stalled, None)],
-                &[(Pid(25362), None), (Failed, None)],
-                Some(&[25361, 25362])
-            )
-            .await,
-            Err(ErrorCode::Timeout)
-        );
-        assert_eq!(
-            list(
-                &[(Pid(25361), None), (Failed, None)],
-                &viewer_same,
-                Some(&[25362])
-            )
-            .await,
+            list(&[(Pid(25361), None)], &viewer_same, Some(&[25362])).await,
             Ok(vec![identified(25362, Some("fixture-viewer"))])
+        );
+    }
+
+    /// Unrelated applications for [`scoped_inventory_skips_unrelated_rechecks`], none served:
+    /// a PID-scoped listing that skips them never reads them past the PID lookup.
+    const UNRELATED_APPS: [(&str, &str); 6] = [
+        (":1.42", "/app"),
+        (":1.50", "/other"),
+        (":1.51", "/other"),
+        (":1.52", "/other"),
+        (":1.53", "/other"),
+        (":1.54", "/other"),
+    ];
+
+    /// A PID-scoped listing filters on the first lookup's PID before the `exe` read, so an app
+    /// outside its PIDs costs one lookup and no recheck, keeping a busy bus inside the
+    /// inventory deadline; the wanted app is still rechecked.
+    #[tokio::test]
+    async fn scoped_inventory_skips_unrelated_rechecks() {
+        use Lookup::Pid;
+        let unrelated: Vec<_> = UNRELATED_APPS[1..]
+            .iter()
+            .zip(30001_u32..)
+            .map(|(&(connection, _), pid)| (connection, pid))
+            .collect();
+        let scripts: Vec<[PidReply; 1]> = unrelated
+            .iter()
+            .map(|&(_, pid)| [(Pid(pid), None)])
+            .collect();
+        let editor = [(Pid(25361), None), (Pid(25361), None)];
+        let mut owners = vec![(":1.42", 25361, "/usr/bin/fixture-editor", &editor[..])];
+        owners.extend(
+            unrelated
+                .iter()
+                .zip(&scripts)
+                .map(|(&(connection, pid), script)| {
+                    (
+                        connection,
+                        u64::from(pid),
+                        "/usr/bin/unrelated",
+                        &script[..],
+                    )
+                }),
+        );
+        // `with_scripted_owners` fails unless each unrelated app got exactly its one lookup.
+        let listed = with_scripted_owners(&UNRELATED_APPS, &owners, async |client| {
+            client.list_roots(Some(&[25361])).await.map(|roots| {
+                roots
+                    .iter()
+                    .map(|root| (root.pid, executable_name(root).map(str::to_owned)))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .await;
+        assert_eq!(
+            listed.map_err(|error| error.code),
+            Ok(vec![(25361, Some("fixture-editor".to_owned()))])
         );
     }
 
