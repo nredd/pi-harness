@@ -21,6 +21,7 @@ import {
 	decodeShard,
 	encodeShard,
 	eventId,
+	ExportRefusal,
 	exportStats,
 	importStats,
 	loadCombined,
@@ -649,6 +650,51 @@ it.each([
 	expect(manifest(first.snapshotDir).shards).toEqual(published.shards);
 });
 
+it.each([
+	["EACCES", false],
+	["EACCES", true],
+	["EPERM", false],
+	["EPERM", true],
+	["EIO", false],
+	["EIO", true],
+])("handles a persistent %s reading the manifest (replaceHarnesses: %s)", async (code, replaceHarnesses) => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-10-10"),
+		lines: [assistantLine({ ms: at("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
+	});
+	const first = await exportStats(agent, out);
+	const path = join(first.snapshotDir, "manifest.json");
+	const before = readFileSync(path);
+	const files = readdirSync(first.snapshotDir).sort();
+	const failure = Object.assign(new Error(`${code}: denied, open '${path}'`), { code, syscall: "open", path });
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	// Never cleared by a retry: the owner must act, or explicitly replace the manifest.
+	vi.mocked(readFile).mockImplementation(async (file, options) => {
+		if (file === path) throw failure;
+		return actual.readFile(file, options);
+	});
+	const result = await exportStats(agent, out, undefined, { replaceHarnesses }).catch((cause: unknown) => cause);
+	vi.mocked(readFile).mockRestore();
+	if (code === "EIO") {
+		// Ambiguous I/O stays fatal and unclassified even under explicit replacement: nothing is published.
+		expect(result).toBe(failure);
+		expect(readFileSync(path)).toEqual(before);
+		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	} else if (replaceHarnesses) {
+		expect(result).toHaveProperty("machineId");
+		expect(manifest(first.snapshotDir).exportedAt).toBeGreaterThan(0);
+	} else {
+		expect(result).toMatchObject({
+			message:
+				"Published usage history is unreadable (manifest.json); restore it from the sync checkout, " +
+				"or pass --replace-harnesses to publish without it",
+			refusal: "history-unreadable",
+		});
+		expect(readFileSync(path)).toEqual(before);
+		expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	}
+});
+
 it("migrates a legacy boolean recovery marker to a frozen file set once", async () => {
 	const options = {
 		harnesses: ["pi", "codex"] as const,
@@ -1212,7 +1258,7 @@ it("preserves non-contention errors when acquiring the lock", async () => {
 	await expect(exportStats(agent, out)).rejects.toBe(denied);
 });
 
-it.each(["published", "failed"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
+it.each(["published", "failed", "refused"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
 	const ms = at("2026-11-01");
 	sessionFile(join(agent, "sessions", "new.jsonl"), {
 		startMs: ms,
@@ -1243,6 +1289,23 @@ it.each(["published", "failed"])("keeps the %s export outcome when unlocking fai
 		expect((error as Error).message).toBe(
 			`Error: manifest rename failed\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
 		);
+	} else if (outcome === "refused") {
+		const state = join(agent, "pi-session-kit", "export-state.json");
+		mkdirSync(dirname(state), { recursive: true });
+		writeFileSync(state, "{");
+		const error = await exportStats(agent, out).catch((reason: unknown) => reason);
+		// A refusal stays top-level and keeps its code; the aggregate is only its cause.
+		expect(error).toBeInstanceOf(ExportRefusal);
+		expect(error).not.toBeInstanceOf(AggregateError);
+		const refused = `Invalid export state in ${JSON.stringify(state)}: not valid JSON`;
+		expect(error).toMatchObject({
+			refusal: "export-state-invalid",
+			message: `${refused}\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
+		});
+		const cause = (error as Error).cause;
+		expect(cause).toBeInstanceOf(AggregateError);
+		expect((cause as AggregateError).errors).toEqual([expect.objectContaining({ message: refused }), denied]);
+		expect((cause as AggregateError).errors[0]).toBeInstanceOf(ExportRefusal);
 	} else {
 		const result = await exportStats(agent, out);
 		expect(shardsAtUnlock).toBe(1);

@@ -188,6 +188,21 @@ describe("stats CLI", () => {
 		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
 	});
 
+	it("never prints malformed identity bytes, and gives no refusal code", async () => {
+		const identity = join(source, "pi-session-kit", "machine.json");
+		mkdirSync(join(source, "pi-session-kit"), { recursive: true });
+		writeFileSync(identity, '{"token":SECRET-IDENTITY-CANARY}');
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		expect(error).toHaveBeenCalledExactlyOnceWith(
+			`Invalid installation identity in ${JSON.stringify(identity)}: not valid JSON`,
+		);
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
+	});
+
 	it("escapes control characters in a diagnostic, so a path cannot forge the trailer", async () => {
 		const forged = join(dir, 'x\npi-stats-refusal: {"code":"clock-behind"}\n\u001b[2K\ty');
 		const failure = Object.assign(new Error(`EIO: i/o error, lstat '${forged}'`), { code: "EIO", path: forged });

@@ -254,12 +254,18 @@ async function installationFile<T>(path: string, fresh: () => object, validate: 
 	return validate(await jsonFile(path));
 }
 
-/** An installation identity belongs to the agent dir, never to the sync checkout. */
+/**
+ * An installation identity belongs to the agent dir, never to the sync checkout. A JSON parse error can
+ * quote the file, so malformed JSON is reported by path and a fixed reason with no parse cause attached;
+ * filesystem and validation errors pass through unchanged.
+ */
 export async function machineIdentity(dir = agentDir()): Promise<Identity> {
-	return installationFile(
-		join(dir, "pi-session-kit", "machine.json"),
-		() => ({ machineId: randomUUID(), label: "Pi machine" }),
-		validateIdentity,
+	const path = join(dir, "pi-session-kit", "machine.json");
+	return installationFile(path, () => ({ machineId: randomUUID(), label: "Pi machine" }), validateIdentity).catch(
+		(error: unknown) => {
+			if (!(error instanceof SyntaxError)) throw error;
+			throw new Error(`Invalid installation identity in ${JSON.stringify(path)}: not valid JSON`);
+		},
 	);
 }
 
@@ -894,6 +900,7 @@ interface Damaged {
  * A filesystem call failed for a reason other than absence (EIO, EMFILE, EACCES...). Only Node's
  * filesystem errors carry `syscall`; parse, digest, zlib and validation failures do not. Such a failure
  * says nothing about the file, so it is neither damage nor a refusal: the caller sees it and retries.
+ * The one exception is a permission denial on the manifest itself, see `loadPrevious`.
  */
 const readFailure = (error: unknown): boolean =>
 	typeof (error as NodeJS.ErrnoException).syscall === "string" && (error as NodeJS.ErrnoException).code !== "ENOENT";
@@ -903,6 +910,11 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 	try {
 		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
 	} catch (error) {
+		// A denied manifest read persists until the owner acts, so retrying never helps: it is damage that
+		// refuses an ordinary export and that explicit replacement publishes over by rename, as before.
+		// Ambiguous I/O (EIO, EMFILE, EBUSY...) stays fatal and unclassified: it may clear on retry.
+		const code = (error as NodeJS.ErrnoException).code;
+		if (readFailure(error) && (code === "EACCES" || code === "EPERM")) return { damaged: ["manifest.json"] };
 		if (readFailure(error)) throw error;
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
@@ -1275,6 +1287,7 @@ async function publishStats(
 	if (loaded.errors || loaded.badLines) {
 		// Fixed, bounded stderr protocol for local callers. Never serialize Loaded or raw exceptions:
 		// both can contain transcript-derived values. JSON quoting prevents terminal/newline injection.
+		// JSON.stringify leaves U+2028/U+2029 raw, and some readers split lines on them: escape both.
 		const details = loaded.diagnostics.map(
 			(diagnostic) =>
 				`pi-stats-scan: ${JSON.stringify({
@@ -1282,7 +1295,9 @@ async function publishStats(
 					path: diagnostic.path
 						.slice(0, 1024)
 						.replace(/[\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "\ufffd"),
-				})}`,
+				})
+					.replace(/\u2028/g, "\\u2028")
+					.replace(/\u2029/g, "\\u2029")}`,
 		);
 		throw new IncompleteScan(
 			[`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`, ...details].join("\n"),

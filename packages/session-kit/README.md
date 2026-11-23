@@ -544,7 +544,9 @@ then run `rmdir` on the reported lock directory and retry the export. No export 
 by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
 with the lock path. A failed publication still reports the original error; if releasing the lock
 also fails, it is an `AggregateError` whose message is the original error followed by the same lock
-warning, with `errors` `[original, unlock]` and the original as `cause`. A lock that vanishes before
+warning, with `errors` `[original, unlock]` and the original as `cause`. A refusal (below) is the
+exception: it stays a top-level `ExportRefusal` with the same `refusal` code and the refusal message
+followed by the lock warning, and its `cause` is that `AggregateError` of `[refusal, unlock]`. A lock that vanishes before
 its age is read is still contention; any other failure to inspect it is reported with its code.
 `pi-usage-sync`
 separately serializes whole sync runs.
@@ -562,7 +564,8 @@ records on local stderr. Lines are physical, one-based (including skipped empty/
 `0` means a filesystem operation or an unavailable cached record, not a known line. Reasons are
 `invalid-record`, `read-directory`, `read-file`, `write-cache`, or `cached-invalid-record`.
 Paths are JSON-quoted, capped at 1024 characters and have C1 and all Unicode `Bidi_Control` characters
-(including ALM, LRM and RLM) neutralized; JSON escaping preserves C0 safety. No raw
+(including ALM, LRM and RLM) neutralized; JSON escaping preserves C0 safety, and U+2028/U+2029 are
+escaped as `\u2028`/`\u2029` so each record stays one line for any reader. No raw
 records, parser/OS exception text, prompts, message IDs or credentials are reported. These local
 locations never enter usage shards or manifests. Bad cached files are re-read to recover locations;
 deleted/former-root bad records remain fail-closed with an unknown line. Wrappers must explicitly
@@ -576,9 +579,13 @@ An export refused until the owner acts exits 1 and ends stderr with exactly one
 reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
 the file, which holds the salt, nor attaching its parse error). Each code comes from one fixed
 refusal site, never from matching a message. `history-unreadable` means a published shard is
-missing (`ENOENT`) or fails its digest/parse/validation; any other filesystem error reading the
-manifest, a shard or the state (`EIO`, `EMFILE`, `EACCES`, ...) says nothing about the file and is
-not a refusal. A refusal whose lock release also fails keeps its code, with the unlock warning
+missing (`ENOENT`) or fails its digest/parse/validation, or reading `manifest.json` is denied
+(`EACCES`/`EPERM`, persistent until the owner fixes its permissions; `--replace-harnesses` publishes
+over it by rename, like a corrupt manifest). Any other filesystem error reading the manifest, a
+shard or the state (`EIO`, `EMFILE`, `EBUSY`, a denied shard or state read, ...) says nothing
+about the file, stays fatal under `--replace-harnesses` too, and is not a refusal. A malformed
+`machine.json` is reported as `Invalid installation identity in <path>: not valid JSON`, never
+quoting the file nor attaching its parse error; it has no code. A refusal whose lock release also fails keeps its code, with the unlock warning
 appended to the message. No line means the failure is unclassified (lock contention, I/O, an
 incomplete scan, usage): treat it as retryable. The diagnostic before the line is escaped to one
 line (line breaks and other control characters as `\n`, `\uXXXX`; the fixed usage text excepted),
