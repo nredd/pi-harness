@@ -522,6 +522,8 @@ It preserves actual per-file LLVM lines/functions/regions and profile/toolchain 
 Regions are not branches or statements; no `BRDA` is fabricated. Its darwin cap is a report-only
 reference measured locally on the PR HEAD with no margin: PR CI runs no Swift, hosted excess is
 reported and never fails accounting, and the first hosted macOS `main` artifact confirms the number.
+A hosted `macos-14` run counted 3 more uncovered functions than the local Mac on the same base, so a
+hosted `main` artifact reading that far above the cap is advisory, not a regression.
 Missing selected-host reports fail closed; Linux explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
 or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`

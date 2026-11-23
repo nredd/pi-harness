@@ -29,8 +29,8 @@ private final class ActFixture {
     var supported = true
     /// When set, only these elements advertise actions (identity match); `supported` applies otherwise.
     var supportedElements: [AXUIElement]?
-    /// False makes the cached handle for `ref` unavailable, so `act` refinds it.
-    var cached = true
+    /// Whether a cached handle exists for `ref`; false makes `act` refind it.
+    var cachedAvailable = true
     /// False makes every frame read fail, leaving a ref target without coordinate grounding.
     var frameReadable = true
     /// Scripted `setAttribute` results, consumed first: a failure is returned without writing.
@@ -68,7 +68,7 @@ private final class ActFixture {
                 guard id == "look" else { return nil }
                 return LookRecord(lookId: id, windowId: 8, windowFrame: self.windowFrame, imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
             },
-            cachedElement: { $0 == "ref" && self.cached ? self.element : nil },
+            cachedElement: { $0 == "ref" && self.cachedAvailable ? self.element : nil },
             refindElement: { ref, pid, window, _ in
                 self.trace.append("refind:\(ref):\(pid):\(window ?? 0)")
                 return self.refind && ref == "ref" ? self.other : nil
@@ -327,16 +327,19 @@ private func runActAdmissionEdgeAssertions() throws {
     half["target"] = ["x": 10] as [String: Any]
     // No target, params or policy keys at all: the defaults still refuse before a lock.
     let bare: [String: Any] = ["lookId": "look", "pid": 1234, "action": "click"]
-    for request in [half, bare] {
+    let targetless = [half, bare]
+    for request in targetless {
         try actionFailure("invalid_args", message: "act target must include ref or x/y") {
             try untargeted.bridge.act(request, world: untargeted.world, supportsAgentCursor: true)
         }
     }
     try actionFailure("invalid_args", message: "paste requires non-empty text") { try untargeted.act("paste", policy: "background") }
-    for (action, params) in [("keypress", [:]), ("keypress", ["keys": [String]()])] as [(String, [String: Any])] {
+    let keyless: [(String, [String: Any])] = [("keypress", [:]), ("keypress", ["keys": [String]()])]
+    for (action, params) in keyless {
         try actionFailure("invalid_args", message: "keypress requires keys") { try untargeted.act(action, policy: "background", params: params) }
     }
-    for action in ["secondaryAction", "selectText"] {
+    let refless = ["secondaryAction", "selectText"]
+    for action in refless {
         try actionFailure("invalid_args", message: "\(action) requires a ref") {
             try untargeted.act(action, policy: "background", coords: true, params: ["name": "AXShowMenu", "start": 0])
         }
@@ -345,7 +348,9 @@ private func runActAdmissionEdgeAssertions() throws {
     try actionFailure("invalid_args", message: "Action setText cannot use coordinate grounding") {
         try untargeted.act("setText", policy: "background", coords: true, params: ["text": "new"])
     }
-    expect(untargeted.trace == Array(repeating: "begin:1234", count: 8), "admission refusals post nothing and take no lock: \(untargeted.trace)")
+    // One root delta per refused call: the loops above plus the textless paste and the coordinate setText.
+    let calls = targetless.count + keyless.count + refless.count + 2
+    expect(untargeted.trace == Array(repeating: "begin:1234", count: calls), "admission refusals post nothing and take no lock: \(untargeted.trace)")
 
     // A batch drag with no target or params is refused before the transaction's root delta or lock.
     let batch = ActFixture()
@@ -362,18 +367,19 @@ private func runActAdmissionEdgeAssertions() throws {
 /// A cached handle that fails its liveness read is refound once; no handle and no frame are refusals.
 private func runActRefEdgeAssertions() throws {
     let refound = ActFixture()
-    refound.cached = false
+    refound.cachedAvailable = false
     let pressed = try refound.act("press", policy: "background")
     expect((pressed["performed"] as? [String: Any])?["refound"] as? Bool == true && pressed["outcome"] as? String == "worked", "a missing cached handle is refound and pressed: \(pressed)")
     expect(refound.trace == ["begin:1234", "refind:ref:1234:8", "ax:AXPress:refound", "cursor:8", "finish"], "the refound handle receives the press: \(refound.trace)")
 
     let gone = ActFixture()
-    gone.cached = false
+    gone.cachedAvailable = false
     gone.refind = false
     try actionFailure("stale_ref", message: "Element reference is stale") { try gone.act("press", policy: "background") }
     expect(gone.trace == ["begin:1234", "refind:ref:1234:8"], "a ref that cannot be refound is stale before any action: \(gone.trace)")
 
-    // An unreadable frame fails the cached handle's liveness check, and the refound handle has no frame either.
+    // The cached handle exists (`cachedAvailable` stays true) but its unreadable frame fails the liveness check, so
+    // `act` refinds; the refound handle has no frame either.
     let frameless = ActFixture()
     frameless.frameReadable = false
     frameless.supported = false
@@ -393,16 +399,29 @@ private func runActRefEdgeAssertions() throws {
     expect(set["outcome"] as? String == "worked" && (set["performed"] as? [String: Any])?["refound"] as? Bool == true, "a refused AXValue write is retried once on the refound handle: \(set)")
     expect(rewritten.trace == ["begin:1234", "set:AXValue", "refind:ref:1234:8", "set:AXValue", "finish"], "the retry writes the refound handle once: \(rewritten.trace)")
 
-    // Both writes refused: the coordinate fallback has no setText form, so it refuses without posting. Only that
-    // part is pinned: the error codes and the HID path's focus steal are #1365.
-    for policy in ["ax_only", "background"] {
+    // Both writes refused. Only the safe invariants are pinned, for every mode: nothing is posted and the value is
+    // unchanged, whether `act` throws (today) or returns `didnt` (the #1365 fix). Neither the error code nor the
+    // trace is pinned.
+    let posts = ["click:", "move:", "wheel:", "drag:", "key:", "keyCode:", "type:", "atomic:", "clipboard:", "scrollAX:", "bar:"]
+    for policy in ["default", "ax_only", "background"] {
         let refused = ActFixture()
         refused.writeStatuses = [.cannotComplete, .cannotComplete]
+        var outcome: String
         do {
-            _ = try refused.act("setText", policy: policy, params: ["text": "new"])
-            expect(false, "\(policy) twice-refused AXValue write must not report a result")
-        } catch is BridgeFailure {}
-        expect(refused.trace == ["begin:1234", "set:AXValue", "refind:ref:1234:8", "set:AXValue"] && refused.value == "before", "\(policy) twice-refused AXValue write posts nothing: \(refused.trace)")
+            outcome = try refused.act("setText", policy: policy, params: ["text": "new"])["outcome"] as? String ?? "none"
+        } catch let failure as BridgeFailure {
+            outcome = "threw:\(failure.code)"
+        }
+        expect(outcome.hasPrefix("threw:") || outcome == "didnt", "\(policy) twice-refused AXValue write is a refusal or didnt, never a delivery (#1365): \(outcome)")
+        let posted = refused.trace.filter { entry in posts.contains { entry.hasPrefix($0) } }
+        expect(posted.isEmpty && refused.value == "before", "\(policy) twice-refused AXValue write posts nothing and leaves the value (#1365): \(refused.trace)")
+        // A refused write must not lock input, activate, raise or hit-test either. The default HID policy still does
+        // all four before refusing (#1365): its check stays disabled until the fix enables it.
+        let focusInvariantDisabledUntil1365 = policy == "default"
+        if !focusInvariantDisabledUntil1365 {
+            let focus = refused.trace.filter { ["lock", "activate", "raise", "hit"].contains($0) }
+            expect(focus.isEmpty, "\(policy) twice-refused AXValue write takes no lock and steals no focus (#1365): \(refused.trace)")
+        }
     }
 }
 
