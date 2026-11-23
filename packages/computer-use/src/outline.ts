@@ -291,16 +291,13 @@ function dropTextOverProtected(root: OutlineNode, legacy = false): void {
 	};
 
 	// Picture-only closure as a worklist: a redacted picture-only node is a new region, which may expose another. A
-	// picture-only node is never exposed by its own region (helpers send none with an unread subtree).
+	// truncated picture-only node is its own region and overlaps it, so its title goes too; a redacted one is no longer
+	// readable, so it is never checked against the region it added.
 	const pictures = nodes.filter((node) => node.pictureOnly && isConfirmedReadable(node));
 	for (let index = 0; index < regions.length && !unknownRegion; index += 1) {
 		const region = regions[index];
 		for (const picture of pictures) {
-			if (
-				picture !== region.node &&
-				isConfirmedReadable(picture) &&
-				(!hasArea(picture.rect) || overlaps(region.rect, picture.rect))
-			) {
+			if (isConfirmedReadable(picture) && (!hasArea(picture.rect) || overlaps(region.rect, picture.rect))) {
 				redactPicture(picture);
 				addRegion(picture);
 			}

@@ -1061,6 +1061,21 @@ describe("OCR text over a protected node (#1263)", () => {
 		assert.equal(serializeOutline(readable).formatVersion, OUTLINE_FORMAT_VERSION, "writers stamp the version");
 	});
 
+	test("truncated picture-only self overlap: an unread picture-only node never keeps its own OCR title", () => {
+		const unread = { ...picture("pic_1", SECRET, far), truncated: true };
+		const outline = window([unread, picture("pic_2", "Beside", { x: 200, y: 150, w: 30, h: 10 })]);
+		assert.deepEqual([byWire(outline, "pic_1").title, byWire(outline, "pic_2").title], [PROTECTED_LABEL, "Beside"]);
+		const restoredPicture = restoreOutline({
+			lookId: "l",
+			formatVersion: OUTLINE_FORMAT_VERSION,
+			root: restoredNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 } }, [
+				restoredNode("@e2", { role: "AXImage", pictureOnly: true, truncated: true, title: SECRET, rect: far }),
+			]),
+		});
+		assert.equal(restoredPicture.nodes[1].title, PROTECTED_LABEL);
+		assert.ok(!JSON.stringify(serializeOutline(restoredPicture)).includes(SECRET));
+	});
+
 	test("observe_ui and search_ui never echo OCR read over a secure field", async () => {
 		const fake = await installFakeDesktop(onTestFinished, { platform: "macos" });
 		fake.lookPayload = () =>

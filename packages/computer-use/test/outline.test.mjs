@@ -386,7 +386,8 @@ describe("graftScopedOutline", () => {
 		const outline = graftBase();
 		const target = outline.nodes[1];
 		const originalRect = { ...target.rect };
-		const scoped = scopedLook();
+		// Readable: an unread picture-only root's title is OCR over unread pixels, which the last check covers.
+		const scoped = scopedLook({ pictureOnly: false });
 		scoped.root.wireRef = "pane-scoped";
 		const returned = graftScopedOutline(outline, "@e2", scoped);
 		assert.equal(returned, target);
@@ -425,13 +426,19 @@ describe("graftScopedOutline", () => {
 			"isTextInput",
 			"focused",
 			"offscreen",
-			"pictureOnly",
 		])
 			assert.equal(target[flag], true, flag);
 		assert.equal(target.truncated, true, "a scoped root that is still unread stays truncated (#1190)");
 		assert.deepEqual(target.scrollExtent, { seen: 2, total: 9 });
 		// The box is in scoped space, so its rect is cleared; the target is still unread, so the unplaced box goes (#1263).
 		assert.deepEqual(target.text, []);
+		const picture = graftBase();
+		const unreadPicture = graftScopedOutline(picture, "@e2", scopedLook());
+		assert.deepEqual(
+			[unreadPicture.pictureOnly, unreadPicture.title, unreadPicture.rect],
+			[true, "[protected]", undefined],
+			"an unread picture-only target's own title is redacted and it is unplaced (#1263)",
+		);
 	});
 
 	test("target without a rect stays rectless; scoped text without rect stays rectless", () => {
@@ -450,7 +457,8 @@ describe("graftScopedOutline", () => {
 	test("reuses matching wire refs, numbers new nodes after the max ref, preserves unreused", () => {
 		const outline = graftBase();
 		const before = Object.fromEntries(outline.nodes.map((node) => [node.wireRef, node]));
-		graftScopedOutline(outline, "@e2", scopedLook());
+		// A readable scoped root: an unread picture-only one is protected and would redact the preserved children.
+		graftScopedOutline(outline, "@e2", scopedLook({ pictureOnly: false }));
 		const pane = outline.nodes[1];
 		const byWire = (wire) => outline.nodes.find((node) => node.wireRef === wire);
 
