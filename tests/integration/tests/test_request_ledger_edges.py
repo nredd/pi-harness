@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 import pytest
 
 from harness.anthropic_mock import AnthropicMock
-from harness.request_ledger import SpanCollector, request_ledger, stable_owner
+from harness.request_ledger import SpanCollector, inherited_prefix, request_ledger, stable_owner
 
 
 def test_only_provider_block_locations_are_cache_markers() -> None:
@@ -338,3 +338,43 @@ def test_empty_or_unknown_prefix_is_refused(prefixes: dict[str, str], message: s
     """An empty prefix would match every block; prefix categories obey provenance rules."""
     with pytest.raises(ValueError, match=message):
         request_ledger('{"messages":[]}', prefixes=prefixes)
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (INHERITED + "task", INHERITED),
+        ([{"type": "text", "text": INHERITED + "task", "cache_control": {"type": "ephemeral"}}], INHERITED),
+    ],
+)
+def test_inherited_prefix_is_the_text_before_the_task(content: object, expected: str) -> None:
+    """String and block content both yield the exact text before the caller's prompt."""
+    raw = json.dumps(
+        {"system": "s", "messages": [{"role": "user", "content": content}, {"role": "user", "content": "x"}]},
+        ensure_ascii=True,
+    )
+    assert inherited_prefix(raw, "task") == {expected: "inherited_context"}
+    buckets = request_ledger(raw, prefixes=inherited_prefix(raw, "task"))["buckets"]
+    assert buckets["inherited_context"] == _escaped_bytes(INHERITED, ensure_ascii=True)
+    assert buckets["user"] == len("task") + len("x")
+
+
+@pytest.mark.parametrize(
+    ("messages", "prompt"),
+    [
+        ([{"role": "user", "content": "task"}], "task"),
+        ([{"role": "user", "content": "ctx other"}], "task"),
+        ([{"role": "user", "content": "ctx"}], ""),
+        ([{"role": "user", "content": [{"type": "image", "text": "ctx task"}]}], "task"),
+        ([{"role": "user", "content": ["ctx task"]}], "task"),
+        ([{"role": "user", "content": []}], "task"),
+        ([{"role": "assistant", "content": "ctx task"}], "task"),
+        ([], "task"),
+    ],
+)
+def test_inherited_prefix_refuses_anything_but_context_then_task(
+    messages: list[dict[str, object]], prompt: str
+) -> None:
+    """No inherited text, a different task, an empty prompt or a non-text first block is refused."""
+    with pytest.raises(ValueError, match="Child task prompt does not follow inherited parent context"):
+        inherited_prefix(json.dumps({"messages": messages}), prompt)

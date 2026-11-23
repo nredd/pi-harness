@@ -1,7 +1,11 @@
 """Real native-adapter cold-start and one built-in read-only child wire ledger.
 
+The parent carries one probe-injected extension note and the child inherits the parent context,
+so real `extension:*` and `inherited_context` rows reach the wire ledger.
+
 References:
 - https://github.com/nredd/pi-harness/issues/1004
+- https://github.com/nredd/pi-harness/issues/1269
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import pytest
 from harness.anthropic_mock import AUTH_GUARD_EXTENSION, AnthropicMock, anthropic_env
 from harness.headless import run_headless
 from harness.paths import ARTIFACTS_DIR, REPO_ROOT
-from harness.request_ledger import request_ledger, stable_owner
+from harness.request_ledger import inherited_prefix, request_ledger, stable_owner
 from harness.sandbox import build_sandbox
 
 if TYPE_CHECKING:
@@ -29,6 +33,10 @@ LOGGER = logging.getLogger(__name__)
 pytestmark = pytest.mark.stack
 ISO_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
 MODEL = "anthropic/claude-haiku-4-5"
+SPAWN = "Spawn exactly one ledger child."
+CHILD_PROMPT = "Return a concise ledger child reply, do not call tools."
+NOTE = "Fixture extension note"
+EXTENSION = "extension:ledger-fixture"
 
 
 def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]:
@@ -53,16 +61,17 @@ def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]
         "input": {
             "subagent_type": "Explore",
             "description": "ledger child",
-            "prompt": "Return a concise ledger child reply, do not call tools.",
+            "prompt": CHILD_PROMPT,
             "model": MODEL,
             "run_in_background": False,
+            "inherit_context": True,
         },
     }
     with AnthropicMock(message_tools=[call]) as mock:
         result = run_headless(
             box,
             {},
-            ["Spawn exactly one ledger child."],
+            [SPAWN],
             model=MODEL,
             load_faux=False,
             extra_args=[
@@ -74,7 +83,8 @@ def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]
                 "-e",
                 str(REPO_ROOT / "probes/request-ledger.ts"),
             ],
-            env=anthropic_env(mock, box) | {"HARNESS_LEDGER_REGISTRY": str(registry)},
+            env=anthropic_env(mock, box)
+            | {"HARNESS_LEDGER_REGISTRY": str(registry), "HARNESS_LEDGER_NOTE": NOTE},
         )
     assert result.returncode == 0, result.transcript()
     outcomes = [outcome for outcome in result.tool_outcomes() if outcome.name == "Agent"]
@@ -88,6 +98,7 @@ def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]
     assert offered <= {"read", "grep", "find", "ls", "SubagentWorkflow"}
     evidence = [json.loads(line) for line in registry.read_text().splitlines()]
     assert len(evidence) == 2, evidence
+    assert all(entry["provenance"].get(NOTE) == EXTENSION for entry in evidence), evidence
     return mock.messages, evidence
 
 
@@ -128,16 +139,30 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
             for tool in metadata.get("tools", [])
         }
         provenance = metadata.get("provenance", {})
+        prefixes = inherited_prefix(request.raw_body, CHILD_PROMPT) if child else {}
         ledger = request_ledger(
             request.raw_body,
             owners=owners,
             provenance=provenance,
+            prefixes=prefixes,
             previous=requests[index - 1].raw_body if index else None,
             parent=requests[0].raw_body if child else None,
         )
         assert sum(ledger["buckets"].values()) == len(request.raw_body.encode())
         assert ledger["buckets"]["serialization_overhead"] >= 0
         assert not [key for key in ledger["buckets"] if "/Users" in key or str(box.root) in key]
+        # The probe's note is one hidden custom message: on the wire it is a plain user block.
+        assert ledger["buckets"].get(EXTENSION) == (None if child else len(NOTE.encode()))
+        if child:
+            inherited = next(iter(prefixes))
+            assert inherited.startswith("# Parent Conversation Context\n"), inherited
+            assert f"[User]: {SPAWN}" in inherited, inherited
+            assert ledger["buckets"]["inherited_context"] == len(
+                json.dumps(inherited, ensure_ascii=False)[1:-1].encode()
+            )
+            assert ledger["buckets"]["user"] == len(CHILD_PROMPT.encode())
+        else:
+            assert "inherited_context" not in ledger["buckets"]
         rows.append(
             {
                 "run": run,
@@ -153,6 +178,7 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
                 stable,
                 owners=owners,
                 provenance={_normalized(value, box): category for value, category in provenance.items()},
+                prefixes=inherited_prefix(stable, CHILD_PROMPT) if child else {},
                 previous=_normalized(requests[index - 1].raw_body, box) if index else None,
                 parent=_normalized(requests[0].raw_body, box) if child else None,
             )

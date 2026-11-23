@@ -576,6 +576,40 @@ class _Attributor:
             self.claim(path, "shared")
 
 
+def inherited_prefix(raw: str, prompt: str) -> dict[str, str]:
+    """Name the exact parent context a child prepended to the task prompt its caller passed.
+
+    `inherit_context` renders the parent history into the child's first user text block, then
+    appends the task prompt. The caller knows that prompt, so every character before it is exact
+    `inherited_context`; nothing is inferred from the rendered history itself.
+
+    Parameters:
+        raw (str): the child's first recorded request body.
+        prompt (str): the exact task prompt the caller passed to the child.
+
+    Returns:
+        dict[str, str]: one leading text -> `inherited_context`, for `request_ledger(prefixes=...)`.
+
+    Raises:
+        ValueError: `prompt` is empty, or the first user message's first text does not end with
+            `prompt` after a non-empty context, e.g. no user message, a non-text first block or a
+            different task.
+    """
+    messages = json.loads(raw).get("messages", [])
+    content = next((message.get("content") for message in messages if message.get("role") == "user"), None)
+    block = content[0] if isinstance(content, list) and content else None
+    text = (
+        content
+        if isinstance(content, str)
+        else block.get("text")
+        if isinstance(block, dict) and block.get("type") == "text"
+        else None
+    )
+    if not prompt or not isinstance(text, str) or not text.endswith(prompt) or text == prompt:
+        raise ValueError("Child task prompt does not follow inherited parent context")
+    return {text[: -len(prompt)]: "inherited_context"}
+
+
 def request_ledger(
     raw: str,
     *,
