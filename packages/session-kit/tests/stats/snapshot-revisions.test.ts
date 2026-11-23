@@ -193,7 +193,9 @@ it("preserves recovery files and keeps a vanished harness lost across repeated u
 		expect(result.harnesses?.claude).toMatchObject({ failed: "lost", consecutiveFailures: run + 1 });
 		expect(result.harnesses?.codex?.failed).toBeUndefined();
 		expect(manifest(first.snapshotDir).lastGoodAt?.codex).toBe(Date.now());
-		expect(result.warnings).toContain("recovery files retained: explicit replacement required");
+		expect(result.warnings).toContain(
+			"recovery files retained: run clean-recovery to remove those the active snapshot covers",
+		);
 	}
 	const statePath = outboxStatePath(agent, first.snapshotDir);
 	const recovery = JSON.parse(readFileSync(statePath, "utf8"));
@@ -370,7 +372,7 @@ it.each(["deleted state", "moved outbox"])(
 			const result = await exportStats(agent, target);
 			expect(readdirSync(snapshotDir)).toContain(original.file);
 			expect(result.warnings).toEqual([
-				"recovery files retained: explicit replacement required",
+				"recovery files retained: run clean-recovery to remove those the active snapshot covers",
 				...(i === 0
 					? [
 							"no bookkeeping for this outbox: froze 1 unaccounted shard files as recovery files; pass --replace-harnesses to drop them",

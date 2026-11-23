@@ -590,7 +590,8 @@ CLI results:
   from this snapshot, and stderr says so. While the harness is still missing, further unreadable
   manifests do not mark it fresh. A lost harness with no data to carry gets no `lastGoodAt` stamp,
   even if the previous manifest stamped it. A clean scan of a reappearing harness clears its loss
-  marker; recovery files still require explicit replacement. Pi itself still fails closed.
+  marker; recovery files stay frozen (the export warns `recovery files retained: run clean-recovery to
+  remove those the active snapshot covers`, see `clean-recovery` below). Pi itself still fails closed.
   `consecutiveFailures` counts failed exports of a harness in a row (kept in the outbox's state file,
   reset by a clean one). It never changes the exit code (see below): a caller that wants to warn
   about a harness stuck on carried data reads `failed`, `consecutiveFailures` and, on import,
@@ -759,7 +760,9 @@ warn without skipping export-state bookkeeping.
 
 Frozen recovery files are never pruned by an export, so repeated read failures or bookkeeping losses
 can accumulate superseded generations. `clean-recovery` is the explicit, recovery-only way to drop
-the redundant ones; no export runs it, so a scheduled sync never does. It takes the outbox's export
+the redundant ones; no export runs it, so a scheduled sync never does. It requires `--agent-dir`
+(it never falls back to the default installation). A missing outbox is refused; one that cannot
+be inspected (e.g. `EACCES`) surfaces that error unchanged. It takes the outbox's export
 lock (contention fails exactly like an export) and refuses, removing nothing, unless the active
 manifest is this machine's v3 manifest and every shard it references authenticates, the outbox has
 its own bookkeeping with a captured `recoveryFiles` set, and `lostHarnesses` is empty (a lost
@@ -774,7 +777,13 @@ anyway). Everything else stays frozen and is listed in `kept` with a reason: `ac
 followed) or `not covered`. Removed names leave `recoveryFiles` first, and `recoveryPending` clears
 once the set is empty; only then are the files unlinked, so an interruption or an unlink failure
 (warned as `redundant recovery file removal failed (the next export prunes them): <errno counts>`)
-leaves only redundant, unprotected files for the next export to prune. Coverage is judged against
+leaves only redundant, unprotected files for the next export to prune. `removed` lists files now gone
+(unlinked or already absent); `failed` lists files whose unlink failed, still on disk and unprotected.
+Right before each unlink the active manifest is authenticated again; if it changed, cleanup stops,
+lists that file and the rest in `kept` as `changed`, re-protects them in `recoveryFiles`, warns
+`recovery cleanup stopped: the active manifest changed; N redundant files left in place` and exits 1.
+That recheck narrows the window, it is not exclusion: a writer that skips the export lock (e.g. a
+manual restore into the outbox) must be quiescent while cleanup runs. Coverage is judged against
 the active snapshot as it is now: once removed, those rows are as protected as any other published
 history, no more. Shard files outside the frozen set are left to export pruning.
 

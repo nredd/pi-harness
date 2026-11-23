@@ -85,6 +85,8 @@ export async function main(): Promise<void> {
 		}
 	} else if (
 		command === "clean-recovery" &&
+		// Deleting files never falls back to the default installation: name it.
+		options.has("--agent-dir") &&
 		output !== undefined &&
 		input === undefined &&
 		!EXPORT_ONLY.some((f) => options.has(f))
@@ -92,6 +94,8 @@ export async function main(): Promise<void> {
 		const result = await cleanRecovery(dir, resolve(output));
 		console.log(JSON.stringify(result));
 		for (const warning of result.warnings ?? []) console.error(warning);
+		// A cleanup the manifest changed under did not finish: say so in the exit code too.
+		if (result.kept.some((k) => k.reason === "changed")) process.exitCode = 1;
 	} else if (
 		command === "import" &&
 		input !== undefined &&
