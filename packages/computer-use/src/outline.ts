@@ -1059,7 +1059,11 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 	const used = new Set<OutlineNode>([target]);
 	copyNodeFields(target, scoped.root, true);
 	target.ref = targetRef;
-	target.rect = targetRect;
+	// The cached full-look rect stays as action geometry only while the fresh target is readable. A protected one's
+	// fresh bounds are authoritative for privacy, but they are in scoped space and cannot be mapped, so it is unplaced
+	// (fail closed, #1263). Its own boxes are in scoped space too: never compare them with full-look rects.
+	target.rect = isConfirmedReadable(target) ? targetRect : undefined;
+	for (const text of target.text) text.rect = undefined;
 	const graftedChildren = scoped.root.children.map((child) =>
 		cloneForGraft(child, target, nextRef, reusableByWireRef, used),
 	);

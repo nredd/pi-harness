@@ -960,6 +960,49 @@ describe("OCR text over a protected node (#1263)", () => {
 		assert.deepEqual([outline.root.text, outline.nodes[3].text.map((item) => item.string)], [[], ["Kept"]]);
 	});
 
+	test("rectless protected graft root: the cached rect never stands in, so every OCR box goes", () => {
+		const outline = outlineOf(
+			outlineNode("@e1", {
+				role: "AXWindow",
+				rect: { x: 0, y: 0, w: 300, h: 200 },
+				text: [box(SECRET, far)],
+				children: [outlineNode("@e2", { wireRef: "f", role: "AXTextField", rect: field })],
+			}),
+		);
+		const target = graftScopedOutline(
+			outline,
+			"@e2",
+			outlineOf(outlineNode("f", { wireRef: "f", role: "AXSecureTextField" })),
+		);
+		assert.equal(target.rect, undefined, "a protected target is unplaced in full-look space");
+		assert.deepEqual(outline.root.text, []);
+		assert.deepEqual(restoreOutline(serializeOutline(outline)).root.text, [], "and stays so on restore");
+	});
+
+	test("a graft never mixes scoped box coordinates with a protected sibling outside it", () => {
+		const outline = outlineOf(
+			outlineNode("@e1", {
+				role: "AXWindow",
+				rect: { x: 0, y: 0, w: 300, h: 200 },
+				children: [
+					outlineNode("@e2", { wireRef: "s", role: "AXSecureTextField", rect: field }),
+					outlineNode("@e3", { wireRef: "g", rect: { x: 200, y: 120, w: 90, h: 70 } }),
+				],
+			}),
+		);
+		// Scoped space: the box sits at the scoped root's origin, nowhere near the sibling's full-look rect.
+		const scoped = outlineOf(
+			outlineNode("g", {
+				wireRef: "g",
+				rect: { x: 0, y: 0, w: 90, h: 70 },
+				text: [box(SECRET, { x: 0, y: 0, w: 30, h: 10 })],
+			}),
+		);
+		const target = graftScopedOutline(outline, "@e3", scoped);
+		assert.deepEqual(target.rect, { x: 200, y: 120, w: 90, h: 70 }, "a readable target keeps its action rect");
+		assert.deepEqual(target.text, []);
+	});
+
 	test("observe_ui and search_ui never echo OCR read over a secure field", async () => {
 		const fake = await installFakeDesktop(onTestFinished, { platform: "macos" });
 		fake.lookPayload = () =>
