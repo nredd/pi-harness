@@ -16,7 +16,9 @@ const USAGE =
 	"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
 	"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
 	"the replacement keep it until this machine exports a later one\n" +
-	"  A clock behind the last published export in its month still publishes, just after it, with a warning";
+	"  A clock behind the last published export in its month still publishes, just after it, with a warning; " +
+	"without a readable published manifest the export publishes by the wall clock and warns when this outbox " +
+	"published before";
 const FLAGS = [
 	"--agent-dir",
 	"--output",

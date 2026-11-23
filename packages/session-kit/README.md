@@ -896,8 +896,17 @@ there could never apply, and the next export could not tell those months from on
 export sealed. Waiting keeps all history. `--replace-harnesses` publishes just after the published
 export (viewers import it) and drops sealed history absent from the scan; until the clock reaches that
 month, each export needs it again. The bound comes only from the readable manifest (including one whose
-shards are unreadable): with it unreadable, denied (`EACCES`/`EPERM`) or missing, the export uses the
-wall clock.
+shards are unreadable): nothing else records the last published instant, so with it unreadable, denied
+(`EACCES`/`EPERM`) or missing, the export uses the wall clock rather than guess a watermark. An ordinary
+export over a corrupt manifest, and a `--replace-harnesses` export over a corrupt, denied or missing one
+(missing while this outbox's bookkeeping or shard files remain), still publishes and exits 0 but warns
+`no readable published manifest bounds this export (<manifest.json unreadable|EACCES on
+manifest.json|manifest.json missing>); published at <exportedAt> by this clock, so viewers holding a
+later snapshot of this machine keep it until this clock passes it`. Viewers reject it only when this
+clock is behind the lost watermark, which nothing here can detect: restoring `manifest.json` from the sync
+checkout before exporting keeps the bound. A first export (no manifest and nothing left of an earlier
+one) does not warn. A persisted watermark that survives the manifest is not implemented
+([#1325](https://github.com/nredd/pi-harness/issues/1325)).
 
 A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000
 (where `YYYY-MM` months stop sorting after sealed ones), is refused first, before the damaged-history
