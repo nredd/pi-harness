@@ -902,10 +902,19 @@ export over a corrupt manifest, and a `--replace-harnesses` export over a corrup
 (missing while this outbox's bookkeeping or shard files remain), still publishes and exits 0 but warns
 `no readable published manifest bounds this export (<manifest.json unreadable|EACCES on
 manifest.json|manifest.json missing>); published at <exportedAt> by this clock, so viewers holding a
-later snapshot of this machine keep it until this clock passes it`. Viewers reject it only when this
-clock is behind the lost watermark, which nothing here can detect: restoring `manifest.json` from the sync
-checkout before exporting keeps the bound. A first export (no manifest and nothing left of an earlier
-one) does not warn. A persisted watermark that survives the manifest is not implemented
+later snapshot of this machine keep it until this clock passes it`. An ordinary export over a denied or
+missing manifest still refuses (`history-unreadable`, `manifest-missing`); a denied shard is retryable
+I/O that fails the export, not an unbounded one. The publication itself is complete (a viewer holding
+nothing of this machine imports it), but a viewer holding a later snapshot rejects its older `exportedAt`
+and reports it as `Incomplete snapshot <machine id>` until this clock passes the lost watermark, which
+nothing here can detect. Restoring `manifest.json` from the sync checkout before exporting keeps the
+bound. The warning fires once: the wall-clock publication writes a new manifest that bounds later
+exports, and the lost watermark is forgotten, so a wrapper that ignores warnings never notices. The
+same applies to a far-future clock, which predates this warning: with no readable manifest the
+later-month and 366-day refusals have nothing to compare, so that instant is published with exit 0
+and every later honest export is bounded by it (and refused as `watermark-ahead` while it is more
+than 366 days ahead). A first export (no manifest and nothing left of an earlier one) does not warn.
+A persisted watermark that survives the manifest is not implemented
 ([#1325](https://github.com/nredd/pi-harness/issues/1325)).
 
 A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000

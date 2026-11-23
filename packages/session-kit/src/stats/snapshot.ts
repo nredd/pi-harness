@@ -906,12 +906,12 @@ type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unread
  * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
  * invalid), the first authenticated shard the expansion budget could not hold, and the manifest's own
  * `exportedAt`, which still bounds the next publication instant. A manifest the owner may not read
- * (`damaged` is `manifest.json`, `denied` its errno code) has no `exportedAt`: like an unreadable one, it
- * bounds nothing.
+ * (`damaged` is `manifest.json`, `manifestDenied` its errno code) has no `exportedAt`: like an unreadable
+ * one, it bounds nothing. A denied shard is never damage: `loadPrevious` throws it as retryable I/O.
  */
 interface Damaged {
 	damaged: string[];
-	denied?: string;
+	manifestDenied?: string;
 	exportedAt?: number;
 	overBudget?: string;
 }
@@ -935,7 +935,7 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 		// Ambiguous I/O (EIO, EMFILE, EBUSY...) stays fatal and unclassified: it may clear on retry.
 		const code = (error as NodeJS.ErrnoException).code;
 		if (readFailure(error) && (code === "EACCES" || code === "EPERM"))
-			return { damaged: ["manifest.json"], denied: code };
+			return { damaged: ["manifest.json"], manifestDenied: code };
 		if (readFailure(error)) throw error;
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
@@ -974,7 +974,9 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 function unboundedBy(previous: Previous | Damaged, publishedBefore: boolean): string | undefined {
 	if (previous === "unreadable") return "manifest.json unreadable";
 	if (previous === null) return publishedBefore ? "manifest.json missing" : undefined;
-	return "damaged" in previous && previous.denied !== undefined ? `${previous.denied} on manifest.json` : undefined;
+	return "damaged" in previous && previous.manifestDenied !== undefined
+		? `${previous.manifestDenied} on manifest.json`
+		: undefined;
 }
 
 /**
@@ -985,10 +987,10 @@ function intactPrevious(previous: Previous | Damaged, replace: boolean): Previou
 	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
 	if (replace) return "unreadable";
 	// Restoring read access keeps the archived history a replacement would drop; only the errno code is named.
-	if (previous.denied !== undefined)
+	if (previous.manifestDenied !== undefined)
 		throw new ExportRefusal(
 			"history-unreadable",
-			`Published usage manifest is not readable (${previous.denied} on manifest.json); restore read access to it ` +
+			`Published usage manifest is not readable (${previous.manifestDenied} on manifest.json); restore read access to it ` +
 				"and retry before considering --replace-harnesses, which drops published history absent from this scan",
 		);
 	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
