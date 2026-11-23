@@ -104,15 +104,19 @@ make help                    # every target
   `toStrictEqual`, `objectContaining`, `arrayContaining`, `toHaveProperty` and `node:assert`'s
   `rejects`/`throws` validation objects are deliberately NOT banned: the first five compare a
   `RegExp` by equality and fail on a matching string (never vacuous), the last two match the regex.
-  A name or shorthand property in the expected value is followed into its initializer when the file
-  binds that name exactly once, as a plain `const` directly in the file or a block whose scope contains
-  the use (#1302), e.g. `const re = /x/; expect(a).toMatchObject({ message: re })`. `let`/`var`/`using`,
-  destructuring, any second binding of the name, case-clause or namespace scopes, helper calls,
-  `new RegExp(...)` and imports are not followed, so shadowing can only cause a miss. A `const`
+  A name or shorthand property in the expected value is followed into its initializer when its nearest
+  binding in scope is a plain `const` directly in the file, a block or a `switch` case block (#1302,
+  #1315), e.g. `const re = /x/; expect(a).toMatchObject({ message: re })`, and a name reused per test
+  (`const expected = ...` in each) resolves per scope. Every binding other than a `let`/`const`/`using`
+  statement (`var`, parameters, `catch`, `for` headers, destructuring, function, class, import, enum and
+  namespace names) counts as visible throughout its enclosing function or the file, and any such binding
+  inside the chosen `const`'s scope that may be visible at the use blocks following, so shadowing can
+  only cause a miss. `let`/`var`/`using`, destructuring, namespace-block `const`, helper calls,
+  `new RegExp(...)` and imports are not followed. A `const`
   fixes the binding, not its contents, so a name that appears in a write target anywhere in the file
   (`expected.m = ...`, `expected[0] += ...`, `++`/`--`, `delete`, the first argument of
-  `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`) is not followed, nor is a use
-  inside a `with` body. Mutation through aliases or calls is not tracked: this can still produce a
+  `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`) is not followed under ANY of its
+  bindings, nor is a use inside a `with` body nested in the chosen `const`'s scope. Mutation through aliases or calls is not tracked: this can still produce a
   finding for a value later overwritten; fix the test by naming the regex differently or asserting
   directly. Each initializer is walked once per matcher call, so shared initializers stay linear.
   The scan uses the `tsgo` parser on the same owned JS/TS test sources as the temp directory check,

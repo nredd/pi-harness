@@ -167,7 +167,7 @@ test("leaves a name alone unless one const binding in scope holds it (#1302)", a
 		"const { picked } = { picked: /g/ };",
 		"const loop = { m: loop }, ping = pong, pong = ping;",
 		"const spread = /h/;",
-		"switch (k) { case 1: const cased = /i/; expect(x).toMatchObject({ m: cased }); }",
+		"namespace N { const spaced = /i/; expect(x).toMatchObject({ m: spaced }); }",
 		"declare const ambient: RegExp;",
 		"expect(x).toMatchObject({ m: early });",
 		"{ const early = /j/; }",
@@ -178,6 +178,54 @@ test("leaves a name alone unless one const binding in scope holds it (#1302)", a
 		'import { imported } from "./other";',
 	].join("\n");
 	expect(await scan(source)).toEqual([]);
+});
+
+test("resolves a name reused across scopes to its nearest const (#1315)", async () => {
+	const source = [
+		'test("a", () => { const expected = { message: /x/ }; expect(a).toMatchObject(expected); });',
+		'test("b", () => { const expected = { message: "y" }; expect(b).toMatchObject(expected); });',
+		'test("c", () => { const expected = { message: /z/ }; expect(c).toMatchObject(expected); });',
+		"const outer = /o/;",
+		"{ const outer = 'ok'; }",
+		"expect(x).toMatchObject({ m: outer });",
+		'test("d", () => { const outer = { m: "ok" }; expect(x).toMatchObject(outer); });',
+		"const re = /p/;",
+		"{ list.map((re) => expect(x).toMatchObject({ m: re })); expect(y).toMatchObject({ m: re }); }",
+		"switch (k) { case 1: const cased = /c/; break; default: expect(x).toMatchObject({ m: cased }); }",
+		"switch (k) { default: const fallback = /f/; expect(x).toMatchObject({ m: fallback }); }",
+		"with ({}) { const inside = /w/; expect(x).toMatchObject({ m: inside }); }",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:47: bare /x/ in toMatchObject via `expected` at 1:78",
+		"a.test.ts:3:47: bare /z/ in toMatchObject via `expected` at 3:78",
+		"a.test.ts:4:15: bare /o/ in toMatchObject via `outer` at 6:30",
+		"a.test.ts:8:12: bare /p/ in toMatchObject via `re` at 9:86",
+		"a.test.ts:10:36: bare /c/ in toMatchObject via `cased` at 10:86",
+		"a.test.ts:11:40: bare /f/ in toMatchObject via `fallback` at 11:74",
+		"a.test.ts:12:28: bare /w/ in toMatchObject via `inside` at 12:62",
+	]);
+});
+
+test("does not follow a const past a nearer binding of the name it does not model (#1315)", async () => {
+	// One file per case: a binding the resolver over-approximates to the whole file would mask the others.
+	const cases = [
+		"function hoisted() { { var expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }",
+		"function annexB() { { function expected() {} } expect(x).toMatchObject({ m: expected }); }",
+		"const named = function expected() { expect(x).toMatchObject({ m: expected }); };",
+		"const klass = class expected { m() { expect(x).toMatchObject({ m: expected }); } };",
+		"try {} catch (expected) { expect(x).toMatchObject({ m: expected }); }",
+		"for (const expected of []) expect(x).toMatchObject({ m: expected });",
+		"(function ({ expected }) { expect(x).toMatchObject({ m: expected }); });",
+		"class C { static { var expected = 'ok'; expect(x).toMatchObject({ m: expected }); } }",
+		"enum E { expected = 1, other = expect(x).toMatchObject({ m: expected }) }",
+		"namespace N { export const expected = 'ok'; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"{ let expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
+		"{ { const expected = 'ok'; } with (o) { expect(x).toMatchObject({ m: expected }); } }",
+	];
+	const control = "{ { const expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }";
+	const found = [];
+	for (const body of [control, ...cases]) found.push(...(await scan(`const expected = /a/;\n${body}`)));
+	expect(found).toEqual(["a.test.ts:1:18: bare /a/ in toMatchObject via `expected` at 2:59"]);
 });
 
 /** `const a0 = /x/` and `depth` levels of `const aN = [aN-1, aN-1]`, matched on the last: 2^depth paths, one regex. */
