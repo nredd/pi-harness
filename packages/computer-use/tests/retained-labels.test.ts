@@ -197,6 +197,31 @@ test("a scoped look with a protected node redacts preserved, unconfirmed childre
 	await assertQueriesClean(stateId, "@e3");
 });
 
+test("a scoped look that leaves a child unread never brings its cached text or ref back (#1349)", async () => {
+	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
+	const kid = wireNode("kid", "AXStaticText", SECRET, { value: SECRET_VALUE });
+	const group = (children: object[]) => wireNode("g", "AXGroup", "Group", { children, truncated: true });
+	// The first look read the child; later looks refuse it, e.g. its live `Parent` edge is now unconfirmed.
+	let children = [kid];
+	fake.lookPayload = (request: { scopeRef?: string }) =>
+		request.scopeRef === "g"
+			? { ...lookPayload({ lookId: "scoped", image: false }), outline: group(children) }
+			: lookPayload({ children: [group(children), wireButton("b", "Keep")] });
+	const { stateId, text } = await fake.observe({ detail: "outline" });
+	children = [];
+	assert.match(text, new RegExp(SECRET), "precondition: the full look shows the child");
+	assert.match(text, /@e4 AXStaticText/, "precondition: the child is @e4");
+	const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+	assert.equal(fake.looks.at(-1).scopeRef, "g", "the truncated group took a scoped look");
+	assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+	await assert.rejects(
+		fake.call(fake.bridge.executeInspectUi, { stateId, ref: "@e4" }),
+		/not available in the current outline/,
+		"the refused child's cached ref is gone",
+	);
+	await assertQueriesClean(stateId, "@e2");
+});
+
 test("a restored session note from before the fix is redacted by every cached query", async () => {
 	const { fake, assertQueriesClean } = await desktop(PROTECTED_SHAPES["linux password"]);
 	fake.tree = [wireButton("b", "Keep")];

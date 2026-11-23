@@ -1029,12 +1029,26 @@ function preserveUnreused(node: OutlineNode, parent: OutlineNode, used: Set<Outl
 	return node;
 }
 
+/** Cached children of `parent` the scoped look did not reuse, or none unless `keepUnseen`. */
+function preservedChildren(
+	oldChildren: OutlineNode[],
+	parent: OutlineNode,
+	used: Set<OutlineNode>,
+	keepUnseen: boolean,
+): OutlineNode[] {
+	if (!keepUnseen) return [];
+	return oldChildren
+		.map((child) => preserveUnreused(child, parent, used))
+		.filter((child): child is OutlineNode => Boolean(child));
+}
+
 function cloneForGraft(
 	source: OutlineNode,
 	parent: OutlineNode,
 	nextRef: () => string,
 	reusableByWireRef: Map<string, OutlineNode>,
 	used: Set<OutlineNode>,
+	keepUnseen: boolean,
 ): OutlineNode {
 	const existing = source.wireRef ? reusableByWireRef.get(source.wireRef) : undefined;
 	const oldChildren = existing?.children ?? [];
@@ -1050,11 +1064,10 @@ function cloneForGraft(
 	copyNodeFields(node, source, Boolean(existing));
 	used.add(node);
 	node.parent = parent;
-	const graftedChildren = source.children.map((child) => cloneForGraft(child, node, nextRef, reusableByWireRef, used));
-	const preservedChildren = oldChildren
-		.map((child) => preserveUnreused(child, node, used))
-		.filter((child): child is OutlineNode => Boolean(child));
-	node.children = [...graftedChildren, ...preservedChildren];
+	const graftedChildren = source.children.map((child) =>
+		cloneForGraft(child, node, nextRef, reusableByWireRef, used, keepUnseen),
+	);
+	node.children = [...graftedChildren, ...preservedChildren(oldChildren, node, used, keepUnseen)];
 	return node;
 }
 
@@ -1084,13 +1097,14 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 	// (fail closed, #1263). Its own boxes are in scoped space too: never compare them with full-look rects.
 	target.rect = isConfirmedReadable(target) ? targetRect : undefined;
 	for (const text of target.text) text.rect = undefined;
+	// A node the scoped look left unread (`truncated`) may have been refused, e.g. a Linux child whose live `Parent`
+	// edge is unconfirmed, and the reply cannot say which cached node that was. So a cached node absent from the look
+	// survives only when the look read everything; otherwise its cached text and refs go (#1349).
+	const keepUnseen = !scoped.nodes.some((node) => node.truncated);
 	const graftedChildren = scoped.root.children.map((child) =>
-		cloneForGraft(child, target, nextRef, reusableByWireRef, used),
+		cloneForGraft(child, target, nextRef, reusableByWireRef, used, keepUnseen),
 	);
-	const preservedChildren = oldChildren
-		.map((child) => preserveUnreused(child, target, used))
-		.filter((child): child is OutlineNode => Boolean(child));
-	target.children = [...graftedChildren, ...preservedChildren];
+	target.children = [...graftedChildren, ...preservedChildren(oldChildren, target, used, keepUnseen)];
 	for (const child of target.children) clearScopedRects(child);
 	// A preserved node is absent from the scoped look, so its classification is unknown. Once that look shows
 	// any protected node, a preserved one may be the same element under a new wire ref: drop its old text.

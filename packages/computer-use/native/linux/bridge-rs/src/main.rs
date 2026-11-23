@@ -3760,6 +3760,90 @@ mod tests {
         }
     }
 
+    /// A readable window that lists `/window/<index>` children, `0..self.0`.
+    struct WideWindow(usize);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl WideWindow {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Window"
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> &str {
+            "frame"
+        }
+
+        fn get_role(&self) -> u32 {
+            23
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            (0..self.0)
+                .map(|index| {
+                    let path = format!("/window/{index}");
+                    (":1.1", OwnedObjectPath::try_from(path).unwrap())
+                })
+                .collect()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            vec![]
+        }
+    }
+
+    /// Serial `Parent` checks that each stall up to the request deadline still end within one
+    /// snapshot deadline, as a `timeout` and never a partial snapshot, scoped or not (#1349).
+    #[tokio::test]
+    async fn snapshot_parent_checks_respect_operation_deadline() {
+        const CHILDREN: usize = 8;
+        let request_timeout = Duration::from_millis(250);
+        let snapshot_timeout = Duration::from_millis(600);
+        with_peer(
+            |peer| {
+                let mut peer = peer.serve_at("/window", WideWindow(CHILDREN))?;
+                for index in 0..CHILDREN {
+                    let mut child = contained_field(Some(STALLED_PARENT));
+                    child.name = "Child";
+                    peer = peer.serve_at(format!("/window/{index}"), child)?;
+                }
+                Ok(peer)
+            },
+            async |connection| {
+                let root = AccessibleRef {
+                    destination: ":1.1".into(),
+                    path: "/window".into(),
+                };
+                let client = AtspiClient::from_connection(connection, request_timeout)
+                    .with_snapshot_timeout(snapshot_timeout);
+                // Unbounded, the edge checks alone take CHILDREN * request_timeout = 2 s.
+                for scoped in [false, true] {
+                    let started = Instant::now();
+                    let reply = if scoped {
+                        client.snapshot_within(&root, &root, 64, 4).await
+                    } else {
+                        client.snapshot_from(&root, 64, 4).await
+                    };
+                    let elapsed = started.elapsed();
+                    let Err(error) = reply else {
+                        panic!("scoped {scoped}: a snapshot past its deadline returned nodes");
+                    };
+                    assert_eq!(error.code, ErrorCode::Timeout, "scoped {scoped}");
+                    assert!(
+                        elapsed < snapshot_timeout + request_timeout,
+                        "scoped {scoped}: {elapsed:?}"
+                    );
+                }
+            },
+        )
+        .await;
+    }
+
     /// A link in a straight chain of readable panels; the leaf has text.
     struct ChainNode {
         parent: String,
