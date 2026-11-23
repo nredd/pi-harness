@@ -29,7 +29,8 @@ def report_lines() -> list[bytes]:
     """Emulate `find . -mindepth 2 -type f | cut -d/ -f3-` in the current directory.
 
     `find` lists regular files without following symlinks, and `cut` works on lines, so a newline
-    inside a file name splits it the same way here.
+    inside a file name splits it the same way here. An unreadable subdirectory is skipped silently
+    (`find` also printed a diagnostic on stderr; the pipeline status ignored it either way).
 
     Returns:
         list[bytes]: Each output line, unsorted.

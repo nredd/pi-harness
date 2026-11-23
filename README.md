@@ -232,7 +232,7 @@ Docs-only PRs still report the four Ubuntu checks without running their gates. m
 GitHub does not order job admission by push age: a delayed or re-run older push can cancel a newer push’s macOS cell. A tip check cannot make admission atomic with `main` moving. These are not required checks; the cancelled cell is visible, and the next push or an eligible dispatch re-measures it.
 
 For a running owned cell, `scripts/ci_require_shards.py` requires a successful shard result and an explicit `WINDOWS_REQUIRED` decision. The planner sets `windows_native_required` when an executing Ubuntu cell selects the `packages/computer-use` workspace. The Windows job and Ubuntu fan-in both read that boolean and fail on a missing or malformed decision for an executing cell. macOS does not require the Windows producer.
-The fan-in then merges the downloaded shard reports with measured `scripts/ci_merge_shard_coverage.py`. It refuses a report path that more than one shard produced, before copying anything, then copies each shard over the checkout with `cp -R`.
+The fan-in then merges the downloaded shard reports with `scripts/ci_merge_shard_coverage.py` (held at 0/0/0 uncovered like the other `scripts/` Python). It refuses a report path that more than one shard produced, before copying anything, then copies each shard over the checkout with `cp -R`. Only files below a shard's top-level directory count: files directly under the download root are ignored, and a hidden top-level directory is checked for duplicates but not merged. An unreadable subdirectory is skipped without the stderr diagnostic `find` printed.
 
 ### Review and merge evidence
 
