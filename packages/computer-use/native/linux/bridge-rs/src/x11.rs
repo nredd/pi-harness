@@ -1636,15 +1636,29 @@ fn intern(c: &impl Connection, n: &str) -> Result<Atom, ProtocolError> {
         .map(|r| r.atom)
         .map_err(xerr)
 }
-/// A 32-bit property's values; empty when the window lacks it or it has another format. A
-/// failed request is an error, never an empty value.
+/// A 32-bit property's values; empty only when the window lacks it (a reply of type `None`).
+/// A failed request, or a present value of another type or format or not read whole, is an
+/// error, never an empty value: e.g. an unreadable `_NET_WM_PID` read as absent would leave
+/// its window unpaired and its root admitted on its executable alone (#1311).
 fn property32(c: &impl Connection, w: Window, p: Atom, t: Atom) -> Result<Vec<u32>, ProtocolError> {
     let reply = c
         .get_property(false, w, p, t, 0, u32::MAX)
         .map_err(xerr)?
         .reply()
         .map_err(xerr)?;
-    Ok(reply.value32().map(Iterator::collect).unwrap_or_default())
+    if reply.type_ == x11rb::NONE {
+        return Ok(Vec::new());
+    }
+    let unread = || {
+        err(
+            format!("X11 property {p} of window {w} is not a complete 32-bit value of type {t}"),
+            ErrorCode::InternalError,
+        )
+    };
+    if reply.type_ != t || reply.bytes_after != 0 {
+        return Err(unread());
+    }
+    reply.value32().map(Iterator::collect).ok_or_else(unread)
 }
 /// `_NET_WM_NAME`, else `WM_NAME`; empty when the window has neither. A failed request is
 /// an error: the title ranks the window's pairing.
@@ -2850,7 +2864,21 @@ mod wire_tests {
     /// 32-bit units, as X11 answers: `None` is a missing property, another type than
     /// `wanted` carries no value, and a longer value is cut short with `bytes_after` set.
     fn property(seq: u16, wanted: Atom, longs: u32, value: Option<(Atom, u8, Vec<u8>)>) -> Vec<u8> {
-        let (kind, format, bytes) = value.unwrap_or((0, 0, Vec::new()));
+        raw(
+            seq,
+            wanted,
+            longs,
+            value.map(|(kind, format, bytes)| (kind, format, bytes, 0)),
+        )
+    }
+
+    /// A property value as type, format, bytes, and extra `bytes_after` the server claims it
+    /// left unread: a reply no conforming request of `u32::MAX` units gets.
+    type Raw = (Atom, u8, Vec<u8>, u32);
+
+    /// [`property`] with `value`'s extra `bytes_after` added.
+    fn raw(seq: u16, wanted: Atom, longs: u32, value: Option<Raw>) -> Vec<u8> {
+        let (kind, format, bytes, after) = value.unwrap_or((0, 0, Vec::new(), 0));
         let max = if wanted != 0 && wanted != kind {
             0
         } else {
@@ -2863,11 +2891,7 @@ mod wire_tests {
             sent.len() / usize::from(format / 8)
         };
         let mut body = kind.to_ne_bytes().to_vec();
-        body.extend(
-            u32::try_from(bytes.len() - sent.len())
-                .unwrap()
-                .to_ne_bytes(),
-        );
+        body.extend((u32::try_from(bytes.len() - sent.len()).unwrap() + after).to_ne_bytes());
         body.extend(u32::try_from(units).unwrap().to_ne_bytes());
         reply(seq, format, &body, sent)
     }
@@ -2876,11 +2900,13 @@ mod wire_tests {
         values.iter().flat_map(|v| v.to_ne_bytes()).collect()
     }
 
-    /// Serve `fakes` on `stream` until the client hangs up, answering the first request
-    /// labelled `fault.0` with `fault.1`. Returns each request's label.
+    /// Serve `fakes` on `stream` until the client hangs up, answering a property labelled in
+    /// `overrides` with its value on every window, and the first request labelled `fault.0`
+    /// with `fault.1`. Returns each request's label.
     fn serve(
         mut stream: UnixStream,
         fakes: Vec<Fake>,
+        overrides: Vec<(&'static str, Option<Raw>)>,
         fault: Option<(&'static str, Fault)>,
     ) -> Vec<String> {
         let mut request = [0u8; 12];
@@ -2931,7 +2957,11 @@ mod wire_tests {
             let fake = fakes.iter().find(|fake| fake.id == window);
             let text = |text: Option<&str>| text.map(|t| (31, 8, t.as_bytes().to_vec()));
             let answer = |value| property(seq, word(12), word(20), value);
+            let overridden = overrides.iter().find(|(at, _)| *at == label);
             let packet = match (full[0], label.as_str()) {
+                (20, _) if overridden.is_some() => {
+                    raw(seq, word(12), word(20), overridden.unwrap().1.clone())
+                }
                 (16, _) => {
                     let len = usize::from(u16::from_ne_bytes([full[4], full[5]]));
                     let name = String::from_utf8(full[8..8 + len].to_vec()).unwrap();
@@ -2956,7 +2986,7 @@ mod wire_tests {
                     &[],
                 ),
                 (_, "_NET_ACTIVE_WINDOW") => answer(Some((33, 32, words(&[0x401])))),
-                (_, "_NET_CLIENT_LIST_STACKING") => {
+                (_, "_NET_CLIENT_LIST_STACKING" | "_NET_CLIENT_LIST") => {
                     let ids = fakes.iter().map(|fake| fake.id).collect::<Vec<_>>();
                     answer(Some((33, 32, words(&ids))))
                 }
@@ -2986,7 +3016,7 @@ mod wire_tests {
     fn listing(
         fault: Option<(&'static str, Fault)>,
     ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
-        classed(None, fault)
+        scripted(None, Vec::new(), fault)
     }
 
     /// [`listing`] with `class` as the second window's `WM_CLASS`.
@@ -2994,8 +3024,17 @@ mod wire_tests {
         class: Option<(Atom, Vec<u8>)>,
         fault: Option<(&'static str, Fault)>,
     ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
+        scripted(class, Vec::new(), fault)
+    }
+
+    /// [`classed`] with `overrides` answering the properties they label.
+    fn scripted(
+        class: Option<(Atom, Vec<u8>)>,
+        overrides: Vec<(&'static str, Option<Raw>)>,
+        fault: Option<(&'static str, Fault)>,
+    ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
         let (client, server) = UnixStream::pair().unwrap();
-        let served = std::thread::spawn(move || serve(server, windows(class), fault));
+        let served = std::thread::spawn(move || serve(server, windows(class), overrides, fault));
         let (stream, _) = DefaultStream::from_unix_stream(client).unwrap();
         let listed = RustConnection::connect_to_stream(stream, 0)
             .map_err(xerr)
@@ -3086,5 +3125,48 @@ mod wire_tests {
                 .wm_class,
             None
         );
+    }
+
+    #[test]
+    fn malformed_pid_refuses_listing() {
+        // A present `_NET_WM_PID` of another type, another format, or not read whole is
+        // unread, never absent: as absent its window would pair with no root (#1311).
+        for (case, pid) in [
+            ("wrong type", (31, 32, words(&[43]), 0)),
+            // Another type with an empty value: only the type tells it from absence.
+            ("wrong type, empty", (31, 32, Vec::new(), 0)),
+            ("wrong format", (6, 16, 43u16.to_ne_bytes().to_vec(), 0)),
+            ("truncated", (6, 32, words(&[43]), 4)),
+        ] {
+            let (listed, labels) = scripted(None, vec![("_NET_WM_PID", Some(pid))], None);
+            assert!(
+                labels.iter().any(|l| l == "_NET_WM_PID"),
+                "{case}: {labels:?}"
+            );
+            let error = listed.expect_err(case);
+            assert_eq!(error.code, ErrorCode::InternalError, "{case}");
+        }
+        // A genuinely missing `_NET_WM_PID` stays absent by design: the windows still list,
+        // pairing with no root, so a root of their process stays `unpaired`.
+        let (listed, _) = scripted(None, vec![("_NET_WM_PID", None)], None);
+        let listed = listed.unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().all(|w| w.pid == 0), "{listed:?}");
+    }
+
+    #[test]
+    fn client_list_fallback_lists_and_fails_closed() {
+        // No `_NET_CLIENT_LIST_STACKING`: the listing falls back to `_NET_CLIENT_LIST`.
+        let absent = || vec![("_NET_CLIENT_LIST_STACKING", None)];
+        let (listed, labels) = scripted(None, absent(), None);
+        assert!(labels.iter().any(|l| l == "_NET_CLIENT_LIST"), "{labels:?}");
+        let mut ids = listed.unwrap().iter().map(|w| w.id).collect::<Vec<_>>();
+        ids.sort_unstable();
+        assert_eq!(ids, [0x401, 0x402]);
+        for how in [Fault::Disconnect, Fault::Error] {
+            let (listed, labels) = scripted(None, absent(), Some(("_NET_CLIENT_LIST", how)));
+            assert!(labels.iter().any(|l| l == "_NET_CLIENT_LIST"), "{labels:?}");
+            assert!(listed.is_err(), "fallback {how:?} still listed {listed:?}");
+        }
     }
 }
