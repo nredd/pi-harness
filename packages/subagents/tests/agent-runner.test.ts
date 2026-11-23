@@ -1,13 +1,16 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { deferred } from "@nredd/pi-test-lib/deferred";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { DEFAULT_AGENTS } from "../src/default-agents.ts";
 import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "../src/memory.ts";
 import { buildAgentPrompt } from "../src/prompts.ts";
 import { preloadSkills } from "../src/skill-loader.ts";
+import { WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
+import { writeHolder } from "./fixtures/writer-claim.ts";
 
 const {
 	createAgentSession,
@@ -1194,14 +1197,166 @@ describe("agent-runner session persistence", () => {
 		settingsManagerGetSessionDir.mockReturnValue("/normal/pi/sessions");
 		const { session } = createSession("OK");
 		createAgentSession.mockResolvedValue({ session });
+		const file = join(realpathSync(makeTestTempDir("runner-reopen-", onTestFinished)), "explore.jsonl");
+		writeFileSync(file, "{}\n");
+		const claimPath = `${file}${WRITER_CLAIM_SUFFIX}`;
+		// Checked and opened under the writer claim (#1247), released once the run returns.
+		const order: string[] = [];
+		sessionManagerOpen.mockImplementationOnce(() => {
+			order.push(`open ${existsSync(claimPath)}`);
+			return { kind: "reopened-session-manager" };
+		});
+		const verifyResumeFile = vi.fn(() => {
+			order.push(`verify ${existsSync(claimPath)}`);
+			return undefined;
+		});
 
-		await runAgent(ctx, "Explore", "carry on", { pi, resumeSessionFile: "/sessions/explore.jsonl" });
+		await runAgent(ctx, "Explore", "carry on", { pi, resumeSessionFile: file, verifyResumeFile });
 
 		// Neither create nor inMemory: both would start an empty conversation, and
 		// the point of a resume is that the history is already there.
 		expect(sessionManagerCreate).not.toHaveBeenCalled();
 		expect(sessionManagerInMemory).not.toHaveBeenCalled();
-		expect(sessionManagerOpen).toHaveBeenCalledWith("/sessions/explore.jsonl", "/normal/pi/sessions");
+		expect(sessionManagerOpen).toHaveBeenCalledWith(file, "/normal/pi/sessions");
+		expect(order).toEqual(["verify true", "open true"]);
+		expect(existsSync(claimPath)).toBe(false);
+	});
+
+	it("refuses a reopen another writer holds, or its recheck refuses, without opening it", async () => {
+		const file = join(realpathSync(makeTestTempDir("runner-held-", onTestFinished)), "explore.jsonl");
+		writeFileSync(file, "{}\n");
+		const claimPath = `${file}${WRITER_CLAIM_SUFFIX}`;
+		writeHolder(claimPath, process.ppid);
+		await expect(runAgent(ctx, "Explore", "carry on", { pi, resumeSessionFile: file })).rejects.toThrow(
+			`child session is in use (writer claim held by pid ${process.ppid}): ${file}`,
+		);
+		unlinkSync(claimPath);
+		await expect(
+			runAgent(ctx, "Explore", "carry on", { pi, resumeSessionFile: file, verifyResumeFile: () => "refused" }),
+		).rejects.toThrow("refused");
+		expect(sessionManagerOpen).not.toHaveBeenCalled();
+		expect(createAgentSession).not.toHaveBeenCalled();
+		// The refused run still released the claim it took.
+		expect(existsSync(claimPath)).toBe(false);
+	});
+
+	it("resumes a live session only under its transcript's writer claim", async () => {
+		const file = join(realpathSync(makeTestTempDir("runner-resume-", onTestFinished)), "explore.jsonl");
+		const claimPath = `${file}${WRITER_CLAIM_SUFFIX}`;
+		const { session } = createSession("RESUMED");
+		const held: boolean[] = [];
+		const prompt = session.prompt;
+		session.prompt = vi.fn(async (text?: string) => {
+			held.push(existsSync(claimPath));
+			await prompt(text);
+		}) as typeof session.prompt;
+		const persisted = Object.assign(session, { sessionManager: { getSessionFile: () => file } });
+		expect((await resumeAgent(persisted as any, "continue", { type: "Explore" })).text).toBe("RESUMED");
+		expect(held).toEqual([true]);
+		expect(existsSync(claimPath)).toBe(false);
+		// Another process took the transcript over while this one sat idle: no second writer.
+		writeHolder(claimPath, process.ppid);
+		await expect(resumeAgent(persisted as any, "continue", { type: "Explore" })).rejects.toThrow(
+			`child session is in use (writer claim held by pid ${process.ppid}): ${file}`,
+		);
+		expect(held).toEqual([true]);
+	});
+
+	it("lets only one of two reopens of one transcript reach the open", async () => {
+		// Two real runner invocations in this process (one pid, so the claim's
+		// holder reads as live): the first parks past its open, the second must
+		// stop at its claim, before its pre-open recheck.
+		const file = join(realpathSync(makeTestTempDir("runner-race-", onTestFinished)), "explore.jsonl");
+		writeFileSync(file, "{}\n");
+		const { session } = createSession("FIRST");
+		const parked = deferred();
+		const gate = deferred();
+		const prompt = session.prompt;
+		session.prompt = vi.fn(async (text?: string) => {
+			parked.resolve();
+			await gate.promise;
+			await prompt(text);
+		}) as typeof session.prompt;
+		createAgentSession.mockResolvedValue({ session });
+		const reached: string[] = [];
+		const verify = (name: string) => () => {
+			reached.push(name);
+			return undefined;
+		};
+		const first = runAgent(ctx, "Explore", "a", { pi, resumeSessionFile: file, verifyResumeFile: verify("first") });
+		await parked.promise;
+		await expect(
+			runAgent(ctx, "Explore", "b", { pi, resumeSessionFile: file, verifyResumeFile: verify("second") }),
+		).rejects.toThrow(`child session is in use (writer claim held by pid ${process.pid} (this process)): ${file}`);
+		gate.resolve();
+		await first;
+		expect(reached).toEqual(["first"]);
+		expect(sessionManagerOpen).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens and writes a transcript at the canonical path its claim covers", async () => {
+		const dir = realpathSync(makeTestTempDir("runner-alias-", onTestFinished));
+		const file = join(dir, "explore.jsonl");
+		writeFileSync(file, "{}\n");
+		const alias = join(dir, "alias");
+		symlinkSync(dir, alias, "dir");
+		const aliased = join(alias, "explore.jsonl");
+		createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+		await runAgent(ctx, "Explore", "carry on", { pi, resumeSessionFile: aliased });
+		expect(sessionManagerOpen.mock.calls.map((call) => (call as unknown[])[0])).toEqual([file]);
+
+		// A fresh session created through the link is created again in the canonical directory.
+		vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+		const fresh = (sessionFile: string) => ({ kind: "persistent-session-manager", getSessionFile: () => sessionFile });
+		sessionManagerCreate
+			.mockReturnValueOnce(fresh(join(alias, "fresh.jsonl")) as never)
+			.mockReturnValueOnce(fresh(join(dir, "fresh.jsonl")) as never);
+		createAgentSession.mockResolvedValue({ session: createSession("OK").session });
+		await runAgent(ctx, "Explore", "go", { pi });
+		expect(sessionManagerCreate.mock.calls.map((call) => (call as unknown[])[1])).toEqual([
+			"/mock/agent-dir/sessions/--tmp--",
+			dir,
+		]);
+		expect(existsSync(join(dir, `fresh.jsonl${WRITER_CLAIM_SUFFIX}`))).toBe(false);
+
+		// ...and refused when the canonical directory moves again in between.
+		sessionManagerCreate.mockClear();
+		vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+		sessionManagerCreate
+			.mockReturnValueOnce(fresh(join(alias, "moved.jsonl")) as never)
+			.mockReturnValueOnce(fresh(join(alias, "moved.jsonl")) as never);
+		await expect(runAgent(ctx, "Explore", "go", { pi })).rejects.toThrow(
+			`child session directory changed while the session was created: ${join(dir, "moved.jsonl")}`,
+		);
+		expect(existsSync(join(dir, `moved.jsonl${WRITER_CLAIM_SUFFIX}`))).toBe(false);
+
+		// A live session whose manager writes through the link is refused, claim released.
+		const persisted = Object.assign(createSession("NEVER").session, {
+			sessionManager: { getSessionFile: () => aliased },
+		});
+		await expect(resumeAgent(persisted as any, "continue", { type: "Explore" })).rejects.toThrow(
+			`child session is written through a link, not at its claimed path ${file}: ${aliased}`,
+		);
+		expect(persisted.prompt).not.toHaveBeenCalled();
+		expect(existsSync(`${file}${WRITER_CLAIM_SUFFIX}`)).toBe(false);
+	});
+
+	it("holds a fresh persisted transcript's claim for the run and releases it on failure", async () => {
+		vi.mocked(getAgentConfig).mockReturnValueOnce(makeAgentConfig({ persistSession: true }));
+		const file = join(realpathSync(makeTestTempDir("runner-fresh-", onTestFinished)), "fresh.jsonl");
+		const claimPath = `${file}${WRITER_CLAIM_SUFFIX}`;
+		sessionManagerCreate.mockReturnValueOnce({
+			kind: "persistent-session-manager",
+			getSessionFile: () => file,
+		} as never);
+		let held: boolean | undefined;
+		createAgentSession.mockImplementationOnce(async () => {
+			held = existsSync(claimPath);
+			throw new Error("session construction failed");
+		});
+		await expect(runAgent(ctx, "Explore", "go", { pi })).rejects.toThrow("session construction failed");
+		expect(held).toBe(true);
+		expect(existsSync(claimPath)).toBe(false);
 	});
 
 	it("uses pi's normal persistent session location and links to the parent session", async () => {

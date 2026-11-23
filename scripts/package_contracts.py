@@ -867,6 +867,7 @@ SUBAGENTS_CONTRACT = PackageContract(
         "src/startup-error.ts",
         "src/status-note.ts",
         "src/structured-output.ts",
+        "src/transcript-claim.ts",
         "src/types.ts",
         "src/ui/agent-mention.ts",
         "src/ui/agent-row.ts",
