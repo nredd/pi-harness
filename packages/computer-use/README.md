@@ -27,9 +27,16 @@ Windows helper commands reject with `Operation aborted.` when their signal abort
 without waiting for the command deadline. Cancellation clears the local pending request, timer and
 listener; late replies are ignored. It does not stop native work already sent or kill the helper.
 A Windows helper command that gets no reply by its deadline rejects with code `reply_lost` (the
-`Helper command '<cmd>' timed out` message is unchanged): the helper may have run it, so `act_ui`
-stops that step as `unknown` with `stoppedAt`, keeps the completed prefix and says not to replay.
-An abort or a helper exit after sending keeps its own error (`helper_disconnected` for an exit).
+`Helper command '<cmd>' timed out` message is unchanged). `reply_lost` means only that no reply
+arrived by the deadline: the write was attempted, so whether the helper ran the command is unknown.
+`act_ui` reads it for `act` and `actBatch` only. A per-step `act` stops that step as `unknown` with
+`stoppedAt` and keeps the completed prefix; a strict-headless `actBatch` is `unknown` with no step
+index. Both say not to replay the transaction, which is guidance, not enforcement. A read-only
+command that times out (e.g. a look) is an observation failure, not a delivery question. Gap: an
+abort or a helper exit after the request may have been sent still fails `act_ui` with a plain error
+(`Operation aborted.`, or `helper_disconnected` for an exit), dropping the prefix and the
+do-not-replay text (#1379). A stdin write that fails (e.g. `EPIPE` from a helper that closed its
+pipe) rejects that command with the write error, and the stream's `error` is handled.
 Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
 ## Windows native helper safety

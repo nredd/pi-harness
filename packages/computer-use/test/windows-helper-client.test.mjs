@@ -1,6 +1,7 @@
 // Drives `WindowsHelperClient` against `support/fake-helper.mjs` stdio children: no Windows helper runs.
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
+import { Writable } from "node:stream";
 import { afterEach, describe, test, vi } from "vitest";
 import {
 	createFakeChild,
@@ -216,5 +217,31 @@ describe("Windows helper client disconnects (#725)", () => {
 		);
 		assert.deepEqual(await client.command("last", {}, { timeoutMs: 30_000 }), { done: true });
 		assert.equal(client.child, undefined, "exit forgets the child so the next command respawns");
+	});
+
+	test("stdin emits EPIPE: the write error rejects the command and the stream error is handled", async () => {
+		// A helper that closed its end of the pipe: Node calls back with `EPIPE`, then the stream emits `error`.
+		const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+		const stdin = new Writable({ write: (_chunk, _encoding, callback) => setImmediate(() => callback(epipe)) });
+		// Record the listeners each `error` emit finds instead of letting an unhandled one escape the test process.
+		const handled = [];
+		const emit = stdin.emit.bind(stdin);
+		stdin.emit = (event, ...rest) => {
+			if (event !== "error") return emit(event, ...rest);
+			handled.push(stdin.listenerCount("error"));
+			return stdin.listenerCount("error") > 0 ? emit(event, ...rest) : false;
+		};
+		const spawn = createFakeSpawn({ "*": () => Object.assign(createFakeChild(), { stdin }) });
+		vi.resetModules();
+		vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
+		const { WindowsHelperClient } = await import("../src/platform/windows/helper.ts");
+		const client = new WindowsHelperClient();
+		clients.push(client);
+		vi.spyOn(client, "ensureInstalled").mockResolvedValue(undefined);
+		// A proven write failure keeps its own error: it is never relabeled `reply_lost`.
+		await assert.rejects(client.command("request", {}, { timeoutMs: 30_000 }), (error) => error === epipe);
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepEqual(handled, [1], "the stream error found a listener");
+		assert.equal(client.pending.size, 0);
 	});
 });

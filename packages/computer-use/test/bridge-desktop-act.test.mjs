@@ -101,16 +101,21 @@ test.for([
 	},
 );
 
-test.for([{ first: true }, { first: false }])(
-	"a reply lost after submission is unknown and ends the transaction (first step: $first)",
-	async ({ first }, { onTestFinished }) => {
+test.for([
+	{ first: true, count: 3 },
+	{ first: false, count: 3 },
+	{ first: false, count: 2 },
+])(
+	"a reply lost after submission is unknown and ends the transaction (first step: $first, actions: $count)",
+	async ({ first, count }, { onTestFinished }) => {
 		const { fake, act } = await observed(onTestFinished);
 		currentPlatformBackend.act = async (request) => {
 			fake.actCalls.push(request);
 			if (!first && fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "hid" } };
 			throw Object.assign(new Error("Helper command 'act' timed out after 15000ms."), { code: "reply_lost" });
 		};
-		const result = await act([press, press, press]);
+		// `count: 2` loses the reply of the last action: there is nothing after it to skip, the stop is still recorded.
+		const result = await act(Array(count).fill(press));
 		const { execution } = result.details;
 		const at = first ? 0 : 1;
 		assert.equal(fake.actCalls.length, at + 1, "nothing after the lost reply is dispatched");

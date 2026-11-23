@@ -127,6 +127,9 @@ export class WindowsHelperClient {
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
 		child.stdin.setDefaultEncoding("utf8");
+		// A helper that closes its stdin fails the next write: the write callback gets `EPIPE` and settles that request,
+		// then the stream emits `error`. Without a listener that `error` is uncaught and ends the host process.
+		child.stdin.on("error", () => undefined);
 		// Each child frames its own lines, so a dead child's partial output cannot corrupt its successor's replies.
 		let buffer = "";
 		child.stdout.on("data", (chunk: string) => {
@@ -211,13 +214,15 @@ export class WindowsHelperClient {
 				clearTimeout(timer);
 				signal?.removeEventListener("abort", onAbort);
 			};
+			// Idempotent: a write callback error after a timeout or abort re-runs the cleanup and its reject is a no-op.
 			const fail = (error: Error) => {
 				cleanup();
 				reject(error);
 			};
 			const onAbort = () => fail(new Error("Operation aborted."));
-			// Armed in the same tick as the write below, so it fires only after the request was written: the helper may
-			// have run it, in part or in full. `reply_lost` makes `act_ui` stop that step as `unknown`, never replay it.
+			// The write below was attempted before this timer can fire, so when no reply arrives by the deadline delivery
+			// is unknown: `reply_lost`. `act_ui` then stops that step as `unknown` and advises against replaying it;
+			// that is guidance to the caller, not enforcement.
 			const timer = setTimeout(
 				() =>
 					fail(

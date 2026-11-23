@@ -349,11 +349,14 @@ describe("Windows helper client", () => {
 			assert.equal(error.code, "reply_lost");
 			return true;
 		});
-		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 6, id: engine.requests[0].id, ok: true, result: {} })}\n`,
-		);
-		engine.script("hang", ok("again"));
-		assert.equal(await client.command("hang"), "again");
+		// The stale reply arrives while a successor is pending: it must not settle the successor.
+		const successor = client.command("hang");
+		await vi.waitFor(() => assert.equal(engine.requests.length, 2));
+		const reply = (id, result) =>
+			children[0].stdout.write(`${JSON.stringify({ protocolVersion: 6, id, ok: true, result })}\n`);
+		reply(engine.requests[0].id, "stale");
+		reply(engine.requests[1].id, "again");
+		assert.equal(await successor, "again");
 	});
 
 	test("default command timeout is 15s", async () => {
