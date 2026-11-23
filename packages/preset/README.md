@@ -419,9 +419,8 @@ See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/re
 
 The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
 a fold omits pending fragments from the shipped changelog. Run `make fold-changelog`
-during release prep and commit the result before tagging.
-This migration leaves four
-pending fragments: #1024, #1050, #1057 and #1126.
+during release prep and commit the result before tagging. The pending fragment list is kept in
+one place, the release contract's Changelog fragments section.
 
 The #932 migration preserves 11 historical bullets: 4 exact bullets move to `fixed` fragments,
 their original category, and 7 remain in `CHANGELOG.md`. The two `1025.changed` bullets share one
