@@ -457,9 +457,9 @@ The caps alone cannot see a shrinking denominator: a build or instrumentation ch
 uncovered block from BOTH exports, which then agree on the smaller map, and the uncovered count
 falls without a new test (#1192). So the signal also records reviewed `mapped_totals`: per OS, per
 package-relative source, the file's SHA-256 and its mapped `lines` / `functions` (main run
-[here](https://github.com/nredd/pi-harness/actions/runs/45009970545) measured 5181 / 619; its
-producer `metadata.json` hashes match the recorded ones). An enforced `llvm-lcov` signal must record
-them for every OS it accounts. Accounting then fails when a source whose hash still matches its
+[here](https://github.com/nredd/pi-harness/actions/runs/45108874524) measured 5760 / 676 after #1264
+edited the sources; its producer `metadata.json` hashes match the recorded ones). An enforced
+`llvm-lcov` signal must record them for every OS it accounts. Accounting then fails when a source whose hash still matches its
 record maps fewer lines or functions than recorded, or leaves the signal's records. Record keys are
 canonical package-relative POSIX paths on every host: no drive, backslash, leading `/`, empty, `.` or
 `..` segment. Growth is allowed. Every run writes the current records, hashed from the checkout, to the
@@ -470,9 +470,13 @@ A file is stale when no current record guards its denominator: it is measured bu
 its record hashes other source (a new or edited file), or it is recorded, not measured and its source
 changed or was deleted. Stale files are not compared. Every run lists them in the summary's
 `stale_mapped_totals` and logs one `STALE mapped totals, not compared (#1270)` warning per signal
-naming them. This is a WARNING, not a failure: a source edit leaves that file's mapped denominator
-unguarded until a reviewed `--measure` refresh lands. Whether the fan-in should fail on stale files is
-the open policy choice in #1270.
+naming them. On an enforced signal it then FAILS with `Stale mapped totals (#1270)`: the PR
+that adds, edits or deletes a measured source records the refresh from a `--measure` replay of its own
+hosted artifact. If instrumentation drops mapped units of that file, the gate forces the shrink into a reviewable policy diff (a refreshed record with the
+new hash and lower total) instead of silently accepting it; it does not prove the source edit caused
+the shrink. Accounting never refreshes records from the run's own `measured_mapped_totals`; that
+would accept exactly the shrink the records guard. Report-only signals and `--measure` replays only
+warn. Unchanged sources keep the `remeasurements` ledger below.
 
 The base ratchet checks every record against the checkout. A record the policy adds or edits must
 hash the checkout's source, so a mistyped hash cannot turn a remeasurement into a permanent stale
