@@ -159,6 +159,18 @@ function errorSnapshot(provider: string, status: "error" | "unavailable", now: n
 	return { provider, status, windows: [], retrievedAt: now, expiresAt: now, message };
 }
 
+/**
+ * Set on an `unavailable` snapshot whose provider has no usage source at all: no collector, or a
+ * credential its collector cannot read (an API key). Only then may confirmation infer from the
+ * failure. A missing credential or a collector retired mid-read is a failed read instead.
+ * Non-enumerable, so snapshot equality and serialization are unchanged.
+ */
+export const NO_USAGE_SOURCE = Symbol.for("pi-subscription-router.no-usage-source");
+
+function unmeasured(provider: string, now: number, message: string): UsageSnapshot {
+	return Object.defineProperty(errorSnapshot(provider, "unavailable", now, message), NO_USAGE_SOURCE, { value: true });
+}
+
 /** `cached` with its last-known windows, marked stale and expired as of `now`. */
 function staleSnapshot(cached: UsageSnapshot, now: number, message: string | undefined): UsageSnapshot {
 	return { ...cached, status: "stale", expiresAt: now, message };
@@ -271,8 +283,7 @@ export class UsageService {
 		const now = this.transport.now();
 		if (options.signal?.aborted) return errorSnapshot(provider, "error", now, "Usage request was cancelled.");
 		const collector = this.currentCollector(provider);
-		if (!collector)
-			return errorSnapshot(provider, "unavailable", now, "No subscription usage collector exists for this provider.");
+		if (!collector) return unmeasured(provider, now, "No subscription usage collector exists for this provider.");
 		const generation = this.generations.get(provider) ?? 0;
 		const cached = this.cache.get(provider);
 		const force = options.force === true;
@@ -584,7 +595,7 @@ export class UsageService {
 		try {
 			signal.throwIfAborted();
 			if (collector.acceptsCredential?.(token) === false) {
-				return unfetched("unavailable", "API-key auth has no subscription usage window.");
+				return { snapshot: unmeasured(provider, now, "API-key auth has no subscription usage window."), failed: false };
 			}
 			signal.throwIfAborted();
 			let parsed: CollectorReading | undefined;
