@@ -83,7 +83,7 @@ beforeEach(({ onTestFinished }) => {
 	});
 	spawnAndWait = vi.fn(async (_pi, _ctx, type, _prompt, options) => {
 		const id = `child-${records.size + 1}`;
-		const record = { id, type, status: "completed", result: "done", parentAgentId: options.parentAgentId };
+		const record = { id, type, status: "completed", result: "done", parentAgentId: options.parentAgentId, session: {} };
 		records.set(id, record);
 		return { id, record };
 	});
@@ -92,6 +92,8 @@ beforeEach(({ onTestFinished }) => {
 		spawnAndWait,
 		awaitStartup: vi.fn(async () => {}),
 		getRecord: (id: string) => records.get(id),
+		records: () => records.values(),
+		latestId: (id: string) => id,
 		resume: vi.fn(),
 		abort: vi.fn((id: string, by?: string) => {
 			const record = records.get(id);
@@ -426,7 +428,7 @@ describe("child-safe nested Agent tools", () => {
 		expect(spawn).not.toHaveBeenCalled();
 	});
 
-	it("ownership-scopes result, resume, and steer", async () => {
+	it("ownership-scopes result, resume, steer and stop through one id or run id lookup", async () => {
 		const [agent, getResult, steer] = tools(["scout"]);
 		records.set("child-1", { id: "child-1", status: "running", result: "mine", parentAgentId: "parent-1" });
 
@@ -453,6 +455,35 @@ describe("child-safe nested Agent tools", () => {
 			).isError,
 		).toBe(true);
 		expect(manager.resume).not.toHaveBeenCalled();
+
+		// One lookup (#1204): `@` and spaces ignored, an owned child's run id answers, and an
+		// exact id or run id that is not this parent's own is refused like a miss.
+		const stop = tools(["scout"])[3]!;
+		const childSteer = vi.fn();
+		Object.assign(records.get("child-1"), { type: "scout", runId: "run-1", session: { steer: childSteer } });
+		records.get("foreign").runId = "run-foreign";
+		records.set("top", { id: "top", status: "running", runId: "run-top", session: { steer: vi.fn() } });
+		expect((await execute(getResult, { agent_id: " @child-1 " })).isError).toBe(false);
+		expect((await execute(getResult, { agent_id: "run-1" })).content[0].text).toBe(own.content[0].text);
+		for (const id of ["run-foreign", "top", "run-top"]) {
+			expect((await execute(getResult, { agent_id: id })).content[0].text).toBe(
+				`Nested agent not found or not owned by this parent: "${id}".`,
+			);
+			expect((await execute(steer, { agent_id: id, message: "x" })).isError).toBe(true);
+			expect((await execute(stop, { agent_id: id })).isError).toBe(true);
+		}
+		expect(await execute(steer, { agent_id: "@run-1", message: "focus" })).toMatchObject({ isError: false });
+		expect(childSteer).toHaveBeenCalledWith("focus");
+		expect(await execute(stop, { agent_id: "run-1" })).toMatchObject({ isError: false });
+		expect(vi.mocked(manager.abort).mock.calls).toEqual([["child-1", "parent"]]);
+		const resume = (id: string) =>
+			execute(agent, { resume: id, subagent_type: "scout", description: "again", prompt: "Again" });
+		await resume(" run-1 ");
+		expect(vi.mocked(manager.resume).mock.calls).toEqual([["child-1", "Again", undefined, expect.anything()]]);
+		// A finished child with no session left is refused before the manager is asked.
+		records.set("bare", { id: "bare", status: "completed", parentAgentId: "parent-1" });
+		expect((await resume("bare")).content[0].text).toBe('Failed to resume nested agent "bare".');
+		expect(manager.resume).toHaveBeenCalledTimes(1);
 	});
 
 	// #443 — a nested parent may stop its own running or queued child, never a
