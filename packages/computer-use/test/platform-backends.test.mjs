@@ -130,8 +130,9 @@ describe("macOS backend", () => {
 				scaleFactor: 2,
 				zOrder: 3,
 				isMinimized: true,
-				isOnscreen: true,
-				isMain: true,
+				// Only a JSON boolean is a read flag: `"true"` and `1` are unknown, never coerced (#1314).
+				isOnscreen: undefined,
+				isMain: undefined,
 				isFocused: true,
 				isModal: true,
 				metadata: { k: 1 },
@@ -163,10 +164,11 @@ describe("macOS backend", () => {
 			framePoints: { x: 0, y: 0, w: 1, h: 1 },
 			scaleFactor: 1,
 			zOrder: 0,
-			isMinimized: false,
-			isOnscreen: false,
-			isMain: false,
-			isFocused: false,
+			// Omitted state flags are unread, not `false` (#1314).
+			isMinimized: undefined,
+			isOnscreen: undefined,
+			isMain: undefined,
+			isFocused: undefined,
 			isModal: false,
 			metadata: {},
 		});
