@@ -269,6 +269,7 @@ def test_runner_temp_is_used_byte_for_byte(tmp_path: Path) -> None:
     assert f"arg=[{temp}/windows-coverage]".encode() in cli[1]
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can list a directory whose mode forbids reading")
 def test_unreadable_download_directory_leaves_the_glob_unmatched(tmp_path: Path) -> None:
     """Fall back to the literal pattern when the download directory cannot be listed (non-root)."""
     oracle, cli = run_both(tmp_path, LAYOUTS["one producer is staged and accounted"], mode=0o300)
@@ -277,10 +278,15 @@ def test_unreadable_download_directory_leaves_the_glob_unmatched(tmp_path: Path)
     assert b"windows-*/lcov.info" in cli[2]
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0 or os.access("/", os.W_OK),
+    reason="the oracle would create real directories under / when the caller can write there",
+)
 def test_unset_runner_inputs_read_as_empty(tmp_path: Path) -> None:
     """Read unset `RUNNER_TEMP` and `BASE` as empty, like Bash without `-u`.
 
     `mkdir -p /windows-coverage/...` fails without root, so both stop at `mkdir` with its status.
+    The test is skipped for root or a writable `/`, where both would create real directories.
     """
     env = {"PATH": os.environ["PATH"]}
     oracle = execute(["/bin/bash", "-e", str(ORACLE)], tmp_path, env)
