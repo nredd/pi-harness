@@ -23,6 +23,9 @@ it.each([false, true])(
 		owner = await createHarness({ cwd: fixture.cwd });
 		await owner.session.bindExtensions({ mode: "print" });
 		const captured = owner.session.extensionRunner.createContext();
+		// Positive control: the shared harness yields a live ctx that `dispose()` really invalidates.
+		const stale = "This extension ctx is stale";
+		expect(() => captured.getSystemPrompt()).not.toThrow();
 		const hold = fixture.heldTool();
 		const physical = fixture.physical("fauxphys", "physical", [
 			toolCalls({ name: "hold", args: {} }),
@@ -47,7 +50,10 @@ it.each([false, true])(
 				},
 			],
 		});
-		if (!midrun) owner.session.dispose();
+		if (!midrun) {
+			owner.session.dispose();
+			expect(() => captured.getSystemPrompt()).toThrow(stale);
+		}
 		for (let attempt = 0; attempt < 2; attempt++) {
 			h.setResponses([toolCalls(spawn(`attempt ${attempt}`, { model: "captured/default" })), answer("PARENT ALIVE")]);
 			await h.session.prompt("launch");
@@ -59,6 +65,7 @@ it.each([false, true])(
 			if (midrun && attempt === 0) {
 				await hold.entered;
 				owner.session.dispose();
+				expect(() => captured.getSystemPrompt()).toThrow(stale);
 				hold.release();
 			}
 			// Old code parks here for 1s/3s/9s, then appends three doomed prompts.
