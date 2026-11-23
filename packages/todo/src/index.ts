@@ -24,6 +24,7 @@ import type { KeyId } from "@earendil-works/pi-tui";
 import { applyAgentEvent, applyOtherSessionSurvivor, clearElsewhere, forgetAgents, setForkLineage } from "./agents.ts";
 import { COLLAPSE_KEY_OFF, getCollapseOnResume, resolveCollapseKey } from "./config.ts";
 import { applyMonitorEvent, forgetMonitors, keepLinks } from "./monitors.ts";
+import { type PreviousSession, previousSessionOf, recordOutgoing } from "./plan/carryover.ts";
 import type { ToolCompletion } from "./plan/empty-reminder.ts";
 import { registerPlanHooks } from "./plan/hooks.ts";
 import { I18N_NAMESPACE } from "./state/i18n-bridge.ts";
@@ -293,8 +294,10 @@ export default function (
 
 	pi.on("session_start", async (event, ctx) => {
 		let id: string;
+		let previous: PreviousSession | undefined;
 		try {
 			id = sid(ctx);
+			previous = previousSessionOf(event, ctx.sessionManager);
 			contextSessions.set(ctx, id);
 			managerSessions.set(ctx.sessionManager, id);
 			// Every session replays into its OWN data slot (Phase 1 isolation).
@@ -312,6 +315,8 @@ export default function (
 		// Only a process restart provably kills every child; /new, /resume, /fork and /reload
 		// detach live agents that pi-subagents re-announces below.
 		await planHooks.sessionStarted(id, event.reason === "startup", ctx.sessionManager.getBranch(), ctx.mode);
+		// A fresh session surfaces, never imports, the open todos its predecessor left.
+		if (previous) planHooks.sessionFresh(id, previous);
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
 		if (!ctx.hasUI) {
@@ -348,11 +353,13 @@ export default function (
 		await replayAndRefresh(ctx);
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
+	pi.on("session_shutdown", async (event, ctx) => {
 		let s = contextSessions.get(ctx);
 		let manager: object | undefined;
 		try {
 			manager = ctx.sessionManager;
+			// `/new` hands the live branch's open todos to the session it starts.
+			recordOutgoing(event, ctx.sessionManager);
 			s ??= managerSessions.get(manager) ?? sid(ctx);
 		} catch (e) {
 			if (!isStaleCtxError(e)) throw e;
