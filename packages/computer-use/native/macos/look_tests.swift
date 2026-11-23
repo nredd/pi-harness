@@ -83,7 +83,9 @@ func runLookAssertions() throws {
         guard let base64 = payload["jpegBase64"] as? String, let data = Data(base64Encoded: base64) else { return nil }
         return (data, payload["width"] as? Int, payload["height"] as? Int)
     }
-    let decoded = jpeg.flatMap { CGImageSourceCreateWithData($0.0 as CFData, nil) }.flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+    let source = jpeg.flatMap { CGImageSourceCreateWithData($0.0 as CFData, nil) }
+    expect(source.flatMap(CGImageSourceGetType) as String? == "public.jpeg", "ImageIO reads the look image as JPEG")
+    let decoded = source.flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
     expect(jpeg?.1 == 100 && jpeg?.2 == 50 && decoded?.width == 100 && decoded?.height == 50, "the image is the capture downscaled to maxDimension, as JPEG")
     let readText = image["readText"] as? [String: Any]
     expect(readText?["requested"] as? String == "auto" && readText?["executed"] as? Bool == false, "readText auto does not run OCR")
@@ -104,7 +106,8 @@ func runLookAssertions() throws {
     expect(trace == ["owner:42"], "a semantic look never captures, got \(trace)")
     expect(noImage["image"] == nil, "a semantic look carries no image")
     let noImageOutline = noImage["outline"] as? [String: Any]
-    expect(noImageOutline?["ref"] as? String != imageOutlineRef, "a scoped look mints its own root ref")
+    let scopedRef = noImageOutline?["ref"] as? String ?? ""
+    expect(scopedRef.hasPrefix("e") && scopedRef != imageOutlineRef && refStore.element(for: scopedRef) != nil, "a scoped look mints its own root ref the look owns")
     let semanticRecord = bridge.lookRecord(for: "look_2")
     expect(semanticRecord?.windowFrame == .zero && semanticRecord?.imageWidth == 1 && semanticRecord?.imageHeight == 1 && semanticRecord?.hasImage == false, "a semantic look over an unread frame records a 1x1 frame-sized image space without an image")
     let semanticScale = (noImage["window"] as? [String: Any])?["scaleFactor"] as? Double ?? 0
