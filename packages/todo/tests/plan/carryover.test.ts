@@ -2,6 +2,7 @@
  * Fresh-session carryover: which previous session is read, how its branch is replayed from the
  * file, and the one-shot hidden list the first request outside Plan mode gets.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -305,15 +306,25 @@ describe("carryover through the context hook", () => {
 	beforeEach(() => __resetState());
 	afterEach(() => __resetState());
 
-	function setup(dir: string, mode: "tui" | "rpc" = "tui") {
+	function setup(dir: string, mode: "tui" | "rpc" | "json" | "print" = "tui", child = false) {
 		const { pi, captured } = createTodoPi();
-		registerTodo(
-			pi,
-			async () => {
-				throw new Error("overlay must not load in headless tests");
-			},
-			{ homeDir: TEST_HOME },
-		);
+		const register = () =>
+			registerTodo(
+				pi,
+				async () => {
+					throw new Error("overlay must not load in headless tests");
+				},
+				{ homeDir: TEST_HOME },
+			);
+		if (child) {
+			// A subagent's in-process session: pi-subagents runs its extension activation in this context.
+			const childContext = new AsyncLocalStorage<boolean>();
+			vi.stubGlobal(Symbol.for("pi-subagents:child-session-context"), childContext);
+			onTestFinished(() => {
+				vi.unstubAllGlobals();
+			});
+			childContext.run(true, register);
+		} else register();
 		const handler = (name: string) => captured.handlers.get(name)?.[0] as (...args: unknown[]) => Promise<unknown>;
 		const ctx = createTodoCtx({
 			sessionId: "s1",
@@ -343,35 +354,53 @@ describe("carryover through the context hook", () => {
 		expect(await context({ messages: [user] }, ctx)).toBeUndefined();
 	});
 
-	it("lists what /new captured from the session it replaced, never another cwd's", async () => {
-		for (const [cwd, listed] of [
-			[CWD, true],
-			["/other", false],
-		] as const) {
-			__resetState();
-			const outgoing = createTodoCtx({
-				sessionId: "prev",
-				mode: "tui",
-				hasUI: false,
-				branch: [snapshot("e1", null, OPEN)] as never,
-				sessionManager: { getHeader: () => ({ cwd }) as never, getSessionFile: () => "/sessions/prev.jsonl" },
-			});
-			const { handler, ctx } = setup("/unused");
-			await handler("session_start")({ reason: "startup" }, outgoing);
-			await handler("session_shutdown")({ reason: "new", targetSessionFile: "/tmp/test-session.jsonl" }, outgoing);
-			await handler("session_start")({ reason: "new", previousSessionFile: "/sessions/prev.jsonl" }, ctx);
-			const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: unknown[] } | undefined;
-			expect(result?.messages[1]).toEqual(
-				listed ? expect.objectContaining({ customType: CARRYOVER_LIST_MESSAGE_TYPE }) : undefined,
-			);
-		}
+	it.each(["tui", "rpc"] as const)(
+		"lists what %s /new captured from the session it replaced, never another cwd's",
+		async (mode) => {
+			for (const [cwd, listed] of [
+				[CWD, true],
+				["/other", false],
+			] as const) {
+				__resetState();
+				const outgoing = createTodoCtx({
+					sessionId: "prev",
+					mode,
+					hasUI: false,
+					branch: [snapshot("e1", null, OPEN)] as never,
+					sessionManager: { getHeader: () => ({ cwd }) as never, getSessionFile: () => "/sessions/prev.jsonl" },
+				});
+				const { handler, ctx } = setup("/unused", mode);
+				await handler("session_start")({ reason: "startup" }, outgoing);
+				await handler("session_shutdown")({ reason: "new", targetSessionFile: "/tmp/test-session.jsonl" }, outgoing);
+				await handler("session_start")({ reason: "new", previousSessionFile: "/sessions/prev.jsonl" }, ctx);
+				const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: unknown[] } | undefined;
+				expect(result?.messages[1]).toEqual(
+					listed ? expect.objectContaining({ customType: CARRYOVER_LIST_MESSAGE_TYPE }) : undefined,
+				);
+			}
+		},
+	);
+
+	it("lists into a fresh parent RPC session, whose client drives its own /new", async () => {
+		const { handler, ctx } = setup(previousDir(), "rpc");
+		await handler("session_start")({ reason: "startup" }, ctx);
+		const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: Record<string, unknown>[] };
+		expect(result.messages[1]).toMatchObject({ customType: CARRYOVER_LIST_MESSAGE_TYPE, display: false });
+		expect(result.messages[1].content).toContain("- #2 in_progress ship widgets (was @worker)\n- #3 pending");
 	});
 
-	it("carries nothing into a headless session or a resumed one", async () => {
-		const headless = setup(previousDir(), "rpc");
-		await headless.handler("session_start")({ reason: "startup" }, headless.ctx);
-		expect(await headless.handler("context")({ messages: [user] }, headless.ctx)).toBeUndefined();
-		__resetState();
+	it.each([
+		["print", false],
+		["json", false],
+		["rpc", true],
+		["tui", true],
+	] as const)("carries nothing into a one-shot or child %s session (child: %s)", async (mode, child) => {
+		const { handler, ctx } = setup(previousDir(), mode, child);
+		await handler("session_start")({ reason: "startup" }, ctx);
+		expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+	});
+
+	it("carries nothing into a resumed session", async () => {
 		const resumed = setup(previousDir());
 		await resumed.handler("session_start")({ reason: "resume" }, resumed.ctx);
 		expect(await resumed.handler("context")({ messages: [user] }, resumed.ctx)).toBeUndefined();

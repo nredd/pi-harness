@@ -11,7 +11,7 @@
  *   list itself is never persisted.
  * - After a compaction, the first request outside Plan mode gets the open
  *   todo list appended once, since the compacted context no longer carries it.
- * - A fresh parent TUI session's first request outside Plan mode gets the
+ * - A fresh parent TUI or RPC session's first request outside Plan mode gets the
  *   previous session's open todos appended once, read-only (see `carryover.ts`).
  */
 
@@ -487,10 +487,11 @@ export interface PlanSessionHooks {
 	/** Whether `sessionId`'s next request outside Plan mode gets the open list: the pending flag `sessionCompacted` sets. */
 	compactionListPending(sessionId: string): boolean;
 	/**
-	 * Call from `session_start` after `sessionStarted` for a fresh session: in a parent TUI session,
-	 * start reading `previous`, whose open todos the next request outside Plan mode gets once.
+	 * Call from `session_start` after `sessionStarted` for a fresh session: in a parent TUI or RPC
+	 * session, start reading `previous`, whose open todos the next request outside Plan mode gets once.
+	 * One-shot print and JSON runs are scripted output, so they never get another session's list.
 	 */
-	sessionFresh(sessionId: string, previous: PreviousSession): void;
+	sessionFresh(sessionId: string, previous: PreviousSession, mode: ExtensionContext["mode"]): void;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
 }
@@ -741,8 +742,10 @@ export function registerPlanHooks(
 		compactionListPending(sessionId) {
 			return compacted.has(sessionId);
 		},
-		sessionFresh(sessionId, previous) {
-			if (parentTuiSessions.has(sessionId)) carryovers.set(sessionId, loadPreviousOpenTodos(previous));
+		sessionFresh(sessionId, previous, mode) {
+			// Parent sessions a person or client keeps driving: TUI, and RPC, whose client issues its own `/new`.
+			if (!childActivation && (mode === "tui" || mode === "rpc"))
+				carryovers.set(sessionId, loadPreviousOpenTodos(previous));
 		},
 		sessionEnded(sessionId) {
 			live.delete(sessionId);
