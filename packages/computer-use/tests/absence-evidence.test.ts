@@ -1,7 +1,7 @@
 // An `absent` condition holds only on complete evidence: a helper's `gone` needs a successor observation that
 // neither shows the condition nor leaves its scope unread, or a proven closure (nredd/pi-harness#1242, #1243).
 import assert from "node:assert/strict";
-import { afterEach, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { outcomeAfterCheck } from "../src/actions.ts";
 import { desktopRoot, installFakeDesktop, lookPayload, wireButton, wireNode } from "../test/support/fake-desktop.mjs";
 
@@ -256,6 +256,86 @@ test("a proven closure keeps a helper-verified absence verified", async ({ onTes
 	assert.equal(result.details.status, "target_closed");
 	assert.equal(execution.verification.status, "verified");
 	assert.equal(execution.error, undefined);
+});
+
+test.for([
+	{
+		name: "a window of the same helper session sharing its window id",
+		left: { kind: "window", ref: "wab12-1", title: "Main" },
+		status: "target_closed",
+	},
+	{
+		name: "a window of a restarted helper with its window id",
+		left: { kind: "window", ref: "wcd34-1", title: "Main" },
+		status: "target_closed",
+	},
+	{
+		name: "another sheet of the same helper session sharing its window id",
+		left: { kind: "sheet", ref: "wab12-3", title: "Save" },
+		status: "target_closed",
+	},
+	{
+		name: "the same sheet listed by a restarted helper",
+		left: { kind: "sheet", ref: "wcd34-2", title: "Save" },
+		status: "post_action_observation_failed",
+	},
+] as const)(
+	"the closure probe of a sheet with its own native ref reads $name",
+	async ({ left, status }, { onTestFinished }) => {
+		// An older helper gave a sheet without a CG window of its own its window's id (#1287): a window carrying it is
+		// another root, before or after a helper restart; only a sheet re-identifies the saved sheet across one.
+		vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+		const sheet = desktopRoot({
+			kind: "sheet",
+			rootRef: "wab12-2",
+			windowRef: "wab12-2",
+			windowId: 100,
+			title: "Save",
+		});
+		const listed = desktopRoot({
+			kind: left.kind,
+			rootRef: left.ref,
+			windowRef: left.ref,
+			windowId: 100,
+			title: left.title,
+		});
+		const fake = await installFakeDesktop(onTestFinished, { roots: [sheet] });
+		fake.tree = [wireButton("go", "Go")];
+		const { stateId } = await fake.observe();
+		fake.actBatchResult = {
+			outcome: "worked",
+			performed: { delivery: "ax", transaction: true, actionCount: 1 },
+			steps: [{ outcome: "worked", performed: { delivery: "ax" } }],
+		};
+		fake.waitFor = async () => {
+			fake.listRootsHook = () => [listed];
+			fake.lookPayload = () => {
+				throw new Error("capture failed");
+			};
+			return { found: false, timedOut: true, incomplete: true, nodeCount: 2000 };
+		};
+		const result = await fake.call(fake.bridge.executeAct, {
+			stateId,
+			actions: [{ action: "press", ref: "@e2" }],
+			expect: { text: "Go", until: "absent", timeoutMs: 250 },
+		});
+		assert.equal(result.details.status, status);
+	},
+);
+
+test("a saved sheet never re-resolves as a restarted helper's window with its window id", async ({
+	onTestFinished,
+}) => {
+	// The saved state keeps the root's kind: after a restart only the window carries the shared legacy id (#1287).
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const sheet = desktopRoot({ kind: "sheet", rootRef: "wab12-2", windowRef: "wab12-2", windowId: 100, title: "Save" });
+	const fake = await installFakeDesktop(onTestFinished, { roots: [sheet] });
+	fake.tree = [wireButton("go", "Go")];
+	const { stateId } = await fake.observe();
+	fake.listRootsHook = () => [desktopRoot({ rootRef: "wcd34-1", windowRef: "wcd34-1", windowId: 100, title: "Main" })];
+	await expect(
+		fake.call(fake.bridge.executeAct, { stateId, actions: [{ action: "press", ref: "@e2" }] }),
+	).rejects.toThrow("The current controlled window is no longer available.");
 });
 
 test("an inventory the helper could not read completely cannot close the root", async ({ onTestFinished }) => {

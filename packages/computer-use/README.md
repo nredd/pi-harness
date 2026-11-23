@@ -489,7 +489,21 @@ text with its `execution` trace. The result is also:
   authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
   an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
-  `focused` only after one. Windows listings carry no completeness information, so an empty listing from
+  `focused` only after one. It matches a root across listings by its CG window id, or without one by
+  kind, role, title and frame. A root whose key may differ from one listing to the next is left out of
+  that comparison and makes its listing incomplete, so it never shows up as `closed` plus a new
+  `appeared` root (#1287): one whose CG pairing read its title or frame unsuccessfully (a later
+  successful read does not vouch for that pairing), and an unpaired one whose title, role, subrole,
+  position or size read failed (a sheet without its own title takes its window's, read or not). Apart
+  from that, a key two roots share is ambiguous: both are left out the same way, whether two unpaired
+  roots read alike or two roots carry one CG window id. One rule keeps the pairing heuristic itself from
+  deciding the comparison: a root claims a CG window when it scores 0 or more for it, or when its own
+  pairing read failed (an unread title or frame could score anything), and a root is keyed by its CG
+  window id only when it claims exactly one that no other root claims. Every claimant of a CG window two
+  roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
+  failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
+  stacked within a few points of each other can therefore report no `closed` or `appeared` change at
+  all. Discovery and target resolution still list every such root. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ### Ref lifecycle
@@ -1847,6 +1861,10 @@ failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
+Known gap: `truncated` does not say whether a node's own fields or only its
+descendants are unread, so an exact `ref` scope whose own `AXChildren` read keeps
+failing on macOS stays `inconclusive`, though nothing below it can hold the
+condition (#1310).
 
 Batch steps only when the second step does not need to inspect the result of the first:
 
@@ -2592,7 +2610,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use t
 
 ## Tree extraction
 
-An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors are marked `truncated` rather than presented as complete.
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
 
 The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
 
@@ -2804,13 +2822,13 @@ Discovery combines three sources:
 
 Single-window lookups call `CGWindowListCreateDescriptionFromArray(_:)` for the requested window ID first and fall back to an all-window `CGWindowListCopyWindowInfo` query when that returns no match ([Apple: `CGWindowListCreateDescriptionFromArray`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcreatedescriptionfromarray%28_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3317)).
 
-Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed.
+Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed. A failed title or frame read adds nothing to a pairing score, so it can neither pair a window nor cost it its match. A sheet carries a `windowId` only when it pairs with a CG window no window took, never its window's; and since one helper process never gives two roots one native ref, the client re-identifies a saved root by `windowId` only when the listed root's native ref is from another helper process, never in place of a different ref from the same one, and only as the same kind of root: a saved sheet never re-identifies as a window, nor a saved window as a sheet (a target restored from a session file carries no kind and keeps the `windowId` alone). `rootDelta` keys a paired root by its `windowId` and an unpaired one by kind, role, title and frame; a root whose pairing or identity reads failed, whose key another root shares, or whose CG window claim is not exclusive (it scores 0 or more for, or failed to read for, more than one CG window, or another root claims one of them), is excluded from that comparison and makes the listing incomplete, but it is not removed from discovery: it still resolves as a positive match.
 
 Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are identified by the Accessibility `AXMenu` role and Core Graphics popup-menu window level; a menu with no matching Accessibility element remains an outline-only, `pictureOnly` root ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1232), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3004)).
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first, and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
 
 When an image is requested, the helper:
 
@@ -2936,7 +2954,21 @@ Terminal `act_ui` results say the action was delivered, or say its delivery is u
   authoritative listing without `complete: true` with `inventory_incomplete` too, including a reply from
   an older external helper that has no `complete` field, and reads such a reply as partial.
   Native macOS `rootDelta` likewise reports `closed` only against a complete listing, and `appeared` or
-  `focused` only after one. Windows listings carry no completeness information, so an empty listing from
+  `focused` only after one. It matches a root across listings by its CG window id, or without one by
+  kind, role, title and frame. A root whose key may differ from one listing to the next is left out of
+  that comparison and makes its listing incomplete, so it never shows up as `closed` plus a new
+  `appeared` root (#1287): one whose CG pairing read its title or frame unsuccessfully (a later
+  successful read does not vouch for that pairing), and an unpaired one whose title, role, subrole,
+  position or size read failed (a sheet without its own title takes its window's, read or not). Apart
+  from that, a key two roots share is ambiguous: both are left out the same way, whether two unpaired
+  roots read alike or two roots carry one CG window id. One rule keeps the pairing heuristic itself from
+  deciding the comparison: a root claims a CG window when it scores 0 or more for it, or when its own
+  pairing read failed (an unread title or frame could score anything), and a root is keyed by its CG
+  window id only when it claims exactly one that no other root claims. Every claimant of a CG window two
+  roots claim is left out, e.g. two sheets of equal geometry, or a window beside one whose pairing read
+  failed, so neither the listing order nor an unread competitor can move an identity. Same-app windows
+  stacked within a few points of each other can therefore report no `closed` or `appeared` change at
+  all. Discovery and target resolution still list every such root. Windows listings carry no completeness information, so an empty listing from
   them is still read as closure.
 
 ## Ref lifecycle

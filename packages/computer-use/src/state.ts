@@ -27,6 +27,8 @@ export interface CurrentTarget {
 	windowId: number;
 	windowRef?: string;
 	nativeWindowRef?: string;
+	/** The root's kind when it was resolved: a CG window id never re-identifies a sheet as a window or back. */
+	rootKind?: string;
 }
 
 export interface CurrentCapture {
