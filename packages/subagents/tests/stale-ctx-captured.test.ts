@@ -1,8 +1,8 @@
 /** #779: a real invalidated extension context poisons a shared route, not its requesting child. */
 
 import { readFileSync } from "node:fs";
-import { createHarness, type Harness } from "@earendil-works/pi-coding-agent/testing";
 import { text, toolCalls } from "@nredd/pi-test-lib/faux";
+import { createHarness, type Harness } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it, vi } from "vitest";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
 
