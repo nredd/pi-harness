@@ -153,7 +153,8 @@ function report(head, base, ref) {
 
 const opts = parseArgs(process.argv.slice(2));
 
-if (!existsSync(join(REPO, PERF_DIR))) usage(`No ${PERF_DIR} directory here — run from the repo root.`);
+if (!existsSync(join(REPO, PERF_DIR)))
+	usage(`No ${PERF_DIR} directory here — run from the packages/subagents directory.`);
 
 const sha = git("rev-parse", "--short", opts.ref);
 let removeWorktree;
