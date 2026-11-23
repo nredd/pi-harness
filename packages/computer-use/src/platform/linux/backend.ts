@@ -188,6 +188,10 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 		const title = query.title?.trim().toLowerCase();
 		return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
 	},
+	async listRootsOfPids(pids: readonly number[], signal?: AbortSignal): Promise<PlatformRoot[]> {
+		// One request and one X11 listing for every app a filtered `find_roots` matched (#1311).
+		return pids.length === 0 ? [] : await listedRoots({ pids: pids.map(Math.trunc) }, signal);
+	},
 	emptyRootsHint: () => wslNoWindowsHint(),
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
 		const roots = await listedRoots({}, signal);

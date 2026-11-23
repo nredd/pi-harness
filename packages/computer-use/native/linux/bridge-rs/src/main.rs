@@ -440,6 +440,9 @@ async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Val
 /// [`look_root`]'s, and reported per root as `metadata.x11Pairing` with the same values: a
 /// failed, timed-out or still-stuck listing is `unavailable` for every root, never a clean
 /// check, so discovery cannot admit a class-blocked window while the X server stalls (#1311).
+/// `pid` scopes it to one process, `pids` to several in one request and one X11 listing,
+/// e.g. every app a `find_roots` filter matched: one listing per app would queue behind a
+/// stalled X server for longer than the client waits.
 async fn list_roots_with(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
@@ -447,10 +450,21 @@ async fn list_roots_with(
     windows: impl FnOnce() -> Result<Option<Vec<x11::WindowInfo>>, ProtocolError> + Send + 'static,
     enrichment: &Enrichment,
 ) -> Result<Value, ProtocolError> {
-    let mut roots = connect()
-        .await?
-        .list_roots(args.get("pid").and_then(Value::as_u64))
-        .await?;
+    let pids = match args.get("pids") {
+        Some(pids) => Some(
+            pids.as_array()
+                .filter(|pids| !pids.is_empty())
+                .and_then(|pids| pids.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
+                .ok_or_else(|| {
+                    ProtocolError::new(
+                        "listRoots pids must be a non-empty array of process IDs",
+                        ErrorCode::InvalidRequest,
+                    )
+                })?,
+        ),
+        None => args.get("pid").and_then(Value::as_u64).map(|pid| vec![pid]),
+    };
+    let mut roots = connect().await?.list_roots(pids.as_deref()).await?;
     let pairings = match bounded(enrichment, windows).await {
         Some(Ok(Some(windows))) => x11::enrich_roots(&mut roots, &windows)
             .into_iter()
@@ -3697,6 +3711,68 @@ mod tests {
                 assert_eq!(root["metadata"]["x11Pairing"], "unavailable");
                 assert_eq!(spawned.load(Ordering::SeqCst), 0);
                 drop(release);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_roots_lists_several_pids_with_one_x11_listing() {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let frame = observed_root().frame.unwrap();
+        let extents = Arc::new(Mutex::new(Some(frame)));
+        for pids in [json!([]), json!([42, "7"]), json!(42)] {
+            let error = list_roots_with(
+                &state,
+                &json!({ "pids": pids }),
+                no_bus,
+                || Ok(None),
+                enrichment(X11_ENRICHMENT.deadline),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidRequest, "{pids}");
+        }
+        with_peer(
+            |server| {
+                server
+                    .serve_at("/org/freedesktop/DBus", OwnerPid)?
+                    .serve_at("/org/a11y/atspi/accessible/root", Inventory(&["/app"]))?
+                    .serve_at("/app", Inventory(&["/window"]))?
+                    .serve_at("/window", LiveWindow)?
+                    .serve_at("/window", LiveExtents(Arc::clone(&extents)))
+            },
+            async |connection| {
+                let connect = async || {
+                    Ok(AtspiClient::from_connection(
+                        connection.clone(),
+                        Duration::from_millis(250),
+                    ))
+                };
+                let listings = Arc::new(AtomicUsize::new(0));
+                for (args, found) in [
+                    (json!({ "pids": [7, 42] }), 1),
+                    (json!({ "pids": [7, 8] }), 0),
+                    (json!({ "pid": 42 }), 1),
+                    (json!({ "pid": 7 }), 0),
+                ] {
+                    let counted = Arc::clone(&listings);
+                    let listed = list_roots_with(
+                        &state,
+                        &args,
+                        connect,
+                        move || {
+                            counted.fetch_add(1, Ordering::SeqCst);
+                            Ok(None)
+                        },
+                        enrichment(X11_ENRICHMENT.deadline),
+                    )
+                    .await
+                    .unwrap();
+                    assert_eq!(listed["roots"].as_array().unwrap().len(), found, "{args}");
+                }
+                // One X11 listing per request, however many processes it names.
+                assert_eq!(listings.load(Ordering::SeqCst), 4);
             },
         )
         .await;

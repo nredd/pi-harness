@@ -42,6 +42,10 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	const original = { ...currentPlatformBackend };
 	const cwd = makeTestTempDir("cu-linux-identity-", onTestFinished);
 	onTestFinished(() => {
+		// Drop the Linux backend's optional methods, e.g. `listRootsOfPids`, that the original backend lacks.
+		for (const key of Object.keys(currentPlatformBackend)) {
+			if (!(key in original)) delete (currentPlatformBackend as Record<string, unknown>)[key];
+		}
 		Object.assign(currentPlatformBackend, original);
 		vi.restoreAllMocks();
 		vi.unstubAllEnvs();
@@ -54,9 +58,10 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	});
 	// `lookRootClient` answers `atspiLookRoot` through a real helper client instead, e.g. over a no-reply transport.
 	// `x11Pairing` is the X11 status every `atspiLookRoot` reply reports for its root, `listX11Pairing` the one every
-	// `listRoots` reply reports for each root (#1311).
+	// `listRoots` reply reports for each root (#1311). `beforeList`, when set, runs before each `listRoots` reply.
 	const state: {
 		roots: Root[];
+		beforeList?: () => Promise<void>;
 		lookRootError?: Error;
 		lookRootClient?: Pick<typeof linuxHelper, "command">;
 		x11Pairing?: unknown;
@@ -70,8 +75,10 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	const command = vi.spyOn(linuxHelper, "command").mockImplementation(async (name, args, options) => {
 		switch (name) {
 			case "listRoots": {
-				const pid = (args as { pid?: number } | undefined)?.pid;
-				const listed = pid ? state.roots.filter((root) => root.pid === pid) : state.roots;
+				await state.beforeList?.();
+				const { pid, pids } = (args ?? {}) as { pid?: number; pids?: number[] };
+				const scope = pids ?? (pid ? [pid] : undefined);
+				const listed = scope ? state.roots.filter((root) => scope.includes(root.pid)) : state.roots;
 				const next = new Map<string, string>();
 				const roots = listed.map((root) => {
 					const rootRef = handles.get(nativeIdentity(root)) ?? `@w${++minted}`;
@@ -119,7 +126,8 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } } as Parameters<
 		typeof executeFind
 	>[4];
-	const find = async () => (await executeFind("t", {}, undefined, undefined, ctx)).details.windows;
+	const find = async (params: Parameters<typeof executeFind>[1] = {}) =>
+		(await executeFind("t", params, undefined, undefined, ctx)).details.windows;
 	const observe = async (root: string) =>
 		await executeObserve("t", { root, mode: "semantic" }, undefined, undefined, ctx);
 	const calls = (wanted: string) => command.mock.calls.filter(([name]) => name === wanted).length;
@@ -266,6 +274,56 @@ test("Linux discovery never admits a root whose X11 class evidence is missing (#
 	expect(looks()).toBe(4);
 });
 
+test("A filtered Linux find_roots lists every matched app in one request while X11 is stuck (#1311)", async ({
+	onTestFinished,
+}) => {
+	const pids = Array.from({ length: 57 }, (_, index) => 400 + index);
+	const { state, find, calls } = useLinuxRoots(
+		onTestFinished,
+		pids.map((pid) => linuxRoot(pid, "Editor", "fixture-editor")),
+	);
+	state.listX11Pairing = "unavailable";
+	// Model the helper over a stuck X server: it serves 8 requests at a time, each waits the 2 s X11 deadline for the
+	// listing slot, and the client fails a request still unanswered 15 s after it was sent (`COMMAND_TIMEOUT_MS`).
+	vi.useFakeTimers();
+	onTestFinished(() => vi.useRealTimers());
+	let workers = 8;
+	const queued: Array<() => void> = [];
+	state.beforeList = async () => {
+		let deadline: ReturnType<typeof setTimeout> | undefined;
+		const served = (async () => {
+			if (workers > 0) workers--;
+			else await new Promise<void>((resolve) => queued.push(resolve));
+			await new Promise((resolve) => setTimeout(resolve, 2_000));
+			const next = queued.shift();
+			if (next) next();
+			else workers++;
+		})();
+		const timedOut = new Promise<never>((_, reject) => {
+			deadline = setTimeout(() => reject(new Error("Helper command 'listRoots' timed out after 15000ms.")), 15_000);
+		});
+		try {
+			await Promise.race([served, timedOut]);
+		} finally {
+			clearTimeout(deadline);
+		}
+	};
+	const started = Date.now();
+	const found = find({ app: "Editor" }).then((windows) => ({ windows, elapsed: Date.now() - started }));
+	found.catch(() => {});
+	await vi.advanceTimersByTimeAsync(20_000);
+	const { windows, elapsed } = await found;
+	// `listApps`, then one request for all 57 apps: two X11 waits, not eight waves of them.
+	expect(calls("listRoots")).toBe(2);
+	expect(elapsed).toBe(4_000);
+	// `find_roots` shows its 12 best-ranked roots.
+	expect(windows).toHaveLength(12);
+	expect(
+		windows.every((root) => root.blocked && root.identityUnresolved && root.appId === undefined),
+		"every root unidentified",
+	).toBe(true);
+});
+
 test("The Linux backend lists a root without class evidence as unidentified", async ({ onTestFinished }) => {
 	onTestFinished(() => vi.restoreAllMocks());
 	const root = (x11Pairing: unknown) => ({
@@ -284,7 +342,13 @@ test("The Linux backend lists a root without class evidence as unidentified", as
 		expect((await linuxBackend.listRoots({ pid: 1 }))[0].appId, x11Pairing).toBe(appId);
 		expect((await linuxBackend.listApps())[0].appId, x11Pairing).toBe(appId);
 		expect((await linuxBackend.getFrontmost()).appId, x11Pairing).toBe(appId);
+		expect((await linuxBackend.listRootsOfPids!([1.5, 2]))[0].appId, x11Pairing).toBe(appId);
+		expect(command).toHaveBeenLastCalledWith("listRoots", { pids: [1, 2] }, { signal: undefined });
 	}
+	// No app matched: no request, and never an unscoped listing.
+	command.mockClear();
+	expect(await linuxBackend.listRootsOfPids!([])).toEqual([]);
+	expect(command).not.toHaveBeenCalled();
 });
 
 test("Linux WM_CLASS and an ambiguous exe link name can only add a block", async ({ onTestFinished }) => {

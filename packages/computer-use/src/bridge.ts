@@ -1710,7 +1710,13 @@ async function collectWindowDetails(
 	config: ReturnType<typeof getComputerUseConfig>,
 	signal?: AbortSignal,
 ): Promise<ListWindowsDetails["windows"]> {
-	const perApp = await Promise.all(apps.map(async (app) => ({ app, windows: await listWindows(app.pid, signal) })));
+	const listOfPids = currentPlatformBackend.listRootsOfPids;
+	const perApp = listOfPids
+		? await listOfPids(
+				apps.map((app) => app.pid),
+				signal,
+			).then((roots) => apps.map((app) => ({ app, windows: roots.filter((root) => root.pid === app.pid) })))
+		: await Promise.all(apps.map(async (app) => ({ app, windows: await listWindows(app.pid, signal) })));
 	return sortWindowDetails(
 		perApp.flatMap(({ app, windows }) => windows.map((window) => windowDetails(app, window, config))),
 	);
