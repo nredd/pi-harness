@@ -349,3 +349,50 @@ fn a_stalled_press_is_named_at_exit_within_the_kill_grace() {
         assert!(stderr.contains("restart Pi"), "{ending}: {stderr}");
     }
 }
+
+/// Blocking X11 work stuck on a stalled X server must not hold the Tokio workers that read
+/// signals, stdin EOF and the exit deadline (#1261).
+#[test]
+fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
+    for ending in ["TERM", "EOF"] {
+        let mut helper = Helper::spawn();
+        // The shift press stalls for 5 s, as an X11 reply that never comes would.
+        helper.send(&typing(
+            "stall",
+            "A",
+            json!({"delayMs": 5000, "announce": "stall"}),
+        ));
+        helper.ready("posting stall 0");
+        // Seven blocking observations take every other request worker; with the press,
+        // all eight are inside a blocking call, as many as the runtime has workers.
+        for n in 0..7 {
+            helper.send(&request(
+                &format!("observe-{n}"),
+                "testingStall",
+                json!({"ms": 5000}),
+            ));
+        }
+        for n in 0..7 {
+            helper.ready(&format!("stalling observe-{n}"));
+        }
+        let started = Instant::now();
+        if ending == "EOF" {
+            helper.close_stdin();
+        } else {
+            helper.signal(ending);
+        }
+        let status = helper.wait(DEADLINE);
+        let elapsed = started.elapsed();
+        let stderr = helper.stderr();
+        // Inside the client's 750 ms SIGTERM-to-SIGKILL grace, with the press named.
+        assert!(
+            elapsed < Duration::from_millis(750),
+            "{ending}: {elapsed:?}"
+        );
+        assert_eq!(status.code(), Some(3), "{ending}: {stderr}");
+        assert!(
+            stderr.contains("keycode 8 (held by a running action)"),
+            "{ending}: {stderr}"
+        );
+    }
+}

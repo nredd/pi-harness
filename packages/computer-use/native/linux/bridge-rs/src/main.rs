@@ -306,9 +306,14 @@ async fn handle_request_with(
         },
         #[cfg(feature = "testing")]
         "testingAct" => match begin_transaction(&request.id, input).await {
-            Ok(_transaction) => testing_act(&request.args),
+            Ok(_transaction) => {
+                let args = request.args.clone();
+                off_worker(move || testing_act(&args)).await
+            }
             Err(error) => Err(error),
         },
+        #[cfg(feature = "testing")]
+        "testingStall" => Ok(testing_stall(&request.id, &request.args).await),
         "atspiReadText" | "uiaReadText" | "axReadText" => {
             read_text_with(state, &request.args, async |accessible| {
                 connect().await?.read_live_text(accessible).await
@@ -328,7 +333,10 @@ async fn handle_request_with(
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
-        "focusWindow" => admit_mutation(input).and_then(|()| focus_window(state, &request.args)),
+        "focusWindow" => match admit_mutation(input) {
+            Ok(()) => focus_window(state, &request.args).await,
+            Err(error) => Err(error),
+        },
         "openBrowserLocation" => {
             admit_mutation(input).and_then(|()| open_browser_location(&request.args))
         }
@@ -346,7 +354,7 @@ async fn handle_request_with(
 async fn diagnostics() -> Value {
     let accessibility = AtspiClient::available().await;
     let session = SessionKind::detect();
-    let x11_available = x11::available();
+    let x11_available = off_worker(x11::available).await;
     let wayland_portal = if session == SessionKind::Wayland {
         let probe = match PortalClient::connect().await {
             Ok(client) => client.probe().await,
@@ -595,6 +603,34 @@ async fn bounded<T: Send + 'static>(
     in_time().then_some(value)
 }
 
+/// Run blocking X11 work (XTEST posts, capture, focus, the availability probe) on Tokio's
+/// blocking pool, never on a request worker: a stalled X server then holds blocking threads
+/// only, and the workers keep reading stdin, signals and the exit deadline, so shutdown still
+/// names a stuck press instead of waiting for the client's SIGKILL (#1261). At most
+/// `REQUEST_WORKERS` requests run, so at most that many such threads stay stuck. A panic
+/// propagates to the request as it did on the worker.
+async fn off_worker<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(value) => value,
+        Err(error) => std::panic::resume_unwind(error.into_panic()),
+    }
+}
+
+/// Stand in for blocking X11 observation stuck on a stalled X server: announce `stalling <id>`
+/// once inside the blocking call, then hold it for `args.ms`. Only in the dev-only `testing`
+/// build, so process tests can occupy every request worker without a display.
+#[cfg(feature = "testing")]
+async fn testing_stall(id: &str, args: &Value) -> Value {
+    let id = id.to_owned();
+    let stall = Duration::from_millis(args.get("ms").and_then(Value::as_u64).unwrap_or(0));
+    off_worker(move || {
+        testing_ready("stalling", &id);
+        std::thread::sleep(stall);
+    })
+    .await;
+    json!({"stalled": true})
+}
+
 async fn resolve_root(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
@@ -661,7 +697,7 @@ async fn look_with<S: SnapshotSource>(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
     connect: impl AsyncFnOnce() -> Result<S, ProtocolError>,
-    capture: impl FnOnce(u32, Option<u32>) -> Result<x11::Capture, ProtocolError>,
+    capture: impl FnOnce(u32, Option<u32>) -> Result<x11::Capture, ProtocolError> + Send + 'static,
 ) -> Result<Value, ProtocolError> {
     let started = Instant::now();
     let (root_ref, root) = resolve_root(state, args).await?;
@@ -731,7 +767,7 @@ async fn look_with<S: SnapshotSource>(
     {
         match root.x11_window {
             Some(window) => {
-                let shot = capture(window, max_dimension)?;
+                let shot = off_worker(move || capture(window, max_dimension)).await?;
                 image_size = (shot.width, shot.height);
                 Some(json!({
                     "jpegBase64": shot.png_base64, "mimeType":"image/png", "width":shot.width, "height":shot.height,
@@ -779,7 +815,10 @@ async fn look_with<S: SnapshotSource>(
     Ok(response)
 }
 
-fn focus_window(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
+async fn focus_window(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+) -> Result<Value, ProtocolError> {
     let reference = args
         .get("rootRef")
         .or_else(|| args.get("windowRef"))
@@ -798,7 +837,7 @@ fn focus_window(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, 
     let window = root
         .x11_window
         .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
-    x11::focus_window(window, policy)
+    off_worker(move || x11::focus_window(window, policy)).await
 }
 
 fn open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
@@ -923,18 +962,17 @@ async fn act(
             let owning_window = record.root.x11_window.ok_or_else(|| {
                 capability("Observed root is not correlated with an owning X11 window")
             })?;
-            return physical(
-                action,
-                &params,
-                policy,
-                owning_window,
-                (bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-                ActionGeometry {
-                    frame,
-                    image_width: record.image_width,
-                    image_height: record.image_height,
-                },
-            );
+            let action = action.to_owned();
+            let center = (bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+            let geometry = ActionGeometry {
+                frame,
+                image_width: record.image_width,
+                image_height: record.image_height,
+            };
+            return off_worker(move || {
+                physical(&action, &params, policy, owning_window, center, geometry)
+            })
+            .await;
         }
     };
     let owning_window = record
@@ -947,20 +985,14 @@ async fn act(
             ErrorCode::CoordinateUnavailableForRoot,
         )
     })?;
-    let (screen_x, screen_y) =
-        image_point_to_screen(&frame, record.image_width, record.image_height, x, y)?;
-    physical(
-        action,
-        &params,
-        policy,
-        owning_window,
-        (screen_x, screen_y),
-        ActionGeometry {
-            frame,
-            image_width: record.image_width,
-            image_height: record.image_height,
-        },
-    )
+    let point = image_point_to_screen(&frame, record.image_width, record.image_height, x, y)?;
+    let action = action.to_owned();
+    let geometry = ActionGeometry {
+        frame,
+        image_width: record.image_width,
+        image_height: record.image_height,
+    };
+    off_worker(move || physical(&action, &params, policy, owning_window, point, geometry)).await
 }
 
 #[derive(Debug, Clone)]
@@ -1632,6 +1664,78 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+
+    thread_local! {
+        /// Set on a test's own thread, which runs its request futures: blocking X11 work
+        /// that finds it set ran on the request's thread instead of the blocking pool.
+        static ON_REQUEST_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn assert_off_request_thread(what: &str) {
+        assert!(
+            !ON_REQUEST_THREAD.with(std::cell::Cell::get),
+            "{what} ran on the request thread"
+        );
+    }
+
+    #[tokio::test]
+    async fn blocking_x11_work_runs_off_the_request_thread() {
+        ON_REQUEST_THREAD.with(|flag| flag.set(true));
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        lock(&state).unwrap().replace_roots(vec![observed_root()]);
+        let mut button = node();
+        button.bounds = Some(Rect {
+            x: 120,
+            y: 70,
+            width: 40,
+            height: 20,
+        });
+        let look = look_with(
+            &state,
+            &json!({"pid":42,"maxNodes":9000,"maxDepth":0}),
+            async || {
+                Ok(SnapshotFixture {
+                    path: "/window",
+                    limits: (4096, 1),
+                    nodes: vec![button],
+                })
+            },
+            |_, _| {
+                assert_off_request_thread("capture");
+                Ok(x11::Capture {
+                    png_base64: "fixture".into(),
+                    width: 100,
+                    height: 50,
+                    source: "get_image",
+                    warnings: Vec::new(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        let look_id = look["lookId"].as_str().unwrap().to_owned();
+        let element = look["outline"]["ref"].clone();
+        with_peer(Ok, async |connection| {
+            // A coordinate target, and an element whose semantic press finds no Action
+            // interface on the peer, so it falls back to the element centre.
+            for target in [json!({"x":1,"y":1}), json!({"ref": element})] {
+                let args = json!({"lookId":look_id,"action":"press","target":target,"policy":"foreground"});
+                let reply = act(
+                    &state,
+                    &args,
+                    async || Ok(AtspiClient::from_connection(connection.clone(), Duration::from_secs(2))),
+                    |_, _, _, _, _, _| {
+                        assert_off_request_thread("physical delivery");
+                        Ok(json!({"outcome":"worked"}))
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(reply["outcome"], "worked", "{args}");
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -3900,8 +4004,9 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::ForegroundRequired, "{args}");
         }
-        let error =
-            focus_window(&state, &json!({"rootRef":"@w999","policy":"ax_only"})).unwrap_err();
+        let error = focus_window(&state, &json!({"rootRef":"@w999","policy":"ax_only"}))
+            .await
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::ForegroundRequired);
         // Batch steps take the same path.
         let steps = physical_only

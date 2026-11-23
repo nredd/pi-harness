@@ -31,6 +31,10 @@ const PASSWORD_TEXT_ROLE: u32 = 40;
 const PROTECTED_LABEL: &str = "[protected]";
 const MAX_ATSPI_ACTIONS: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+/// How many applications one `list_roots` reads at a time. Serial reads of a batched
+/// inventory add up past the client's 15 s deadline (#1320); this many overlap them
+/// without flooding the accessibility bus.
+const LIST_ROOTS_CONCURRENCY: usize = 4;
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
 pub const TEXT: &str = "org.a11y.atspi.Text";
 /// The procfs mount that attributes an accessibility bus PID to its executable.
@@ -361,6 +365,10 @@ impl AtspiClient {
     /// Every application's roots, or only those of the processes `filter_pids` names: a
     /// PID-scoped inventory (`Some`, even of several PIDs) fails rather than skip an app it
     /// timed out reading, since it would prove absence.
+    ///
+    /// Applications are read [`LIST_ROOTS_CONCURRENCY`] at a time, each on its own task, and
+    /// every read finishes before the result: roots keep the registry's application order, and
+    /// a failure is the first failed application's in that order, whatever finished first.
     pub async fn list_roots(
         &self,
         filter_pids: Option<&[u64]>,
@@ -370,63 +378,103 @@ impl AtspiClient {
             path: REGISTRY_ROOT.to_owned(),
         };
         let applications = self.children(&registry).await?;
-        let mut roots = Vec::new();
-        for app in applications {
-            // A PID-scoped inventory proves absence, so an app it could not read must fail it.
-            let (pid, executable) =
-                scoped_inventory(filter_pids, self.bus_owner(&app).await, (0, None))?;
-            if filter_pids.is_some_and(|wanted| !wanted.contains(&pid)) {
-                continue;
+        let filter: Option<Arc<[u64]>> = filter_pids.map(Arc::from);
+        let mut results: Vec<Option<Result<Vec<RootSnapshot>, ProtocolError>>> =
+            std::iter::repeat_with(|| None)
+                .take(applications.len())
+                .collect();
+        let mut pending = applications.into_iter().enumerate();
+        let mut reads = tokio::task::JoinSet::new();
+        loop {
+            while reads.len() < LIST_ROOTS_CONCURRENCY {
+                let Some((index, app)) = pending.next() else {
+                    break;
+                };
+                let client = self.clone();
+                let filter = filter.clone();
+                reads.spawn(async move { (index, client.app_roots(app, filter.as_deref()).await) });
             }
-            let app_name = self
-                .checked_metadata(&app, async || {
-                    self.string_property(&app, "Name").await.unwrap_or_default()
+            let Some(read) = reads.join_next().await else {
+                break;
+            };
+            // A read that panicked returns nothing, so no inventory may stand without it.
+            let (index, result) = read.map_err(|_| {
+                ProtocolError::new(
+                    "An AT-SPI2 application read stopped unexpectedly",
+                    ErrorCode::InternalError,
+                )
+            })?;
+            results[index] = Some(result);
+        }
+        let mut roots = Vec::new();
+        for result in results.into_iter().flatten() {
+            roots.extend(result?);
+        }
+        Ok(roots)
+    }
+
+    /// The roots of one registry application `app`, or none when `filter_pids` excludes its
+    /// owner; an error only when a PID-scoped inventory could not read it.
+    async fn app_roots(
+        &self,
+        app: AccessibleRef,
+        filter_pids: Option<&[u64]>,
+    ) -> Result<Vec<RootSnapshot>, ProtocolError> {
+        // A PID-scoped inventory proves absence, so an app it could not read must fail it.
+        let (pid, executable) =
+            scoped_inventory(filter_pids, self.bus_owner(&app).await, (0, None))?;
+        if filter_pids.is_some_and(|wanted| !wanted.contains(&pid)) {
+            return Ok(Vec::new());
+        }
+        let app_name = self
+            .checked_metadata(&app, async || {
+                self.string_property(&app, "Name").await.unwrap_or_default()
+            })
+            .await
+            .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
+        let windows = scoped_inventory(filter_pids, self.children(&app).await, Vec::new())?;
+        let mut roots = Vec::new();
+        for window in windows {
+            // A window on another connection belongs to a process this entry's owner does
+            // not vouch for: it never inherits that identity, so it is unidentified.
+            let executable = executable
+                .clone()
+                .filter(|_| window.destination == app.destination);
+            let (role, name) = self
+                .checked_metadata(&window, async || {
+                    (
+                        self.role_name(&window).await.unwrap_or_default(),
+                        self.string_property(&window, "Name")
+                            .await
+                            .unwrap_or_default(),
+                    )
                 })
                 .await
-                .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
-            let windows = scoped_inventory(filter_pids, self.children(&app).await, Vec::new())?;
-            for window in windows {
-                // A window on another connection belongs to a process this entry's owner does
-                // not vouch for: it never inherits that identity, so it is unidentified.
-                let executable = executable
-                    .clone()
-                    .filter(|_| window.destination == app.destination);
-                let (role, name) = self
-                    .checked_metadata(&window, async || {
-                        (
-                            self.role_name(&window).await.unwrap_or_default(),
-                            self.string_property(&window, "Name")
-                                .await
-                                .unwrap_or_default(),
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|access| {
-                        (
-                            access.protected_name().to_owned(),
-                            PROTECTED_LABEL.to_owned(),
-                        )
-                    });
-                roots.push(RootSnapshot {
-                    frame: self.bounds(&window).await,
-                    accessible: window,
-                    pid,
-                    name: if name.is_empty() {
-                        app_name.clone()
-                    } else {
-                        name
-                    },
-                    app_name: app_name.clone(),
-                    executable,
-                    wm_class: None,
-                    class_candidates: Vec::new(),
-                    role,
-                    x11_window: None,
-                    is_focused: false,
-                    is_minimized: false,
-                    z_order: None,
+                .unwrap_or_else(|access| {
+                    (
+                        access.protected_name().to_owned(),
+                        PROTECTED_LABEL.to_owned(),
+                    )
                 });
-            }
+            roots.push(RootSnapshot {
+                frame: self.bounds(&window).await,
+                accessible: window,
+                pid,
+                name: if name.is_empty() {
+                    app_name.clone()
+                } else {
+                    name
+                },
+                app_name: app_name.clone(),
+                executable,
+                wm_class: None,
+                class_candidates: Vec::new(),
+                role,
+                x11_window: None,
+                is_focused: false,
+                is_minimized: false,
+                z_order: None,
+            });
         }
         Ok(roots)
     }
@@ -1653,6 +1701,204 @@ mod tests {
             )
             .await;
         }
+    }
+
+    /// Window paths of the gated applications, one per application.
+    const GATED_WINDOWS: [&str; 8] = [
+        "/app0/window",
+        "/app1/window",
+        "/app2/window",
+        "/app3/window",
+        "/app4/window",
+        "/app5/window",
+        "/app6/window",
+        "/app7/window",
+    ];
+
+    /// Holds each application `GetChildren` read until its whole wave of `wave` reads has
+    /// arrived (the last wave is whatever is left of `total`), as providers too slow to read
+    /// serially would: only reads overlapped `wave` at a time ever get a reply.
+    struct ReadGate {
+        wave: usize,
+        total: usize,
+        arrived: tokio::sync::watch::Sender<usize>,
+    }
+
+    impl ReadGate {
+        fn new(wave: usize, total: usize) -> Arc<Self> {
+            Arc::new(Self {
+                wave,
+                total,
+                arrived: tokio::sync::watch::Sender::new(0),
+            })
+        }
+
+        async fn pass(&self) {
+            let mut arrival = 0;
+            self.arrived.send_modify(|arrived| {
+                arrival = *arrived;
+                *arrived += 1;
+            });
+            let released = ((arrival / self.wave + 1) * self.wave).min(self.total);
+            let _ = self
+                .arrived
+                .subscribe()
+                .wait_for(|&arrived| arrived >= released)
+                .await;
+        }
+    }
+
+    /// An application whose window inventory replies only through a shared [`ReadGate`].
+    struct GatedApplication {
+        window: &'static str,
+        gate: Arc<ReadGate>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl GatedApplication {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Gated"
+        }
+
+        fn get_role(&self) -> u32 {
+            75
+        }
+
+        async fn get_children(&self) -> Vec<(String, OwnedObjectPath)> {
+            self.gate.pass().await;
+            vec![(
+                ":1.42".to_owned(),
+                OwnedObjectPath::try_from(self.window).unwrap(),
+            )]
+        }
+    }
+
+    /// List the roots of eight gated applications, read through [`ReadGate`]s of `wave`.
+    async fn list_gated_roots(
+        wave: usize,
+        request_timeout: Duration,
+    ) -> Result<Vec<RootSnapshot>, ProtocolError> {
+        const APPS: [(&str, &str); 8] = [
+            (":1.42", "/app0"),
+            (":1.42", "/app1"),
+            (":1.42", "/app2"),
+            (":1.42", "/app3"),
+            (":1.42", "/app4"),
+            (":1.42", "/app5"),
+            (":1.42", "/app6"),
+            (":1.42", "/app7"),
+        ];
+        let gate = ReadGate::new(wave, APPS.len());
+        with_peer(
+            |server| {
+                let mut server = server.serve_at(FIXTURE_DBUS_ROOT, MockBus)?.serve_at(
+                    FIXTURE_REGISTRY_ROOT,
+                    TreeNode {
+                        name: "Registry",
+                        role: "desktop",
+                        children: &APPS,
+                        has_text: false,
+                    },
+                )?;
+                for ((_, app), window) in APPS.into_iter().zip(GATED_WINDOWS) {
+                    server = server
+                        .serve_at(
+                            app,
+                            GatedApplication {
+                                window,
+                                gate: Arc::clone(&gate),
+                            },
+                        )?
+                        .serve_at(
+                            window,
+                            TreeNode {
+                                name: window,
+                                role: "frame",
+                                children: &[],
+                                has_text: false,
+                            },
+                        )?;
+                }
+                Ok(server)
+            },
+            async |connection| {
+                AtspiClient::from_connection(connection, request_timeout)
+                    .list_roots(Some(&[25361]))
+                    .await
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn batched_list_roots_bounds_serial_provider_latency() {
+        // Reads overlapped up to the bound all reply, and roots keep registry order. Serial
+        // reads never pass the gate: the first one times out and fails the PID-scoped inventory.
+        let roots = list_gated_roots(LIST_ROOTS_CONCURRENCY, REQUEST_TIMEOUT)
+            .await
+            .unwrap();
+        assert_eq!(
+            roots
+                .iter()
+                .map(|root| root.accessible.path.as_str())
+                .collect::<Vec<_>>(),
+            GATED_WINDOWS
+        );
+        // No more than the bound is ever in flight: a wave one larger never fills, so its
+        // reads time out and the scoped inventory fails rather than skip them.
+        let error = list_gated_roots(LIST_ROOTS_CONCURRENCY + 1, STALLED_REQUEST_TIMEOUT)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Timeout);
+        assert_eq!(error.message, "AT-SPI2 GetChildren timed out");
+    }
+
+    /// A bus that attributes `:1.40` and stalls the PID lookup of any other connection.
+    struct PartlyStalledBus(StalledReply);
+
+    #[zbus::interface(name = "org.freedesktop.DBus")]
+    impl PartlyStalledBus {
+        #[zbus(name = "GetConnectionUnixProcessID")]
+        async fn get_connection_unix_process_id(&self, name: &str) -> u32 {
+            if name == ":1.40" {
+                return 25361;
+            }
+            self.0.wait().await
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_list_roots_reports_the_first_failed_app_in_registry_order() {
+        let (owner_stall, _owner_requests) = StalledReply::new();
+        let (children_stall, _children_requests) = StalledReply::new();
+        with_peer(
+            |server| {
+                server
+                    .serve_at(
+                        FIXTURE_REGISTRY_ROOT,
+                        TreeNode {
+                            name: "Registry",
+                            role: "desktop",
+                            children: &[(":1.40", "/app0"), (":1.41", "/app1")],
+                            has_text: false,
+                        },
+                    )?
+                    .serve_at(FIXTURE_DBUS_ROOT, PartlyStalledBus(owner_stall))?
+                    .serve_at("/app0", StalledApplication(children_stall))
+            },
+            async |connection| {
+                // The second app's owner lookup times out first, yet the first app, whose
+                // window read times out after its own owner and name reads, is reported.
+                let error = AtspiClient::from_connection(connection, STALLED_REQUEST_TIMEOUT)
+                    .list_roots(Some(&[25361]))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code, ErrorCode::Timeout);
+                assert_eq!(error.message, "AT-SPI2 GetChildren timed out");
+            },
+        )
+        .await;
     }
 
     struct StalledAction(StalledReply);
