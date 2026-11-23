@@ -104,6 +104,11 @@ make help                    # every target
   `toStrictEqual`, `objectContaining`, `arrayContaining`, `toHaveProperty` and `node:assert`'s
   `rejects`/`throws` validation objects are deliberately NOT banned: the first five compare a
   `RegExp` by equality and fail on a matching string (never vacuous), the last two match the regex.
+  A name or shorthand property in the expected value is followed into its initializer when the file
+  binds that name exactly once, as a plain `const` directly in the file or a block whose scope contains
+  the use (#1302), e.g. `const re = /x/; expect(a).toMatchObject({ message: re })`. `let`/`var`/`using`,
+  destructuring, any second binding of the name, case-clause or namespace scopes, helper calls,
+  `new RegExp(...)` and imports are not followed.
   The scan uses the `tsgo` parser on the same owned JS/TS test sources as the temp directory check,
   recognizes `.toMatchObject(...)` and `["toMatchObject"](...)` calls, follows object and array
   literals (spreads, parentheses, `as`, `satisfies`, conditional branches) inside the call, and

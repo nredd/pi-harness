@@ -59,9 +59,14 @@ async function scan(source: string, name = "a.test.ts"): Promise<string[]> {
 	);
 }
 
+/** A regex the guard cannot see through: it does not follow helper calls. */
+function regex(): RegExp {
+	return /x/;
+}
+
 test("premise: Vitest toMatchObject ignores a RegExp value, stringMatching and toEqual do not", () => {
-	// Built at runtime so this file passes its own guard.
-	const bare = /x/;
+	// Reached through a call, which the syntactic guard does not follow, so this file passes its own guard.
+	const bare = regex();
 	expect({ message: "zzz" }).toMatchObject({ message: bare });
 	expect({ list: [{ message: "zzz" }] }).toMatchObject({ list: [{ message: bare }] });
 	expect({ message: /y/ }).toMatchObject({ message: bare });
@@ -122,6 +127,51 @@ test("allows matchers that really check a regex, and regexes outside toMatchObje
 		"toMatchObject({ message: /k/ });",
 		"await assert.rejects(run, { code: 'x', message: /l/ });",
 		"const regex = { message: /m/ };",
+	].join("\n");
+	expect(await scan(source)).toEqual([]);
+});
+
+test("follows a uniquely bound local const in the same or an enclosing scope (#1302)", async () => {
+	const source = [
+		"const re = /a/;",
+		"expect(x).toMatchObject({ message: re });",
+		"const expected = { message: /b/ } as const;",
+		"expect(x).toMatchObject(expected);",
+		"const message = /c/;",
+		"expect(x).toMatchObject({ message });",
+		"const inner = /d/, outer = { list: [inner] };",
+		"test('t', () => {",
+		"\texpect(x).toMatchObject(outer);",
+		"\t{ const local = { m: /e/ }; expect(x).toMatchObject({ ...local }); }",
+		"});",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:12: bare /a/ in toMatchObject via `re` at 2:36",
+		"a.test.ts:3:29: bare /b/ in toMatchObject via `expected` at 4:25",
+		"a.test.ts:5:17: bare /c/ in toMatchObject via `message` at 6:27",
+		"a.test.ts:7:15: bare /d/ in toMatchObject via `outer` at 9:26",
+		"a.test.ts:10:23: bare /e/ in toMatchObject via `local` at 10:59",
+	]);
+});
+
+test("leaves a name alone unless one const binding in scope holds it (#1302)", async () => {
+	const source = [
+		"let mutable = /a/;",
+		"var hoisted = /b/;",
+		"using disposable = /c/;",
+		"const shadowed = /d/;",
+		"function f(shadowed) { expect(x).toMatchObject({ m: shadowed }); }",
+		"const blocked = /e/;",
+		"{ const blocked = 'e'; expect(x).toMatchObject({ m: blocked }); }",
+		"{ const hidden = /f/; }",
+		"const { picked } = { picked: /g/ };",
+		"const loop = { m: loop }, ping = pong, pong = ping;",
+		"const spread = /h/;",
+		"switch (k) { case 1: const cased = /i/; expect(x).toMatchObject({ m: cased }); }",
+		"declare const ambient: RegExp;",
+		"expect(x).toMatchObject({ mutable, hoisted, disposable, hidden, picked, ambient, imported, global });",
+		"expect(x).toMatchObject({ loop, ping, ...spread });",
+		'import { imported } from "./other";',
 	].join("\n");
 	expect(await scan(source)).toEqual([]);
 });

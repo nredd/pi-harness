@@ -11,7 +11,13 @@
  * literals (and parentheses, `as`, `satisfies`, spreads and both conditional branches) inside each
  * argument, and stops at any other expression. A regex spread into an object (`{ ...(/x/) }`) adds no
  * keys, so it is not an expected value. Calls are recognized as `.toMatchObject(...)` or
- * `["toMatchObject"](...)`. A regex reached through a variable, a helper call or `new RegExp(...)` is not seen.
+ * `["toMatchObject"](...)`.
+ *
+ * A name (or shorthand property) is followed into its initializer only under ONE conservative rule (#1302):
+ * the file binds that name exactly once, as a plain `const name = ...` statement directly in the file or
+ * a block, and that scope contains the use. Anything else (`let`, `var`, `using`, destructuring, a
+ * second binding anywhere that could shadow it, a case clause or namespace scope, a free global) is not
+ * followed. A regex reached through a helper call, `new RegExp(...)` or another module is not seen.
  *
  * CLI: `node scripts/check-test-matchers.ts` checks every owned JS/TS test source and exits 1 on findings.
  */
@@ -19,22 +25,42 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Expression, Node, SourceFile } from "typescript/unstable/ast";
+import type { Expression, Identifier, Node, SourceFile } from "typescript/unstable/ast";
+import { NodeFlags } from "typescript/unstable/ast";
 import {
 	isArrayLiteralExpression,
 	isAsExpression,
+	isBindingElement,
+	isBlock,
 	isCallExpression,
+	isClassDeclaration,
+	isClassExpression,
 	isConditionalExpression,
 	isElementAccessExpression,
+	isEnumDeclaration,
+	isFunctionDeclaration,
+	isFunctionExpression,
+	isIdentifier,
+	isImportClause,
+	isImportEqualsDeclaration,
+	isImportSpecifier,
+	isModuleDeclaration,
+	isNamespaceImport,
 	isObjectLiteralExpression,
+	isParameterDeclaration,
 	isParenthesizedExpression,
 	isPropertyAccessExpression,
 	isPropertyAssignment,
 	isRegularExpressionLiteral,
 	isSatisfiesExpression,
+	isShorthandPropertyAssignment,
+	isSourceFile,
 	isSpreadAssignment,
 	isSpreadElement,
 	isStringLiteral,
+	isVariableDeclaration,
+	isVariableDeclarationList,
+	isVariableStatement,
 } from "typescript/unstable/ast/is";
 import { API } from "typescript/unstable/async";
 import { listOwnedTestSources } from "./check-test-tempdirs.mjs";
@@ -53,32 +79,106 @@ const PARSE_ONLY_OPTIONS = {
 	module: "esnext",
 };
 
+/** Declarations whose identifier `name` binds a value or namespace in some scope of the file. */
+const BINDS = [
+	isVariableDeclaration,
+	isParameterDeclaration,
+	isBindingElement,
+	isFunctionDeclaration,
+	isFunctionExpression,
+	isClassDeclaration,
+	isClassExpression,
+	isImportClause,
+	isImportSpecifier,
+	isNamespaceImport,
+	isImportEqualsDeclaration,
+	isEnumDeclaration,
+	isModuleDeclaration,
+];
+
+/** Count every identifier the file binds, by name, wherever it is bound. */
+function bindingsByName(file: SourceFile): Map<string, Node[]> {
+	const bindings = new Map<string, Node[]>();
+	function visit(node: Node): void {
+		const bound = BINDS.some((binds) => binds(node)) ? (node as Node & { name?: Node }).name : undefined;
+		if (bound !== undefined && isIdentifier(bound)) {
+			const existing = bindings.get(bound.text);
+			if (existing) existing.push(node);
+			else bindings.set(bound.text, [node]);
+		}
+		node.forEachChild(visit);
+	}
+	visit(file);
+	return bindings;
+}
+
 /** Report every bare regex literal reachable through literals in the arguments of a `toMatchObject` call. */
 export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 	const problems: string[] = [];
+	let bindings: Map<string, Node[]> | undefined;
+	/** Declarations being followed right now, so a self-referencing initializer cannot loop. */
+	const following = new Set<Node>();
 
-	/** Walk `node`; `stored` is false for an object spread operand, whose own regex contributes no keys. */
-	function expected(node: Expression, stored = true): void {
+	function at(node: Node): string {
+		const { line, character } = file.getLineAndCharacterOfPosition(node.getStart(file));
+		return `${line + 1}:${character + 1}`;
+	}
+
+	/** The initializer of the single plain `const` binding `use` names, when its scope contains `use`. */
+	function constInitializer(use: Identifier): { declaration: Node; initializer: Expression } | undefined {
+		bindings ??= bindingsByName(file);
+		const [declaration, ...others] = bindings.get(use.text) ?? [];
+		if (declaration === undefined || others.length > 0 || !isVariableDeclaration(declaration)) return undefined;
+		const list = declaration.parent;
+		const statement = list.parent;
+		const scope = statement.parent;
+		if (
+			declaration.initializer === undefined ||
+			!isVariableDeclarationList(list) ||
+			(list.flags & (NodeFlags.Let | NodeFlags.Const | NodeFlags.Using)) !== NodeFlags.Const ||
+			!isVariableStatement(statement) ||
+			!(isSourceFile(scope) || isBlock(scope)) ||
+			use.pos < scope.pos ||
+			use.end > scope.end
+		) {
+			return undefined;
+		}
+		return { declaration, initializer: declaration.initializer };
+	}
+
+	/**
+	 * Walk `node`; `stored` is false for an object spread operand, whose own regex contributes no keys.
+	 * `via` is the outermost name followed from the matcher argument, reported with the regex.
+	 */
+	function expected(node: Expression, stored = true, via?: Identifier): void {
 		if (isRegularExpressionLiteral(node)) {
 			if (!stored) return;
-			const { line, character } = file.getLineAndCharacterOfPosition(node.getStart(file));
-			problems.push(`${name}:${line + 1}:${character + 1}: bare ${node.text} in ${MATCHER} ${FIX}`);
+			const route = via ? ` via \`${via.text}\` at ${at(via)}` : "";
+			problems.push(`${name}:${at(node)}: bare ${node.text} in ${MATCHER}${route} ${FIX}`);
+		} else if (isIdentifier(node)) {
+			const resolved = constInitializer(node);
+			if (resolved === undefined || following.has(resolved.declaration)) return;
+			following.add(resolved.declaration);
+			expected(resolved.initializer, stored, via ?? node);
+			following.delete(resolved.declaration);
 		} else if (
 			isParenthesizedExpression(node) ||
 			isAsExpression(node) ||
 			isSatisfiesExpression(node) ||
 			isSpreadElement(node)
 		) {
-			expected(node.expression, stored);
+			expected(node.expression, stored, via);
 		} else if (isConditionalExpression(node)) {
-			expected(node.whenTrue, stored);
-			expected(node.whenFalse, stored);
+			expected(node.whenTrue, stored, via);
+			expected(node.whenFalse, stored, via);
 		} else if (isArrayLiteralExpression(node)) {
-			for (const element of node.elements) expected(element);
+			for (const element of node.elements) expected(element, true, via);
 		} else if (isObjectLiteralExpression(node)) {
 			for (const property of node.properties) {
-				if (isPropertyAssignment(property)) expected(property.initializer);
-				else if (isSpreadAssignment(property)) expected(property.expression, false);
+				if (isPropertyAssignment(property)) expected(property.initializer, true, via);
+				// The grammar only allows an identifier as a shorthand property name.
+				else if (isShorthandPropertyAssignment(property)) expected(property.name as Identifier, true, via);
+				else if (isSpreadAssignment(property)) expected(property.expression, false, via);
 			}
 		}
 	}
