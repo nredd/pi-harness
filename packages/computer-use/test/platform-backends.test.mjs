@@ -21,7 +21,7 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 	runProcess: vi.fn(),
 }));
 vi.mock("../src/platform/linux/helper.ts", () => ({
-	LINUX_HELPER_PROTOCOL_VERSION: 6,
+	LINUX_HELPER_PROTOCOL_VERSION: 7,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
 }));
@@ -43,6 +43,8 @@ const diagnostics = (over = {}) => ({
 	accessibility: true,
 	...over,
 });
+/** The Linux helper speaks its own protocol version (#1300). */
+const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 7, ...over });
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -661,21 +663,21 @@ describe("Linux backend", () => {
 	});
 
 	test("ensureReady validates protocol, architecture and accessibility", async () => {
-		fakes.linux.command.mockResolvedValue(diagnostics());
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics());
 		const state = await backend.ensureReady({}, { lastPermissionCheckAt: 0, keep: 1 }, signal);
 		assert.equal(state.keep, 1);
 		assert.ok(state.lastPermissionCheckAt > 0);
 		assert.deepEqual(lastCall(fakes.linux), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
 		// A v4 helper neither records owed releases across restarts nor rechecks the drag start, so it must not pass readiness.
-		fakes.linux.command.mockResolvedValue(diagnostics({ protocolVersion: 4 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 6, got 4/);
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ protocolVersion: 4 }));
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 7, got 4/);
 		fakes.linux.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
-		fakes.linux.command.mockResolvedValue(diagnostics({ invariants: [] }));
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ invariants: [] }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Linux helper does not satisfy/);
-		fakes.linux.command.mockResolvedValue(diagnostics({ accessibility: false }));
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: false }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /AT-SPI/);
-		fakes.linux.command.mockResolvedValue(diagnostics({ accessibility: undefined }));
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: undefined }));
 		await backend.ensureReady({}, { lastPermissionCheckAt: 0 });
 	});
 

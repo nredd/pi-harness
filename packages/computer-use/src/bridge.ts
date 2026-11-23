@@ -406,6 +406,8 @@ interface WindowRefRecord {
 	windowTitle: string;
 	windowId?: number;
 	nativeWindowRef?: string;
+	/** See `CurrentTarget.rootKind`. */
+	rootKind?: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
 	isMinimized: boolean;
@@ -920,6 +922,7 @@ function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): Windo
 		windowTitle: window.title || "(untitled)",
 		windowId: window.windowId,
 		nativeWindowRef: window.windowRef,
+		rootKind: window.kind,
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -973,6 +976,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 		windowTitle: window.title || "(untitled)",
 		windowId: typeof window.windowId === "number" ? window.windowId : 0,
 		nativeWindowRef: window.windowRef,
+		rootKind: window.kind,
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -1009,6 +1013,7 @@ function setCurrentTarget(target: ResolvedTarget): void {
 		windowId: target.windowId,
 		windowRef: target.windowRef,
 		nativeWindowRef: target.nativeWindowRef,
+		rootKind: target.rootKind,
 	};
 }
 
@@ -1019,13 +1024,11 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 /**
  * A Windows root is bound to its original owner and window instance, not a matching title or HWND: the
  * helper issues a new native ref for a same-HWND replacement, so the saved ref must still be listed.
- * A Linux text read binds the same way to the exact AT-SPI root that owns the look (#1180).
  */
 async function resolveExactRoot(
 	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
 	signal?: AbortSignal,
 ): Promise<ResolvedTarget> {
-	const platform = currentPlatformBackend.name === "windows" ? "Windows" : "Linux";
 	const windows = await listWindows(saved.pid, signal);
 	const match = windows.find(
 		(window) =>
@@ -1037,7 +1040,7 @@ async function resolveExactRoot(
 	if (!match)
 		throw new ComputerUseError(
 			"root_stale",
-			`Saved ${platform} root is no longer available for its original owner and window instance. Rediscover it with find_roots.`,
+			"Saved Windows root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
 		);
 	if (match.instanceUnavailable)
 		throw new ComputerUseError(
@@ -1048,13 +1051,57 @@ async function resolveExactRoot(
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
 		throw new ComputerUseError(
 			"app_blocked",
-			`${platform} root owner identity changed. Rediscover it with find_roots and observe it again.`,
+			"Windows root owner identity changed. Rediscover it with find_roots and observe it again.",
 		);
 	}
 	const target = toResolvedTarget(saved, match);
 	setCurrentTarget(target);
 	return target;
 }
+
+/**
+ * A Linux text read binds to the AT-SPI root (bus name and object path) its look retains, not to the `@w`
+ * inventory handle a later PID-scoped listing reissues (#1300), and never to its X11 window: the read is
+ * AT-SPI only. The helper reads the registry and that root's own application only; a lookup that could not
+ * finish is `inventory_incomplete`, never absence. Live identity and policy are checked as for any root. X11
+ * `WM_CLASS` can only add a block, so a root without class aliases passes policy only when its `x11Pairing` proves
+ * the X11 check ran (`LINUX_X11_CHECKED`) or no X display exists (`absent`); a failed, timed-out or skipped listing
+ * (`unavailable`), or any other status, is `inventory_incomplete`.
+ */
+async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise<CurrentTarget> {
+	const current = operationState().currentTarget!;
+	assertAppNotBlocked(current);
+	const live = await currentPlatformBackend.lookRoot!(lookId, { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(
+		(error: unknown) => {
+			if ((error as { code?: unknown } | undefined)?.code !== "timeout") throw error;
+			throw new ComputerUseError(
+				"inventory_incomplete",
+				`Saved Linux root could not be verified: ${(error as Error).message}. It may still be open; retry read_text, or observe_ui it again.`,
+			);
+		},
+	);
+	if (!live || live.pid !== current.pid)
+		throw new ComputerUseError(
+			"root_stale",
+			"Saved Linux root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
+		);
+	assertAppNotBlocked({ appName: current.appName, appId: live.appId, blockAliases: live.blockAliases });
+	if (live.appId!.toLowerCase() !== current.appId!.toLowerCase())
+		throw new ComputerUseError(
+			"app_blocked",
+			"Linux root owner identity changed. Rediscover it with find_roots and observe it again.",
+		);
+	const x11Pairing = live.metadata?.x11Pairing;
+	if (!LINUX_X11_CHECKED.has(x11Pairing))
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Saved Linux root's X11 class evidence could not be read (x11Pairing: ${String(x11Pairing)}), so blocked_apps cannot be checked. It may still be open; retry read_text, or observe_ui it again.`,
+		);
+	return current;
+}
+
+/** `atspiLookRoot` X11 statuses under which a root's class aliases are complete: see `revalidateLookRoot`. */
+const LINUX_X11_CHECKED = new Set<unknown>(["paired", "ambiguous", "unpaired", "absent"]);
 
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {
@@ -1074,7 +1121,7 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 	// A partial listing admits the ref only by its verified identity: a same-title window is another root.
 	const partial = windows.complete === false;
 	const match =
-		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
+		windows.find((window) => windowIdIdentifies(fromRef, window)) ??
 		(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
 		(partial
 			? undefined
@@ -1095,18 +1142,17 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 /**
  * Re-resolve the current root. `preferModal` (observe) may move to a confirmed foreground modal; act
  * transactions pass `false` so actions and the successor capture stay on the root the state belongs to.
- * `exact` (Linux `read_text`) re-lists the root only by its native ref and live owner identity, like Windows;
  * `exactIdentity` (a claimed `wait_for` absence) drops the title and ranking fallbacks of the listing path.
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean; exact?: boolean; exactIdentity?: boolean } = {},
+	options: { preferModal?: boolean; exactIdentity?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
 	assertAppNotBlocked(current);
-	if (currentPlatformBackend.name === "windows" || options.exact) return await resolveExactRoot(current, signal);
+	if (currentPlatformBackend.name === "windows") return await resolveExactRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
 	const partial = windows.complete === false;
 	if (!windows.length && !partial) {
@@ -1120,9 +1166,7 @@ async function resolveCurrentTarget(
 				(window) => window.windowRef === current.nativeWindowRef || window.rootRef === current.nativeWindowRef,
 			)
 		: undefined;
-	match ??= hadStableWindowId
-		? windows.find((window) => window.windowId !== undefined && window.windowId === current.windowId)
-		: undefined;
+	match ??= windows.find((window) => windowIdIdentifies(current, window));
 	// A partial listing, or a caller that needs this exact root, admits it only by its verified identity: a
 	// title or ranking match could be another window.
 	if (!match && partial)
@@ -1939,7 +1983,12 @@ async function performReadText(
 	const raw = (
 		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
 			// Revalidate the exact root owning the look and its live identity before any live read.
-			const target = requiresLiveIdentity() ? await resolveCurrentTarget(signal, { exact: true }) : undefined;
+			const target =
+				currentPlatformBackend.name === "linux"
+					? await revalidateLookRoot(state.currentOutline!.lookId, signal)
+					: currentPlatformBackend.name === "windows"
+						? await resolveCurrentTarget(signal)
+						: undefined;
 			return await currentPlatformBackend.readText(
 				{
 					...(target ? { pid: target.pid, windowId: target.windowId } : {}),
@@ -2806,8 +2855,33 @@ function exactPlatformRootMatchesTarget(root: HelperWindow, target: ResolvedTarg
 	);
 	// Windows: only the instance's native ref identifies it; a same-HWND replacement must not pass.
 	if (currentPlatformBackend.name === "windows") return nativeRefMatches;
-	const windowIdMatches = target.windowId > 0 && root.windowId === target.windowId;
-	return nativeRefMatches || windowIdMatches;
+	return nativeRefMatches || windowIdIdentifies(target, root);
+}
+
+/** The helper process epoch of a macOS root ref `w<epoch>-<n>`; `undefined` for any other ref. */
+function macosRefEpoch(ref: string): string | undefined {
+	return /^w([0-9a-f]+)-\d+$/.exec(ref)?.[1];
+}
+
+/**
+ * Whether `root` is the saved root by its CG window id. One macOS helper process (one random hex epoch in its
+ * `w<epoch>-<n>` refs) never gives two windows one ref nor one window two refs, so between refs of one epoch the
+ * native ref decides: a shared window id (an older helper gave a sheet its window's) never stands in for another
+ * root's ref. After a helper restart the epochs differ and the window id still re-identifies the root, but only as
+ * the same kind of root: a saved sheet's id never matches a window, nor a saved window's a sheet. A target saved
+ * without its kind (restored from a session file) keeps the id alone.
+ */
+function windowIdIdentifies(
+	saved: { windowId?: number; nativeWindowRef?: string; rootKind?: string },
+	root: Pick<HelperWindow, "windowId" | "rootRef" | "windowRef" | "kind">,
+): boolean {
+	if (!saved.windowId || saved.windowId <= 0 || root.windowId !== saved.windowId) return false;
+	const savedRef = saved.nativeWindowRef;
+	const rootRef = root.rootRef ?? root.windowRef;
+	if (savedRef && rootRef === savedRef) return true;
+	const epoch = savedRef ? macosRefEpoch(savedRef) : undefined;
+	if (epoch !== undefined && rootRef && epoch === macosRefEpoch(rootRef)) return false;
+	return !saved.rootKind || (saved.rootKind === "sheet") === (root.kind === "sheet");
 }
 
 function clearDesktopOperationState(state: OperationState): void {

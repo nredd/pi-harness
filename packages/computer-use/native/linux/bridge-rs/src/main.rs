@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -315,6 +316,16 @@ async fn handle_request_with(
             })
             .await
         }
+        "atspiLookRoot" => {
+            look_root(
+                state,
+                &request.args,
+                &connect,
+                x11::list_display_windows,
+                &X11_ENRICHMENT,
+            )
+            .await
+        }
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
@@ -434,6 +445,116 @@ async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Val
         "windows": windows,
         "roots": windows
     }))
+}
+
+/// The X11 window listing that may add a class alias to an `atspiLookRoot` root.
+struct Enrichment {
+    /// How long a lookup waits for the listing.
+    deadline: Duration,
+    /// Set from the spawn of a listing thread until its read returns: a stalled X server
+    /// then holds one thread and one connection, never one per lookup, and lookups in the
+    /// meantime report `unavailable` at once.
+    in_flight: &'static AtomicBool,
+}
+
+static X11_ENRICHMENT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static X11_ENRICHMENT: Enrichment = Enrichment {
+    deadline: Duration::from_secs(2),
+    in_flight: &X11_ENRICHMENT_IN_FLIGHT,
+};
+
+/// A claim on an [`Enrichment`]'s single listing slot, released on drop.
+struct InFlight(&'static AtomicBool);
+
+impl InFlight {
+    /// Claim the slot, or `None` while another listing still runs.
+    fn claim(slot: &'static AtomicBool) -> Option<Self> {
+        // Never build `Self` for a held slot: dropping it would release the holder's claim.
+        if slot.swap(true, Ordering::AcqRel) {
+            None
+        } else {
+            Some(Self(slot))
+        }
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// The live root of `lookId`'s retained look, found by the AT-SPI bus name and object path
+/// the look retains, never by an inventory `@w` handle a later listing may reissue (#1300).
+/// `root` is `null` only when the bounded lookup proved it absent. The owner PID and
+/// executable are live, and the X11 pairing ranks against the root's own live name and
+/// extents, never the frame or title an earlier pairing saved in the look. The X11 listing
+/// gets `enrichment`'s deadline at most, and one listing runs at a time. `metadata.x11Pairing` says how it went: `paired`, `ambiguous`
+/// (tied windows' classes are block-only aliases), `unpaired`, `absent` (no X display, so no
+/// class evidence exists) or `unavailable` (the listing failed or timed out, so class
+/// evidence is missing, which the bridge refuses as `inventory_incomplete`; so is a lookup
+/// made while an earlier listing is still stuck).
+async fn look_root(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
+    windows: impl FnOnce() -> Result<Option<Vec<x11::WindowInfo>>, ProtocolError> + Send + 'static,
+    enrichment: &Enrichment,
+) -> Result<Value, ProtocolError> {
+    let look_id = required_str(args, "lookId", "atspiLookRoot requires lookId")?;
+    let mut root = lock(state)?.look(look_id)?.root;
+    let Some(live) = connect().await?.exact_root(&root.accessible).await? else {
+        return Ok(json!({ "root": Value::Null }));
+    };
+    root = RootSnapshot {
+        pid: live.pid,
+        executable: live.executable,
+        name: live.name,
+        frame: live.frame,
+        wm_class: None,
+        class_candidates: Vec::new(),
+        x11_window: None,
+        is_focused: false,
+        is_minimized: false,
+        z_order: None,
+        ..root
+    };
+    let pairing = match bounded(enrichment, windows).await {
+        Some(Ok(Some(windows))) => {
+            x11::enrich_roots(std::slice::from_mut(&mut root), &windows)[0].as_str()
+        }
+        Some(Ok(None)) => "absent",
+        _ => "unavailable",
+    };
+    let reference = lock(state)?.root_ref(&root.accessible).unwrap_or_default();
+    let mut json = root_json(&reference, &root, 0);
+    json["metadata"]["x11Pairing"] = json!(pairing);
+    Ok(json!({ "root": json }))
+}
+
+/// Run a blocking `read` on its own thread for at most `enrichment.deadline`; `None` past
+/// it, or at once while an earlier read still holds the slot. A read still blocked is left
+/// behind rather than awaited, so it cannot hold the reply, and keeps the slot until it
+/// returns, so a stuck X server never accumulates threads.
+async fn bounded<T: Send + 'static>(
+    enrichment: &Enrichment,
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let slot = InFlight::claim(enrichment.in_flight)?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    // A failed spawn drops the closure, and the claim with it.
+    std::thread::Builder::new()
+        .name("x11-enrichment".into())
+        .spawn(move || {
+            let value = read();
+            drop(slot);
+            let _ = sender.send(value);
+        })
+        .ok()?;
+    tokio::time::timeout(enrichment.deadline, receiver)
+        .await
+        .ok()?
+        .ok()
 }
 
 async fn resolve_root(
@@ -626,17 +747,19 @@ fn focus_window(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, 
         .or_else(|| args.get("windowRef"))
         .and_then(Value::as_str)
         .ok_or_else(|| invalid("focusWindow requires rootRef"))?;
+    let policy = if args.get("policy").is_some() {
+        PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?
+    } else {
+        PhysicalPolicy::Foreground
+    };
+    // Before the root lookup: a refusal never says whether the handle exists (#1298).
+    policy.refuse_strict_headless()?;
     let root = lock(state)?
         .root(reference)
         .ok_or_else(|| ProtocolError::new("Root not found", ErrorCode::TargetNotFound))?;
     let window = root
         .x11_window
         .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
-    let policy = if args.get("policy").is_some() {
-        PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?
-    } else {
-        PhysicalPolicy::Foreground
-    };
     x11::focus_window(window, policy)
 }
 
@@ -663,6 +786,16 @@ type PhysicalAct = fn(
     ActionGeometry,
 ) -> Result<Value, ProtocolError>;
 
+/// Element actions `act` tries semantically (`press`, `setText`) before any physical fallback;
+/// every other action, and every coordinate target, needs physical delivery.
+const SEMANTIC_ACTIONS: [&str; 4] = ["press", "click", "setText", "typeText"];
+
+/// What an `act` request targets: an outline element, or a point in its look image.
+enum ActTarget<'a> {
+    Element(&'a str),
+    Point(f64, f64),
+}
+
 async fn act(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
@@ -676,78 +809,96 @@ async fn act(
         .ok_or_else(|| invalid("act requires target"))?;
     let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
     let policy = PhysicalPolicy::parse(args.get("policy").and_then(Value::as_str))?;
+    let target = match target.get("ref").and_then(Value::as_str) {
+        Some(reference) => ActTarget::Element(reference),
+        None => ActTarget::Point(
+            target
+                .get("x")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("coordinate target requires x"))?,
+            target
+                .get("y")
+                .and_then(Value::as_f64)
+                .ok_or_else(|| invalid("coordinate target requires y"))?,
+        ),
+    };
+    // Physical-only delivery is refused before any look, target or bus lookup, so neither a
+    // missing target nor an unavailable bus can stand in for `foreground_required` (#1298).
+    let physical_only = match target {
+        ActTarget::Element(_) => !SEMANTIC_ACTIONS.contains(&action),
+        ActTarget::Point(..) => true,
+    };
+    if physical_only {
+        policy.refuse_strict_headless()?;
+    }
     let record = lock(state)?.look(look_id)?;
     let client = connect().await?;
 
-    if let Some(reference) = target.get("ref").and_then(Value::as_str) {
-        let node = lock(state)?.element(look_id, reference)?;
-        let text = params.get("text").and_then(Value::as_str).unwrap_or("");
-        let semantic = match action {
-            "press" | "click" => Some(client.press(&node).await.map(|worked| (worked, None))),
-            "setText" | "typeText" => Some(
-                client
-                    .set_text(&node, text)
-                    .await
-                    .map(|worked| (worked, Some(json!({"value":text})))),
-            ),
-            _ => None,
-        };
-        match semantic {
-            Some(Ok((worked, evidence))) => {
-                let mut result = json!({"outcome": if worked {"worked"} else {"didnt"}, "performed": semantic_performed()});
-                if let Some(evidence) = evidence {
-                    result["evidence"] = evidence;
+    let (x, y) = match target {
+        ActTarget::Point(x, y) => (x, y),
+        ActTarget::Element(reference) => {
+            let node = lock(state)?.element(look_id, reference)?;
+            let text = params.get("text").and_then(Value::as_str).unwrap_or("");
+            let semantic = match action {
+                "press" | "click" => Some(client.press(&node).await.map(|worked| (worked, None))),
+                "setText" | "typeText" => Some(
+                    client
+                        .set_text(&node, text)
+                        .await
+                        .map(|worked| (worked, Some(json!({"value":text})))),
+                ),
+                _ => None,
+            };
+            match semantic {
+                Some(Ok((worked, evidence))) => {
+                    let mut result = json!({"outcome": if worked {"worked"} else {"didnt"}, "performed": semantic_performed()});
+                    if let Some(evidence) = evidence {
+                        result["evidence"] = evidence;
+                    }
+                    return Ok(result);
                 }
-                return Ok(result);
+                // Shutdown began before the mutation: nothing ran, and nothing may fall back.
+                Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
+                Some(Err(error)) if error.code == ErrorCode::Timeout => {
+                    return Err(ProtocolError::new(
+                        format!("{}; semantic action outcome is unknown", error.message),
+                        ErrorCode::Timeout,
+                    ));
+                }
+                _ => {}
             }
-            // Shutdown began before the mutation: nothing ran, and nothing may fall back.
-            Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
-            Some(Err(error)) if error.code == ErrorCode::Timeout => {
-                return Err(ProtocolError::new(
-                    format!("{}; semantic action outcome is unknown", error.message),
-                    ErrorCode::Timeout,
-                ));
-            }
-            _ => {}
+            // Semantic delivery was attempted first. Only an explicitly physical-capable
+            // policy may fall back to the element centre.
+            policy.refuse_strict_headless()?;
+            let bounds = node.bounds.ok_or_else(|| {
+                ProtocolError::new(
+                    "Element has no coordinate fallback",
+                    ErrorCode::CoordinateUnavailableForRoot,
+                )
+            })?;
+            let frame = record.root.frame.clone().ok_or_else(|| {
+                ProtocolError::new(
+                    "Root has no coordinate geometry",
+                    ErrorCode::CoordinateUnavailableForRoot,
+                )
+            })?;
+            let owning_window = record.root.x11_window.ok_or_else(|| {
+                capability("Observed root is not correlated with an owning X11 window")
+            })?;
+            return physical(
+                action,
+                &params,
+                policy,
+                owning_window,
+                (bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+                ActionGeometry {
+                    frame,
+                    image_width: record.image_width,
+                    image_height: record.image_height,
+                },
+            );
         }
-        // Semantic delivery was attempted first. Only an explicitly physical-capable
-        // policy may fall back to the element centre.
-        let bounds = node.bounds.ok_or_else(|| {
-            ProtocolError::new(
-                "Element has no coordinate fallback",
-                ErrorCode::CoordinateUnavailableForRoot,
-            )
-        })?;
-        let frame = record.root.frame.clone().ok_or_else(|| {
-            ProtocolError::new(
-                "Root has no coordinate geometry",
-                ErrorCode::CoordinateUnavailableForRoot,
-            )
-        })?;
-        let owning_window = record.root.x11_window.ok_or_else(|| {
-            capability("Observed root is not correlated with an owning X11 window")
-        })?;
-        return physical(
-            action,
-            &params,
-            policy,
-            owning_window,
-            (bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-            ActionGeometry {
-                frame,
-                image_width: record.image_width,
-                image_height: record.image_height,
-            },
-        );
-    }
-    let x = target
-        .get("x")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| invalid("coordinate target requires x"))?;
-    let y = target
-        .get("y")
-        .and_then(Value::as_f64)
-        .ok_or_else(|| invalid("coordinate target requires y"))?;
+    };
     let owning_window = record
         .root
         .x11_window
@@ -1272,7 +1423,7 @@ mod tests {
     use super::*;
     use linux_bridge::testing::RecordingSink;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
 
@@ -1326,6 +1477,7 @@ mod tests {
             app_name: "Editor".into(),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "Dialog".into(),
             frame: Some(Rect {
                 x: 100,
@@ -1596,6 +1748,7 @@ mod tests {
             app_name: "Calculator".into(),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "frame".into(),
             frame: None,
             x11_window: None,
@@ -2885,6 +3038,7 @@ mod tests {
             app_name: "App".into(),
             executable: None,
             wm_class: None,
+            class_candidates: Vec::new(),
             role: "frame".into(),
             frame: Some(Rect {
                 x: 100,
@@ -3085,6 +3239,442 @@ mod tests {
         }
         let error = deliver(RecordingSink::default(), "wiggle", json!({})).unwrap_err();
         assert_eq!(error.code, ErrorCode::UnsupportedCommand);
+    }
+
+    /// An accessible whose children are `paths` on `:1.1`.
+    struct Inventory(&'static [&'static str]);
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl Inventory {
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            self.0
+                .iter()
+                .map(|path| (":1.1", OwnedObjectPath::try_from(*path).unwrap()))
+                .collect()
+        }
+    }
+
+    /// A live root window named `Editor` as a readable frame.
+    struct LiveWindow;
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl LiveWindow {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            "Editor"
+        }
+
+        fn get_role(&self) -> u32 {
+            23
+        }
+    }
+
+    /// Live screen extents the test moves; `None` fails the read.
+    struct LiveExtents(Arc<Mutex<Option<Rect>>>);
+
+    #[zbus::interface(name = "org.a11y.atspi.Component")]
+    impl LiveExtents {
+        fn get_extents(&self, _coordinate_type: u32) -> zbus::fdo::Result<(i32, i32, i32, i32)> {
+            let frame = self.0.lock().unwrap().clone();
+            frame
+                .map(|frame| (frame.x, frame.y, frame.width, frame.height))
+                .ok_or_else(|| zbus::fdo::Error::Failed("extents unavailable".into()))
+        }
+    }
+
+    /// A bus daemon reporting PID 42 for every connection.
+    struct OwnerPid;
+
+    #[zbus::interface(name = "org.freedesktop.DBus")]
+    impl OwnerPid {
+        #[zbus(name = "GetConnectionUnixProcessID")]
+        fn get_connection_unix_process_id(&self, _name: &str) -> u32 {
+            42
+        }
+    }
+
+    /// An X11 enrichment with `deadline` and its own listing slot, apart from the helper's.
+    fn enrichment(deadline: Duration) -> &'static Enrichment {
+        Box::leak(Box::new(Enrichment {
+            deadline,
+            in_flight: Box::leak(Box::new(AtomicBool::new(false))),
+        }))
+    }
+
+    /// An `Editor` window of PID 42 at `frame` with class `class`.
+    fn editor_window(id: u32, frame: &Rect, class: &str) -> x11::WindowInfo {
+        x11::WindowInfo {
+            id,
+            pid: 42,
+            title: "Editor".into(),
+            wm_class: Some((class.to_lowercase(), class.into())),
+            frame: frame.clone(),
+            focused: false,
+            minimized: false,
+            z_order: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn look_root_follows_the_look_not_a_reissued_inventory_handle() {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let mut other = observed_root();
+        other.pid = 43;
+        other.accessible.path = "/other".into();
+        let mut closed = observed_root();
+        closed.accessible.path = "/closed".into();
+        // A is listed and observed, then a PID-scoped listing of B drops A's handle.
+        let a_ref = lock(&state).unwrap().replace_roots(vec![observed_root()])[0]
+            .0
+            .clone();
+        // The look saved its X11-enriched frame, title and class: none is carried over or
+        // ranked against, only the root's live metadata is.
+        let saved = observed_root().frame.unwrap();
+        let moved = Rect {
+            x: 600,
+            ..saved.clone()
+        };
+        let mut looked = observed_root();
+        looked.wm_class = Some(("stale".into(), "Stale".into()));
+        let (look_id, _) = lock(&state)
+            .unwrap()
+            .insert_look(looked, vec![node()], None);
+        let (closed_look, _) = lock(&state).unwrap().insert_look(closed, vec![], None);
+        lock(&state).unwrap().replace_roots(vec![other]);
+        assert!(lock(&state).unwrap().root(&a_ref).is_none());
+        let extents = Arc::new(Mutex::new(Some(saved.clone())));
+        with_peer(
+            |server| {
+                server
+                    .serve_at("/org/freedesktop/DBus", OwnerPid)?
+                    .serve_at("/org/a11y/atspi/accessible/root", Inventory(&["/app"]))?
+                    .serve_at("/app", Inventory(&["/window"]))?
+                    .serve_at("/window", LiveWindow)?
+                    .serve_at("/window", LiveExtents(Arc::clone(&extents)))
+            },
+            async |connection| {
+                let connect = async || {
+                    Ok(AtspiClient::from_connection(
+                        connection.clone(),
+                        Duration::from_millis(250),
+                    ))
+                };
+                let args = json!({ "lookId": look_id });
+                let lookup = async |windows: Vec<x11::WindowInfo>| {
+                    look_root(
+                        &state,
+                        &args,
+                        connect,
+                        move || Ok(Some(windows)),
+                        enrichment(X11_ENRICHMENT.deadline),
+                    )
+                    .await
+                    .unwrap()["root"]
+                        .clone()
+                };
+                let class = |root: &Value| root["metadata"]["wmClass"]["class"].clone();
+
+                // Unchanged inventory: the listing and the look's lookup pair the same window.
+                let unchanged = vec![
+                    editor_window(71, &saved, "Fixture"),
+                    editor_window(72, &moved, "Other"),
+                ];
+                let mut listed = [observed_root()];
+                listed[0].frame = Some(saved.clone());
+                listed[0].x11_window = None;
+                x11::enrich_roots(&mut listed, &unchanged);
+                let root = lookup(unchanged).await;
+                assert_eq!(listed[0].x11_window, Some(71));
+                assert_eq!(root["windowId"], 71);
+                assert_eq!(class(&root), "Fixture");
+                assert_eq!(root["metadata"]["x11Pairing"], "paired");
+                assert_eq!(root["pid"], 42);
+                assert_eq!(root["metadata"]["busName"], ":1.1");
+                assert_eq!(root["metadata"]["objectPath"], "/window");
+                // No inventory handle names it any more; the look still does.
+                assert_eq!(root["rootRef"], "");
+
+                // The same-title siblings swapped places and the root's own window gained a
+                // blocked class: the live extents pair it, never the sibling at the saved frame.
+                *extents.lock().unwrap() = Some(moved.clone());
+                let swapped = vec![
+                    editor_window(71, &moved, "KeePassXC"),
+                    editor_window(72, &saved, "Fixture"),
+                ];
+                let root = lookup(swapped.clone()).await;
+                assert_eq!(root["windowId"], 71);
+                assert_eq!(class(&root), "KeePassXC");
+                assert_eq!(root["framePoints"]["x"], 600);
+
+                // Extreme live extents rank in i64: the closer blocked-class window still
+                // pairs, never the farther allowed one an overflowing distance would pick.
+                let at = |x| Rect { x, ..saved.clone() };
+                for (live, near, far) in [(i32::MIN, -1, 0), (i32::MAX, 0, -1)] {
+                    *extents.lock().unwrap() = Some(at(live));
+                    let root = lookup(vec![
+                        editor_window(81, &at(far), "Fixture"),
+                        editor_window(82, &at(near), "KeePassXC"),
+                    ])
+                    .await;
+                    assert_eq!(root["windowId"], 82, "{live}");
+                    assert_eq!(class(&root), "KeePassXC", "{live}");
+                    assert_eq!(root["metadata"]["x11Pairing"], "paired", "{live}");
+                }
+
+                // Without live extents the same-title siblings tie: no class is attributed,
+                // and every tied class is a block-only alias, so the blocked one still refuses.
+                *extents.lock().unwrap() = None;
+                let root = lookup(swapped.clone()).await;
+                assert!(root["metadata"]["wmClass"].is_null());
+                assert_eq!(root["metadata"]["x11Pairing"], "ambiguous");
+                assert_eq!(
+                    root["blockAliases"],
+                    json!(["keepassxc", "KeePassXC", "fixture", "Fixture"])
+                );
+                // A tie of classless windows has no aliases at all, and is still ambiguous.
+                let classless = swapped
+                    .iter()
+                    .cloned()
+                    .map(|window| x11::WindowInfo {
+                        wm_class: None,
+                        ..window
+                    })
+                    .collect();
+                let root = lookup(classless).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "ambiguous");
+                assert_eq!(root["blockAliases"], json!([]));
+                // No same-PID window: unpaired, and no stale window id survives.
+                let root = lookup(vec![]).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "unpaired");
+                assert!(root["windowId"].is_null());
+
+                // Without an X display no class evidence exists: confirmed absence.
+                let found = look_root(
+                    &state,
+                    &args,
+                    connect,
+                    || Ok(None),
+                    enrichment(X11_ENRICHMENT.deadline),
+                )
+                .await
+                .unwrap();
+                assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "absent");
+                assert_eq!(found["root"]["pid"], 42);
+                // An X display that cannot be listed is missing evidence, never absence.
+                let found = look_root(
+                    &state,
+                    &args,
+                    connect,
+                    || Err(capability("X11 unavailable: connection refused")),
+                    enrichment(X11_ENRICHMENT.deadline),
+                )
+                .await
+                .unwrap();
+                assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
+                assert_eq!(found["root"]["pid"], 42);
+
+                // A stalled X11 listing never holds the reply: the membership result comes
+                // back past the enrichment deadline marked `unavailable`, never as a clean
+                // check, though the stalled window's class would have blocked it.
+                let (release, stalled) = std::sync::mpsc::channel::<()>();
+                let started = Instant::now();
+                let found = look_root(
+                    &state,
+                    &args,
+                    connect,
+                    move || {
+                        let _ = stalled.recv_timeout(Duration::from_secs(5));
+                        Ok(Some(vec![editor_window(71, &saved, "KeePassXC")]))
+                    },
+                    enrichment(Duration::from_millis(50)),
+                )
+                .await
+                .unwrap();
+                assert!(started.elapsed() < Duration::from_secs(2));
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
+                assert!(found["root"]["metadata"]["wmClass"].is_null());
+                assert_eq!(found["root"]["pid"], 42);
+                drop(release);
+
+                // One listing at a time: while one is stuck, a later lookup spawns no thread
+                // (its listing never runs) and is `unavailable` at once. The slot frees only
+                // once the stuck listing itself returns.
+                let single = enrichment(Duration::from_millis(50));
+                let (release, stuck) = std::sync::mpsc::channel::<()>();
+                let found = look_root(
+                    &state,
+                    &args,
+                    connect,
+                    move || {
+                        let _ = stuck.recv();
+                        Ok(None)
+                    },
+                    single,
+                )
+                .await
+                .unwrap();
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
+                let spawned = Arc::new(AtomicUsize::new(0));
+                let counted = || {
+                    let spawned = Arc::clone(&spawned);
+                    move || {
+                        spawned.fetch_add(1, Ordering::SeqCst);
+                        Ok(None)
+                    }
+                };
+                for _ in 0..3 {
+                    let found = look_root(&state, &args, connect, counted(), single)
+                        .await
+                        .unwrap();
+                    assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
+                }
+                assert_eq!(spawned.load(Ordering::SeqCst), 0);
+                assert!(single.in_flight.load(Ordering::SeqCst));
+                drop(release);
+                let freed = Instant::now();
+                while single.in_flight.load(Ordering::SeqCst) {
+                    assert!(freed.elapsed() < Duration::from_secs(5), "slot never freed");
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                let found = look_root(&state, &args, connect, counted(), single)
+                    .await
+                    .unwrap();
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "absent");
+                assert_eq!(spawned.load(Ordering::SeqCst), 1);
+
+                // Its application no longer lists the closed root: proven absent.
+                let reply = peer_request(
+                    &state,
+                    &connection,
+                    "atspiLookRoot",
+                    json!({ "lookId": closed_look }),
+                )
+                .await;
+                assert_eq!(reply.result.unwrap(), json!({ "root": null }));
+                for (args, code) in [
+                    (json!({}), ErrorCode::InvalidRequest),
+                    (json!({"lookId":"look_999"}), ErrorCode::StaleLook),
+                ] {
+                    let reply = peer_request(&state, &connection, "atspiLookRoot", args).await;
+                    assert_eq!(reply.error.unwrap().code, code);
+                }
+            },
+        )
+        .await;
+    }
+
+    /// A bus connector for requests that must be refused before reaching AT-SPI.
+    async fn no_bus() -> Result<AtspiClient, ProtocolError> {
+        panic!("connected to AT-SPI before refusing")
+    }
+
+    #[tokio::test]
+    async fn strict_headless_refuses_physical_fallback_in_every_session_kind() {
+        // An X11 root, and one with no X11 window (Wayland or no graphical session).
+        let mut detached = observed_root();
+        detached.accessible.path = "/detached".into();
+        detached.x11_window = None;
+        detached.frame = None;
+        for root in [observed_root(), detached] {
+            let state = Arc::new(Mutex::new(HelperState::default()));
+            let root_ref = lock(&state).unwrap().replace_roots(vec![root.clone()])[0]
+                .0
+                .clone();
+            let (look_id, nodes) = lock(&state).unwrap().insert_look(root, vec![node()], None);
+            let element = json!({"ref": nodes[0].reference});
+            with_peer(Ok, async |connection| {
+                for (cmd, args) in [
+                    // The element has no Action interface, so press falls back.
+                    ("act", json!({"action":"press","target":element})),
+                    (
+                        "act",
+                        json!({"action":"scroll","target":element,"params":{"scrollY":1}}),
+                    ),
+                    ("act", json!({"action":"click","target":{"x":1,"y":1}})),
+                    ("focusWindow", json!({"rootRef":root_ref})),
+                ] {
+                    let mut args = args;
+                    args["lookId"] = json!(look_id);
+                    args["policy"] = json!("ax_only");
+                    let error = peer_request(&state, &connection, cmd, args.clone())
+                        .await
+                        .error
+                        .unwrap();
+                    assert_eq!(error.code, ErrorCode::ForegroundRequired, "{args}");
+                }
+            })
+            .await;
+        }
+
+        // Unknown handles and no bus: physical-only delivery is refused before any target
+        // lookup or bus connection, so the refusal says nothing about either (#1298).
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let unknown = "linux:look_999:@e1";
+        let physical_only = [
+            json!({"action":"click","target":{"x":1,"y":1}}),
+            json!({"action":"scroll","target":{"ref":unknown},"params":{"scrollY":1}}),
+            json!({"action":"keypress","target":{"ref":unknown},"params":{"keys":["a"]}}),
+        ];
+        for mut args in physical_only.clone() {
+            args["lookId"] = json!("look_999");
+            args["policy"] = json!("ax_only");
+            let error = act(&state, &args, no_bus, |_, _, _, _, _, _| {
+                panic!("attempted physical input")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{args}");
+        }
+        let error =
+            focus_window(&state, &json!({"rootRef":"@w999","policy":"ax_only"})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ForegroundRequired);
+        // Batch steps take the same path.
+        let steps = physical_only
+            .iter()
+            .map(|step| {
+                let mut step = step.clone();
+                step["lookId"] = json!("look_999");
+                step["policy"] = json!("ax_only");
+                step
+            })
+            .collect::<Vec<_>>();
+        let reply = handle_request_with(
+            &state,
+            &Request {
+                protocol_version: PROTOCOL_VERSION,
+                id: "batch".into(),
+                cmd: "actBatch".into(),
+                args: json!({ "actions": steps }),
+            },
+            &InputState::default(),
+            no_bus,
+            |_, _, _, _, _, _| panic!("attempted physical input"),
+        )
+        .await
+        .result
+        .unwrap();
+        assert_eq!(reply["steps"][0]["error"]["code"], "foreground_required");
+        // Request shape is still checked first, and an action an AT-SPI element can take
+        // semantically still resolves its target to try that first.
+        for (args, code) in [
+            (
+                json!({"lookId":"look_999","action":"click","target":{"x":1},"policy":"ax_only"}),
+                ErrorCode::InvalidRequest,
+            ),
+            (
+                json!({"lookId":"look_999","action":"press","target":{"ref":unknown},"policy":"ax_only"}),
+                ErrorCode::StaleLook,
+            ),
+        ] {
+            let error = act(&state, &args, no_bus, |_, _, _, _, _, _| {
+                panic!("attempted physical input")
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(error.code, code, "{args}");
+        }
     }
 
     #[tokio::test]

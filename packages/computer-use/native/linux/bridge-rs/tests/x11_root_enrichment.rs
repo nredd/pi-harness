@@ -1,7 +1,11 @@
 //! Exercise production X11 root matching using snapshots, without a display server.
 
 use linux_bridge::atspi::{AccessibleRef, Rect, RootSnapshot};
-use linux_bridge::x11::{enrich_roots, parse_wm_class, wm_class_property, WindowInfo};
+use linux_bridge::x11::{
+    enrich_roots, parse_wm_class, windows_on, wm_class_property, Pairing, WindowInfo,
+};
+use linux_bridge::{ErrorCode, ProtocolError};
+use std::ffi::OsStr;
 
 fn frame(x: i32) -> Rect {
     Rect {
@@ -23,6 +27,7 @@ fn root(pid: u64, name: &str, frame: Option<Rect>) -> RootSnapshot {
         app_name: "Fixture".into(),
         executable: None,
         wm_class: None,
+        class_candidates: Vec::new(),
         role: "frame".into(),
         frame,
         x11_window: None,
@@ -121,6 +126,62 @@ fn copies_the_paired_window_class_without_touching_identity() {
 }
 
 #[test]
+fn an_equally_ranked_sibling_window_leaves_the_class_unattributed() {
+    let class = |name: &str| Some((name.to_owned(), name.to_owned()));
+    // Two windows of one process with the same title and bounds, one with a blocked class.
+    let mut roots = [
+        root(7, "Editor", Some(frame(0))),
+        root(7, "Editor", Some(frame(0))),
+    ];
+    let windows = [
+        WindowInfo {
+            wm_class: class("keepassxc"),
+            ..window(1, 7, "Editor", 0)
+        },
+        WindowInfo {
+            wm_class: class("fixture"),
+            ..window(2, 7, "Editor", 0)
+        },
+    ];
+
+    enrich_roots(&mut roots, &windows);
+
+    // Each root still pairs with one window, but neither class is evidence for it, including
+    // the second root, whose only remaining window is a consequence of the first choice.
+    assert_eq!(
+        roots.each_ref().map(|root| root.x11_window),
+        [Some(1), Some(2)]
+    );
+    assert_eq!(
+        roots.each_ref().map(|root| root.wm_class.clone()),
+        [None, None]
+    );
+    // Blocking is additive: every tied class stays a block-only candidate of both roots.
+    let tied = vec![class("keepassxc").unwrap(), class("fixture").unwrap()];
+    assert_eq!(
+        roots.each_ref().map(|root| root.class_candidates.clone()),
+        [tied.clone(), tied]
+    );
+
+    // A distinct best rank still carries its class, even beside a lower-ranked sibling.
+    let mut roots = [root(7, "Editor", Some(frame(0)))];
+    let windows = [
+        WindowInfo {
+            wm_class: class("fixture"),
+            ..window(1, 7, "Editor", 0)
+        },
+        WindowInfo {
+            wm_class: class("keepassxc"),
+            ..window(2, 7, "Editor", 30)
+        },
+    ];
+    assert_eq!(enrich_roots(&mut roots, &windows), [Pairing::Paired]);
+    assert_eq!(roots[0].x11_window, Some(1));
+    assert_eq!(roots[0].wm_class, class("fixture"));
+    assert!(roots[0].class_candidates.is_empty());
+}
+
+#[test]
 fn parses_only_well_formed_wm_class_values() {
     assert_eq!(
         parse_wm_class(b"keepassxc\0KeePassXC\0"),
@@ -163,8 +224,30 @@ fn reads_only_complete_8_bit_wm_class_properties() {
 fn rejects_unknown_process_ids_even_when_both_are_zero() {
     let mut roots = [root(0, "Editor", Some(frame(10)))];
 
-    enrich_roots(&mut roots, &[window(1, 0, "Editor", 0)]);
+    let pairings = enrich_roots(&mut roots, &[window(1, 0, "Editor", 0)]);
 
+    assert_eq!(pairings, [Pairing::Unpaired]);
     assert_eq!(roots[0].x11_window, None);
     assert_eq!(roots[0].frame, Some(frame(10)));
+}
+
+#[test]
+fn only_a_missing_x_display_is_confirmed_absence_of_class_evidence() {
+    let unlisted = || -> Result<Vec<WindowInfo>, ProtocolError> {
+        panic!("listed windows without an X display")
+    };
+    assert_eq!(windows_on(None, unlisted).unwrap(), None);
+    assert_eq!(windows_on(Some(OsStr::new("")), unlisted).unwrap(), None);
+    let display = Some(OsStr::new(":0"));
+    let listed = windows_on(display, || Ok(vec![window(1, 7, "Editor", 0)])).unwrap();
+    assert_eq!(listed.map(|windows| windows.len()), Some(1));
+    // A configured display that cannot be listed is an error, never absence.
+    let error = windows_on(display, || {
+        Err(ProtocolError::new(
+            "X11 unavailable",
+            ErrorCode::CapabilityDeferred,
+        ))
+    })
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::CapabilityDeferred);
 }

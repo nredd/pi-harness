@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::ProtocolError;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Request {

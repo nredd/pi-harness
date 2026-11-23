@@ -62,7 +62,7 @@ private func assertRootRanking(_ bridge: Bridge) {
         ("AXSheet", "AXDialog", "sheet"), ("AXWindow", "AXSystemPopover", "popover"), ("AXWindow", "AXSystemDialog", "dialog"),
         ("AXDialog", "", "dialog"), ("AXWindow", "AXStandardWindow", "window"),
     ] {
-        expect(bridge.rootKind(role: role, subrole: subrole) == kind, "rootKind(\(role), \(subrole)) is \(kind)")
+        expect(rootKind(role: role, subrole: subrole) == kind, "rootKind(\(role), \(subrole)) is \(kind)")
     }
     let metadata = bridge.rootMetadata(pairing: WindowPairing(candidate: nil, score: 12.5, confidence: "high"), sheetCount: 2)
     let pairingMetadata = metadata["pairing"] as? [String: Any]
@@ -141,19 +141,19 @@ private func assertWindowOwners(_ bridge: Bridge) {
 private func assertPairing(_ bridge: Bridge) {
     let frame = CGRect(x: 0, y: 0, width: 200, height: 100)
     let near = CGWindowCandidate(windowId: 1, title: " report ", bounds: CGRect(x: 10, y: 20, width: 210, height: 100), isOnscreen: true, layer: 0, zOrder: 0)
-    expect(bridge.windowPairScore(frame: frame, title: "Report", candidate: near) == 108, "equal titles add 100, geometry subtracts its distance over 20, on screen adds 10")
-    expect(bridge.windowPairScore(frame: frame, title: "Report - Draft", candidate: near) == 58, "a contained title adds 50")
-    expect(bridge.windowPairScore(frame: frame, title: "", candidate: near) == 8, "an empty title adds nothing")
+    expect(windowPairScore(frame: frame, title: "Report", candidate: near) == 108, "equal titles add 100, geometry subtracts its distance over 20, on screen adds 10")
+    expect(windowPairScore(frame: frame, title: "Report - Draft", candidate: near) == 58, "a contained title adds 50")
+    expect(windowPairScore(frame: frame, title: "", candidate: near) == 8, "an empty title adds nothing")
     let offscreen = CGWindowCandidate(windowId: 2, title: "Other", bounds: CGRect(x: 900, y: 900, width: 10, height: 10), isOnscreen: false, layer: 0, zOrder: 1)
-    expect(bridge.windowPairScore(frame: .zero, title: "Report", candidate: offscreen) == 0, "a degenerate frame skips geometry and off-screen adds nothing")
+    expect(windowPairScore(frame: .zero, title: "Report", candidate: offscreen) == 0, "a degenerate frame skips geometry and off-screen adds nothing")
     let exactCandidate = CGWindowCandidate(windowId: 3, title: "Report", bounds: CGRect(x: 2, y: -2, width: 202, height: 98), isOnscreen: true, layer: 0, zOrder: 2)
-    expect(bridge.pairingConfidence(frame: CGRect(x: 0, y: 0, width: 1, height: 100), title: "Report", candidate: exactCandidate, score: 500) == "low", "a degenerate frame is low confidence")
-    expect(bridge.pairingConfidence(frame: frame, title: " report", candidate: exactCandidate, score: 0) == "exact", "equal titles within 2 points are exact")
+    expect(pairingConfidence(frame: CGRect(x: 0, y: 0, width: 1, height: 100), title: "Report", candidate: exactCandidate, score: 500) == "low", "a degenerate frame is low confidence")
+    expect(pairingConfidence(frame: frame, title: " report", candidate: exactCandidate, score: 0) == "exact", "equal titles within 2 points are exact")
     let shifted = CGWindowCandidate(windowId: 4, title: "Report", bounds: CGRect(x: 3, y: 0, width: 200, height: 100), isOnscreen: true, layer: 0, zOrder: 3)
-    expect(bridge.pairingConfidence(frame: frame, title: "Report", candidate: shifted, score: 50) == "high", "geometry beyond 2 points falls back to a score of 50 or more")
-    expect(bridge.pairingConfidence(frame: frame, title: "Report", candidate: shifted, score: 49.9) == "low", "a score under 50 is low confidence")
+    expect(pairingConfidence(frame: frame, title: "Report", candidate: shifted, score: 50) == "high", "geometry beyond 2 points falls back to a score of 50 or more")
+    expect(pairingConfidence(frame: frame, title: "Report", candidate: shifted, score: 49.9) == "low", "a score under 50 is low confidence")
     let untitled = CGWindowCandidate(windowId: 5, title: "", bounds: frame, isOnscreen: true, layer: 0, zOrder: 4)
-    expect(bridge.pairingConfidence(frame: frame, title: "", candidate: untitled, score: 10) == "low", "exact geometry without equal titles is not exact")
+    expect(pairingConfidence(frame: frame, title: "", candidate: untitled, score: 10) == "low", "exact geometry without equal titles is not exact")
 
     // AX handles no process answers read empty frames and titles, so only on-screen state ranks the
     // candidates.
@@ -167,8 +167,51 @@ private func assertPairing(_ bridge: Bridge) {
     expect(contested?.candidate?.windowId == 1 && contested?.score == 10, "one window between two candidates takes the higher-scoring one")
     let unpaired = bridge.windowPairings(windows: [windows[0]], candidates: [])[ObjectIdentifier(windows[0])]
     expect(unpaired?.candidate == nil && unpaired?.confidence == "low", "windows without candidates are unpaired")
-    expect(bridge.bestCandidate(for: windows[0], candidates: [offscreen, near])?.windowId == 1, "the best candidate is the highest score")
-    expect(bridge.bestCandidate(for: windows[0], candidates: []) == nil, "no candidates means no best candidate")
+    assertPairingEvidence()
+}
+
+/// A window or sheet an injected world reads.
+private final class FakeRoot {
+    let name: String
+    init(_ name: String) { self.name = name }
+}
+
+/// `pairWindows` scores only reads that answered: a failed title or frame read adds no score and no penalty, and the
+/// pairing is `unread` (#1287).
+private func assertPairingEvidence() {
+    let window = FakeRoot("w")
+    let frame = CGRect(x: 600, y: 100, width: 800, height: 600)
+    let sole = CGWindowCandidate(windowId: 7, title: "Doc", bounds: frame, isOnscreen: true, layer: 0, zOrder: 0)
+    func pairing(title: AXStringRead = .value("Doc"), origin: CGPoint = frame.origin, frameRead: Bool = true) -> WindowPairing? {
+        let read = WindowPairingRead(title: title, frame: CGRect(origin: origin, size: frame.size), frameRead: frameRead)
+        return pairWindows([window], candidates: [sole], read: { _ in read })[ObjectIdentifier(window)]
+    }
+    let whole = pairing()
+    expect(whole?.candidate?.windowId == 7 && whole?.score == 110 && whole?.confidence == "exact" && whole?.unread == false, "a read pairing scores title, geometry and on-screen state")
+    // A failed position read once read as the origin: 600 points off, the pairing lost 30 and dropped below 0.
+    let unreadFrame = pairing(origin: .zero, frameRead: false)
+    expect(unreadFrame?.candidate?.windowId == 7 && unreadFrame?.score == 110 && unreadFrame?.unread == true, "a failed frame read costs no geometry penalty and leaves the pairing unread")
+    expect(unreadFrame?.confidence == "low", "a pairing without a read frame is low confidence")
+    let unreadTitle = pairing(title: .failed)
+    expect(unreadTitle?.candidate?.windowId == 7 && unreadTitle?.score == 10 && unreadTitle?.unread == true, "a failed title read adds no title score and leaves the pairing unread")
+    let absentTitle = pairing(title: .absent)
+    expect(absentTitle?.score == 10 && absentTitle?.unread == false, "an absent title is read as empty")
+    let unpaired = pairWindows([window], candidates: [], read: { _ in WindowPairingRead(title: .failed, frame: .zero, frameRead: true) })[ObjectIdentifier(window)]
+    expect(unpaired?.candidate == nil && unpaired?.unread == true, "a window left unpaired keeps its unread evidence")
+    let far = pairing(title: .absent, origin: CGPoint(x: 0, y: 100))
+    expect(far?.candidate == nil && far?.score == -20 && far?.unread == false, "an untitled read frame 600 points off the only candidate scores below 0 and stays unpaired")
+
+    let parent = FakeRoot("parent")
+    let first = FakeRoot("first")
+    let second = FakeRoot("second")
+    let own = CGWindowCandidate(windowId: 8, title: "Save", bounds: .zero, isOnscreen: true, layer: 0, zOrder: 1)
+    let titled: (FakeRoot) -> WindowPairingRead = { WindowPairingRead(title: .value($0.name == "parent" ? "Doc" : "Save"), frame: .zero, frameRead: true) }
+    let windowPairings = pairWindows([parent], candidates: [sole, own], read: titled)
+    expect(windowPairings[ObjectIdentifier(parent)]?.candidate?.windowId == 7, "the window takes its own CG window")
+    let alone = pairSheets([first], candidates: [sole], windowPairings: windowPairings, read: titled)[ObjectIdentifier(first)]
+    expect(alone?.candidate == nil && alone?.score == -Double.greatestFiniteMagnitude, "a sheet whose window took the only candidate is unpaired")
+    let sheets = pairSheets([first, second], candidates: [sole, own], windowPairings: windowPairings, read: titled)
+    expect([first, second].compactMap { sheets[ObjectIdentifier($0)]?.candidate?.windowId } == [8], "two sheets never share one CG window")
 }
 
 /// Look geometry: screen frames scale into the image and clamp to it.
@@ -252,5 +295,281 @@ private func assertRootIdentityAndDelta(_ bridge: Bridge) {
     expect(changes.sorted() == ["appeared:New", "appeared:New focused", "closed:Gone", "focused:Kept", "focused:New focused"], "deltas report appeared, closed and newly focused roots, not roots that stayed focused")
     expect(changes.firstIndex(of: "closed:Gone").map { index in changes[..<index].allSatisfy { $0.hasPrefix("appeared:") } && changes[(index + 1)...].allSatisfy { $0.hasPrefix("focused:") } } == true, "appeared roots come first, then closed, then focused")
     expect(bridge.rootSnapshotDelta(before: complete(after), after: complete(after), pid: 5).isEmpty, "an unchanged snapshot has no delta")
+    assertUnidentifiedRoots(bridge)
+}
 
+/// An unpaired root whose identity fields failed to read, or whose identity another root shares, is never compared
+/// across listings: it neither closes, appears nor gains focus, and it keeps a missing root from proving closure (#1287).
+private func assertUnidentifiedRoots(_ bridge: Bridge) {
+    func root(_ ref: String, title: String, windowId: Int? = nil, focused: Bool = false) -> [String: Any] {
+        var root: [String: Any] = ["rootRef": ref, "kind": "window", "role": "AXWindow", "title": title, "isFocused": focused, "framePoints": ["x": 10, "y": 20, "w": 300, "h": 200]]
+        if let windowId { root["windowId"] = windowId }
+        return root
+    }
+    func snapshot(_ roots: [[String: Any]], complete: Bool = true, unidentified: Set<String> = []) -> RootInventorySnapshot {
+        RootInventorySnapshot(roots: roots, complete: complete, unidentifiedRefs: unidentified, identity: bridge.rootIdentity)
+    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["title"] as? String ?? "?")" }.sorted()
+    }
+    let readable = [root("r1", title: "Doc"), root("r2", title: "Paired", windowId: 7)]
+    let whole = snapshot(readable)
+    expect(whole.complete && Set(whole.roots.keys) == ["meta:window:AXWindow:Doc:10,20,300,200", "window:7"], "read roots keep their identity in a complete snapshot")
+    expect(snapshot(readable, complete: false).complete == false, "an incomplete listing stays incomplete")
+
+    // The same live unpaired window, its title unread on one side: the failed read changes its metadata key.
+    let unreadTitle = [root("r1", title: "", focused: true), root("r2", title: "Paired", windowId: 7)]
+    let unidentified = snapshot(unreadTitle, unidentified: ["r1"])
+    expect(!unidentified.complete && Set(unidentified.roots.keys) == ["window:7"], "an unidentified root is left out and the snapshot is incomplete")
+    expect(changes(whole, unidentified).isEmpty, "a root unidentified after the action is neither closed nor appeared, nor focused")
+    expect(changes(unidentified, whole).isEmpty, "a root unidentified before the action is neither closed nor appeared")
+    let paired = snapshot([root("r2", title: "", windowId: 7)], unidentified: ["r9"])
+    expect(paired.complete && paired.roots["window:7"] != nil, "an unidentified ref names only the roots it lists")
+
+    // Two live roots with one identity, e.g. both reading as untitled at the origin: neither can be told apart.
+    let twins = [root("r3", title: ""), root("r4", title: ""), root("r5", title: ""), root("r2", title: "Paired", windowId: 7)]
+    let ambiguous = snapshot(twins)
+    expect(!ambiguous.complete && Set(ambiguous.roots.keys) == ["window:7"], "roots sharing an identity are all left out and the snapshot is incomplete")
+    expect(changes(whole, ambiguous).isEmpty && changes(ambiguous, whole).isEmpty, "ambiguous roots prove no closure or appearance")
+    let closedBesideUnknown = snapshot([root("r1", title: "")], unidentified: ["r1"])
+    expect(changes(whole, closedBesideUnknown).isEmpty, "a paired root missing next to an unidentified one is not proven closed")
+    assertRootIdentityEligibility()
+    assertClassifiedIdentity(bridge)
+
+}
+
+/// Which reads decide a root's identity (`RootIdentityField`, `rootIdentityComparable`): a sheet's own title stands on
+/// its own read, and only a title it took from its window inherits that window's failed read (#1287).
+private func assertRootIdentityEligibility() {
+    let unreadWindowTitle = RootIdentityField(.failed)
+    expect(unreadWindowTitle == RootIdentityField(value: "", read: false), "a failed read keeps the fallback's value, unread")
+    expect(RootIdentityField(.failed, fallback: RootIdentityField(value: "Doc")) == RootIdentityField(value: "Doc", read: false), "a failed read falls back to the fallback's value")
+    let ownTitle = RootIdentityField(.value("Save"), fallback: unreadWindowTitle)
+    let borrowedTitle = RootIdentityField(.absent, fallback: unreadWindowTitle)
+    expect(ownTitle == RootIdentityField(value: "Save") && borrowedTitle == unreadWindowTitle, "an absent read takes the fallback whole, a read value ignores it")
+    let unpaired = WindowPairing(candidate: nil, score: -1, confidence: "low")
+    let sheetRole = RootIdentityField(.absent, fallback: RootIdentityField(value: "AXSheet"))
+    expect(rootIdentityComparable(pairing: unpaired, fields: [ownTitle, sheetRole, RootIdentityField(.absent)], frameRead: true), "a sheet with its own title is comparable though its window's title read failed")
+    expect(!rootIdentityComparable(pairing: unpaired, fields: [borrowedTitle, sheetRole], frameRead: true), "a sheet that took its window's unread title is not")
+    expect(!rootIdentityComparable(pairing: unpaired, fields: [ownTitle], frameRead: false), "an unpaired root with an unread frame is not")
+    let candidate = CGWindowCandidate(windowId: 7, title: "", bounds: .zero, isOnscreen: true, layer: 0, zOrder: 0)
+    expect(rootIdentityComparable(pairing: WindowPairing(candidate: candidate, score: 10, confidence: "low"), fields: [borrowedTitle], frameRead: false), "a paired root is keyed by its CG window id whatever its metadata reads")
+    var unreadPairing = WindowPairing(candidate: candidate, score: 10, confidence: "low")
+    unreadPairing.unread = true
+    expect(!rootIdentityComparable(pairing: unreadPairing, fields: [ownTitle], frameRead: true), "a pairing that read partial evidence is not comparable, paired or not")
+    var unreadUnpaired = unpaired
+    unreadUnpaired.unread = true
+    expect(!rootIdentityComparable(pairing: unreadUnpaired, fields: [ownTitle], frameRead: true), "nor is a window it left unpaired")
+    var contested = WindowPairing(candidate: candidate, score: 10, confidence: "low")
+    contested.contested = true
+    expect(!rootIdentityComparable(pairing: contested, fields: [ownTitle], frameRead: true), "a contested pairing is not comparable")
+    var contestedUnpaired = unpaired
+    contestedUnpaired.contested = true
+    expect(!rootIdentityComparable(pairing: contestedUnpaired, fields: [ownTitle], frameRead: true), "nor is a root a contested pairing left unpaired")
+}
+
+/// Scripted AX reads for one listing, read in production order through `RootInventoryWorld.classify` and `rootEntries`
+/// into the snapshot `rootMetadataSnapshot` builds. `fail["doc.position"] = [true]` fails only the first position read
+/// of `doc` (its pairing read); later reads of it answer.
+private final class FakeListing {
+    let windows: [FakeRoot]
+    var sheets: [String: [FakeRoot]] = [:]
+    var frames: [String: CGRect] = [:]
+    var titles: [String: AXStringRead] = [:]
+    /// Windows read `AXWindow`; a sheet's role is absent and falls back to `AXSheet`.
+    var roles: [String: AXStringRead] = ["doc": .value("AXWindow")]
+    var fail: [String: [Bool]] = [:]
+    var candidates: [CGWindowCandidate] = []
+    static let frame = CGRect(x: 600, y: 100, width: 800, height: 600)
+    init(_ windows: [FakeRoot]) { self.windows = windows }
+
+    private func fails(_ root: FakeRoot, _ attribute: String) -> Bool {
+        let key = "\(root.name).\(attribute)"
+        guard var queue = fail[key], !queue.isEmpty else { return false }
+        let next = queue.removeFirst()
+        fail[key] = queue
+        return next
+    }
+    private func position(_ root: FakeRoot) -> CGPoint? { fails(root, "position") ? nil : frames[root.name, default: FakeListing.frame].origin }
+    private func size(_ root: FakeRoot) -> AXSizeRead { fails(root, "size") ? .failed : .size(frames[root.name, default: FakeListing.frame].size) }
+    private func string(_ root: FakeRoot, _ attribute: RootIdentityAttribute) -> AXStringRead {
+        switch attribute {
+        case .title: return fails(root, "title") ? .failed : titles[root.name] ?? .absent
+        case .role: return fails(root, "role") ? .failed : roles[root.name] ?? .absent
+        case .subrole: return fails(root, "subrole") ? .failed : .absent
+        }
+    }
+    /// One position and one size read, as `Bridge.frameRead` reads them.
+    private func frameRead(_ root: FakeRoot) -> (frame: CGRect, read: Bool) {
+        let origin = position(root)
+        let sized = size(root)
+        var value = CGSize.zero
+        if case .size(let size) = sized { value = size }
+        return (CGRect(origin: origin ?? .zero, size: value), origin != nil && sized != .failed)
+    }
+    var world: RootInventoryWorld<FakeRoot> {
+        RootInventoryWorld(
+            windows: WindowInventoryWorld(
+                windows: { self.windows }, fallbackWindows: { [] }, position: { self.position($0) }, size: { self.size($0) },
+                sheets: { (self.sheets[$0.name] ?? [], true) }),
+            string: { self.string($0, $1) },
+            frame: { self.frameRead($0) },
+            // As `Bridge.pairingRead`: one frame read and one title read.
+            pairingRead: { root in
+                let (frame, read) = self.frameRead(root)
+                return WindowPairingRead(title: self.string(root, .title), frame: frame, frameRead: read)
+            })
+    }
+    func classify(_ bridge: Bridge) -> (snapshot: RootInventorySnapshot, windows: [ClassifiedWindow<FakeRoot>], entries: [[String: Any]]) {
+        let inventory = world.classify(candidates: candidates)
+        let entries = rootEntries(inventory.windows, ref: { $0.name }) { _, sheet in ["title": "extra", "isFocused": sheet == nil] }
+        let snapshot = RootInventorySnapshot(roots: entries.roots, complete: inventory.complete, unidentifiedRefs: entries.unidentified, identity: bridge.rootIdentity)
+        return (snapshot, inventory.windows, entries.roots)
+    }
+}
+
+/// A failed pairing or identity read, injected below production classification, keeps the root out of `rootDelta`
+/// (#1287): a later successful read of the same field never vouches for the failed one.
+private func assertClassifiedIdentity(_ bridge: Bridge) {
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
+    }
+    let doc = FakeRoot("doc")
+    func paired(_ fail: [String: [Bool]] = [:]) -> FakeListing {
+        let listing = FakeListing([doc])
+        listing.candidates = [CGWindowCandidate(windowId: 7, title: "", bounds: FakeListing.frame, isOnscreen: true, layer: 0, zOrder: 0)]
+        listing.fail = fail
+        return listing
+    }
+    // An untitled window paired with its sole on-screen CG window. Only the pairing pass's position read fails
+    // afterward; the inventory's own position read answers.
+    let before = paired().classify(bridge)
+    expect(before.snapshot.complete && Set(before.snapshot.roots.keys) == ["window:7"], "a read pairing keys the root by its CG window id")
+    let after = paired(["doc.position": [true]]).classify(bridge)
+    let root = after.windows.first?.root
+    expect(after.windows.first?.window.axFrameRead == true, "the inventory's own frame reads answered")
+    expect(root?.pairing.candidate?.windowId == 7 && root?.pairing.unread == true, "a failed pairing position read keeps the sole candidate and marks the pairing unread")
+    expect(root?.comparable == false && !after.snapshot.complete && after.snapshot.roots.isEmpty, "the root is left out and the snapshot is incomplete")
+    expect(changes(before.snapshot, after.snapshot).isEmpty && changes(after.snapshot, before.snapshot).isEmpty, "a failed pairing read never reports the live window closed and reappeared")
+
+    func unpaired(_ fail: [String: [Bool]] = [:], sheets: [FakeRoot] = [], sheetTitles: [String: AXStringRead] = [:]) -> FakeListing {
+        let listing = FakeListing([doc])
+        listing.titles = sheetTitles.merging(["doc": .value("Doc")]) { first, _ in first }
+        listing.sheets = ["doc": sheets]
+        listing.fail = fail
+        return listing
+    }
+    let read = unpaired().classify(bridge)
+    expect(read.snapshot.complete && Set(read.snapshot.roots.keys) == ["meta:window:AXWindow:Doc:600,100,800,600"], "an unpaired read root keys by its metadata")
+    // The pairing pass reads the title first; the identity read after it fails.
+    let unreadTitle = unpaired(["doc.title": [false, true]]).classify(bridge)
+    expect(unreadTitle.windows.first?.root.pairing.unread == false && unreadTitle.windows.first?.root.title == RootIdentityField(value: "", read: false), "only the identity title read failed")
+    expect(!unreadTitle.snapshot.complete && unreadTitle.snapshot.roots.isEmpty, "an unpaired root with an unread title is left out and the snapshot is incomplete")
+    expect(changes(read.snapshot, unreadTitle.snapshot).isEmpty && changes(unreadTitle.snapshot, read.snapshot).isEmpty, "a failed title read neither closes nor reopens the root")
+    let unreadPosition = unpaired(["doc.position": [false, true]]).classify(bridge)
+    expect(unreadPosition.windows.first?.window.axFrameRead == false && unreadPosition.snapshot.roots.isEmpty && !unreadPosition.snapshot.complete, "a failed inventory position read leaves the unpaired root out")
+    expect(changes(read.snapshot, unreadPosition.snapshot).isEmpty, "a failed position read neither closes nor reopens the root")
+
+    // A failed window title read touches only the sheet that took that title.
+    let own = FakeRoot("own")
+    let bare = FakeRoot("bare")
+    let sheeted = unpaired(["doc.title": [false, true]], sheets: [own, bare], sheetTitles: ["own": .value("Save")]).classify(bridge)
+    let sheets = sheeted.windows.first?.sheets ?? []
+    expect(sheets.map(\.title) == [RootIdentityField(value: "Save"), RootIdentityField(value: "", read: false)], "a sheet without a title takes its window's, read or not")
+    expect(sheets.map(\.comparable) == [true, false] && sheets.map(\.kind) == ["sheet", "sheet"], "only the sheet that took the unread title is unidentified")
+    expect(Set(sheeted.snapshot.roots.keys) == ["meta:sheet:AXSheet:Save:600,100,800,600"] && !sheeted.snapshot.complete, "the sheet with its own title stays in the snapshot")
+
+    let entries = sheeted.entries
+    expect(entries.map { $0["rootRef"] as? String } == ["doc", "own", "bare"] && entries.map { $0["windowRef"] as? String } == ["doc", "own", "bare"], "each window is followed by its sheets")
+    expect(entries.map { $0["title"] as? String } == ["", "Save", ""] && entries.map { $0["isFocused"] as? Bool } == [true, false, false], "identity fields override the extras, which carry the rest")
+    expect(entries.allSatisfy { $0["windowId"] == nil } && before.entries.first?["windowId"] as? Int == 7, "only a paired root carries its CG window id")
+
+    // A sheet without a CG window of its own: its window's is the only candidate, and the sheet scores for it too.
+    let sheet = FakeRoot("sheet")
+    let borrowed = paired()
+    borrowed.sheets = ["doc": [sheet]]
+    borrowed.titles = ["sheet": .value("Save")]
+    let open = borrowed.classify(bridge)
+    expect(open.entries.map { $0["windowId"] as? Int } == [7, nil], "a sheet never borrows its window's CG window id")
+    expect(open.snapshot.roots.isEmpty && !open.snapshot.complete, "a window and a sheet that both claim one CG window are both unidentified")
+    let sheetFrame = CGRect(x: 700, y: 150, width: 400, height: 300)
+    let inset = paired()
+    inset.sheets = ["doc": [sheet]]
+    inset.titles = ["sheet": .value("Save")]
+    inset.frames = ["sheet": sheetFrame]
+    let insetSheet = inset.classify(bridge)
+    expect(insetSheet.entries.map { $0["windowId"] as? Int } == [7, nil], "an inset sheet does not claim its window's CG window")
+    expect(Set(insetSheet.snapshot.roots.keys) == ["window:7", "meta:sheet:AXSheet:Save:700,150,400,300"] && insetSheet.snapshot.complete, "the sheet keeps its own metadata identity beside its window")
+    let separate = paired()
+    separate.sheets = ["doc": [sheet]]
+    separate.frames = ["sheet": sheetFrame]
+    separate.candidates.append(CGWindowCandidate(windowId: 8, title: "", bounds: sheetFrame, isOnscreen: true, layer: 0, zOrder: 1))
+    let separated = separate.classify(bridge)
+    expect(separated.entries.map { $0["windowId"] as? Int } == [7, 8], "a sheet with a CG window of its own pairs with it")
+    expect(Set(separated.snapshot.roots.keys) == ["window:7", "window:8"] && separated.snapshot.complete, "exclusive claims key both roots by their CG window ids")
+    assertContestedPairings(bridge)
+}
+
+/// One conservative rule (`contestedClaims`): a CG candidate claimed by more than one root, or by a root whose pairing
+/// read failed, keys none of its claimants, so neither the listing order nor an unread competitor moves an identity (#1287).
+private func assertContestedPairings(_ bridge: Bridge) {
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
+    }
+    let frame = FakeListing.frame
+    let titledDoc = CGWindowCandidate(windowId: 9, title: "Doc", bounds: frame, isOnscreen: false, layer: 0, zOrder: 0)
+    let farFrame = CGRect(x: 0, y: 0, width: 800, height: 600)
+    func read(_ title: AXStringRead, _ frame: CGRect, frameRead: Bool = true) -> WindowPairingRead {
+        WindowPairingRead(title: title, frame: frame, frameRead: frameRead)
+    }
+    expect(contestedClaims([read(.value("Doc"), frame)], candidates: [titledDoc]) == [false], "a sole claimant of a sole candidate is exclusive")
+    expect(contestedClaims([read(.value("Doc"), frame), read(.value("Other"), farFrame)], candidates: [titledDoc]) == [false, false], "a read root scoring below 0 claims nothing")
+    expect(contestedClaims([read(.value("Doc"), frame), read(.failed, farFrame)], candidates: [titledDoc]) == [true, true], "an unread title claims a candidate it might match, so both claimants are contested")
+    expect(contestedClaims([read(.value("Doc"), frame), read(.value("Doc"), farFrame)], candidates: [titledDoc]) == [true, true], "two read roots scoring 0 or more for one candidate are both contested")
+    let second = CGWindowCandidate(windowId: 10, title: "Doc", bounds: farFrame, isOnscreen: false, layer: 0, zOrder: 1)
+    expect(contestedClaims([read(.value("Doc"), frame)], candidates: [titledDoc, second]) == [true], "a root claiming two candidates is contested")
+    expect(contestedClaims([read(.failed, frame)], candidates: []) == [false], "without candidates nothing is claimed")
+
+    // Two windows, one on-screen untitled CG window: `a` scores 9 for it, `b` far below 0. A failed pairing position
+    // read lifts `b` to 10, so `b` takes it and `a` loses its CG id.
+    let a = FakeRoot("a")
+    let b = FakeRoot("b")
+    func competitors(_ fail: [String: [Bool]] = [:]) -> FakeListing {
+        let listing = FakeListing([a, b])
+        listing.frames = ["a": CGRect(x: 620, y: 100, width: 800, height: 600), "b": farFrame]
+        listing.titles = ["a": .value("A"), "b": .value("B")]
+        listing.candidates = [CGWindowCandidate(windowId: 9, title: "", bounds: frame, isOnscreen: true, layer: 0, zOrder: 0)]
+        listing.fail = fail
+        return listing
+    }
+    let whole = competitors().classify(bridge)
+    expect(whole.snapshot.complete && Set(whole.snapshot.roots.keys) == ["window:9", "meta:window::B:0,0,800,600"], "the read listing keys `a` by its CG window id")
+    let unread = competitors(["b.position": [true]]).classify(bridge)
+    expect(unread.entries.map { $0["windowId"] as? Int } == [nil, 9], "the unread competitor takes the candidate")
+    expect(unread.snapshot.roots.isEmpty && !unread.snapshot.complete, "both claimants of the candidate are unidentified")
+    expect(changes(whole.snapshot, unread.snapshot).isEmpty && changes(unread.snapshot, whole.snapshot).isEmpty, "an unread competitor reports no change in either direction")
+
+    // Two sheets with distinct titles and equal geometry score alike for one leftover untitled CG window: the
+    // listing order alone would decide which one takes it.
+    let doc = FakeRoot("doc")
+    let save = FakeRoot("save")
+    let export = FakeRoot("export")
+    let sheetFrame = CGRect(x: 700, y: 150, width: 400, height: 300)
+    func sheets(_ order: [FakeRoot]) -> FakeListing {
+        let listing = FakeListing([doc])
+        listing.sheets = ["doc": order]
+        listing.frames = ["save": sheetFrame, "export": sheetFrame]
+        listing.titles = ["save": .value("Save"), "export": .value("Export")]
+        listing.candidates = [
+            CGWindowCandidate(windowId: 7, title: "", bounds: frame, isOnscreen: true, layer: 0, zOrder: 0),
+            CGWindowCandidate(windowId: 8, title: "", bounds: sheetFrame, isOnscreen: true, layer: 0, zOrder: 1),
+        ]
+        return listing
+    }
+    let forward = sheets([save, export]).classify(bridge)
+    let reverse = sheets([export, save]).classify(bridge)
+    expect(forward.entries.map { $0["windowId"] as? Int } == [7, 8, nil] && reverse.entries.map { $0["windowId"] as? Int } == [7, 8, nil], "the first sheet listed takes the candidate")
+    expect(Set(forward.snapshot.roots.keys) == ["window:7"] && Set(reverse.snapshot.roots.keys) == ["window:7"], "only the window keeps its identity")
+    expect(!forward.snapshot.complete && !reverse.snapshot.complete, "the contested sheets leave both snapshots incomplete")
+    expect(changes(forward.snapshot, reverse.snapshot).isEmpty && changes(reverse.snapshot, forward.snapshot).isEmpty, "reordering the sheets reports no change")
 }

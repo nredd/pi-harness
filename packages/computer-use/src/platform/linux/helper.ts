@@ -34,7 +34,7 @@ export const HELPER_STDERR_LIMIT_BYTES = 8_192;
 export const DISCARDED_EXIT_WAIT_MS = HELPER_TERMINATE_GRACE_MS + 1_000;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
-export const LINUX_HELPER_PROTOCOL_VERSION = 6;
+export const LINUX_HELPER_PROTOCOL_VERSION = 7;
 export const LINUX_HELPER_PATH =
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH ||
 	path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
@@ -120,6 +120,15 @@ const SESSION_CLOSED_MESSAGE = "Linux helper closed because the Pi session ended
 function replyLost(error: unknown): Error & { code: string } {
 	const message = error instanceof Error ? error.message : String(error);
 	return Object.assign(new Error(message, { cause: error }), { code: "reply_lost" });
+}
+
+/** The `cause.code` of a reply lost to the client's own deadline, as opposed to an abort or a helper exit. */
+const DEADLINE_EXCEEDED = "deadline_exceeded";
+
+/** Whether `error` is a reply lost because the client's deadline expired with no reply. */
+export function isHelperDeadline(error: unknown): boolean {
+	const lost = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
+	return lost?.code === "reply_lost" && lost.cause?.code === DEADLINE_EXCEEDED;
 }
 
 /** Commands that can post XTEST input or move focus: everything but `act`/`actBatch` steps limited to `ax_only`. */
@@ -561,7 +570,8 @@ export class LinuxHelperClient {
 			const timer = setTimeout(() => {
 				signal?.removeEventListener("abort", onAbort);
 				this.pending.delete(id);
-				reject(replyLost(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)));
+				const deadline = new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`);
+				reject(replyLost(Object.assign(deadline, { code: DEADLINE_EXCEEDED })));
 			}, timeoutMs);
 			this.pending.set(id, {
 				child,
