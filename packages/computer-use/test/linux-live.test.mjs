@@ -125,7 +125,7 @@ describe.skipIf(process.env.PI_CU_LINUX_LIVE_SESSION !== "1")(
 					assert(stateId, "semantic observation did not return a stateId");
 					assert.equal(semantic.details?.target?.windowTitle, appFinder.windowTitle);
 					assert.equal(semantic.details?.helper?.accessibility, true);
-					assert.equal(semantic.details?.helper?.protocolVersion, 8);
+					assert.equal(semantic.details?.helper?.protocolVersion, 9);
 					assert(
 						Number(/\((?:\d+ of )?(\d+) nodes/.exec(semantic.content?.[0]?.text ?? "")?.[1] ?? 0) > 1,
 						"semantic observation returned no accessible descendants",

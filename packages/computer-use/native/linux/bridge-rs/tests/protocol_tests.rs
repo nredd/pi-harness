@@ -153,7 +153,7 @@ fn protocol_round_trip_matches_other_helpers() {
     .unwrap();
     let response = Response::ok(&request.id, json!({"backend":"at-spi2"}));
     let value = serde_json::to_value(response).unwrap();
-    assert_eq!(value["protocolVersion"], 8);
+    assert_eq!(value["protocolVersion"], 9);
     assert_eq!(value["id"], "linux-1");
     assert_eq!(value["result"]["backend"], "at-spi2");
 }

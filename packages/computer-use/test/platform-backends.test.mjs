@@ -21,7 +21,7 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 	runProcess: vi.fn(),
 }));
 vi.mock("../src/platform/linux/helper.ts", () => ({
-	LINUX_HELPER_PROTOCOL_VERSION: 8,
+	LINUX_HELPER_PROTOCOL_VERSION: 9,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
 }));
@@ -44,7 +44,7 @@ const diagnostics = (over = {}) => ({
 	...over,
 });
 /** The Linux helper speaks its own protocol version (#1300). */
-const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 8, ...over });
+const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 9, ...over });
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -673,7 +673,7 @@ describe("Linux backend", () => {
 		assert.deepEqual(lastCall(fakes.linux), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
 		// A v4 helper neither records owed releases across restarts nor rechecks the drag start, so it must not pass readiness.
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ protocolVersion: 4 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 8, got 4/);
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 9, got 4/);
 		fakes.linux.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ invariants: [] }));

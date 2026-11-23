@@ -36,7 +36,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const rootsFile = process.env.PI_TEST_WSL_ROOTS_FILE;
   const roots = rootsFile && require("node:fs").existsSync(rootsFile) ? JSON.parse(require("node:fs").readFileSync(rootsFile, "utf8")) : [];
   const result = request.cmd === "listRoots" ? { roots } : {};
-  process.stdout.write(JSON.stringify({ protocolVersion: 8, id: request.id, ok: true, result }) + "\\n");
+  process.stdout.write(JSON.stringify({ protocolVersion: 9, id: request.id, ok: true, result }) + "\\n");
 });
 `,
 	);
