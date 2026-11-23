@@ -6,6 +6,7 @@ import {
 	foldToBudget,
 	graftScopedOutline,
 	isProtectedNode,
+	OUTLINE_FORMAT_VERSION,
 	type ParseLookOptions,
 	PROTECTED_LABEL,
 	parseLookResponse,
@@ -778,10 +779,11 @@ describe("OCR text over a protected node (#1263)", () => {
 	/** A readable box well away from `field`, so only the unknown-geometry rule can drop it. */
 	const far = { x: 10, y: 150, w: 30, h: 10 };
 	const farText = (extra = {}) => ({ ref: "t", role: "AXStaticText", rect: far, text: [box(SECRET, far)], ...extra });
-	/** A restored outline: `children` under a readable window that holds a box at `far`. */
+	/** A restored current-format outline: `children` under a readable window that holds a box at `far`. */
 	const restored = (children: object[]) =>
 		restoreOutline({
 			lookId: "l",
+			formatVersion: OUTLINE_FORMAT_VERSION,
 			root: {
 				...outlineNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 }, text: [box(SECRET, far)] }),
 				children: children as never,
@@ -887,6 +889,7 @@ describe("OCR text over a protected node (#1263)", () => {
 		const legacy = (text: object) =>
 			restoreOutline({
 				lookId: "l",
+				formatVersion: OUTLINE_FORMAT_VERSION,
 				root: restoredNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 } }, [
 					restoredNode("@e2", { role: "unknown", rect: { x: 10, y: 10, w: 200, h: 100 } }, [child(text)]),
 				]),
@@ -1012,6 +1015,50 @@ describe("OCR text over a protected node (#1263)", () => {
 		const target = graftScopedOutline(outline, "@e3", scoped);
 		assert.deepEqual(target.rect, { x: 200, y: 120, w: 90, h: 70 }, "a readable target keeps its action rect");
 		assert.deepEqual(target.text, []);
+	});
+
+	/** A stored window holding a secure field at `fieldRect`, a box at x:110 and a picture-only title far away. */
+	const stored = (fieldRect: object, formatVersion?: number) =>
+		restoreOutline({
+			lookId: "l",
+			...(formatVersion === undefined ? {} : { formatVersion }),
+			root: restoredNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 } }, [
+				restoredNode("@e2", { role: "AXSecureTextField", rect: fieldRect }),
+				restoredNode("@e3", {
+					role: "AXGroup",
+					rect: { x: 105, y: 45, w: 60, h: 30 },
+					text: [box(SECRET, { x: 110, y: 52, w: 30, h: 10 })],
+				}),
+				restoredNode("@e4", { role: "AXImage", pictureOnly: true, title: SECRET, rect: far }),
+			]),
+		});
+
+	test("legacy normalized origin: an unversioned outline with an unreadable node drops all its OCR", () => {
+		// The old parser saved `{ y: 50, w: 80, h: 20 }` as `x: 0`, so the box at x:110 escaped its filter.
+		const legacy = stored({ x: 0, y: 50, w: 80, h: 20 });
+		assert.deepEqual([legacy.nodes[2].text, legacy.nodes[3].title], [[], PROTECTED_LABEL]);
+		assert.ok(!JSON.stringify(serializeOutline(legacy)).includes(SECRET));
+		const versioned = stored({ x: 0, y: 50, w: 80, h: 20 }, OUTLINE_FORMAT_VERSION);
+		assert.deepEqual(
+			[versioned.nodes[2].text.map((item) => item.string), versioned.nodes[3].title],
+			[[SECRET], SECRET],
+			"a versioned origin is genuine, so the per-rect rules apply",
+		);
+		const unknown = stored({ x: 0, y: 50, w: 80, h: 20 }, OUTLINE_FORMAT_VERSION + 1);
+		assert.deepEqual(unknown.nodes[2].text, [], "an unrecognized version is legacy too");
+		const readable = restoreOutline({
+			lookId: "l",
+			root: restoredNode("@e1", { role: "AXWindow", rect: { x: 0, y: 0, w: 300, h: 200 } }, [
+				restoredNode("@e3", { role: "AXGroup", rect: far, text: [box("Kept", far)] }),
+				restoredNode("@e4", { role: "AXImage", pictureOnly: true, title: "Logo", rect: field }),
+			]),
+		});
+		assert.deepEqual(
+			[readable.nodes[1].text.map((item) => item.string), readable.nodes[2].title],
+			[["Kept"], "Logo"],
+			"a legacy outline with no unreadable node restores unchanged",
+		);
+		assert.equal(serializeOutline(readable).formatVersion, OUTLINE_FORMAT_VERSION, "writers stamp the version");
 	});
 
 	test("observe_ui and search_ui never echo OCR read over a secure field", async () => {

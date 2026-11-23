@@ -128,9 +128,17 @@ export interface OutlineDiff {
 
 export type SerializedOutlineNode = Omit<OutlineNode, "parent" | "children"> & { children: SerializedOutlineNode[] };
 
+/**
+ * Stored outline format. Version 1 is the first writer that never invents a rect origin and filters OCR over
+ * unreadable nodes (#1263). An outline without it predates that writer: its rects may carry a made-up `x: 0`/`y: 0`.
+ */
+export const OUTLINE_FORMAT_VERSION = 1;
+
 export interface SerializedOutline {
 	lookId: string;
 	root: SerializedOutlineNode;
+	/** `OUTLINE_FORMAT_VERSION` of the writer; missing on outlines stored before it. */
+	formatVersion?: number;
 }
 
 export interface ControlsResult {
@@ -257,10 +265,11 @@ function redactPicture(node: OutlineNode): void {
  * node has no known area, every box and picture-only title goes, and while one exists a box with no known area goes
  * too. The one exception is trusted provenance: a box the Linux helper derived from its readable node's own AX value
  * (`source: "value"` and the same string), enclosed by that node's rect, under the protected ancestor. A redacted
- * picture-only node is itself protected, so its region joins the worklist; restore therefore gives the same result.
- * Mutates the tree.
+ * picture-only node is itself protected, so its region joins the worklist; a versioned restore therefore gives the same result.
+ * `legacy` (an outline stored before `OUTLINE_FORMAT_VERSION`, whose rects may have invented origins) treats every
+ * region as unknown, so any unreadable node drops all of it. Mutates the tree.
  */
-function dropTextOverProtected(root: OutlineNode): void {
+function dropTextOverProtected(root: OutlineNode, legacy = false): void {
 	const nodes = collectNodes(root);
 	const regions: Array<{ node: OutlineNode; rect: OutlineRect }> = [];
 	let unknownRegion = false;
@@ -270,6 +279,7 @@ function dropTextOverProtected(root: OutlineNode): void {
 	};
 	for (const node of nodes) if (coversUnreadablePixels(node)) addRegion(node);
 	if (!regions.length && !unknownRegion) return;
+	if (legacy) unknownRegion = true;
 
 	const mustDropBox = (owner: OutlineNode, text: OutlineText): boolean => {
 		const box = text.rect;
@@ -886,7 +896,7 @@ export function countOutlineNodes(root: OutlineNode): number {
 }
 
 export function serializeOutline(outline: Outline): SerializedOutline {
-	return { lookId: outline.lookId, root: serializeOutlineNode(outline.root) };
+	return { lookId: outline.lookId, root: serializeOutlineNode(outline.root), formatVersion: OUTLINE_FORMAT_VERSION };
 }
 
 export function serializeOutlineNode(node: OutlineNode): SerializedOutlineNode {
@@ -914,7 +924,7 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 		return node;
 	};
 	const root = restoreNode(serialized.root);
-	dropTextOverProtected(root);
+	dropTextOverProtected(root, serialized.formatVersion !== OUTLINE_FORMAT_VERSION);
 	return { lookId: serialized.lookId, root, nodes, refToWireRef, wireRefToRef };
 }
 
