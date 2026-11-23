@@ -4,13 +4,14 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
-import { ExportRefusal, exportStats, IncompleteScan, importStats } from "./snapshot.ts";
+import { cleanRecovery, ExportRefusal, exportStats, IncompleteScan, importStats } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
 	"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] " +
 	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO | " +
-	"subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
+	"clean-recovery --agent-dir DIR --output OUT | subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
+	"  clean-recovery: remove frozen recovery shard files the active snapshot fully covers; never part of an export\n" +
 	"  --replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
 	"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
 	"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
@@ -83,6 +84,20 @@ export async function main(): Promise<void> {
 					`${name}: scan incomplete (${status.consecutiveFailures} in a row), ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`,
 				);
 		}
+	} else if (
+		command === "clean-recovery" &&
+		// Deleting files never falls back to the default installation: name it.
+		options.has("--agent-dir") &&
+		output !== undefined &&
+		input === undefined &&
+		!EXPORT_ONLY.some((f) => options.has(f))
+	) {
+		const result = await cleanRecovery(dir, resolve(output));
+		console.log(JSON.stringify(result));
+		// A cleanup that exits 1 here has no refusal code, so no warning may look like a trailer either.
+		for (const warning of result.warnings ?? []) console.error(oneLine(warning));
+		// A cleanup the manifest changed under did not finish: say so in the exit code too.
+		if (result.kept.some((k) => k.reason === "changed")) process.exitCode = 1;
 	} else if (
 		command === "import" &&
 		input !== undefined &&
