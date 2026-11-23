@@ -614,8 +614,15 @@ enum RootStateAttribute {
 	case minimized
 }
 
-/// A root's `AXFocused`, `AXMain` and `AXMinimized`: `nil` unless the read returned a boolean. A failed, absent or
-/// undecodable read is unknown, never `false`, and its key is left out of the root entry.
+/// Decode one root-state AX reply (`AXFocused`, `AXMain`, `AXMinimized`): only a successful reply that IS a `CFBoolean`
+/// is evidence. No reply, or any other type, e.g. a numeric `0` or `2`, is unknown (`nil`), never `false` (#1303).
+func rootStateBoolean(_ value: AnyObject?) -> Bool? {
+	guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+	return value as? Bool
+}
+
+/// A root's `AXFocused`, `AXMain` and `AXMinimized`: `nil` unless the read returned a boolean (`rootStateBoolean`). A
+/// failed, absent or undecodable read is unknown, never `false`, and its key is left out of the root entry.
 struct RootState: Equatable {
 	let focused: Bool?
 	let main: Bool?
@@ -2809,7 +2816,7 @@ final class Bridge {
 			string: { self.stringRead($0, attribute: Bridge.identityAttribute($1)) },
 			frame: { self.frameRead($0) },
 			pairingRead: { self.pairingRead($0) },
-			state: { self.boolAttribute($0, attribute: Bridge.stateAttribute($1)) }
+			state: { rootStateBoolean(self.copyAttribute($0, attribute: Bridge.stateAttribute($1))) }
 		)
 		let inventory = world.classify(candidates: cgWindowCandidates(pid: pid, entries: cgEntries))
 		let entries = rootEntries(inventory.windows, ref: { self.refStore.storeWindow($0) }) { classified, sheet in
