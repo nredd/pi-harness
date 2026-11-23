@@ -225,7 +225,8 @@ test("does not follow a const past a nearer binding of the name it does not mode
 		"function g() { for (var expected of []) {} expect(x).toMatchObject({ m: expected }); }",
 		"function g() { { var { expected } = { expected: 'ok' }; } expect(x).toMatchObject({ m: expected }); }",
 		"namespace N { export const { expected } = { expected: 'ok' }; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
-		"declare namespace N { const expected: string; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"declare namespace N { const expected = 'ok'; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"declare namespace N { const expected = { m: /x/ }; const used = expect(x).toMatchObject(expected); }",
 		"namespace N { const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 	];
 	const control = "{ { const expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }";
@@ -266,12 +267,16 @@ test("vetoes a const only for writes inside its scope (#1334)", async () => {
 		"const looped = { m: /l/ }; for (looped.m of ['ok']); for (const each in looped);",
 		"const each = { m: /e/ }, keyed = { m: /k/ }; for (keyed.k in { a: 1 });",
 		"expect(x).toMatchObject({ outer, looped, each, keyed });",
+		// The pattern records the later `expected.z` before the walk reaches the earlier write inside the arrow.
+		"[x[(() => { const expected = { m: /w/ }; expected.m = 'ok'; expect(a).toMatchObject(expected); })()], expected.z] = [];",
 	].join("\n");
 	// `outer` stays vetoed: the write inside its scope hits a parameter, but resolving writes would add machinery.
 	expect(await scan(source)).toEqual([
 		"a.test.ts:1:41: bare /x/ in toMatchObject via `expected` at 1:72",
 		"a.test.ts:6:19: bare /e/ in toMatchObject via `each` at 7:42",
 	]);
+	// A write at position 0 starts exactly where the file scope does.
+	expect(await scan("expected.m = 'ok'; const expected = { m: /s/ }; expect(x).toMatchObject(expected);")).toEqual([]);
 });
 
 test("skips arguments across a function and the object of a with statement (#1315)", async () => {
@@ -295,6 +300,19 @@ test("resolves many sibling tests reusing one name without rescanning every decl
 	expect(found).toHaveLength(200);
 	expect(found[0]).toBe("a.test.ts:1:41: bare /r/ in toMatchObject via `expected` at 1:72");
 	expect(found[199]).toBe("a.test.ts:399:43: bare /r/ in toMatchObject via `expected` at 399:74");
+});
+
+test("vetoes per scope across many sibling tests that each write their own name (#1334)", async () => {
+	// Pins behavior, not complexity: the per-use write lookup is a binary search, a linear scan gives the same findings.
+	const lines = [];
+	for (let index = 0; index < 400; index++) {
+		const write = index % 2 === 0 ? " expected.n = 1;" : "";
+		lines.push(`test("${index}", () => { const expected = { m: /r/ };${write} expect(a).toMatchObject(expected); });`);
+	}
+	const found = await scan(lines.join("\n"));
+	expect(found).toHaveLength(200);
+	expect(found[0]).toBe("a.test.ts:2:41: bare /r/ in toMatchObject via `expected` at 2:72");
+	expect(found[199]).toBe("a.test.ts:400:43: bare /r/ in toMatchObject via `expected` at 400:74");
 });
 
 /** `const a0 = /x/` and `depth` levels of `const aN = [aN-1, aN-1]`, matched on the last: 2^depth paths, one regex. */

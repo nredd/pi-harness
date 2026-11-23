@@ -20,21 +20,24 @@
  * visible at the use. A `let`, `const` or `using` statement there binds exactly that scope, and so does a name
  * it destructures. A `catch` binding counts as visible in its clause and a `let`/`const`/`using` `for` header
  * (destructured or not) in its statement. Every other binding (`var`, parameter, exported namespace member,
- * function, class, import, enum) counts as visible throughout its nearest enclosing function or the file, a
- * superset of its real scope, so a binding the resolver does not model precisely can only cause a miss, never a
- * finding. A reused name (`const expected` in each test) resolves per scope; `let`, `var`, `using`, destructured
- * names and free globals are not followed. `arguments` is never followed: every ordinary function
- * binds it implicitly. A `const` fixes the binding, not its contents: it is not followed when its scope holds
- * a write target naming it under any binding (assignment, `++`/`--`, `delete`, a `for...in`/`for...of`
- * target, the first argument of `Object.assign`, `defineProperty`, `defineProperties` or `fromEntries`); a
- * write outside that scope cannot reach it. Nor is a use anywhere inside a `with` statement nested in the
- * chosen scope: in its body the object may shadow the name, and its object expression is skipped too although
- * it is evaluated before that (conservative, only a miss).
+ * function, class, import, enum, namespace) counts as visible throughout its nearest enclosing function or the
+ * file, a superset of its real scope (exact regions are #1356), so a binding the resolver does not model
+ * precisely can only cause a miss, never a finding. A reused name (`const expected` in each test) resolves per
+ * scope; `let`, `var`, `using`, destructured names and free globals are not followed. `arguments` is never
+ * followed: every ordinary function binds it implicitly. A `const` fixes the binding, not its contents: it is
+ * not followed when its scope holds a write target naming it under any binding (assignment, `++`/`--`,
+ * `delete`, a `for...in`/`for...of` target, the first argument of `Object.assign`, `defineProperty`,
+ * `defineProperties` or `fromEntries`); a write outside that scope cannot reach it. Writes are not resolved to
+ * a binding, so a write to a nearer shadowing binding inside the scope still vetoes (#1356). Nor is a use
+ * anywhere inside a `with` statement nested in the chosen scope: in its body the object may shadow the name,
+ * and its object expression is skipped too although it is evaluated before that (conservative, only a miss).
  * Syntactic, so the temporal dead zone is not modeled: a `const` used in a different `switch` clause than its
- * initializer may be uninitialized at runtime, and the guard still reports it. A write through an alias or a call is not tracked,
- * so a regex later overwritten that way can still be reported. A regex reached through a helper call, `new RegExp(...)` or another
- * module is not seen. Each initializer is walked at most once per matcher call and stored mode, so shared
- * initializers (`const a2 = [a1, a1]`) cost linear work and a revisit adds no finding.
+ * initializer may be uninitialized at runtime, and the guard still reports it. A write through an alias or a
+ * call is not tracked, so a regex later overwritten that way can still be reported. A regex reached through a
+ * helper call, `new RegExp(...)` or another module is not seen. Each initializer is walked at most once per
+ * matcher call and stored mode, so shared initializers (`const a2 = [a1, a1]`) cost linear work and a revisit
+ * adds no finding. Writes are sorted per name and binary searched per use, so many tests each writing their
+ * own `expected` cost O(n log n), not quadratic.
  *
  * CLI: `node scripts/check-test-matchers.ts` checks every owned JS/TS test source and exits 1 on findings.
  */
@@ -218,6 +221,23 @@ function spans(outer: Node, inner: Node): boolean {
 }
 
 /**
+ * Whether one of `writes` (sorted by position) lies inside `scope`: binary search for the first write starting at
+ * or after `scope`, which lies inside it if any does, since identifiers never overlap. Linear scans per use would
+ * make many tests each writing their own `expected` quadratic.
+ */
+function writtenInside(writes: readonly Node[], scope: Node): boolean {
+	let low = 0;
+	let high = writes.length;
+	while (low < high) {
+		const middle = (low + high) >>> 1;
+		if ((writes[middle] as Node).pos < scope.pos) low = middle + 1;
+		else high = middle;
+	}
+	const first = writes[low];
+	return first !== undefined && spans(scope, first);
+}
+
+/**
  * `Object` methods whose first argument counts as written. `fromEntries` never writes its argument; listing
  * it only makes the rule more conservative, which can cause a miss and never a finding.
  */
@@ -304,6 +324,8 @@ function namesOf(file: SourceFile): FileNames {
 		node.forEachChild(scan);
 	}
 	scan(file);
+	// A destructuring write is recorded by its pattern and again by a nested assignment, out of source order.
+	for (const writes of written.values()) writes.sort((left, right) => left.pos - right.pos);
 	return { scoped, loose, written };
 }
 
@@ -330,9 +352,10 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 	 * binding of `use` lies inside its own scope and may be visible there, so a nearer binding the walk does not
 	 * model is caught by that check. A `with` statement passed on the way (whose object could supply the name)
 	 * and a `const` whose scope holds a write into the name (under any binding: a write outside that scope
-	 * cannot reach it) are never followed, nor is `arguments` (implicitly bound by every ordinary function). A lexical binding is visible at `use` exactly when its scope is an ancestor, so
-	 * the only other lexical bindings that matter are duplicates in the chosen scope: per use, the work is the
-	 * walk to the root plus the name's loose bindings, never every same-named `const` in the file.
+	 * cannot reach it) are never followed, nor is `arguments` (implicitly bound by every ordinary function).
+	 * A lexical binding is visible at `use` exactly when its scope is an ancestor, so the only other lexical
+	 * bindings that matter are duplicates in the chosen scope: per use, the work is the walk to the root, the
+	 * name's loose bindings and a binary search of its writes, never every same-named `const` or write in the file.
 	 */
 	function constInitializer(use: Identifier): { declaration: Node; initializer: Expression } | undefined {
 		names ??= namesOf(file);
@@ -345,7 +368,7 @@ export function findVacuousMatchers(file: SourceFile, name: string): string[] {
 			if (here !== undefined) {
 				const { declaration, constant } = here[0] as Lexical;
 				const shadowed = here.length > 1 || loose.some(({ binding }) => spans(node, binding));
-				const mutated = writes.some((write) => spans(node, write));
+				const mutated = writtenInside(writes, node);
 				if (!constant || declaration.initializer === undefined || shadowed || mutated) return undefined;
 				return { declaration, initializer: declaration.initializer };
 			}
