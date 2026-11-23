@@ -23,7 +23,15 @@ interface Coverage {
 interface Entry {
 	owned: string[];
 	exclusions: { path: string }[];
-	signals: { primary?: { report: string }; bun?: { report: string; enforcement?: string; files?: string[] } };
+	signals: {
+		primary?: { report: string };
+		bun?: {
+			report: string;
+			enforcement?: string;
+			files?: string[];
+			max_uncovered: Record<string, Record<string, number>>;
+		};
+	};
 }
 
 type Loader = () => Promise<{ default: unknown }>;
@@ -573,12 +581,14 @@ test("computer-use-vitest is an enforced ratchet with a cap for every counter on
 	}
 });
 
-test("computer-use Bun accounts the complete primary inventory in a separate report (#645)", () => {
+test("computer-use Bun enforces zero on the complete primary inventory in a separate report (#645)", () => {
 	const bun = realPolicy()["computer-use-vitest"]?.signals.bun;
 	assert.ok(bun);
 	assert.equal(bun.report, "coverage/bun/lcov.info");
-	assert.equal(bun.enforcement, "report-only");
+	assert.equal(bun.enforcement, "enforced");
 	assert.equal(bun.files, undefined);
+	const zero = { lines: 0, functions: 0, branches: 0, statements: 0 };
+	assert.deepEqual(bun.max_uncovered, { darwin: zero, linux: zero });
 });
 
 test("computer-use Node pins every file already at zero uncovered, each owned (#645)", async () => {
