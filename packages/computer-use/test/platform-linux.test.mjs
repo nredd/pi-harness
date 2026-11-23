@@ -34,7 +34,7 @@ const readline = require("node:readline");
 const invariants = ["state-scoped-observations","bounded-observation-history","multi-root-forest","progressive-disclosure","atomic-physical-input","concurrent-requests","transactional-batching"];
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line); let result;
-  if (request.cmd === "diagnostics") result = { protocolVersion: 8, architectureVersion: 1, invariants, pid: process.pid, accessibility: true };
+  if (request.cmd === "diagnostics") result = { protocolVersion: 9, architectureVersion: 1, invariants, pid: process.pid, accessibility: true };
   else if (request.cmd === "listRoots") result = { roots: [{ kind: "window", rootRef: "root:1", pid: 42, appName: "google-chrome-stable", title: "Linux fixture", framePoints: { x: 10, y: 20, w: 800, h: 600 }, isFocused: true }] };
   else if (request.cmd === "atspiReadText") result = { text: "fixture", offset: 0, limit: 7, totalChars: 7, hasMore: false };
   else if (request.cmd === "atspiWaitFor") result = { found: true };
@@ -42,7 +42,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   else if (request.cmd === "actBatch") result = { outcome: "worked", performed: { transaction: true, actionCount: request.args.actions.length } };
   else if (request.cmd === "openBrowserLocation") result = { opened: true };
   else result = { focused: true };
-  process.stdout.write(JSON.stringify({ protocolVersion: 8, id: request.id, ok: true, result }) + "\\n");
+  process.stdout.write(JSON.stringify({ protocolVersion: 9, id: request.id, ok: true, result }) + "\\n");
 });
 `,
 	);
@@ -75,7 +75,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	assert.equal(linux.isBrowserApp("gnome-text-editor"), false);
 
 	const ready = await linux.ensureReady({}, { lastPermissionCheckAt: 0 });
-	assert.equal(ready.helperDiagnostics?.protocolVersion, 8);
+	assert.equal(ready.helperDiagnostics?.protocolVersion, 9);
 	assert.equal((await linux.listApps())[0]?.appName, "google-chrome-stable");
 	assert.equal((await linux.listRoots({ title: "fixture" }))[0]?.rootRef, "root:1");
 	assert.equal((await linux.getFrontmost()).pid, 42);
@@ -128,8 +128,8 @@ const readline = require("node:readline");
 fs.appendFileSync(process.env.PI_TEST_LINUX_START_COUNT, "start\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
-  const result = request.cmd === "diagnostics" ? { protocolVersion: 8, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
-  process.stdout.write(JSON.stringify({ protocolVersion: 8, id: request.id, ok: true, result }) + "\\n");
+  const result = request.cmd === "diagnostics" ? { protocolVersion: 9, architectureVersion: 1, invariants: ${JSON.stringify(INVARIANTS)} } : request.args;
+  process.stdout.write(JSON.stringify({ protocolVersion: 9, id: request.id, ok: true, result }) + "\\n");
 });
 `,
 	);
@@ -183,7 +183,7 @@ fs.chmodSync(process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH, 0o755);
 	 * @throws {TypeError} If fixture options cannot be serialized.
 	 */
 	const helperScript = ({
-		protocol = 8,
+		protocol = 9,
 		architecture = 1,
 		startFile,
 		diagnosticsDelayMs = NO_DIAGNOSTICS_DELAY_MS,
@@ -305,7 +305,7 @@ ${installs ? `const tmp = process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH + ".tmp"
 			assert.match(error.message, /no prebuilt and PI_COMPUTER_USE_ALLOW_BUILD not set/);
 			assert.match(
 				error.message,
-				/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 8, got 4\./,
+				/Installed Linux helper .* was rejected: Linux helper protocol mismatch: expected 9, got 4\./,
 			);
 			return true;
 		});
@@ -330,7 +330,7 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		const client = c.client();
 		await assert.rejects(
 			client.command("echo", {}),
-			/installed at .* failed validation: Linux helper protocol mismatch: expected 8, got 4\./,
+			/installed at .* failed validation: Linux helper protocol mismatch: expected 9, got 4\./,
 		);
 		assert.equal((await lines(c.setupCount)).length, 1, "no recursive or repeated setup within one attempt");
 		client.dispose();
@@ -388,7 +388,7 @@ const fs = require("node:fs"); fs.copyFileSync(${JSON.stringify(c.good)}, proces
 		await fs.chmod(c.helper, 0o755);
 		await assert.rejects(c.client().command("echo", {}), (error) => {
 			assert.doesNotMatch(error.message, /Restart Pi/);
-			assert.match(error.message, /was rejected: Linux helper protocol mismatch: expected 8, got 4\./);
+			assert.match(error.message, /was rejected: Linux helper protocol mismatch: expected 9, got 4\./);
 			return true;
 		});
 	}

@@ -344,18 +344,25 @@ impl AtspiClient {
     /// The connection PID of `accessible`'s bus owner and that process's executable. Only a
     /// unique connection name (`:1.42`) is attributed: a well-known name can change owner between
     /// requests, so it stays unidentified.
+    ///
+    /// The bus reports the PID the connection had when it connected, so the `exe` read counts
+    /// only when the same connection still reports that PID after it (#1294): the bus drops a
+    /// connection once its owner exits, and a PID is reused only after its owner exits, so a
+    /// live connection means the read reached its owner. A lookup that fails is an error, like
+    /// the first one; a changed PID is unidentified.
     async fn bus_owner(
         &self,
         accessible: &AccessibleRef,
     ) -> Result<(u64, Option<Executable>), ProtocolError> {
         let pid = self.application_pid(accessible).await?;
-        let unique = accessible.destination.starts_with(':');
-        Ok((
-            pid,
-            unique
-                .then(|| process_executable(&self.proc_root, pid))
-                .flatten(),
-        ))
+        if !accessible.destination.starts_with(':') {
+            return Ok((pid, None));
+        }
+        let Some(executable) = process_executable(&self.proc_root, pid) else {
+            return Ok((pid, None));
+        };
+        let confirmed = self.application_pid(accessible).await? == pid;
+        Ok((pid, confirmed.then_some(executable)))
     }
 
     /// Every application's roots, or only those of the processes `filter_pids` names: a
@@ -1951,6 +1958,99 @@ mod tests {
             },
         )
         .await;
+    }
+
+    /// One scripted `GetConnectionUnixProcessID` reply: the PID, or `None` once the connection
+    /// is gone, and the `exe` target the fixture PID links to from then on.
+    type PidReply = (Option<u32>, Option<&'static str>);
+
+    /// A bus answering connection PID lookups from a script. A reply can relink the fixture
+    /// PID's `exe` before it is sent, as a PID reused right after the lookup would (#1294).
+    struct ScriptedBus {
+        replies: Arc<Mutex<std::collections::VecDeque<PidReply>>>,
+        exe: std::path::PathBuf,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.DBus")]
+    impl ScriptedBus {
+        #[zbus(name = "GetConnectionUnixProcessID")]
+        fn get_connection_unix_process_id(&self, name: &str) -> zbus::fdo::Result<u32> {
+            assert_eq!(name, ":1.42");
+            let (pid, relink) = self
+                .replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("unscripted PID lookup");
+            if let Some(target) = relink {
+                std::fs::remove_file(&self.exe).unwrap();
+                std::os::unix::fs::symlink(target, &self.exe).unwrap();
+            }
+            pid.ok_or_else(|| zbus::fdo::Error::NameHasNoOwner(format!("{name} is gone")))
+        }
+    }
+
+    /// The `exe` read counts only while the root's connection still reports the same PID after
+    /// it: a PID reused between the bus lookup and the read can only belong to a new process once
+    /// the owner exited, and then the bus has dropped the owner's connection (#1294).
+    #[tokio::test]
+    async fn identity_needs_the_same_bus_owner_after_the_exe_read() {
+        const REUSED: &str = "/usr/bin/reused-pid";
+        let cases: [(&[PidReply], u64, Option<&str>); 4] = [
+            (
+                &[(Some(25361), None), (Some(25361), None)],
+                25361,
+                Some("fixture-editor"),
+            ),
+            // The owner exits and its PID is reused before the read: the connection is gone.
+            (&[(Some(25361), Some(REUSED)), (None, None)], 0, None),
+            (&[(Some(25361), None), (Some(25362), None)], 25361, None),
+            // A PID reused only after the recheck: the read already named the live owner.
+            (
+                &[(Some(25361), None), (Some(25361), Some(REUSED))],
+                25361,
+                Some("fixture-editor"),
+            ),
+        ];
+        for (script, pid, identity) in cases {
+            let proc = ProcFixture::new(&[(25361, "/usr/bin/fixture-editor")]);
+            let replies = Arc::new(Mutex::new(script.iter().copied().collect()));
+            let bus = ScriptedBus {
+                replies: Arc::clone(&replies),
+                exe: proc.0.join("25361").join("exe"),
+            };
+            with_peer(
+                |server| {
+                    let node = |name, role, children: &'static [(&str, &str)]| TreeNode {
+                        name,
+                        role,
+                        children,
+                        has_text: false,
+                    };
+                    server
+                        .serve_at(FIXTURE_DBUS_ROOT, bus)?
+                        .serve_at(
+                            FIXTURE_REGISTRY_ROOT,
+                            node("Registry", "desktop", &[(":1.42", "/app")]),
+                        )?
+                        .serve_at(
+                            "/app",
+                            node("Editor", "application", &[(":1.42", "/app/window")]),
+                        )?
+                        .serve_at("/app/window", node("Notes", "frame", &[]))
+                },
+                async |connection| {
+                    let client = peer_client(connection).with_proc_root(&proc.0);
+                    let roots = client.list_roots(None).await.unwrap();
+                    let [root] = roots.as_slice() else {
+                        panic!("expected one root, got {}", roots.len());
+                    };
+                    assert_eq!((root.pid, executable_name(root)), (pid, identity));
+                    assert!(replies.lock().unwrap().is_empty(), "{script:?}");
+                },
+            )
+            .await;
+        }
     }
 
     /// An exact root lookup reads the registry and its own connection's application only: a
