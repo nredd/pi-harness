@@ -373,7 +373,11 @@ plain identity tokens through `installRootObserver` (no `AXObserver`, no trust n
 event log's cap, cursor, routing, LRU eviction and change wait, observed through an injected
 `RootChangeWaiter` so nothing sleeps. One check creates a real `AXObserver` and prints `SKIP:` if the
 caller is refused. `native/macos/image_encoding_tests.swift` downscales and JPEG-encodes in-memory bitmaps;
-a noise bitmap must encode larger at quality 1.0 than at 0.1.
+a noise bitmap must encode larger at quality 1.0 than at 0.1. `native/macos/look_tests.swift` runs
+`look` past ownership on a stored root ref for such a PID, with an injected owner and an in-memory
+capture: root and scope-ref resolution, downscaled JPEG and frame-sized image spaces, the scale factor,
+the truncated outline root, the stored look record and base-look ref transfer across eviction. It
+never requests `readText: always`, so Vision OCR stays unexecuted.
 Successful AX reads, observer registration and real captures stay live-only.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.

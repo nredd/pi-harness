@@ -3053,7 +3053,7 @@ final class Bridge {
 		return "look_\(nextLookId)"
 	}
 
-	private func lookRecord(for lookId: String) -> LookRecord? {
+	func lookRecord(for lookId: String) -> LookRecord? {
 		lookRecordLock.lock()
 		defer { lookRecordLock.unlock() }
 		return lookRecords[lookId]
