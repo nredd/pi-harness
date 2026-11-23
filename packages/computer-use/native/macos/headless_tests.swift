@@ -364,6 +364,7 @@ struct HeadlessTests {
         runAXElementAssertions()
         runRootEventAssertions()
         runImageEncodingAssertions()
+        try runLookAssertions()
         testMotionLifecycle()
         runCursorMotionAssertions()
         runCursorLifecycleAssertions()
