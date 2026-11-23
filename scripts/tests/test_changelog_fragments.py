@@ -501,7 +501,10 @@ def test_uncategorized_legacy_bullet_conflicts_with_equal_fragment(repo: Path) -
     assert fragment.read_text() == BULLET
 
 
-@pytest.mark.parametrize("package", ["session-kit", "dev-tools", "todo", "plan-mode", "resource-sampler"])
+@pytest.mark.parametrize(
+    "package",
+    ["session-kit", "dev-tools", "todo", "plan-mode", "resource-sampler", "preset", "subscription-router"],
+)
 def test_additional_packages_preserve_legacy_and_plain_release_headers(repo: Path, package: str) -> None:
     """Fold strict fragments without rewriting uncategorized, wrapped or prose legacy data.
 

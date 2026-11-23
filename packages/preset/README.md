@@ -191,7 +191,8 @@ and `InteractiveHarnessOptions` from the fork's `/testing/interactive`, and
 `tests/scenarios/footer-model.test.ts` still imports its `InteractiveHarness` type.
 Those hosts depend on private `InteractiveMode` and TUI render flushing; private model-route
 and interactive behavior are unchanged. Run `npm run check` for lint, types, Node and Bun tests plus the
-packed-file contract. `CHANGELOG.md` records releases from `0.5.0` on, with unreleased changes under `[Unreleased]`;
+packed-file contract. `CHANGELOG.md` records releases from `0.5.0` on, with unreleased changes under `[Unreleased]` and
+[changelog fragments](#changelog-fragments);
 earlier history remains in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
 
 ## Contents
@@ -407,3 +408,23 @@ Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.
 They run in the test process, so a path Pi computed at import time would not be redirected; Pi 1.3.0
 computes none of the ones used (see the comment in `tests/discovery.test.ts`).
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging.
+This migration leaves four
+pending fragments: #1024, #1050, #1057 and #1126.
+
+The #932 migration preserves 11 historical bullets: 4 exact bullets move to `fixed` fragments,
+their original category, and 7 remain in `CHANGELOG.md`. The two `1025.changed` bullets share one
+issue/category and remain; the #1175 and four #1178 bullets lack the required issue link.
+The emptied `### Fixed` heading is dropped; a fold recreates it.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

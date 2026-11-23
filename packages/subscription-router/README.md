@@ -835,3 +835,20 @@ Legacy `balanced` keeps its fixed 20% margin. Versioned policies support the exp
 `switchMargin` described [here](#routing-policies-v1); cross-process anti-herding remains unimplemented.
 Neither changing the margin nor random tie-breaking alone establishes a global capacity guarantee
 with delayed account-wide telemetry.
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging.
+
+The #932 migration moves no historical bullets: all 17 retained `[Unreleased]` bullets lack
+the required matching issue link. Its `## Unreleased` heading becomes `## [Unreleased]`, which
+the fold requires; the bullets, blank lines and unbracketed release headings stay verbatim.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

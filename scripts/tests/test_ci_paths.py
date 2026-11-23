@@ -183,7 +183,7 @@ def classify_change(repo: Path, files: dict[str, str]) -> ci_paths.ChangeClassif
         "CONTRIBUTING.md",
         "NOTES.md",
         "packages/dev-tools/README.md",
-        "packages/preset/CHANGELOG.md",
+        "packages/computer-use/CHANGELOG.md",
     ],
 )
 def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
@@ -218,6 +218,8 @@ def test_classify_accepts_documentation_paths(repo: Path, path: str) -> None:
         "packages/todo/CHANGELOG.md",
         "packages/plan-mode/CHANGELOG.md",
         "packages/resource-sampler/CHANGELOG.md",
+        "packages/preset/CHANGELOG.md",
+        "packages/subscription-router/CHANGELOG.md",
         ".github/workflows/ci.yml",
         "AGENTS.md",
         "docs/coverage.md",

@@ -2449,9 +2449,9 @@ The initial migration moves 49 exact historical bullets. Eighteen bullets remain
 `[Unreleased]`: the repeated issue/category groups `330.fixed` (five), `436.fixed` (two),
 `548.fixed` (two), `264.fixed` (two), six unattributed bullets and the PR-only `#196` bullet.
 The nonbullet `#900` breaking warning also remains verbatim. No historical issue IDs were
-invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode
-and resource-sampler now use the same fragment contract; their READMEs record retained legacy
-entries. Preset, subscription-router and computer-use remain outside this migration.
+invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode,
+resource-sampler, preset and subscription-router now use the same fragment contract; their READMEs
+record retained legacy entries. Computer-use remains outside this migration.
 
 ### Contributing
 
