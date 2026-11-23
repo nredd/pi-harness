@@ -543,45 +543,46 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     Returns:
         None: Every ported suite is a conventional test file with no stale helper entry.
     Raises:
-        AssertionError: A suite leaves `test/`, or a helper entry still names its old script.
+        AssertionError: A suite leaves `test/` and `tests/`, or a helper entry still names its old script.
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path for helper in cfg.verification_helpers}
-    suites = sorted((ROOT / "packages/computer-use/test").glob("*.test.mjs"))
-    # The 26 ported suites plus #551, #637, #672, #646 and #648, by name: losing or renaming any fails,
-    # while new suites (the #645 coverage work adds many) need no edit here.
+    package = ROOT / "packages/computer-use"
+    suites = sorted([*(package / "test").glob("*.test.mjs"), *(package / "tests").glob("*.test.ts")])
+    # The 26 ported suites plus #551, #637, #672, #646 and #648, by stem: losing or renaming any fails,
+    # while new suites (#645 adds many) and #871 moves to `tests/*.test.ts` need no edit here.
     required = {
-        "act-outcomes.test.mjs",
-        "app-policy.test.mjs",
-        "async.test.mjs",
-        "bounded-output.test.mjs",
-        "cleanup.test.mjs",
-        "desktop-tools.test.mjs",
-        "find-params.test.mjs",
-        "invariants.test.mjs",
-        "linux-build-scripts.test.mjs",
-        "linux-live.test.mjs",
-        "linux-native.test.mjs",
-        "local-signing.test.mjs",
-        "macos-helper-live.test.mjs",
-        "macos-helper-path.test.mjs",
-        "macos-native-pure.test.mjs",
-        "macos-observe-target.test.mjs",
-        "managed-browser-headless.test.mjs",
-        "managed-browser-profile.test.mjs",
-        "outline-store.test.mjs",
-        "platform-linux.test.mjs",
-        "platform-windows.test.mjs",
-        "runtime-concurrency.test.mjs",
-        "rust-coverage.test.mjs",
-        "session-lifecycle.test.mjs",
-        "swift-sdk.test.mjs",
-        "tool-schemas.test.mjs",
-        "unpaired-act.test.mjs",
-        "windows-build-scripts.test.mjs",
-        "wsl2-diagnostics.test.mjs",
+        "act-outcomes",
+        "app-policy",
+        "async",
+        "bounded-output",
+        "cleanup",
+        "desktop-tools",
+        "find-params",
+        "invariants",
+        "linux-build-scripts",
+        "linux-live",
+        "linux-native",
+        "local-signing",
+        "macos-helper-live",
+        "macos-helper-path",
+        "macos-native-pure",
+        "macos-observe-target",
+        "managed-browser-headless",
+        "managed-browser-profile",
+        "outline-store",
+        "platform-linux",
+        "platform-windows",
+        "runtime-concurrency",
+        "rust-coverage",
+        "session-lifecycle",
+        "swift-sdk",
+        "tool-schemas",
+        "unpaired-act",
+        "windows-build-scripts",
+        "wsl2-diagnostics",
     }
-    assert required <= {suite.name for suite in suites}
+    assert required <= {suite.name.removesuffix(".test.mjs").removesuffix(".test.ts") for suite in suites}
     for suite in suites:
         assert is_test_path(suite.relative_to(ROOT))
     for moved in [

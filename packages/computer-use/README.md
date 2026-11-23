@@ -1199,7 +1199,8 @@ native/windows/                 Windows backend/helper code when developing on W
 native/linux/bridge-rs/         Linux AT-SPI2 helper (Rust)
 scripts/build-native.mjs         macOS helper build script
 scripts/setup-helper.mjs         macOS helper install script
-test/*.test.mjs                  Vitest suites, e.g. invariants and runtime concurrency
+test/*.test.mjs                  Vitest suites not yet moved to tests/ (#871), e.g. invariants
+tests/*.test.ts                  Vitest suites, e.g. managed browser launch and profiles
 scripts/check-*.mjs              Repository gates (docs, package assets, commits, sync ledger)
 scripts/pi-cubench-agent.mjs     Cubench gateway adapter using registered Pi tools
 ```
@@ -1208,7 +1209,7 @@ The public tool surface lives in `extensions/computer-use.ts`. Keep it small. In
 
 ## Checks
 
-Run all static checks (typecheck, docs, every Vitest suite under `test/`, then the repository gates):
+Run all static checks (typecheck, docs, every Vitest suite under `test/` and `tests/`, then the repository gates):
 
 ```bash
 npm run check
