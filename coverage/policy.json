@@ -432,12 +432,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): shared peer tests and AT-SPI root discovery reduced uncovered L/F/regions from 967/129/1793 to 930/125/1730. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches.",
+      "note": "Ubuntu main runs 45225473086 and 45229504804 (same crate sources) agree on 727/106/1245 uncovered L/F/regions (#696). Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 834, "functions": 108 } },
+          "max_uncovered": { "linux": { "lines": 727, "functions": 106 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
@@ -453,13 +453,13 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Headless x64 tests do not prove live desktop behavior or Windows ARM64 coverage (#696).",
-      "note": "Hosted runs 44914453077 and 44876056492 agree on 3000/324/4868 uncovered lines/functions/regions. Mapped totals (5181 lines, 619 functions) come from main run 45009970545 at the sources they hash. Source tests inside src count; regions are not branches.",
+      "note": "Hosted main runs 45204703192 and 45210838089 (unchanged crate sources) agree on 2899/311 uncovered lines/functions (uncovered regions 4659 and 4656; uncapped). Mapped totals (5181 lines, 619 functions) come from main run 45009970545 at the sources they hash. Source tests inside src count; regions are not branches.",
       "signals": {
         "primary": {
           "report": "coverage/native-windows/lcov.info",
           "producer": "llvm-lcov",
           "platforms": ["win32"],
-          "max_uncovered": { "win32": { "lines": 3000, "functions": 324 } },
+          "max_uncovered": { "win32": { "lines": 2899, "functions": 311 } },
           "reporters": ["text", "lcov", "json"],
           "mapped_totals": {
             "win32": {
