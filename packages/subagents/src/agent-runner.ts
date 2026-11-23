@@ -56,6 +56,7 @@ import { createRosterTools } from "./roster-tools.ts";
 import { preloadSkills } from "./skill-loader.ts";
 import { isStaleCtxError } from "./stale-ctx.ts";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.ts";
+import { claimCreated, claimTranscript, openClaimed, type TranscriptClaim } from "./transcript-claim.ts";
 import type { SubagentType, ThinkingLevel } from "./types.ts";
 import type { LifetimeUsage } from "./usage.ts";
 import type { CompiledSchema } from "./workflow/json-schema.ts";
@@ -547,6 +548,11 @@ export interface RunOptions {
 	 */
 	resumeSessionFile?: string;
 	/**
+	 * Rechecks `resumeSessionFile` under its writer claim, just before the open;
+	 * a returned string refuses the run with it. Internal, like `resumeSessionFile`.
+	 */
+	verifyResumeFile?: () => string | undefined;
+	/**
 	 * True when another agent spawned this one. Only top-level agents get a
 	 * handle, so only they can be reopened by name — which is the whole reason
 	 * `rememberAgents` persists a session at all. A nested run's transcript would
@@ -1027,11 +1033,31 @@ export function childSessionDir(
 	);
 }
 
+/**
+ * Run an agent. A persisted transcript is written only under its writer claim
+ * (#1247), taken before the transcript is created or reopened and released
+ * once the run returns or throws.
+ */
 export async function runAgent(
 	ctx: ExtensionContext,
 	type: SubagentType,
 	prompt: string,
 	options: RunOptions,
+): Promise<RunResult> {
+	const claims: TranscriptClaim[] = [];
+	try {
+		return await runClaimedAgent(ctx, type, prompt, options, claims);
+	} finally {
+		for (const claim of claims) claim.release();
+	}
+}
+
+async function runClaimedAgent(
+	ctx: ExtensionContext,
+	type: SubagentType,
+	prompt: string,
+	options: RunOptions,
+	claims: TranscriptClaim[],
 ): Promise<RunResult> {
 	const config = getConfig(type);
 	const agentConfig = getAgentConfig(type);
@@ -1455,20 +1481,26 @@ export async function runAgent(
 	// which `rememberAgents` supplies for top-level agents only. Same precedence
 	// as `outputTranscript`.
 	const persistSession = agentConfig?.persistSession ?? (options.nested ? false : rememberAgents);
-	const sessionManager = options.resumeSessionFile
+	const resumeFile = options.resumeSessionFile;
+	const createSession = (dir: string | undefined) =>
+		SessionManager.create(effectiveCwd, dir, {
+			// Optional metadata — it only nests the subagent under its spawner in
+			// `/resume`. Until `rememberAgents` this ran solely for the rare
+			// `persist_session: true` agent; now it runs for every spawn, so a
+			// context without a session manager (a bare programmatic ctx) must
+			// still persist rather than take the whole spawn down.
+			parentSession: ctx.sessionManager?.getSessionFile?.(),
+		});
+	const sessionManager = resumeFile
 		? // Reopening an existing conversation: the file already carries its own
 			// header (cwd, parent) and history, so none of the create-time options
 			// apply. `sessionDir` still matters for a later /new or /branch off it.
-			SessionManager.open(options.resumeSessionFile, sessionDir)
+			// Claimed first, then checked and opened under the claim.
+			openClaimed(resumeFile, claims, (claimed) => SessionManager.open(claimed, sessionDir), options.verifyResumeFile)
 		: persistSession
-			? SessionManager.create(effectiveCwd, sessionDir, {
-					// Optional metadata — it only nests the subagent under its spawner in
-					// `/resume`. Until `rememberAgents` this ran solely for the rare
-					// `persist_session: true` agent; now it runs for every spawn, so a
-					// context without a session manager (a bare programmatic ctx) must
-					// still persist rather than take the whole spawn down.
-					parentSession: ctx.sessionManager?.getSessionFile?.(),
-				})
+			? // A fresh transcript is not on disk until its first flush; claim its
+				// path now, written at the canonical path the claim covers.
+				claimCreated(createSession(sessionDir), claims, createSession)
 			: SessionManager.inMemory(effectiveCwd);
 
 	// Pi 0.80.8 replaced createAgentSession's modelRegistry option with
@@ -1671,6 +1703,25 @@ export async function resumeAgent(
 		/** The agent's type, for its own `max_turns`. */
 		type: SubagentType;
 	},
+): Promise<{ text: string; failure?: string } & Pick<RunResult, "aborted" | "steered">> {
+	// A persisted session is written only under its writer claim (#1247), held for this run.
+	const file = session.sessionManager?.getSessionFile?.();
+	const claim = file ? claimTranscript(file) : undefined;
+	try {
+		// Written through a link: the claim covers a path these writes may leave.
+		if (claim && claim.file !== file) {
+			throw new Error(`child session is written through a link, not at its claimed path ${claim.file}: ${file}`);
+		}
+		return await resumeClaimedAgent(session, prompt, options);
+	} finally {
+		claim?.release();
+	}
+}
+
+async function resumeClaimedAgent(
+	session: AgentSession,
+	prompt: string,
+	options: Parameters<typeof resumeAgent>[2],
 ): Promise<{ text: string; failure?: string } & Pick<RunResult, "aborted" | "steered">> {
 	// Boundary for the history fallback: the session already holds prior turns,
 	// so only assistant text produced by THIS resume prompt counts as its output

@@ -25,6 +25,9 @@ fn root(n: usize, frame: Option<Rect>) -> RootSnapshot {
         pid: n as u64,
         name: format!("root {n}"),
         app_name: "fixture".into(),
+        executable: None,
+        wm_class: None,
+        class_candidates: Vec::new(),
         role: "frame".into(),
         frame,
         x11_window: None,
@@ -88,11 +91,14 @@ fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
         .spawn()
         .unwrap();
     // All requests stop before any desktop/backend operation. Responses may complete out of order.
-    let input = concat!(
-        "\n{\n",
-        "{\"protocolVersion\":4,\"id\":\"malformed\",\"cmd\":false,\"args\":{}}\n",
-        "{\"protocolVersion\":0,\"id\":\"version\",\"cmd\":\"diagnostics\",\"args\":{}}\n",
-        "{\"protocolVersion\":4,\"id\":\"command\",\"cmd\":\"not-a-command\",\"args\":{}}\n"
+    let input = format!(
+        concat!(
+            "\n{{\n",
+            "{{\"protocolVersion\":{v},\"id\":\"malformed\",\"cmd\":false,\"args\":{{}}}}\n",
+            "{{\"protocolVersion\":0,\"id\":\"version\",\"cmd\":\"diagnostics\",\"args\":{{}}}}\n",
+            "{{\"protocolVersion\":{v},\"id\":\"command\",\"cmd\":\"not-a-command\",\"args\":{{}}}}\n"
+        ),
+        v = PROTOCOL_VERSION
     );
     let written = child.stdin.take().unwrap().write_all(input.as_bytes());
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -127,7 +133,7 @@ fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
         (
             "version",
             "invalid_request",
-            "Unsupported Linux helper protocol 0; expected 4.",
+            "Unsupported Linux helper protocol 0; expected 10.",
         ),
         (
             "command",
@@ -189,6 +195,9 @@ fn every_error_has_the_stable_wire_code_and_display() {
         (ErrorCode::CoordinateBlocked, "coordinate_blocked"),
         (ErrorCode::ForegroundRequired, "foreground_required"),
         (ErrorCode::SecureTextUnreadable, "secure_text_unreadable"),
+        (ErrorCode::OccludedTarget, "occluded_target"),
+        (ErrorCode::InputUnsafe, "input_unsafe"),
+        (ErrorCode::Cancelled, "cancelled"),
     ] {
         assert_eq!(serde_json::to_value(code).unwrap(), wire);
         assert_eq!(code.to_string(), wire);

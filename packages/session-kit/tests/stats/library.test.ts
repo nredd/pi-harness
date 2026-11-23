@@ -38,6 +38,7 @@ it("preserves every type-only binding from the original export-star targets", ()
 	expectTypeOf<library.MachineCoverage>().toEqualTypeOf<snapshot.MachineCoverage>();
 	expectTypeOf<library.Coverage>().toEqualTypeOf<snapshot.Coverage>();
 	expectTypeOf<library.Combined>().toEqualTypeOf<snapshot.Combined>();
+	expectTypeOf<library.RefusalCode>().toEqualTypeOf<snapshot.RefusalCode>();
 });
 
 it("imports the same public namespace through real Node and Bun without Vitest transforms", () => {

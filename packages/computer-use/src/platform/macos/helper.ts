@@ -12,7 +12,11 @@ import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
 const NO_LISTENER_CODES = new Set<string | undefined>(["ENOENT", "ECONNREFUSED"]);
-const HELPER_PROTOCOL_VERSION = 7;
+const HELPER_PROTOCOL_VERSION = 8;
+/** Commands that may post keys and so carry `keyboardDeadlineUptimeMs`. */
+const KEYBOARD_COMMANDS = new Set(["desktopInput", "act", "actBatch"]);
+/** Keyboard delivery stops this long before the socket timer, so the helper can still report its posted prefix. */
+const KEYBOARD_DEADLINE_MARGIN_MS = 250;
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 /** Deadline of one read-only diagnostics probe. A resident that answers within it is used as is. */
 const DIAGNOSTICS_PROBE_TIMEOUT_MS = 4_000;
@@ -127,6 +131,10 @@ function parseReply(line: string): HelperReply {
 export const STALE_HELPER_REPAIR =
 	"from the package root, run `node scripts/setup-helper.mjs --runtime`. For a source checkout, rebuild first with `npm run build:native`. See https://github.com/nredd/pi-harness/tree/main/packages/computer-use#repair-a-missing-macos-helper";
 
+/** The operator's repair for a matching-build daemon that is not the installed helper. */
+export const RESIDENT_MISMATCH_REPAIR =
+	"Quit that helper process, then retry: the next command launches the installed app. If the refusal persists, repair the install: from the package root, run `node scripts/setup-helper.mjs --runtime`.";
+
 export class HelperTransportError extends Error {
 	readonly code?: string;
 
@@ -147,6 +155,25 @@ export class HelperCommandError extends Error {
 		this.code = code;
 		this.evidence = evidence;
 	}
+}
+
+/**
+ * The keyboard deadline in the helper's boot-relative clock, which its `diagnostics` reports as `uptimeMs`. Only
+ * monotonic time is involved, so a wall-clock step on either side cannot extend delivery past the client's timeout.
+ * @param uptimeMs The helper's clock when it built the probe reply; it reads at least this by `nowMs`.
+ * @param deadlineMs The client's own deadline in `performance.now()` time.
+ * @param nowMs `performance.now()` when the probe reply arrived. Charging the reply's transit time against the
+ * budget can only make the deadline earlier.
+ * @throws {HelperCommandError} `helper_protocol` when the helper reports no usable clock.
+ */
+function helperKeyboardDeadline(uptimeMs: unknown, deadlineMs: number, nowMs: number): number {
+	if (typeof uptimeMs !== "number" || !Number.isFinite(uptimeMs) || uptimeMs < 0) {
+		throw new HelperCommandError(
+			`Helper at ${HELPER_SOCKET_PATH} reported no usable uptimeMs clock for the keyboard deadline; the command was not sent. Update and restart it.`,
+			"helper_protocol",
+		);
+	}
+	return uptimeMs + (deadlineMs - nowMs);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -186,8 +213,7 @@ async function helperExecutableState(): Promise<"ready" | "missing" | { unusable
 	}
 }
 
-async function isResolvedHelperExecutable(filePath?: string): Promise<boolean> {
-	if (!filePath) return true;
+async function isResolvedHelperExecutable(filePath: string): Promise<boolean> {
 	const [actualPath, expectedPath] = await Promise.all([
 		realpath(filePath).catch(() => path.resolve(filePath)),
 		realpath(HELPER_APP_EXECUTABLE_PATH).catch(() => path.resolve(HELPER_APP_EXECUTABLE_PATH)),
@@ -195,34 +221,20 @@ async function isResolvedHelperExecutable(filePath?: string): Promise<boolean> {
 	return actualPath === expectedPath;
 }
 
-/** True when the daemon process started before the installed binary was last written (it runs old code). */
-export function helperPredatesBinary(processStartMs: number, binaryChangeMs: number): boolean {
-	return Number.isFinite(processStartMs) && Number.isFinite(binaryChangeMs) && processStartMs + 1_000 < binaryChangeMs;
-}
-
-async function daemonRunsOldBinary(pid: number): Promise<boolean> {
-	if (!Number.isFinite(pid) || pid <= 0) return false;
-	try {
-		const elapsed = await new Promise<string>((resolve, reject) => {
-			const child = spawn("ps", ["-o", "etime=", "-p", String(pid)], { stdio: ["ignore", "pipe", "ignore"] });
-			let out = "";
-			child.stdout.on("data", (chunk) => {
-				out += chunk;
-			});
-			child.on("error", reject);
-			child.on("close", () => resolve(out.trim()));
-		});
-		// etime is [[dd-]hh:]mm:ss
-		const [days, clock] = elapsed.includes("-") ? elapsed.split("-") : ["0", elapsed];
-		const parts = clock.split(":").map(Number);
-		const seconds = parts.reduce((total, part) => total * 60 + part, 0) + Number(days) * 86_400;
-		if (!Number.isFinite(seconds)) return false;
-		// ctime, not mtime: ditto preserves mtime, but any install changes ctime.
-		const { ctimeMs } = await stat(HELPER_APP_EXECUTABLE_PATH);
-		return helperPredatesBinary(Date.now() - seconds * 1_000, ctimeMs);
-	} catch {
-		return false;
+/**
+ * Why a managed daemon whose build already matched is still not the installed helper, or `undefined` when it is.
+ * Missing evidence is a mismatch, never a match. Its start time is not compared with the installed binary: the
+ * build check already refuses stale code.
+ */
+async function residentMismatch(diagnostics: PlatformDiagnostics): Promise<string | undefined> {
+	if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION) {
+		return `reports protocol ${diagnostics.protocolVersion} (expected ${HELPER_PROTOCOL_VERSION})`;
 	}
+	if (!diagnostics.executablePath) return `reports no executable path (expected ${HELPER_APP_EXECUTABLE_PATH})`;
+	if (!(await isResolvedHelperExecutable(diagnostics.executablePath))) {
+		return `runs ${diagnostics.executablePath} (expected ${HELPER_APP_EXECUTABLE_PATH})`;
+	}
+	return undefined;
 }
 
 export async function runProcess(
@@ -285,6 +297,11 @@ export async function runProcess(
 
 		signal?.addEventListener("abort", onAbort, { once: true });
 	});
+}
+
+/** Out-parameter for one connection's classification; starts as managed, so the stricter checks apply by default. */
+interface ConnectionClass {
+	managed: boolean;
 }
 
 export class MacosHelperClient {
@@ -379,14 +396,21 @@ export class MacosHelperClient {
 		);
 	}
 
+	/**
+	 * Send one command on a fresh connection, after that connection's own build check.
+	 * @param connection Receives the connection's classification, fixed at connect (see `connectHelper`), for a
+	 * caller whose later checks depend on it.
+	 */
 	async daemonCommand<T>(
 		cmd: string,
 		args: Record<string, unknown>,
 		timeoutMs: number,
 		signal?: AbortSignal,
+		connection?: ConnectionClass,
 	): Promise<T> {
 		// An already-aborted signal never fires again, so the request would be sent and wait out its timeout.
 		throwIfAborted(signal);
+		const deadlineMs = performance.now() + timeoutMs - KEYBOARD_DEADLINE_MARGIN_MS;
 		return await new Promise<T>((resolve, reject) => {
 			const id = `req_${++this.requestSequence}`;
 			const probeId = `build_${id}`;
@@ -422,13 +446,13 @@ export class MacosHelperClient {
 					socket.destroy();
 					reject(new Error("Operation aborted."));
 				});
-			// Give the helper a chance to report its posted prefix before the socket timer wins.
-			const keyboardDeadlineMs =
-				cmd === "desktopInput" || cmd === "act" || cmd === "actBatch" ? Date.now() + timeoutMs - 250 : undefined;
-			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineMs })}\n`);
+			// Set from this connection's own build probe, which every keyboard command waits for.
+			let keyboardDeadlineUptimeMs: number | undefined;
+			const sendCommand = () => socket.write(`${JSON.stringify({ id, cmd, ...args, keyboardDeadlineUptimeMs })}\n`);
 			const onConnect = (managedAtConnect: boolean) => {
 				connected = true;
 				managed = managedAtConnect;
+				if (connection) connection.managed = managedAtConnect;
 				if (checkingBuild) socket.write(`${JSON.stringify({ id: probeId, cmd: "diagnostics" })}\n`);
 				else sendCommand();
 			};
@@ -443,6 +467,8 @@ export class MacosHelperClient {
 							throw new HelperTransportError("Invalid helper build probe reply.");
 						}
 						this.verifyBuild(probe.result, managed);
+						if (KEYBOARD_COMMANDS.has(cmd))
+							keyboardDeadlineUptimeMs = helperKeyboardDeadline(probe.result?.uptimeMs, deadlineMs, performance.now());
 						checkingBuild = false;
 						buffer = "";
 						sendCommand();
@@ -545,14 +571,14 @@ export class MacosHelperClient {
 	async command<T>(
 		cmd: string,
 		args: Record<string, unknown> = {},
-		options?: { timeoutMs?: number; signal?: AbortSignal },
+		options?: { timeoutMs?: number; signal?: AbortSignal; connection?: ConnectionClass },
 	): Promise<T> {
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		if (!(await this.ensureDaemon(options?.signal))) {
 			throw new HelperTransportError(`pi-computer-use helper app daemon is unavailable at ${HELPER_APP_PATH}.`);
 		}
 		try {
-			return await this.daemonCommand<T>(cmd, args, timeoutMs, options?.signal);
+			return await this.daemonCommand<T>(cmd, args, timeoutMs, options?.signal, options?.connection);
 		} catch (error) {
 			this.daemonAvailable = false;
 			throw error instanceof Error ? error : new Error(String(error));
@@ -572,8 +598,9 @@ export class MacosHelperClient {
 		}
 	}
 
-	async diagnosticsCommand(signal?: AbortSignal): Promise<PlatformDiagnostics> {
-		const result = await this.command<any>("diagnostics", {}, { signal });
+	/** @param connection Receives the classification of the connection that answered (see `daemonCommand`). */
+	async diagnosticsCommand(signal?: AbortSignal, connection?: ConnectionClass): Promise<PlatformDiagnostics> {
+		const result = await this.command<any>("diagnostics", {}, { signal, connection });
 		const diagnostics = {
 			protocolVersion: Math.trunc(toFiniteNumber(result?.protocolVersion, 0)),
 			architectureVersion: Math.trunc(toFiniteNumber(result?.architectureVersion, 0)),
@@ -595,32 +622,25 @@ export class MacosHelperClient {
 		return diagnostics;
 	}
 
+	/**
+	 * Check that a managed daemon whose build matched is the installed helper: expected protocol and executable path.
+	 * A mismatch, or a missing path, is refused with `helper_mismatch`; the daemon is never shut down, relaunched or
+	 * stopped here.
+	 */
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
-		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection.
-		let diagnostics = await this.diagnosticsCommand(signal);
-		if (usingExternalHelperSocket) return diagnostics;
-		const executableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
-		if (
-			diagnostics.protocolVersion === HELPER_PROTOCOL_VERSION &&
-			executableMatches &&
-			!(await daemonRunsOldBinary(diagnostics.pid))
-		)
-			return diagnostics;
-
-		// The helper daemon outlives Pi, so restarting/reloading Pi alone does not
-		// replace a stale daemon or one launched from the legacy system location.
-		// Stop it through the backwards-compatible command channel and relaunch
-		// the exact app bundle that ensureInstalled() resolved.
-		await this.restart(signal);
-		diagnostics = await this.diagnosticsCommand(signal);
-		const relaunchedExecutableMatches = await isResolvedHelperExecutable(diagnostics.executablePath);
-		if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION || !relaunchedExecutableMatches) {
-			this.daemonAvailable = false;
-			throw new Error(
-				`pi-computer-use helper mismatch after relaunch: expected protocol ${HELPER_PROTOCOL_VERSION} and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol ${diagnostics.protocolVersion} and executable ${diagnostics.executablePath ?? "unknown"}. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
-			);
-		}
-		return diagnostics;
+		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection. The
+		// exemption follows that connection's classification, not the import-time one: an override that aliases the
+		// managed socket is managed.
+		const connection: ConnectionClass = { managed: true };
+		const diagnostics = await this.diagnosticsCommand(signal, connection);
+		if (!connection.managed) return diagnostics;
+		const mismatch = await residentMismatch(diagnostics);
+		if (mismatch === undefined) return diagnostics;
+		this.daemonAvailable = false;
+		throw new HelperCommandError(
+			`pi-computer-use helper at ${HELPER_SOCKET_PATH} has this package's build but ${mismatch}; it was not restarted or stopped. ${RESIDENT_MISMATCH_REPAIR}`,
+			"helper_mismatch",
+		);
 	}
 }
 

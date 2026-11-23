@@ -15,6 +15,8 @@ test("unpaired act roots and physical transaction lease", async () => {
 		windowRef: "ax:dlg",
 		pid: 7,
 		appName: "App",
+		// Linux and Windows hosts admit a root only by its executable identity.
+		appId: "app",
 		title: "Unpaired",
 		zOrder: 0,
 		framePoints: { x: 0, y: 0, w: 300, h: 200 },
@@ -88,7 +90,7 @@ test("unpaired act roots and physical transaction lease", async () => {
 		 * @returns {Promise<object[]>} App list.
 		 * @throws {never} The mock always succeeds.
 		 */
-		listApps: async () => [{ appName: "App", pid: 7, isFrontmost: true }],
+		listApps: async () => [{ appName: "App", appId: "app", pid: 7, isFrontmost: true }],
 		/**
 		 * List the unpaired root.
 		 * @returns {Promise<object[]>} Root list.
@@ -100,7 +102,7 @@ test("unpaired act roots and physical transaction lease", async () => {
 		 * @returns {Promise<object>} App identity.
 		 * @throws {never} The mock always succeeds.
 		 */
-		getFrontmost: async () => ({ appName: "App", pid: 7 }),
+		getFrontmost: async () => ({ appName: "App", appId: "app", pid: 7 }),
 		/**
 		 * Observe the root, refusing unpaired visual capture.
 		 * @param {object} request Observation request.
@@ -132,6 +134,8 @@ test("unpaired act roots and physical transaction lease", async () => {
 			steps: [{ outcome: "worked" }],
 		}),
 	});
+	// The stub answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 
 	const ctx = {
 		cwd: process.cwd(),

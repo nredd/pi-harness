@@ -127,9 +127,9 @@ completion; only the parent changes todo status with evidence.
 
 In parent TUI sessions only, an unchanged list with `pending` or `in_progress` todos adds a hidden
 `rpiv-todo-stale-reminder` after `staleAfterSettles` completed settles (default 10, set in
-`~/.config/rpiv-todo/config.json`; a non-positive-integer value falls back to the default) that would otherwise stop, even when a
-background agent is armed. It asks the parent to run `todo list` and reconcile actual progress.
-A successful todo write resets the count; reads and rejected writes do not. Plan mode pauses
+`~/.config/rpiv-todo/config.json`; see [Stale-list reminders](#stale-list-reminders)) that
+would otherwise stop, even when a background agent is armed. It asks the parent to run
+`todo list` and reconcile actual progress. A successful todo write resets the count, as do compaction and `/tree` replay; reads and rejected writes do not. Plan mode pauses
 counting. Only human input rearms the reminder; monitor and agent wakes do not.
 On resume or `/reload`, a restored spent budget blocks another nudge until fresh human input.
 
@@ -154,10 +154,62 @@ entry is written but the marker is not, no nudge runs and a resume still sees a 
 budget. Sessions from before this entry restore an unspent budget even with an old
 marker, so after upgrading they can nudge once more. A restored marker does not expand again. Core
 still needs a persisted `custom_message` to continue after an assistant reply, so
-these markers remain visible in `/tree` and in the generic `entry_appended` event. JSON, RPC and print sessions do not emit
-either nudge. An earlier extension handler that delays only a `todo`
-completion can reorder the reset, making the nudge late or missed until the next
-tool call, but cannot cause an extra nudge.
+these markers remain visible in `/tree` and in the generic `entry_appended` event
+([#1265](https://github.com/nredd/pi-harness/issues/1265) tracks request-local continuation in core). JSON, RPC and print sessions do not emit
+either nudge. The work count follows tool-result messages (`message_end`), which core emits one at a
+time in the order the assistant made the calls. Parallel `tool_execution_end` events do not set the
+order: they run concurrently, so another extension's slow handler could make a `todo` reset land
+after a later call and miss the nudge. In a parallel batch, calls listed after a `todo` call count
+and calls listed before it are reset. The tool name and `isError` come from the same turn's
+`tool_execution_end` with the matching `toolCallId`, so an extension registered before todo that
+replaces the result message in `message_end` (e.g. renames a `todo` result or flips an `Agent`
+result's `isError`) does not change the count. Limits: `isError` is the value after every
+`tool_result` handler, so an earlier extension can still change it there, and a replaced message
+whose `toolCallId` matches no completion is counted as delivered. Handler order matters for both.
+Core does not expose the original completion record yet ([#1265](https://github.com/nredd/pi-harness/issues/1265)).
+
+A compaction keeps the list, but the compacted model context no longer shows it. So the first
+model request after `session_compact` outside Plan mode gets one hidden `rpiv-todo-compaction-list` message
+appended, listing every `pending` and `in_progress` todo with its owner and open blockers, and
+asking the model to update them by id instead of recreating them. This applies in every session
+mode, child agents included. The message is never persisted and later requests do not carry it.
+A request with nothing open spends it. Plan mode defers it to the first request after Plan mode.
+The list is built from the todos at that request; until then only a pending flag is kept, in
+memory, so a `/reload` or session switch before the next request drops it, also while Plan mode
+defers it. `/tree` navigation does not set the flag and does not clear one already set: the next
+eligible request lists the newly replayed branch's todos.
+
+Limits: the stale-list and empty-list nudges stay parent-TUI-only (#1195), so headless parents
+(JSON, RPC, print) get neither. Only the compaction list reaches every session mode.
+
+A fresh session starts with an empty list, even when the session before it in the same cwd ended
+with open todos. So in a parent TUI or RPC session started by `/new` or at process startup, with an empty
+branch and no `parentSession`, the first model request outside Plan mode gets one hidden
+`rpiv-todo-carryover-list` message listing the previous session's `pending` and `in_progress`
+todos as it last recorded them, with their old ids and former owners. Nothing is imported: the new
+list, its ids and `nextId` stay untouched, and the message tells the model to recreate only the
+todos the new request still needs. It is never persisted and later requests do not carry it.
+`/resume`, `/fork`, `/reload`, `--continue` and child sessions never get it. After `/new` the list
+is the replaced session's live branch as it stood at `session_shutdown`, so a `/tree` move without a
+summary (which writes nothing) still counts. That capture is in memory: when it is missing, names
+another predecessor, or the predecessor's header cwd differs from the new session's cwd (e.g. after
+a resume with a cwd override) or either cwd is missing, `/new` shows nothing rather than guess. At
+most 8 unconsumed captures are kept (a replacement session without todo never takes its own); the
+oldest is dropped first. At startup the previous
+session is the most recently written `.jsonl` in the session directory whose header has this cwd
+and no `parentSession`; entries that vanish or cannot be read during that scan are skipped. With
+parallel sessions in one cwd that is whichever wrote last, so the message names its session id and
+says it may still be running. The chosen file is read once and its todos are replayed only when the
+header in those same bytes still has its session id, this cwd and no `parentSession`, so a file
+replaced after the scan shows nothing. A chosen session with nothing open, or one that cannot be read,
+shows nothing; the scan never falls back to an older session. Like the compaction list, the pending
+read lives in memory, so a session switch before the first request drops it. RPC startup accepts
+the same live-sibling risk as TUI startup: the scan can select a still-running same-cwd sibling, and
+the same-bytes header check confirms its id, cwd and missing `parentSession`, not that it ended.
+The client's ability to issue `/new` does not make that scan safer. The line between modes is what
+the session is for: a client-driven TUI or RPC session can use a read-only handoff, while a one-shot
+print or JSON run is scripted output and should not get unrelated todos in its model context, so it
+never gets the list ([#1321](https://github.com/nredd/pi-harness/issues/1321)).
 
 ### Session switches and survivors
 
@@ -688,6 +740,12 @@ Examples: `alt+o`, `ctrl+shift+t`, `super+alt+f5`.
   run `/reload` to rebind; until you do, the old key stays active even though the
   collapsed panel's hint text (which is resolved per render) already shows the
   new one.
+
+### Stale-list reminders
+
+`staleAfterSettles` defaults to `10` and accepts positive integers; any other
+value falls back to the default. It is read at each eligible settle, so an edit
+applies without `/reload`.
 
 ### Empty-list reminders
 

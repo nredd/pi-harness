@@ -1,8 +1,10 @@
 /** Restart-safe child recovery (#1086, #1115) and the synthetic #330 activation/stop/restart diagnosis. */
 import { execFileSync } from "node:child_process";
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	statSync,
@@ -18,8 +20,10 @@ import { deferred } from "@nredd/pi-test-lib/deferred";
 import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentRunner from "../src/agent-runner.ts";
-import { RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
+import { canonicalChildPath, RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";
+import { WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";
+import { EXITED_PID, stubExited, stubVerifiedDomain, writeHolder } from "./fixtures/writer-claim.ts";
 
 let fixture: ScenarioSession;
 
@@ -33,6 +37,16 @@ function settle(file: string | undefined) {
 	if (!file) throw new Error("Missing child transcript");
 	const stale = new Date(fixture.clock.now() - (RECENT_CHILD_WRITE_SECONDS + 1) * 1000);
 	utimesSync(file, stale, stale);
+}
+/**
+ * Leave the writer claim a crashed process would: the in-process run still
+ * holds `file`, so its claim is handed to a pid that reads as exited in a
+ * verified PID domain, where a takeover is allowed (#1247).
+ */
+function crashWriter(file: string) {
+	stubExited();
+	stubVerifiedDomain();
+	writeHolder(`${canonicalChildPath(file)}${WRITER_CLAIM_SUFFIX}`, EXITED_PID);
 }
 afterEach(async () => {
 	await fixture?.dispose();
@@ -66,7 +80,8 @@ it("reopens the newest id after two restarts through a symlinked child directory
 		host = await fixture.start({ harness: { sessionManager: SessionManager.open(parentPath) } });
 	};
 	const first = await run();
-	expect(first.sessionFile).toContain(`${sessionDir}/`);
+	// Written at the canonical path its writer claim covers (#1247), not through the link.
+	expect(first.sessionFile).toContain(`${realpathSync(target)}/`);
 	await restart();
 	const second = await run(first.id);
 	expect(second.sessionFile).toContain(`${realpathSync(target)}/`);
@@ -338,6 +353,7 @@ it.each([
 	"worktree-child-settings",
 	"future",
 	"parent-alias",
+	"held",
 ] as const)("recovers a saved running child after a crash: %s", { timeout: 30_000 }, async (mode) => {
 	const chain = mode === "chain-A" || mode === "chain-B";
 	fixture = new ScenarioSession({
@@ -474,6 +490,8 @@ it.each([
 
 		// Drop the registry without emitting session_shutdown. The held child
 		// cannot advance until cleanup, simulating a process that died mid-run.
+		// `held` keeps its live claim: a writer idle past the write-age window.
+		if (mode !== "held") crashWriter(childFile);
 		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
 		const alias = join(fixture.root, "parents-alias");
 		if (mode === "parent-alias") symlinkSync(dirname(parentFile), alias);
@@ -485,14 +503,14 @@ it.each([
 		expect(diagnostic?.isError).toBe(true);
 		expect(diagnostic?.text).toContain(`Agent "${id}"`);
 		expect(diagnostic?.text).toContain(
-			mode === "recent" || mode === "future"
+			mode === "recent" || mode === "future" || mode === "held"
 				? "may still be running in another process"
 				: "interrupted by a process restart",
 		);
 		expect(diagnostic?.text).toContain(`transcript: ${childFile}`);
 		expect(child.state.callCount).toBe(chain ? 2 : 1);
 
-		if (mode === "deleted" || mode === "recent" || mode === "future") {
+		if (mode === "deleted" || mode === "recent" || mode === "future" || mode === "held") {
 			if (mode !== "deleted") expect(diagnostic?.text).not.toContain("interrupted");
 			await call(reopened, resume(id), steer(id));
 			for (const tool of ["Agent", "steer_subagent"]) {
@@ -504,7 +522,9 @@ it.each([
 						? "may still be running in another process (last write 23s ago; retry in 97 s)"
 						: mode === "future"
 							? "may still be running in another process (last write 3600s in the future, possibly clock skew; retry in 3720 s)"
-							: "only historical metadata is available",
+							: mode === "held"
+								? `may still be running in another process (writer claim held by pid ${process.pid} (this process))`
+								: "only historical metadata is available",
 				);
 			}
 			expect(child.state.callCount).toBe(1);
@@ -803,6 +823,7 @@ it("journals both ends of a foreground resume, including an interrupted second r
 		if (!parentFile) throw new Error("Missing parent transcript");
 		const stale = new Date(fixture.clock.now() - 121_000);
 		utimesSync(sessionFile, stale, stale);
+		crashWriter(sessionFile);
 		Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
 		const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
 		next.setResponses([toolCalls({ name: "get_subagent_result", args: { agent_id: id } }), answer("CHECKED")]);
@@ -877,6 +898,173 @@ it("refuses a fresh transcript whose resume start was never journaled, from anot
 		errors.mockRestore();
 		hold.release();
 		await old;
+		h.cleanup();
+	}
+});
+
+/** A completed saved child, its transcript past the write-age window, and a host restarted on its parent. */
+async function restartedWithSavedChild() {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const child = fixture.physical("kid", "child", [answer("FIRST DONE"), answer("NEVER REOPENED")]);
+	const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+	const h = await fixture.start({ harness: { sessionManager: parent } });
+	h.setResponses([toolCalls(spawn("recheck probe")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	const first = fixture.record(agentId(outcomes(h, "Agent")[0]?.text));
+	await first.promise;
+	await h.session.waitForIdle();
+	const file = first.sessionFile;
+	settle(file);
+	h.cleanup();
+	Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+	const parentFile = parent.getSessionFile();
+	if (!parentFile || !file) throw new Error("Missing session path");
+	const next = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+	const resume = async () => {
+		next.setResponses([toolCalls(spawn("resume", { resume: first.id, prompt: "CONTINUE" })), answer("CHECKED")]);
+		await next.session.prompt("resume");
+		return outcomes(next, "Agent").at(-1);
+	};
+	return { child, file, next, resume };
+}
+
+it("rechecks a saved transcript under its writer claim before reopening it", { timeout: 30_000 }, async () => {
+	const { child, file, next, resume } = await restartedWithSavedChild();
+	// Another process writes the transcript after the dispatch check passed, before the open.
+	const runAgent = agentRunner.runAgent;
+	const run = vi.spyOn(agentRunner, "runAgent").mockImplementation((...args) => {
+		const now = new Date(fixture.clock.now());
+		utimesSync(file, now, now);
+		return runAgent(...args);
+	});
+	try {
+		const resumed = fixture.record(agentId((await resume())?.text));
+		await resumed.promise;
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(resumed.status).toBe("error");
+		expect(resumed.error).toBe(
+			`may still be running in another process (last recorded status completed, last write 0s ago; retry in 120 s): ${file}`,
+		);
+		expect(child.state.callCount).toBe(1);
+		expect(existsSync(`${canonicalChildPath(file)}${WRITER_CLAIM_SUFFIX}`)).toBe(false);
+	} finally {
+		run.mockRestore();
+		next.cleanup();
+	}
+});
+
+// A mode-000 claim reads fine as root and permissions mean nothing to Windows here.
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+	"reports an unreadable writer claim's I/O error instead of reopening",
+	{ timeout: 30_000 },
+	async () => {
+		fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+		const child = fixture.physical("kid", "child", [answer("FIRST DONE"), answer("NEVER REOPENED")]);
+		const parent = SessionManager.create(fixture.cwd, join(fixture.root, "parents"));
+		let host = await fixture.start({ harness: { sessionManager: parent } });
+		host.setResponses([toolCalls(spawn("claim probe")), answer("SPAWNED")]);
+		await host.session.prompt("spawn");
+		const first = fixture.record(agentId(outcomes(host, "Agent")[0]?.text));
+		await first.promise;
+		await host.session.waitForIdle();
+		const file = first.sessionFile;
+		const parentFile = parent.getSessionFile();
+		if (!parentFile || !file) throw new Error("Missing session path");
+		settle(file);
+		// Not a refusal this code classifies: the error itself is the answer.
+		const claimPath = `${canonicalChildPath(file)}${WRITER_CLAIM_SUFFIX}`;
+		writeFileSync(claimPath, "{}");
+		chmodSync(claimPath, 0o000);
+		const resume = async () => {
+			host.setResponses([toolCalls(spawn("resume", { resume: first.id, prompt: "CONTINUE" })), answer("CHECKED")]);
+			await host.session.prompt("resume");
+			return outcomes(host, "Agent").at(-1);
+		};
+		try {
+			// Evicted in this process: the dispatch peek reports the error.
+			fixture.clock.advance(61 * 60_000);
+			await host.session.waitForIdle();
+			const evicted = await resume();
+			expect(evicted?.isError).toBe(true);
+			expect(evicted?.text).toMatch(new RegExp(`^Could not resume agent "${first.id}": EACCES`));
+			// Restored after a restart: the saved-child check refuses, carrying the error.
+			host.cleanup();
+			Reflect.deleteProperty(globalThis, Symbol.for("pi-subagents:manager"));
+			host = await fixture.start({ harness: { sessionManager: SessionManager.open(parentFile) } });
+			const saved = await resume();
+			expect(saved?.isError).toBe(true);
+			expect(saved?.text).toContain(
+				"may still be running in another process (last recorded status completed, writer claim unreadable: EACCES",
+			);
+			expect(child.state.callCount).toBe(1);
+		} finally {
+			host.cleanup();
+		}
+	},
+);
+
+/** A persisted child parked in its held tool after its first flush, with the claim it holds. */
+async function heldPersistedChild(sessionDir?: string) {
+	const hold = fixture.heldTool();
+	fixture.physical("kid", "child", [
+		fauxAssistantMessage([{ type: "text", text: "FIRST FLUSH" }, fauxToolCall("hold", {})], { stopReason: "toolUse" }),
+		answer("AFTER THE HOLD"),
+	]);
+	const h = await fixture.start({
+		harness: { sessionManager: SessionManager.create(fixture.cwd, join(fixture.root, "parents")) },
+	});
+	h.setResponses([toolCalls(spawn("claim probe")), answer("SPAWNED")]);
+	await h.session.prompt("spawn");
+	await hold.entered;
+	const id = agentId(outcomes(h, "Agent")[0]?.text);
+	const record = fixture.record(id);
+	const file = record.sessionFile;
+	if (!file) throw new Error("Missing child transcript");
+	if (sessionDir) expect(file.startsWith(`${realpathSync(sessionDir)}/`)).toBe(true);
+	expect(readFileSync(file, "utf8")).toContain("FIRST FLUSH");
+	const claimPath = `${file}${WRITER_CLAIM_SUFFIX}`;
+	expect(existsSync(claimPath)).toBe(true);
+	return { h, id, hold, record, file, claimPath };
+}
+
+it("keeps writes at the claimed path after retarget", { timeout: 30_000 }, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const sessionDir = join(fixture.agentDir, "sessions");
+	const target = join(fixture.root, "child-sessions");
+	const elsewhere = join(fixture.root, "elsewhere");
+	mkdirSync(target);
+	mkdirSync(elsewhere);
+	symlinkSync(target, sessionDir, "dir");
+	const { h, hold, record, file, claimPath } = await heldPersistedChild(target);
+	try {
+		// The configured directory now names another one, mid-run, where a write
+		// through the old spelling would land.
+		const misdirected = join(elsewhere, basename(dirname(file)));
+		mkdirSync(misdirected);
+		unlinkSync(sessionDir);
+		symlinkSync(elsewhere, sessionDir, "dir");
+		hold.release();
+		await record.promise;
+		expect(record.result).toBe("AFTER THE HOLD");
+		expect(readFileSync(file, "utf8")).toContain("AFTER THE HOLD");
+		expect(readdirSync(misdirected)).toEqual([]);
+		expect(existsSync(claimPath)).toBe(false);
+	} finally {
+		h.cleanup();
+	}
+});
+
+it("releases a cancelled child's writer claim", { timeout: 30_000 }, async () => {
+	fixture = new ScenarioSession({ rememberAgents: true, agentModels: { "general-purpose": "kid/child" } });
+	const { h, id, hold, record, claimPath } = await heldPersistedChild();
+	try {
+		h.setResponses([toolCalls({ name: "stop_subagent", args: { agent_id: id } }), answer("STOP REQUESTED")]);
+		await h.session.prompt("stop");
+		hold.release();
+		await record.promise;
+		expect(record.status).toBe("stopped");
+		expect(existsSync(claimPath)).toBe(false);
+	} finally {
 		h.cleanup();
 	}
 });
@@ -973,16 +1161,8 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 	reopened.setResponses([
 		toolCalls({ name: "stop_subagent", args: { agent_id: id } }),
 		toolCalls({ name: "steer_subagent", args: { agent_id: "synthetic-empty", message: "no transcript to open" } }),
-		toolCalls({
-			name: "Agent",
-			args: {
-				resume: id,
-				subagent_type: "general-purpose",
-				description: "manual recovery",
-				prompt: "continue",
-				run_in_background: true,
-			},
-		}),
+		// Recorded as stopped before the restart: history, not a live stop, so a steer reopens it.
+		toolCalls({ name: "steer_subagent", args: { agent_id: id, message: "continue" } }),
 		answer("CHECKED HISTORICAL CONTROLS"),
 	]);
 	await reopened.session.prompt("historical controls");
@@ -995,7 +1175,7 @@ it("#330: a fresh stopped child retains its output across a fresh parent activat
 		isError: true,
 		text: expect.stringContaining("only historical metadata is available; reopen the recorded session manually."),
 	});
-	const resume = outcomes(reopened, "Agent")[0];
+	const resume = outcomes(reopened, "steer_subagent")[1];
 	expect(resume?.isError).toBe(false);
 	expect(resume?.text).toContain(`Agent resumed in background, reopening evicted agent ${id}`);
 	const next = agentId(resume?.text);

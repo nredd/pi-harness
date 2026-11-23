@@ -1,5 +1,5 @@
 import type { AsyncLocalStorage } from "node:async_hooks";
-import type { ToolExecutionEndEvent } from "@earendil-works/pi-coding-agent";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { getEmptyReminderConfig } from "../config.ts";
 import { TOOL_NAME } from "../tool/types.ts";
 
@@ -11,6 +11,9 @@ export function isChildActivation(): boolean {
 	const globals = globalThis as typeof globalThis & { [CHILD_CONTEXT]?: AsyncLocalStorage<boolean> };
 	return globals[CHILD_CONTEXT]?.getStore() === true;
 }
+
+/** The fields of a tool-result message the work counter reads. */
+export type ToolCompletion = Pick<ToolResultMessage, "toolName" | "isError">;
 
 /** One session's empty-list work counter, prompt budget and settle cooldown. */
 export function trackEmptyReminder(config: ReturnType<typeof getEmptyReminderConfig>, previouslyReminded: boolean) {
@@ -28,7 +31,7 @@ export function trackEmptyReminder(config: ReturnType<typeof getEmptyReminderCon
 	}
 
 	return {
-		toolFinished(event: ToolExecutionEndEvent, eligible: boolean) {
+		toolFinished(event: ToolCompletion, eligible: boolean) {
 			if (event.toolName === TOOL_NAME) {
 				resetWork();
 				return;

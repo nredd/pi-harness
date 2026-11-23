@@ -362,6 +362,7 @@ const RESOLVED: Record<string, unknown> = {
 	"scripts/vitest.config.ts": {
 		test: {
 			include: [
+				"scripts/tests/check-test-matchers.test.ts",
 				"scripts/tests/check-test-tempdirs.test.mjs",
 				"scripts/tests/commit-messages.test.mjs",
 				"scripts/tests/commit-policy.test.mjs",

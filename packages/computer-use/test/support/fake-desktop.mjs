@@ -69,6 +69,7 @@ const BACKEND_KEYS = [
 	"ensureReady",
 	"listApps",
 	"listRoots",
+	"listRootsOfPids",
 	"getFrontmost",
 	"observe",
 	"act",
@@ -212,7 +213,9 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		};
 	};
 	Object.assign(currentPlatformBackend, {
-		name: options.platform ?? currentPlatformBackend.name,
+		// Pin a host-neutral fake to macOS policy so it behaves alike on every CI host; Linux and Windows
+		// admit roots only by an executable identity the default roots do not carry.
+		name: options.platform ?? "macos",
 		ensureReady: async () => {
 			fake.readyCalls++;
 			return {
@@ -265,6 +268,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			return await fake.waitFor(request, options);
 		},
 	});
+	// The fake answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
 	fake.ctx = ctx;

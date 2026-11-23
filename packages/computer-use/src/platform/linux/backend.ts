@@ -20,7 +20,7 @@ import type {
 	PlatformWaitForRequest,
 	PlatformWaitForResponse,
 } from "../types.ts";
-import { LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
+import { isHelperDeadline, LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
 import { wslNoWindowsHint } from "./wsl.ts";
 
 function normalizedProcessName(appName: string): string {
@@ -70,6 +70,20 @@ function parseRootKind(raw: unknown): PlatformRootKind {
 		: "window";
 }
 
+/** Block-only names: the helper's ambiguous `exe` link names plus the app-settable X11 `WM_CLASS` pair. */
+/** A process id the helper can report: a positive safe integer. */
+function isPid(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
+function parseBlockAliases(raw: any): { blockAliases?: string[] } {
+	const wmClass = raw?.metadata?.wmClass;
+	const aliases = [...(Array.isArray(raw?.blockAliases) ? raw.blockAliases : []), wmClass?.instance, wmClass?.class]
+		.map(toOptionalString)
+		.filter((alias) => alias !== undefined);
+	return aliases.length ? { blockAliases: aliases } : {};
+}
+
 function parseRoots(result: unknown): PlatformRoot[] {
 	const roots = Array.isArray(result) ? result : (result as any)?.roots;
 	if (!Array.isArray(roots)) return [];
@@ -81,8 +95,9 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			windowId: Number.isFinite(raw?.windowId) ? Math.trunc(raw.windowId) : undefined,
 			pid: Number.isFinite(raw?.pid) ? Math.trunc(raw.pid) : undefined,
 			appName: toOptionalString(raw?.appName ?? raw?.processName),
-			// The helper currently copies the AT-SPI accessible Name into processName (#1180).
-			appId: toOptionalString(raw?.processName),
+			// The executable basename; the accessible app name is presentation only (#1180).
+			appId: toOptionalString(raw?.appId),
+			...parseBlockAliases(raw),
 			title: toOptionalString(raw?.title) ?? "",
 			role: toOptionalString(raw?.role),
 			subrole: toOptionalString(raw?.subrole),
@@ -96,6 +111,24 @@ function parseRoots(result: unknown): PlatformRoot[] {
 			isModal: toBoolean(raw?.isModal),
 			metadata: raw?.metadata,
 		}),
+	);
+}
+
+/**
+ * `x11Pairing` values (`listRoots` and `atspiLookRoot`) under which a root's X11 class aliases are complete: the
+ * listing ran (`paired`, `ambiguous`, `unpaired`) or no X display exists (`absent`). Anything else, e.g. `unavailable`
+ * for a failed, timed-out or still-stuck listing, is missing evidence, never a clean check.
+ */
+export const LINUX_X11_CHECKED: ReadonlySet<unknown> = new Set(["paired", "ambiguous", "unpaired", "absent"]);
+
+/**
+ * A root inventory for discovery and target resolution. `WM_CLASS` can only add a block, so a root whose class
+ * evidence is missing has an incomplete policy identity: it is listed without `appId`, i.e. unidentified and refused
+ * like an unreadable executable, never admitted on its executable alone while the X server stalls (#1311).
+ */
+async function listedRoots(args: Record<string, unknown>, signal?: AbortSignal): Promise<PlatformRoot[]> {
+	return parseRoots(await linuxHelper.command("listRoots", args, { signal })).map((root) =>
+		LINUX_X11_CHECKED.has(root.metadata?.x11Pairing) ? root : { ...root, appId: undefined },
 	);
 }
 
@@ -143,25 +176,25 @@ async function ensureReady(
 
 export const linuxBackend: ComputerUsePlatformBackend = {
 	name: "linux",
-	shutdown(): void {
-		resetLinuxHelper();
+	async shutdown(): Promise<string | undefined> {
+		return await resetLinuxHelper();
 	},
 	ensureReady,
 	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
-		return appsFromRoots(parseRoots(await linuxHelper.command("listRoots", {}, { signal })));
+		return appsFromRoots(await listedRoots({}, signal));
 	},
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
-		const roots = parseRoots(
-			await linuxHelper.command("listRoots", Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, {
-				signal,
-			}),
-		);
+		const roots = await listedRoots(Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, signal);
 		const title = query.title?.trim().toLowerCase();
 		return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
 	},
+	async listRootsOfPids(pids: readonly number[], signal?: AbortSignal): Promise<PlatformRoot[]> {
+		// One request and one X11 listing for every app a filtered `find_roots` matched (#1311).
+		return pids.length === 0 ? [] : await listedRoots({ pids: pids.map(Math.trunc) }, signal);
+	},
 	emptyRootsHint: () => wslNoWindowsHint(),
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
-		const roots = parseRoots(await linuxHelper.command("listRoots", {}, { signal }));
+		const roots = await listedRoots({}, signal);
 		const focused = roots.find((root) => root.isFocused) ?? roots[0];
 		// The WSL hint is only for an empty guest: roots without a pid are a Linux-side problem.
 		if (!focused?.pid)
@@ -199,8 +232,9 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 				},
 				options,
 			),
-			// The AT-SPI2 helper marks every node; a node without the marker was not proven read.
-			{ unmarkedNodesUnread: true },
+			// The AT-SPI2 helper marks every node; a node without the marker was not proven read. Its text boxes repeat
+			// the node's own value (`atspi.rs`), they are not OCR.
+			{ unmarkedNodesUnread: true, ownValueText: true },
 		);
 	},
 	async act(
@@ -220,6 +254,25 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformReadTextResponse> {
 		return await linuxHelper.command("atspiReadText", { ...args }, options);
+	},
+	async lookRoot(
+		lookId: string,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<PlatformRoot | undefined> {
+		const result = await linuxHelper
+			.command<{ root?: unknown }>("atspiLookRoot", { lookId }, options)
+			.catch((error: unknown) => {
+				// No reply by the client deadline (e.g. a stalled lookup) is an unfinished lookup like a helper
+				// `timeout`; an abort or a helper exit stays a lost reply.
+				if (!isHelperDeadline(error)) throw error;
+				throw Object.assign(new Error((error as Error).message, { cause: error }), { code: "timeout" });
+			});
+		// Only an explicit `null` proves absence; a malformed reply is not evidence either way.
+		if (result?.root === null) return undefined;
+		// An array, or an object without a positive integer `pid`, cannot name a live root either.
+		const root = result?.root as { pid?: unknown } | undefined;
+		if (!isPid(root?.pid)) throw new Error("Linux helper atspiLookRoot reply has no root with a valid pid.");
+		return parseRoots([root])[0];
 	},
 	async waitFor(
 		args: PlatformWaitForRequest,

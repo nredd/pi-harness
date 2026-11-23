@@ -16,7 +16,11 @@ test.each([false, true])("check-ts preserves inherited fd precedence (inherited 
 	if (inherited) writeFileSync(join(bin, "fd"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
 	mkdirSync(tools, { recursive: true });
 	writeFileSync(join(tools, "fd"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
-	writeFileSync(join(bin, "node"), '#!/bin/sh\ntest "$1" = scripts/check-test-tempdirs.mjs\n', { mode: 0o755 });
+	writeFileSync(
+		join(bin, "node"),
+		'#!/bin/sh\ncase "$1" in scripts/check-test-tempdirs.mjs | scripts/check-test-matchers.ts) ;; *) exit 1 ;; esac\n',
+		{ mode: 0o755 },
+	);
 	writeFileSync(join(bin, "npm"), '#!/bin/sh\ncommand -v fd\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
 	const result = spawnSync("/usr/bin/make", ["check-ts", "WORKSPACES=tests/inprocess"], {
 		cwd: root,

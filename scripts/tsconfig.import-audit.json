@@ -8,9 +8,12 @@
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
+    "allowJs": true,
     "types": ["node"]
   },
   "files": [
+    "check-test-matchers.ts",
+    "tests/check-test-matchers.test.ts",
     "merge-pr.ts",
     "merge-pr.test.ts",
     "coverage-configs.test.ts",

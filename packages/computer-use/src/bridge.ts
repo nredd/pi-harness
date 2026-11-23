@@ -63,7 +63,14 @@ import {
 } from "./contract.ts";
 import { withDesktopTransaction, withPhysicalInput } from "./desktop.ts";
 import { normalizeFindParams } from "./find-params.ts";
-import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
+import {
+	noteAfterAct,
+	noteForOutline,
+	noteFromLook,
+	noteRegionKeyForRef,
+	renderNote,
+	type WindowNote,
+} from "./note.ts";
 import {
 	controlLine,
 	foldToBudget,
@@ -98,8 +105,9 @@ import {
 	UI_TEXT_PAGE_CHARS,
 } from "./output.ts";
 import type { PermissionStatus } from "./permissions.ts";
-import { toFiniteNumber } from "./platform/coerce.ts";
+import { toFiniteNumber, toOptionalBoolean } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
+import { LINUX_X11_CHECKED } from "./platform/linux/backend.ts";
 import type {
 	FramePoints,
 	PlatformFrontmostResult as FrontmostResult,
@@ -111,6 +119,8 @@ import type {
 	PlatformActRequest,
 	PlatformDiagnostics,
 	PlatformRoot,
+	PlatformRootList,
+	PlatformWaitForResponse,
 } from "./platform/types.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
 import { ResourceScheduler } from "./runtime.ts";
@@ -168,7 +178,8 @@ interface ExecutionTrace {
 	escalationReason?: string;
 	backgroundAttempt?: { outcome: "foreground_required" | "didnt"; reason: string };
 	verification?: {
-		status: "verified" | "preexisting" | "failed";
+		/** `inconclusive`: an `absent` condition was not found, but incomplete evidence cannot prove it gone. */
+		status: "verified" | "preexisting" | "failed" | "inconclusive";
 		text?: string;
 		role?: string;
 		value?: string;
@@ -270,10 +281,11 @@ interface ListWindowsDetails {
 		nativeWindowRef?: string;
 		framePoints: FramePoints;
 		scaleFactor: number;
-		isMinimized: boolean;
-		isOnscreen: boolean;
-		isMain: boolean;
-		isFocused: boolean;
+		/** Unread state flags stay `undefined` (omitted from stored details), never `false`. */
+		isMinimized?: boolean;
+		isOnscreen?: boolean;
+		isMain?: boolean;
+		isFocused?: boolean;
 		isModal: boolean;
 		sheetCount?: number;
 		role?: string;
@@ -283,6 +295,7 @@ interface ListWindowsDetails {
 		browserUseAllowed: boolean;
 		blocked: boolean;
 		identityUnresolved?: true;
+		instanceUnavailable?: true;
 		score: number;
 		url?: string;
 	}>;
@@ -340,6 +353,12 @@ interface WaitForDetails {
 	found: boolean;
 	gone?: boolean;
 	timedOut?: boolean;
+	/** An `absent` condition was not found, but incomplete evidence cannot prove it gone; `found` stays false. */
+	inconclusive?: true;
+	/** Successor nodes in the condition's scope that could not be read (`truncated`); omitted when there are none. */
+	unreadRefs?: string[];
+	/** An inconclusive absence whose root could not be observed afterward: why. No successor state exists. */
+	observationError?: string;
 	target?: SerializedOutlineSearchMatch;
 	nodeCount?: number;
 	text?: string;
@@ -367,31 +386,36 @@ interface OutlineToolDetails {
 }
 
 interface ResolvedTarget extends CurrentTarget {
+	/** Block-only names from this live root lookup; see `PlatformAppIdentity.blockAliases`. */
+	blockAliases?: string[];
 	windowRef: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
-	isMinimized: boolean;
-	isOnscreen: boolean;
-	isMain: boolean;
-	isFocused: boolean;
+	isMinimized?: boolean;
+	isOnscreen?: boolean;
+	isMain?: boolean;
+	isFocused?: boolean;
 }
 
 interface WindowRefRecord {
 	ref: string;
 	appName: string;
 	appId?: string;
+	blockAliases?: string[];
 	legacyIdentity?: true;
 	bundleId?: string;
 	pid: number;
 	windowTitle: string;
 	windowId?: number;
 	nativeWindowRef?: string;
+	/** See `CurrentTarget.rootKind`. */
+	rootKind?: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
-	isMinimized: boolean;
-	isOnscreen: boolean;
-	isMain: boolean;
-	isFocused: boolean;
+	isMinimized?: boolean;
+	isOnscreen?: boolean;
+	isMain?: boolean;
+	isFocused?: boolean;
 }
 
 interface RuntimeState {
@@ -447,6 +471,7 @@ const savedStates = new SavedStates();
 export const testing = {
 	assertBrowserTransactionAction,
 	savedState: (stateId: string) => savedStates.get(stateId),
+	storedRootRef: (ref: string) => runtimeState.windowRefs.get(ref),
 	runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn),
 	buildToolResult,
 	browserObservationResult,
@@ -488,8 +513,8 @@ export async function setComputerUseActivity(active: boolean): Promise<void> {
 	await currentPlatformBackend.setActivity?.(active);
 }
 
-/** Release handles and state owned by the current Pi session. */
-export async function shutdownComputerUseSession(): Promise<void> {
+/** Release handles and state owned by the current Pi session; `warn` receives a platform shutdown warning. */
+export async function shutdownComputerUseSession(warn?: (message: string) => void): Promise<void> {
 	await resourceScheduler.close();
 	resourceScheduler = new ResourceScheduler();
 	disconnectCdp();
@@ -513,7 +538,8 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	runtimeState.permissionStatus = undefined;
 	runtimeState.helperDiagnostics = undefined;
 	runtimeState.lastPermissionCheckAt = 0;
-	await currentPlatformBackend.shutdown?.();
+	const warning = await currentPlatformBackend.shutdown?.();
+	if (warning) warn?.(warning);
 	if (browserStopError) throw browserStopError;
 }
 
@@ -597,10 +623,6 @@ function trimOrUndefined(value: string | undefined): string | undefined {
 
 function normalizeText(value: string): string {
 	return value.trim().toLowerCase();
-}
-
-function toBoolean(value: unknown): boolean {
-	return value === true;
 }
 
 function outlineNodeCenter(node: OutlineNode): { x: number; y: number } {
@@ -718,7 +740,7 @@ async function listApps(signal?: AbortSignal): Promise<HelperApp[]> {
 	return await currentPlatformBackend.listApps(signal);
 }
 
-async function listWindows(pid: number, signal?: AbortSignal): Promise<HelperWindow[]> {
+async function listWindows(pid: number, signal?: AbortSignal): Promise<PlatformRootList> {
 	return await currentPlatformBackend.listRoots({ pid }, signal);
 }
 
@@ -765,6 +787,7 @@ function formatWindowLine(window: ListWindowsDetails["windows"][number]): string
 		window.browserUseAllowed ? undefined : "browser_use_disabled",
 		window.blocked ? "blocked" : undefined,
 		window.identityUnresolved ? "unidentified" : undefined,
+		window.instanceUnavailable ? "unbound" : undefined,
 	]
 		.filter(Boolean)
 		.join(", ");
@@ -801,10 +824,15 @@ class ComputerUseError extends Error {
 	}
 }
 
-type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId">;
+type PolicyIdentity = Pick<HelperApp, "appId" | "bundleId" | "blockAliases">;
+
+/** Windows and Linux resolve an executable identity per root; a root without one is refused. */
+function requiresLiveIdentity(): boolean {
+	return currentPlatformBackend.name === "windows" || currentPlatformBackend.name === "linux";
+}
 
 function appBlockReason(target: PolicyIdentity): string | { identityUnresolved: true } | undefined {
-	if (currentPlatformBackend.name === "windows" && !target.appId) return { identityUnresolved: true };
+	if (requiresLiveIdentity() && !target.appId) return { identityUnresolved: true };
 	return blockedAppId(currentPlatformBackend.name, target);
 }
 
@@ -840,7 +868,9 @@ function windowRecordIdentity(
 	record: Pick<WindowRefRecord, "pid" | "windowId" | "nativeWindowRef" | "windowTitle" | "framePoints">,
 ): string {
 	if (record.windowId && record.windowId > 0) {
-		return `pid:${record.pid}|id:${record.windowId}`;
+		// A Windows native ref names one window instance: a same-HWND replacement gets a new `@r`.
+		const instance = currentPlatformBackend.name === "windows" ? `|ref:${record.nativeWindowRef}` : "";
+		return `pid:${record.pid}|id:${record.windowId}${instance}`;
 	}
 	if (record.nativeWindowRef) {
 		return `pid:${record.pid}|ref:${record.nativeWindowRef}`;
@@ -876,19 +906,22 @@ function storeBrowserRootRef(contextId: string): string {
 }
 
 function windowAppId(app: HelperApp, window: HelperWindow): string | undefined {
-	// Windows resolves the owner on each root lookup. Never mask a failed lookup with a saved identity.
-	return currentPlatformBackend.name === "windows" ? window.appId : (window.appId ?? app.appId);
+	// Windows and Linux resolve the owner on each root lookup. Never mask a failed lookup with a saved identity.
+	return requiresLiveIdentity() ? window.appId : (window.appId ?? app.appId);
 }
 
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
 	return storeWindowRef({
 		appName: app.appName,
 		appId: windowAppId(app, window),
+		// Block-only names come from this root lookup alone, like a live identity.
+		blockAliases: window.blockAliases,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
 		windowId: window.windowId,
 		nativeWindowRef: window.windowRef,
+		rootKind: window.kind,
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -936,11 +969,13 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 	const baseTarget = {
 		appName: app.appName,
 		appId: storedRef.appId,
+		blockAliases: storedRef.blockAliases,
 		bundleId: app.bundleId,
 		pid: app.pid,
 		windowTitle: window.title || "(untitled)",
 		windowId: typeof window.windowId === "number" ? window.windowId : 0,
 		nativeWindowRef: window.windowRef,
+		rootKind: window.kind,
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -977,6 +1012,7 @@ function setCurrentTarget(target: ResolvedTarget): void {
 		windowId: target.windowId,
 		windowRef: target.windowRef,
 		nativeWindowRef: target.nativeWindowRef,
+		rootKind: target.rootKind,
 	};
 }
 
@@ -984,8 +1020,11 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 	return trimOrUndefined(selector);
 }
 
-/** A Windows look is bound to its original owner and native root, not a matching title. */
-async function resolveWindowsRoot(
+/**
+ * A Windows root is bound to its original owner and window instance, not a matching title or HWND: the
+ * helper issues a new native ref for a same-HWND replacement, so the saved ref must still be listed.
+ */
+async function resolveExactRoot(
 	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
 	signal?: AbortSignal,
 ): Promise<ResolvedTarget> {
@@ -993,16 +1032,21 @@ async function resolveWindowsRoot(
 	const match = windows.find(
 		(window) =>
 			window.pid === saved.pid &&
-			(saved.windowId
-				? window.windowId === saved.windowId
-				: saved.nativeWindowRef && window.windowRef === saved.nativeWindowRef),
+			saved.nativeWindowRef !== undefined &&
+			window.windowRef === saved.nativeWindowRef &&
+			(!saved.windowId || window.windowId === saved.windowId),
 	);
 	if (!match)
 		throw new ComputerUseError(
 			"root_stale",
-			"Saved Windows root is no longer available for its original owner. Rediscover it with find_roots.",
+			"Saved Windows root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
 		);
-	assertAppNotBlocked({ appName: saved.appName, appId: match.appId });
+	if (match.instanceUnavailable)
+		throw new ComputerUseError(
+			"root_stale",
+			"Windows root could not be admitted: its owner or window instance is unverifiable, so it cannot be observed or controlled.",
+		);
+	assertAppNotBlocked({ appName: saved.appName, appId: match.appId, blockAliases: match.blockAliases });
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
 		throw new ComputerUseError(
 			"app_blocked",
@@ -1012,6 +1056,47 @@ async function resolveWindowsRoot(
 	const target = toResolvedTarget(saved, match);
 	setCurrentTarget(target);
 	return target;
+}
+
+/**
+ * A Linux text read binds to the AT-SPI root (bus name and object path) its look retains, not to the `@w`
+ * inventory handle a later PID-scoped listing reissues (#1300), and never to its X11 window: the read is
+ * AT-SPI only. The helper reads the registry and that root's own application only; a lookup that could not
+ * finish is `inventory_incomplete`, never absence. Live identity and policy are checked as for any root. X11
+ * `WM_CLASS` can only add a block, so a root without class aliases passes policy only when its `x11Pairing` proves
+ * the X11 check ran (`LINUX_X11_CHECKED`) or no X display exists (`absent`); a failed, timed-out or skipped listing
+ * (`unavailable`), or any other status, is `inventory_incomplete`.
+ */
+async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise<CurrentTarget> {
+	const current = operationState().currentTarget!;
+	assertAppNotBlocked(current);
+	const live = await currentPlatformBackend.lookRoot!(lookId, { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(
+		(error: unknown) => {
+			if ((error as { code?: unknown } | undefined)?.code !== "timeout") throw error;
+			throw new ComputerUseError(
+				"inventory_incomplete",
+				`Saved Linux root could not be verified: ${(error as Error).message}. It may still be open; retry read_text, or observe_ui it again.`,
+			);
+		},
+	);
+	if (!live || live.pid !== current.pid)
+		throw new ComputerUseError(
+			"root_stale",
+			"Saved Linux root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
+		);
+	assertAppNotBlocked({ appName: current.appName, appId: live.appId, blockAliases: live.blockAliases });
+	if (live.appId!.toLowerCase() !== current.appId!.toLowerCase())
+		throw new ComputerUseError(
+			"app_blocked",
+			"Linux root owner identity changed. Rediscover it with find_roots and observe it again.",
+		);
+	const x11Pairing = live.metadata?.x11Pairing;
+	if (!LINUX_X11_CHECKED.has(x11Pairing))
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Saved Linux root's X11 class evidence could not be read (x11Pairing: ${String(x11Pairing)}), so blocked_apps cannot be checked. It may still be open; retry read_text, or observe_ui it again.`,
+		);
+	return current;
 }
 
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
@@ -1026,13 +1111,22 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 		throw new Error(`Root ref '${selector}' is not available in this session. Call find_roots first.`);
 	}
 	assertAppNotBlocked(fromRef);
-	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(fromRef, signal);
+	if (currentPlatformBackend.name === "windows") return await resolveExactRoot(fromRef, signal);
 	const app: HelperApp = fromRef;
 	const windows = await listWindows(fromRef.pid, signal);
+	// A partial listing admits the ref only by its verified identity: a same-title window is another root.
+	const partial = windows.complete === false;
 	const match =
-		(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
+		windows.find((window) => windowIdIdentifies(fromRef, window)) ??
 		(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
-		windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
+		(partial
+			? undefined
+			: windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle)));
+	if (!match && partial)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Root ref '${selector}' could not be verified: the window listing was incomplete and does not name it; it may still be open. Call find_roots again, or observe_ui it later.`,
+		);
 	if (!match) {
 		throw new Error(`Root ref '${selector}' is stale. Call find_roots again and choose a current window.`);
 	}
@@ -1044,18 +1138,20 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 /**
  * Re-resolve the current root. `preferModal` (observe) may move to a confirmed foreground modal; act
  * transactions pass `false` so actions and the successor capture stay on the root the state belongs to.
+ * `exactIdentity` (a claimed `wait_for` absence) drops the title and ranking fallbacks of the listing path.
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean } = {},
+	options: { preferModal?: boolean; exactIdentity?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
 	assertAppNotBlocked(current);
-	if (currentPlatformBackend.name === "windows") return await resolveWindowsRoot(current, signal);
+	if (currentPlatformBackend.name === "windows") return await resolveExactRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
-	if (!windows.length) {
+	const partial = windows.complete === false;
+	if (!windows.length && !partial) {
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
 	}
 
@@ -1066,9 +1162,15 @@ async function resolveCurrentTarget(
 				(window) => window.windowRef === current.nativeWindowRef || window.rootRef === current.nativeWindowRef,
 			)
 		: undefined;
-	match ??= hadStableWindowId
-		? windows.find((window) => window.windowId !== undefined && window.windowId === current.windowId)
-		: undefined;
+	match ??= windows.find((window) => windowIdIdentifies(current, window));
+	// A partial listing, or a caller that needs this exact root, admits it only by its verified identity: a
+	// title or ranking match could be another window.
+	if (!match && partial)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			"The current controlled window could not be verified: the window listing was incomplete and does not name it; it may still be open. Call observe_ui again, or find_roots to choose a root.",
+		);
+	if (!match && options.exactIdentity) throw new Error(CURRENT_TARGET_GONE_ERROR);
 	if (!match) {
 		const exactTitleMatches =
 			titleQuery && titleQuery !== "(untitled)"
@@ -1136,6 +1238,12 @@ async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTar
 	}
 
 	let selected = windows.find((window) => window.windowId !== undefined && window.windowId === frontmost.windowId);
+	// A partial listing that omits the named frontmost window cannot stand in another for it, by title or rank.
+	if (!selected && windows.complete === false && frontmost.windowId !== undefined)
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			"The frontmost window could not be verified: the window listing was incomplete and does not name it; it may still be open. Call observe_ui again, or find_roots to choose a root.",
+		);
 	if (!selected && frontmost.windowTitle) {
 		const title = normalizeText(frontmost.windowTitle);
 		selected = windows.find((window) => normalizeText(window.title) === title);
@@ -1225,18 +1333,18 @@ function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: Look
 	};
 }
 
+/** Capture `resolved`, the root the caller already resolved, as the new current state. */
 async function captureCurrentTarget(
 	signal: AbortSignal | undefined,
 	readText: "auto" | "always" | "never",
-	maxDimension = AUTO_IMAGE_MAX_DIMENSION,
-	targetOverride?: ResolvedTarget,
+	maxDimension: number,
+	resolved: ResolvedTarget,
 	includeImage = true,
 ): Promise<CaptureResult> {
 	const state = operationState();
 	const baseOutline = state.currentOutline;
 	const baseTarget = state.currentTarget;
-	let target = targetOverride ?? (await resolveCurrentTarget(signal));
-	target = await ensureTargetWindowId(target, signal);
+	const target = await ensureTargetWindowId(resolved, signal);
 	const look = await performLook(target, { maxDimension, readText, includeImage }, signal);
 	const outline = stabilizeRefs(
 		baseTarget && sameRootIdentity(baseTarget, target) ? baseOutline : undefined,
@@ -1463,7 +1571,7 @@ async function helperAct(
 				.act(helperActRequest(target, action, initialPolicy), { signal, timeoutMs })
 				.catch(timedOut),
 		);
-		if (canRetryInForeground(action, result.outcome, headless)) {
+		if (canRetryInForeground(action, result, headless)) {
 			const foreground = checked(await actInForeground());
 			const trace = executionTraceFromAct(foreground, "foreground");
 			trace.backgroundFirst = true;
@@ -1471,7 +1579,7 @@ async function helperAct(
 			trace.escalationReason = "side_effect_free_didnt";
 			trace.backgroundAttempt = {
 				outcome: "didnt",
-				reason: "Background input produced no observable value change; a foreground retry was safe.",
+				reason: "Background input posted nothing; a foreground retry was safe.",
 			};
 			return trace;
 		}
@@ -1583,6 +1691,7 @@ function windowDetails(
 		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
 		blocked: blockReason !== undefined,
 		...(typeof blockReason === "object" ? blockReason : {}),
+		...(window.instanceUnavailable ? { instanceUnavailable: true as const } : {}),
 		score: scoreWindow(window),
 	};
 }
@@ -1599,7 +1708,13 @@ async function collectWindowDetails(
 	config: ReturnType<typeof getComputerUseConfig>,
 	signal?: AbortSignal,
 ): Promise<ListWindowsDetails["windows"]> {
-	const perApp = await Promise.all(apps.map(async (app) => ({ app, windows: await listWindows(app.pid, signal) })));
+	const listOfPids = currentPlatformBackend.listRootsOfPids;
+	const perApp = listOfPids
+		? await listOfPids(
+				apps.map((app) => app.pid),
+				signal,
+			).then((roots) => apps.map((app) => ({ app, windows: roots.filter((root) => root.pid === app.pid) })))
+		: await Promise.all(apps.map(async (app) => ({ app, windows: await listWindows(app.pid, signal) })));
 	return sortWindowDetails(
 		perApp.flatMap(({ app, windows }) => windows.map((window) => windowDetails(app, window, config))),
 	);
@@ -1679,7 +1794,7 @@ async function performListWindows(
 		.sort(
 			(a, b) =>
 				b.match!.score - a.match!.score ||
-				Number(b.root.isFocused) - Number(a.root.isFocused) ||
+				Number(b.root.isFocused === true) - Number(a.root.isFocused === true) ||
 				a.root.zOrder - b.root.zOrder ||
 				a.order - b.order,
 		);
@@ -1869,7 +1984,13 @@ async function performReadText(
 	const state = operationState();
 	const raw = (
 		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
-			const target = currentPlatformBackend.name === "windows" ? await resolveCurrentTarget(signal) : undefined;
+			// Revalidate the exact root owning the look and its live identity before any live read.
+			const target =
+				currentPlatformBackend.name === "linux"
+					? await revalidateLookRoot(state.currentOutline!.lookId, signal)
+					: currentPlatformBackend.name === "windows"
+						? await resolveCurrentTarget(signal)
+						: undefined;
 			return await currentPlatformBackend.readText(
 				{
 					...(target ? { pid: target.pid, windowId: target.windowId } : {}),
@@ -1971,6 +2092,50 @@ function outlineConditionPresent(outline: Outline, condition: ReturnType<typeof 
 	);
 }
 
+/** Why a successor outline cannot corroborate a `gone` condition (see `absenceUnproven`). */
+interface AbsenceUnproven {
+	/** `present`: the successor still shows it; `unread`: nodes it could hide in are unread; `scope_unmatched`: its scope did not carry over and the condition shows elsewhere. */
+	reason: "present" | "unread" | "scope_unmatched";
+	/** Unread (`truncated`) successor nodes that could hold the condition. */
+	unreadRefs: string[];
+}
+
+/**
+ * Why a successor outline cannot corroborate a `gone` condition: it still shows the condition, or a node that is
+ * the condition's scope, above it, or (unless exact) inside it is unread (`truncated`). The Windows UIA wait does
+ * not report its own truncation, so absence is checked here on every platform. Element wire refs are look-local and
+ * public refs carry over structurally, so a moved scope can arrive under a fresh ref: a scope ref missing from the
+ * successor proves nothing while the condition shows anywhere in it. `undefined` when corroborated.
+ */
+function absenceUnproven(
+	outline: Outline,
+	condition: ReturnType<typeof validateCondition>,
+): AbsenceUnproven | undefined {
+	if (outlineConditionPresent(outline, condition)) return { reason: "present", unreadRefs: [] };
+	const scope = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
+	if (condition.scopeRef && !scope && outlineConditionPresent(outline, { ...condition, scopeRef: undefined }))
+		return { reason: "scope_unmatched", unreadRefs: [] };
+	const unreadRefs = outline.nodes
+		.filter(
+			(node) =>
+				node.truncated &&
+				(!scope ||
+					nodeWithinScope(scope, node.ref, false) ||
+					(!condition.scopeExact && nodeWithinScope(node, scope.ref, false))),
+		)
+		.map((node) => node.ref);
+	return unreadRefs.length > 0 ? { reason: "unread", unreadRefs } : undefined;
+}
+
+function absenceUnprovenMessage(unproven: AbsenceUnproven): string {
+	if (unproven.reason === "present") return "the successor observation still shows the condition";
+	if (unproven.reason === "scope_unmatched")
+		return "its scope could not be matched in the successor observation, which shows the condition elsewhere";
+	const { unreadRefs } = unproven;
+	const list = `${unreadRefs.slice(0, 5).join(", ")}${unreadRefs.length > 5 ? ", ..." : ""}`;
+	return `${unreadRefs.length} node${unreadRefs.length === 1 ? "" : "s"} in its scope could not be read (${list})`;
+}
+
 function conditionScopeNode(
 	outline: Outline,
 	condition: ReturnType<typeof validateCondition>,
@@ -1985,6 +2150,44 @@ function waitForViewText(outline: Outline, stateId: string, transition: OutlineD
 	return transition.useFullView
 		? renderStateView(outline, stateId, "compact").text
 		: `${renderChanges(transition.changes) || "(no element changes)"}\nUse stateId ${stateId} for subsequent actions and queries.`;
+}
+
+/**
+ * A claimed absence whose root could not be observed afterward: without a successor observation it stays
+ * `inconclusive`, and the base state is left as the current one.
+ */
+function unobservedAbsence(
+	baseStateId: string,
+	raw: PlatformWaitForResponse,
+	condition: ReturnType<typeof validateCondition>,
+	error: unknown,
+): AgentToolResult<WaitForDetails> {
+	const { text, role, value, scopeRef } = condition;
+	const reason = error instanceof Error ? error.message : String(error);
+	return {
+		content: [
+			{
+				type: "text",
+				text: `Inconclusive: the condition is not proven gone: its root could not be observed afterward (${reason}). No successor state was created; state ${baseStateId} is unchanged. Call find_roots, then observe_ui before treating it as gone.`,
+			},
+		],
+		details: {
+			tool: "wait_for",
+			stateId: baseStateId,
+			baseStateId,
+			view: "full",
+			found: false,
+			timedOut: raw.timedOut || undefined,
+			inconclusive: true,
+			observationError: reason,
+			nodeCount: Number.isFinite(raw.nodeCount) ? Number(raw.nodeCount) : undefined,
+			text,
+			role,
+			value,
+			scopeRef,
+			renderedOutline: "",
+		},
+	};
 }
 
 async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Promise<AgentToolResult<WaitForDetails>> {
@@ -2081,27 +2284,49 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		},
 		{ signal, timeoutMs: timeoutMs + 2_000 },
 	);
-	// A desktop state hydrates from a saved record, which always carries its resource identity.
-	const refreshed = (
-		await resourceScheduler.readAt(
-			state.resourceKey!,
-			state.epoch!,
-			async () => await captureCurrentTarget(signal, "auto"),
-		)
-	).value;
+	// A helper's `gone`, or its incomplete walk, holds only when the successor observation corroborates it.
+	const absenceClaimed = gone && (raw.found || raw.incomplete === true);
+	let refreshed: CaptureResult;
+	try {
+		// A desktop state hydrates from a saved record, which always carries its resource identity. The successor
+		// re-resolves the root the wait read (by its native ref, so a changed window id is followed) without
+		// moving to a foreground modal: a modal opened meanwhile is another root, not evidence for this one. Only the
+		// exact waited root corroborates an absence: a same-title window reached by fallback never does.
+		refreshed = (
+			await resourceScheduler.readAt(
+				state.resourceKey!,
+				state.epoch!,
+				async () =>
+					await captureCurrentTarget(
+						signal,
+						"auto",
+						AUTO_IMAGE_MAX_DIMENSION,
+						await resolveCurrentTarget(signal, { preferModal: false, exactIdentity: absenceClaimed }),
+					),
+			)
+		).value;
+	} catch (error) {
+		if (signal?.aborted || !absenceClaimed) throw error;
+		return unobservedAbsence(baseView.stateId, raw, condition, error);
+	}
 	const transition = changesBetween(baseView.outline, refreshed.outline);
 	const useDiff = !transition.useFullView;
 	const matches = searchOutline(refreshed.outline, text, role, undefined, 1);
 	const foundTarget = matches[0];
+	const helperIncomplete = gone && raw.incomplete === true;
+	const unproven = absenceClaimed ? absenceUnproven(refreshed.outline, condition) : undefined;
+	const inconclusive = helperIncomplete || unproven !== undefined;
 	const details: WaitForDetails = {
 		tool: "wait_for",
 		stateId: refreshed.capture.stateId,
 		baseStateId: baseView.stateId,
 		view: useDiff ? "diff" : "full",
 		changes: useDiff ? transition.changes : undefined,
-		found: raw.found,
-		gone: raw.gone || undefined,
+		found: raw.found && !inconclusive,
+		gone: (raw.gone && !inconclusive) || undefined,
 		timedOut: raw.timedOut || undefined,
+		...(inconclusive ? { inconclusive: true as const } : {}),
+		...(unproven?.unreadRefs.length ? { unreadRefs: unproven.unreadRefs } : {}),
 		target: foundTarget ? serializeOutlineSearchMatch(foundTarget) : undefined,
 		nodeCount: Number.isFinite(raw.nodeCount) ? Number(raw.nodeCount) : refreshed.outline.nodes.length,
 		text,
@@ -2110,11 +2335,13 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		scopeRef,
 		renderedOutline: foldToBudget(refreshed.outline).text,
 	};
-	const message = details.found
-		? details.gone
-			? "Condition disappeared."
-			: "Condition appeared."
-		: `Timed out after ${timeoutMs}ms waiting for condition.`;
+	const message = inconclusive
+		? `Inconclusive: the condition is not proven gone: ${helperIncomplete ? `the accessibility tree could not be read completely within ${timeoutMs}ms` : absenceUnprovenMessage(unproven!)}. Observe or wait again before treating it as gone.`
+		: details.found
+			? details.gone
+				? "Condition disappeared."
+				: "Condition appeared."
+			: `Timed out after ${timeoutMs}ms waiting for condition.`;
 	return {
 		content: [
 			{
@@ -2128,6 +2355,9 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 
 function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
 	if (a.pid !== b.pid) return false;
+	// A Windows native ref names one window instance; a same-HWND replacement is another root.
+	if (currentPlatformBackend.name === "windows")
+		return a.nativeWindowRef !== undefined && a.nativeWindowRef === b.nativeWindowRef;
 	if (a.windowId > 0 && b.windowId > 0) return a.windowId === b.windowId;
 	if (a.nativeWindowRef && b.nativeWindowRef) return a.nativeWindowRef === b.nativeWindowRef;
 	return normalizeText(a.windowTitle) === normalizeText(b.windowTitle);
@@ -2272,6 +2502,8 @@ async function performSearchUi(
 		escalatedOCR = true;
 	}
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
+	// A cached query rechecks the note: a graft or a restored session note may name a node no longer readable.
+	const note = noteForOutline(state.currentNote, outline);
 	// Browser snapshots are not partial reads; expand_ui cannot re-read them.
 	const unreadRefs =
 		ranked.totalMatches === 0 && !isBrowserContextId(state.contextId)
@@ -2286,7 +2518,7 @@ async function performSearchUi(
 		totalMatches: ranked.totalMatches,
 		returned: matches.length,
 		hasMore: ranked.totalMatches > matches.length,
-		note: state.currentNote,
+		note,
 		...(inconclusive ? { inconclusive: true as const, unreadRefs } : {}),
 	};
 	const collides = (match: OutlineSearchMatch) =>
@@ -2295,7 +2527,7 @@ async function performSearchUi(
 		(match) =>
 			`${controlLine(match.node)} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score!.toFixed(2)}` : ""}]${collides(match) ? `\n  path: ${match.path}` : ""}`,
 	);
-	const noteHeader = renderNote(state.currentNote);
+	const noteHeader = renderNote(note);
 	const noteText = noteHeader ? `${noteHeader}\n\n` : "";
 	const escalationText = escalatedOCR
 		? " OCR text was escalated for this search after the cached outline had no matches."
@@ -2379,7 +2611,7 @@ async function performExpandUi(
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
 		renderedOutline: folded.text,
-		note: state.currentNote,
+		note: noteForOutline(state.currentNote, outline),
 	};
 	return {
 		content: [
@@ -2402,7 +2634,7 @@ async function performInspectUi(params: InspectUiParams): Promise<AgentToolResul
 		stateId: state.currentCapture?.stateId,
 		lookId: outline.lookId,
 		target: serializeOutlineNodeShallow(target),
-		note: state.currentNote,
+		note: noteForOutline(state.currentNote, outline),
 	};
 	const fields = [
 		formatOutlineNodeLabel(target),
@@ -2499,10 +2731,17 @@ async function dispatchUiTransaction(
 			helperActRequest(target, prepareUiAction(action, actionState, look, true), "ax_only"),
 		);
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
-		const result = await currentPlatformBackend.actBatch(requests, {
-			signal,
-			timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
-		});
+		let result: Awaited<ReturnType<NonNullable<typeof currentPlatformBackend.actBatch>>>;
+		try {
+			result = await currentPlatformBackend.actBatch(requests, {
+				signal,
+				timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
+			});
+		} catch (error) {
+			// Any step may have run, so no step index is known: the whole batch is unknown.
+			if (!isReplyLost(error)) throw error;
+			return { ...aggregateExecutions([]), outcome: "unknown", ...replyLostStop(error) };
+		}
 		if (!result.steps || result.steps.length === 0)
 			throw new Error("Native action transaction returned no checked steps.");
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
@@ -2523,12 +2762,23 @@ async function dispatchUiTransaction(
 		try {
 			const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 			steps.push(step);
-			// A later action would run on an unknown state and its outcome would mask the timeout.
-			if (isTimedOutStep(step)) return stoppedTransaction(steps);
-			if (step.outcome === "didnt") break;
+			// A later action would run on an unknown state and its outcome would mask the indeterminate delivery.
+			if (isIndeterminateStep(step)) return stoppedTransaction(steps);
+			// The stop index is recorded whether or not the refusal carries an error; a returned error is kept too.
+			if (step.outcome === "didnt") return stoppedTransaction(steps);
+			// A helper that stopped after posting part of the action reports the count; never run the next action.
+			if (step.error && typeof step.evidence?.deliveredUnits === "number") return stoppedTransaction(steps);
 		} catch (error) {
 			const failure = error as (Error & { code?: string; evidence?: Record<string, unknown> }) | undefined;
-			if (failure?.code !== "app_blocked" && failure?.code !== "input_deadline_expired") throw error;
+			// The request reached the helper but its reply was lost: the action may have run, in part or in full.
+			if (isReplyLost(failure)) {
+				const step = executionTraceFromAct({ outcome: "unknown", ...replyLostStop(failure) }, "foreground");
+				steps.push(step);
+				return stoppedTransaction(steps);
+			}
+			// A refusal thrown after an earlier step ran, e.g. sticky `input_unsafe` or a helper shutting down,
+			// keeps that checked prefix and its stop index: the transaction is `unknown`, never a bare error.
+			if (!isStopRefusal(failure)) throw error;
 			if (!failure.evidence && steps.length === 0) throw error;
 			steps.push(
 				executionTraceFromAct(
@@ -2542,23 +2792,51 @@ async function dispatchUiTransaction(
 	return aggregateExecutions(steps);
 }
 
+/** Refusals a per-action dispatch records as a `didnt` stop instead of throwing, once a step ran or with evidence. */
+const STOP_REFUSAL_CODES = new Set(["app_blocked", "input_deadline_expired", "input_unsafe", "cancelled"]);
+
+function isStopRefusal(error: unknown): error is Error & { code: string; evidence?: Record<string, unknown> } {
+	return STOP_REFUSAL_CODES.has((error as { code?: string } | undefined)?.code ?? "");
+}
+
+function isReplyLost(error: unknown): error is Error & { code: "reply_lost" } {
+	return (error as { code?: string } | undefined)?.code === "reply_lost";
+}
+
+/** The error and evidence of a stop whose request reached the helper but whose reply was lost. */
+function replyLostStop(error: Error & { code: "reply_lost" }): Pick<ExecutionTrace, "error" | "evidence"> {
+	return { error: { code: error.code, message: error.message }, evidence: { deliveryUncertain: true } };
+}
+
 /** The serial transaction stopped at its last step: carry that step's error and its index. */
 function stoppedTransaction(steps: ExecutionTrace[]): ExecutionTrace {
 	const step = steps.at(-1)!;
 	return { ...aggregateExecutions(steps), error: step.error, evidence: step.evidence, stoppedAt: steps.length - 1 };
 }
 
-function isTimedOutStep(step: ExecutionTrace): boolean {
-	return step.outcome === "unknown" && step.error?.code === "timeout";
+/**
+ * Why a step's delivery is explicitly indeterminate, or undefined: a timeout, an AX press that may have landed
+ * (`ax_delivery_unknown`), or posted input the helper flagged `evidence.deliveryUnknown`. A generic `unknown` is not.
+ */
+function indeterminateReason(step: ExecutionTrace): string | undefined {
+	if (step.outcome !== "unknown") return undefined;
+	if (step.error?.code === "timeout") return "timed out";
+	if (step.error?.code === "ax_delivery_unknown") return "failed with an AX error after the press may have landed";
+	return step.evidence?.deliveryUnknown === true ? "posted input that its readback did not confirm" : undefined;
 }
 
+function isIndeterminateStep(step: ExecutionTrace): boolean {
+	return indeterminateReason(step) !== undefined;
+}
+
+/**
+ * A transaction is `didnt` only when its first step stopped as `didnt`: any step before a stop ran and
+ * may have delivered input, so a later refusal leaves it `unknown`, never `didnt`.
+ */
 function aggregateExecutions(steps: ExecutionTrace[]): ExecutionTrace {
 	const outcomes = steps.map((step) => step.outcome);
-	const outcome: ActOutcome = outcomes.includes("didnt")
-		? "didnt"
-		: outcomes.includes("unknown")
-			? "unknown"
-			: "worked";
+	const stop = outcomes.indexOf("didnt");
+	const outcome: ActOutcome = stop === 0 ? "didnt" : stop > 0 || outcomes.includes("unknown") ? "unknown" : "worked";
 	const fallback = steps.find((step) => step.escalatedToForeground);
 	return executionTrace("act", steps.every((step) => step.variant === "stealth") ? "stealth" : "default", {
 		outcome,
@@ -2577,8 +2855,35 @@ function exactPlatformRootMatchesTarget(root: HelperWindow, target: ResolvedTarg
 	const nativeRefMatches = Boolean(
 		target.nativeWindowRef && (root.rootRef === target.nativeWindowRef || root.windowRef === target.nativeWindowRef),
 	);
-	const windowIdMatches = target.windowId > 0 && root.windowId === target.windowId;
-	return nativeRefMatches || windowIdMatches;
+	// Windows: only the instance's native ref identifies it; a same-HWND replacement must not pass.
+	if (currentPlatformBackend.name === "windows") return nativeRefMatches;
+	return nativeRefMatches || windowIdIdentifies(target, root);
+}
+
+/** The helper process epoch of a macOS root ref `w<epoch>-<n>`; `undefined` for any other ref. */
+function macosRefEpoch(ref: string): string | undefined {
+	return /^w([0-9a-f]+)-\d+$/.exec(ref)?.[1];
+}
+
+/**
+ * Whether `root` is the saved root by its CG window id. One macOS helper process (one random hex epoch in its
+ * `w<epoch>-<n>` refs) never gives two windows one ref nor one window two refs, so between refs of one epoch the
+ * native ref decides: a shared window id (an older helper gave a sheet its window's) never stands in for another
+ * root's ref. After a helper restart the epochs differ and the window id still re-identifies the root, but only as
+ * the same kind of root: a saved sheet's id never matches a window, nor a saved window's a sheet. A target saved
+ * without its kind (restored from a session file) keeps the id alone.
+ */
+function windowIdIdentifies(
+	saved: { windowId?: number; nativeWindowRef?: string; rootKind?: string },
+	root: Pick<HelperWindow, "windowId" | "rootRef" | "windowRef" | "kind">,
+): boolean {
+	if (!saved.windowId || saved.windowId <= 0 || root.windowId !== saved.windowId) return false;
+	const savedRef = saved.nativeWindowRef;
+	const rootRef = root.rootRef ?? root.windowRef;
+	if (savedRef && rootRef === savedRef) return true;
+	const epoch = savedRef ? macosRefEpoch(savedRef) : undefined;
+	if (epoch !== undefined && rootRef && epoch === macosRefEpoch(rootRef)) return false;
+	return !saved.rootKind || (saved.rootKind === "sheet") === (root.kind === "sheet");
 }
 
 function clearDesktopOperationState(state: OperationState): void {
@@ -2657,20 +2962,42 @@ async function foregroundModalNote(target: ResolvedTarget): Promise<string | und
 	}
 }
 
+/** A helper's `gone` verdict awaiting corroboration, kept with the delivery outcome it falls back to. */
+interface ProvisionalAbsence {
+	/** The transaction's outcome before the check: an unproven absence settles back to it. */
+	fallback: ActOutcome;
+}
+
+/**
+ * Settle an `absent` check the evidence could not prove: `inconclusive`, keeping the delivery outcome from before
+ * the check. The message claims delivery only when that outcome says it worked.
+ */
+function settleUnprovenAbsence(execution: ExecutionTrace, fallback: ActOutcome, reason: string): void {
+	execution.verification!.status = "inconclusive";
+	execution.outcome = settledOutcome(execution, fallback);
+	const lead = execution.outcome === "worked" ? "The action was delivered, but its" : "The";
+	execution.error = {
+		code: "postcondition_inconclusive",
+		message: `${lead} absent postcondition is not proven: ${reason}.`,
+	};
+}
+
 export async function terminalDesktopActionResult(
 	target: ResolvedTarget,
 	baseStateId: string,
 	execution: ExecutionTrace,
 	error: unknown,
 	condition?: ReturnType<typeof validateCondition>,
+	provisional?: ProvisionalAbsence,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
 	await normalizeRootDeltaRefs(execution, target);
-	const timedOutIndex = timedOutStepIndex(execution);
+	const unknownIndex = indeterminateStepIndex(execution);
 	let exactRootAvailable: boolean | undefined;
 	let liveRoots: PlatformRoot[] = [];
 	try {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
-			const roots = await currentPlatformBackend.listRoots({ pid: target.pid });
+			// Only a complete listing proves the root closed; a partial one fails the probe.
+			const roots = await currentPlatformBackend.listRoots({ pid: target.pid, authoritative: true });
 			liveRoots = roots;
 			exactRootAvailable = roots.some((root) => exactPlatformRootMatchesTarget(root, target));
 			if (exactRootAvailable) break;
@@ -2714,17 +3041,27 @@ export async function terminalDesktopActionResult(
 			gone: condition.gone || undefined,
 			timeoutMs: condition.timeoutMs,
 		};
-		execution.outcome = settledOutcome(
-			execution,
-			outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus),
-		);
-		if (verificationStatus === "failed" && timedOutIndex < 0) {
+		// A transaction that already stopped, an indeterminate step included, keeps its outcome and original error;
+		// the check is recorded beside it.
+		const stopped = execution.error !== undefined || execution.stoppedAt !== undefined || unknownIndex >= 0;
+		if (!stopped)
+			execution.outcome = settledOutcome(
+				execution,
+				outcomeAfterCheck(execution.outcome ?? "unknown", verificationStatus),
+			);
+		if (!stopped && verificationStatus === "failed") {
 			execution.error = {
 				code: "postcondition_failed",
 				message: "The source root closed before the requested presence or value postcondition could be verified.",
 			};
+		} else if (execution.error?.code === "postcondition_inconclusive") {
+			// The proven closure settles an absence the helper could not confirm.
+			execution.error = undefined;
 		}
 	}
+	// Without a successor observation or a proven closure, the helper's absence stays uncorroborated.
+	if (provisional && !targetClosed)
+		settleUnprovenAbsence(execution, provisional.fallback, "no successor observation could be captured");
 	const successors = targetClosed
 		? execution
 				.rootDelta!.filter(
@@ -2777,55 +3114,126 @@ export async function terminalDesktopActionResult(
 	const rootFate = targetClosed
 		? `closed before a successor observation could be captured.${successorText}`
 		: `could not be observed afterward: ${message}`;
-	const result =
-		timedOutIndex >= 0
-			? `${timeoutSentence(timedOutIndex)} Its source root ${root} ${rootFate}`
-			: `The action was delivered, ${targetClosed ? "and" : "but"} its source root ${root} ${rootFate}`;
-	const next =
-		timedOutIndex >= 0
-			? `Do not replay the transaction: call find_roots, then observe_ui to check whether action ${timedOutIndex + 1} took effect.`
-			: "Call find_roots, then observe_ui to continue.";
+	// The text follows the settled outcome: an unknown delivery is never claimed, and never invites a replay. A stop
+	// (an indeterminate step included) opens with its own sentence, and the root observation follows on its own line.
+	const stop = stopReport(execution);
+	const rootLine = `source root ${root} ${rootFate}`;
+	const result = stop
+		? `${stop.opening}\nIts ${rootLine}\nNo successor state was created. ${observeAgainGuidance(stop)}`
+		: execution.outcome === "unknown"
+			? `Delivery of the action is unknown, and its ${rootLine}\nNo successor state was created. ${observeAgainGuidance({ retrySafe: false, check: "it" })}`
+			: `The action was delivered, ${targetClosed ? "and" : "but"} its ${rootLine}\nNo successor state was created. Call find_roots, then observe_ui to continue.`;
+	return { content: [{ type: "text", text: result }], details };
+}
+
+/** How a stopped transaction reads: its opening sentence and its one replay decision. */
+interface StopReport {
+	/** The stopped action, its refusal or error code and what may have been delivered, without replay guidance. */
+	opening: string;
+	/** The backend established that nothing was posted, so retrying is safe; otherwise the transaction is never replayed. */
+	retrySafe: boolean;
+	/** What to check before retrying: the indeterminate `action N`, or `it`. */
+	check: string;
+}
+
+/**
+ * The one formatter for a stopped transaction, shared by successor, terminal and aborted results: an indeterminate
+ * step, a keyboard stop, or any other defined `stoppedAt`. Undefined for an unstopped transaction.
+ *
+ * Only a first action that stopped as `didnt` with a refusal code or `0` posted units, no uncertain delivery and no
+ * unconfirmed release, establishes that nothing was posted. An errorless `didnt` does not: e.g. a scroll posts
+ * events and then sees no change. Every other stop may have delivered input and is never replayed.
+ */
+function stopReport(execution: ExecutionTrace): StopReport | undefined {
+	const unknownIndex = indeterminateStepIndex(execution);
+	if (unknownIndex >= 0)
+		return {
+			opening: indeterminateSentence(execution, unknownIndex),
+			retrySafe: false,
+			check: `action ${unknownIndex + 1}`,
+		};
+	const index = execution.stoppedAt;
+	const code = execution.error?.code;
+	const evidence = execution.evidence;
+	const units = evidence?.postedUnits;
+	const delivered = evidence?.deliveredUnits;
+	const uncertain = evidence?.deliveryUncertain === true;
+	const held = evidence?.unconfirmedReleases;
+	const stuck = Array.isArray(held) && held.length > 0 ? ` Release of ${held.join(", ")} is unconfirmed.` : "";
+	const keyboard =
+		code === "app_blocked" ||
+		code === "input_deadline_expired" ||
+		(code !== undefined && (typeof delivered === "number" || uncertain));
+	if (!keyboard && index === undefined) return undefined;
+	const postedCount = typeof units === "number" ? units : typeof delivered === "number" ? delivered : undefined;
+	const refusal = code === undefined ? "" : ` (${code})`;
+	const nothingPosted =
+		index === 0 &&
+		execution.outcome === "didnt" &&
+		!uncertain &&
+		!stuck &&
+		(postedCount === 0 || (postedCount === undefined && code !== undefined));
+	if (nothingPosted)
+		return {
+			opening: `Stopped at action 1${refusal}: nothing was posted, so a retry is safe.`,
+			retrySafe: true,
+			check: "it",
+		};
+	const atAction = index === undefined ? "" : ` at action ${index + 1}`;
+	if (keyboard) {
+		const posted =
+			typeof units === "number"
+				? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.`
+				: typeof delivered === "number"
+					? ` ${delivered} input ${delivered === 1 ? "event" : "events"} posted.`
+					: "";
+		const more = uncertain ? " More input may have been delivered." : "";
+		return { opening: `Stopped${atAction}${refusal}.${posted}${more}${stuck}`, retrySafe: false, check: "it" };
+	}
+	const prefix =
+		index === 0
+			? ""
+			: ` ${index === 1 ? "Action 1" : `Actions 1-${index}`} ran before it and may have delivered input.`;
 	return {
-		content: [
-			{
-				type: "text",
-				text: `${keyboardStopSummary(execution) ?? result}\nNo successor state was created. ${next}`,
-			},
-		],
-		details,
+		opening: `Stopped${atAction}${refusal}; whether the transaction was delivered is unknown.${prefix}`,
+		retrySafe: false,
+		check: "it",
 	};
 }
 
-function keyboardStopSummary(execution: ExecutionTrace): string | undefined {
-	const code = execution.error?.code;
-	if (code !== "app_blocked" && code !== "input_deadline_expired") return undefined;
-	const units = execution.evidence?.postedUnits;
-	const posted = typeof units === "number" ? ` ${units} key ${units === 1 ? "pair" : "pairs"} posted.` : "";
-	const atAction = execution.stoppedAt === undefined ? "" : ` at action ${execution.stoppedAt + 1}`;
-	return `Stopped${atAction} (${code}).${posted} Do not replay the transaction.`;
+/** Next step of a result without a successor state: observe again, and never replay unless nothing was posted. */
+function observeAgainGuidance(stop: Pick<StopReport, "retrySafe" | "check">): string {
+	return stop.retrySafe
+		? "Call find_roots, then observe_ui to continue."
+		: `Do not replay the transaction: call find_roots, then observe_ui to check whether ${stop.check} took effect.`;
 }
 
-/** Index of the step that timed out, or -1: its delivery stays unknown whatever is observed afterward. */
-function timedOutStepIndex(execution: ExecutionTrace): number {
-	return (execution.steps ?? []).findIndex(isTimedOutStep);
+/** Next step of a successor result: check the returned state, and never replay unless nothing was posted. */
+function successorGuidance(stop: StopReport, stateId: string): string {
+	return stop.retrySafe
+		? `Returned state ${stateId}.`
+		: `Do not replay the transaction: check state ${stateId} for whether ${stop.check} took effect before retrying it.`;
 }
 
-/** Later evidence settles an act's outcome, except after a timed-out step: postconditions and values cannot prove delivery. */
+/** Index of the step whose delivery is indeterminate, or -1: it stays unknown whatever is observed afterward. */
+function indeterminateStepIndex(execution: ExecutionTrace): number {
+	return (execution.steps ?? []).findIndex(isIndeterminateStep);
+}
+
+/** Later evidence settles an act's outcome, except after an indeterminate step: postconditions and values cannot prove delivery. */
 function settledOutcome(execution: ExecutionTrace, settled: ActOutcome): ActOutcome {
-	return timedOutStepIndex(execution) < 0 ? settled : execution.outcome!;
+	return indeterminateStepIndex(execution) < 0 ? settled : execution.outcome!;
 }
 
-/** The numbered timeout sentence plus the completed prefix, shared by successor and terminal results. */
-function timeoutSentence(index: number): string {
+/**
+ * The numbered indeterminate-delivery sentence, with the step's error code unless that code is the reason itself
+ * (`timeout`), plus the completed prefix.
+ */
+function indeterminateSentence(execution: ExecutionTrace, index: number): string {
+	const step = execution.steps![index]!;
+	const code = step.error && step.error.code !== "timeout" ? ` (${step.error.code})` : "";
 	const prefix = index === 0 ? "" : index === 1 ? " Action 1 completed." : ` Actions 1-${index} completed.`;
-	return `Action ${index + 1} timed out; whether it was delivered is unknown.${prefix}`;
-}
-
-function timeoutSummary(execution: ExecutionTrace, stateId: string): string | undefined {
-	const index = timedOutStepIndex(execution);
-	return index < 0
-		? undefined
-		: `${timeoutSentence(index)} Do not replay the transaction: check state ${stateId} for whether action ${index + 1} took effect before retrying it.`;
+	return `Action ${index + 1} ${indeterminateReason(step)}${code}; whether it was delivered is unknown.${prefix}`;
 }
 
 async function performDesktopTransaction(
@@ -2849,8 +3257,13 @@ async function performDesktopTransaction(
 			await normalizeRootDeltaRefs(execution, target);
 			// Both dispatch paths aggregate their steps, which records how many ran.
 			const executedActions = actions.slice(0, execution.actionCount!);
+			// The helper's `gone`, pending corroboration by the successor observation or a proven closure.
+			let provisional: ProvisionalAbsence | undefined;
+			// Any stop, even an errorless first-step `didnt`, or an error: neither `expect` nor observed values upgrade it.
+			const partial = execution.error !== undefined || execution.stoppedAt !== undefined;
 			try {
-				if (condition && !execution.error) {
+				// An indeterminate step skips the postcondition: a passing or stale check cannot settle its delivery.
+				if (condition && !partial && indeterminateStepIndex(execution) < 0) {
 					const {
 						text: expectedText,
 						role: expectedRole,
@@ -2875,23 +3288,30 @@ async function performDesktopTransaction(
 						},
 						{ signal, timeoutMs: timeoutMs + 2_000 },
 					);
+					const before = execution.outcome ?? "unknown";
+					const status = verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed";
 					execution.verification = {
-						status: verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed",
+						status,
 						text: expectedText,
 						role: expectedRole,
 						value: expectedValue,
 						gone: gone || undefined,
 						timeoutMs,
 					};
-					execution.outcome = settledOutcome(
-						execution,
-						outcomeAfterCheck(execution.outcome ?? "unknown", execution.verification.status),
-					);
-					if (!verification.found) {
-						execution.error = {
-							code: "postcondition_failed",
-							message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
-						};
+					if (gone && !verification.found && verification.incomplete) {
+						settleUnprovenAbsence(
+							execution,
+							before,
+							`the accessibility tree could not be read completely within ${timeoutMs}ms`,
+						);
+					} else {
+						execution.outcome = settledOutcome(execution, outcomeAfterCheck(before, status));
+						if (gone && verification.found) provisional = { fallback: before };
+						if (!verification.found)
+							execution.error = {
+								code: "postcondition_failed",
+								message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`,
+							};
 					}
 				} else {
 					await sleep(settleMsForExecution(execution), signal);
@@ -2904,28 +3324,42 @@ async function performDesktopTransaction(
 					target,
 					target.windowId > 0,
 				);
-				execution.outcome = settledOutcome(
-					execution,
-					outcomeAfterObservedValues(
-						execution.outcome ?? "unknown",
-						executedActions,
-						(ref) => nodeByRef(capture.outline, ref)?.value,
-					),
-				);
-				const timedOutIndex = timedOutStepIndex(execution);
+				if (provisional) {
+					const unproven = absenceUnproven(capture.outline, condition!);
+					if (unproven) settleUnprovenAbsence(execution, provisional.fallback, absenceUnprovenMessage(unproven));
+					provisional = undefined;
+				}
+				// A stopped transaction may have delivered more than its values show, e.g. a held key: it stays unknown.
+				// An indeterminate step is always a stop; `settledOutcome` keeps it unknown should one ever arrive unstopped.
+				// An explicit delivery error also blocks the observed-value upgrade.
+				if (!partial)
+					execution.outcome = settledOutcome(
+						execution,
+						outcomeAfterObservedValues(
+							execution.outcome ?? "unknown",
+							executedActions,
+							(ref) => nodeByRef(capture.outline, ref)?.value,
+							execution.error,
+						),
+					);
+				const unknownIndex = indeterminateStepIndex(execution);
 				for (const [index, action] of executedActions.entries()) {
 					state.currentNote = noteAfterAct(state.currentNote, action.ref, capture.outline, {
 						window: noteWindowForTarget(capture.target, capture.look),
 						rootDelta: execution.rootDelta,
 						// The saved note carries the indeterminate delivery to every later call on this state.
-						timedOutAction: index === timedOutIndex ? index + 1 : undefined,
+						unknownDelivery:
+							index === unknownIndex
+								? `action ${index + 1} ${indeterminateReason(execution.steps![index]!)}`
+								: undefined,
 					});
 				}
+				const stop = stopReport(execution);
 				const built = await buildToolResult(
 					"act_ui",
-					keyboardStopSummary(execution) ??
-						timeoutSummary(execution, capture.capture.stateId) ??
-						`Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
+					stop
+						? `${stop.opening} ${successorGuidance(stop, capture.capture.stateId)}`
+						: `Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`,
 					capture,
 					execution,
 					signal,
@@ -2939,9 +3373,19 @@ async function performDesktopTransaction(
 			} catch (error) {
 				if (signal?.aborted) {
 					clearDesktopOperationState(state);
+					// The abort ends only the follow-up observation: a stopped transaction keeps its trace and stop text.
+					const stop = stopReport(execution);
+					if (stop)
+						throw Object.assign(
+							new ComputerUseError(
+								execution.error?.code ?? "aborted",
+								`${stop.opening} The follow-up observation was aborted. ${observeAgainGuidance(stop)}`,
+							),
+							{ execution, cause: error },
+						);
 					throw error;
 				}
-				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition);
+				return await terminalDesktopActionResult(target, baseView.stateId, execution, error, condition, provisional);
 			}
 		}, signal),
 	);
@@ -3813,8 +4257,7 @@ function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, 
 	if (!currentTarget) return;
 	const refusalForState = () => {
 		const savedRef = currentTarget.windowRef;
-		const latest =
-			currentPlatformBackend.name === "windows" && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
+		const latest = requiresLiveIdentity() && savedRef ? runtimeState.windowRefs.get(savedRef) : undefined;
 		return appPolicyRefusal(currentTarget) ?? (latest && appPolicyRefusal(latest));
 	};
 	if (tool === "observe_ui" || tool === "act_ui" || tool === "wait_for" || (tool === "read_text" && !outputRef)) {
@@ -3947,10 +4390,10 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 						h: Math.max(1, toFiniteNumber(window.framePoints?.h, 1)),
 					},
 					scaleFactor: Math.max(1, toFiniteNumber(window.scaleFactor, 1)),
-					isMinimized: toBoolean(window.isMinimized),
-					isOnscreen: toBoolean(window.isOnscreen),
-					isMain: toBoolean(window.isMain),
-					isFocused: toBoolean(window.isFocused),
+					isMinimized: toOptionalBoolean(window.isMinimized),
+					isOnscreen: toOptionalBoolean(window.isOnscreen),
+					isMain: toOptionalBoolean(window.isMain),
+					isFocused: toOptionalBoolean(window.isFocused),
 				};
 				runtimeState.windowRefs.set(record.ref, record);
 				runtimeState.windowRefByIdentity.set(windowRecordIdentity(record), record.ref);
@@ -4114,10 +4557,34 @@ act_ui({
 })
 ```
 
-Verification reports `verified`, `preexisting`, or `failed`. A preexisting
-condition means the requested end state holds, but is not evidence that the
-action caused it. Use `ref` for one exact element or `scopeRef` for a subtree;
-role-only conditions must be scoped, and value checks require an exact `ref`.
+Verification reports `verified`, `preexisting`, `failed`, or `inconclusive`. A
+preexisting condition means the requested end state holds, but is not evidence
+that the action caused it. Use `ref` for one exact element or `scopeRef` for a
+subtree; role-only conditions must be scoped, and value checks require an exact
+`ref`.
+
+An `absent` condition holds only on complete evidence. The helper must walk the
+whole scope and read every field the condition tests (the macOS walk stops at
+depth 12 and 2,000 nodes) and say so: the macOS client reads a `gone` reply
+without the helper's `complete: true`, e.g. from an older external helper, as
+incomplete. The successor observation, captured from the exact root the wait read
+(its native ref or window id, never a same-title window and never a foreground
+modal that opened meanwhile), must neither show the
+condition nor mark a node `truncated` in the scope, above it or, unless the
+scope is an exact `ref`, below it. Element refs are look-local, so a scope ref
+missing from the successor proves nothing while the condition shows anywhere in
+it. A root closure proven from a complete listing also settles it. Otherwise
+`act_ui` reports the check `inconclusive` with `postcondition_inconclusive`,
+keeping the delivery outcome from before the check (its message claims delivery
+only when that outcome is `worked`), and `wait_for` returns `inconclusive: true`
+instead of `gone`, with `unreadRefs` only when the successor has unread nodes
+there. When the root of a claimed absence cannot be observed or resolved by that
+identity afterward, `wait_for` returns `inconclusive: true` with `observationError` and no successor
+state. A `wait_for` that timed out while the helper still saw the condition is a
+failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
+failed successor observation after it, or after any presence wait, is an error.
+The Windows UIA wait still answers `gone` from a truncated walk; only the
+successor's `truncated` root catches that.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 

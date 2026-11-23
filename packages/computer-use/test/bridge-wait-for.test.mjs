@@ -132,7 +132,11 @@ test("wait_for reports timeouts and disappearance, replacing the diff when the r
 	);
 	assert.equal(timedOut.details.nodeCount, 2, "a non-finite helper count falls back to the refreshed outline size");
 
-	fake.waitFor = async () => ({ found: true, gone: true, nodeCount: 2 });
+	// The successor observation must corroborate the helper's absence.
+	fake.waitFor = async () => {
+		fake.tree = [wireButton("other", "Other")];
+		return { found: true, gone: true, nodeCount: 2 };
+	};
 	const gone = await fake.call(executeWaitFor, { stateId, text: "Go", until: "absent" });
 	assert.equal(fake.waits.at(-1).request.gone, true);
 	assert.match(fake.text(gone), /^Condition disappeared\./);

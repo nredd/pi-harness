@@ -2,6 +2,8 @@
 
 Only explicit wire structure or exact caller-supplied provenance is attributed.
 The wire adapter erases custom-message types; absent provenance remains shared.
+Exact caller-supplied text prefixes split one text block; inherited parent context
+that a subagent prepends to its own task prompt is verified and bound to that block.
 JSON envelope syntax and control fields are serialization overhead. Tool objects,
 call arguments and result values are indivisible serialized components, including
 their internal syntax. XML sections count their escaped contents and tags, not
@@ -228,11 +230,12 @@ def _owner_label(owner: str | None) -> str:
     return _safe(owner, SAFE_OWNER)
 
 
-def _categories(provenance: dict[str, str]) -> dict[str, str]:
+def _categories(provenance: dict[str, str], *, name: str = "provenance") -> dict[str, str]:
     """Validate caller provenance and sanitize extension custom types.
 
     Parameters:
-        provenance (dict[str, str]): exact message text mapped to known categories.
+        provenance (dict[str, str]): exact message text, or a text prefix, mapped to known categories.
+        name (str): argument name for error messages.
 
     Returns:
         dict[str, str]: validated categories with safe extension labels.
@@ -247,8 +250,20 @@ def _categories(provenance: dict[str, str]) -> dict[str, str]:
         elif category.startswith("extension:") and len(category) > len("extension:"):
             result[text] = "extension:" + _safe(category.removeprefix("extension:"), SAFE_EXTENSION)
         else:
-            raise ValueError("Invalid `provenance` category")
+            raise ValueError(f"Invalid `{name}` category")
     return result
+
+
+def _utf16_units(text: str) -> int:
+    """Count UTF-16 code units, so lone surrogates and escaped pairs measure alike.
+
+    Parameters:
+        text (str): decoded text, possibly holding lone surrogates.
+
+    Returns:
+        int: UTF-16 code units.
+    """
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
 
 
 class SpanCollector:
@@ -317,6 +332,9 @@ class _Attributor:
         raw: str,
         owners: dict[str, str],
         provenance: dict[str, str],
+        prefixes: dict[str, str],
+        *,
+        inherited: InheritedContext | None = None,
     ) -> None:
         """Bind the indexed body and attribution inputs.
 
@@ -325,11 +343,15 @@ class _Attributor:
             raw (str): original body.
             owners (dict[str, str]): tool name -> owner label.
             provenance (dict[str, str]): validated exact text -> category.
+            prefixes (dict[str, str]): validated exact text prefix -> category, longest first.
+            inherited (InheritedContext | None): verified parent context, re-verified against this body.
         """
         self.nodes = nodes
         self.raw = raw
         self.owners = owners
         self.provenance = provenance
+        self.prefixes = dict(sorted(prefixes.items(), key=lambda item: -len(item[0])))
+        self.inherited = inherited
         self.collector = SpanCollector(raw)
         self.calls: dict[str, str] = {}
 
@@ -358,13 +380,21 @@ class _Attributor:
         """
         return f"tool:{_safe(name, SAFE_NAME)}:owner:{_owner_label(self.owners.get(str(name)))}"
 
-    def text(self, path: tuple[str | int, ...], category: str, *, system: bool = False) -> None:
-        """Charge escaped string payload, splitting explicit XML sections only.
+    def text(
+        self,
+        path: tuple[str | int, ...],
+        category: str,
+        *,
+        system: bool = False,
+        prefix: tuple[str, str] | None = None,
+    ) -> None:
+        """Charge escaped string payload, splitting an exact leading prefix and explicit XML sections.
 
         Parameters:
             path (tuple[str | int, ...]): structural path to the string value.
             category (str): destination for text outside tagged system sections.
             system (bool): attribute explicit tags as system sections.
+            prefix (tuple[str, str] | None): decoded leading text the value starts with, and its category.
 
         Returns:
             None: charges the collector in place.
@@ -381,9 +411,18 @@ class _Attributor:
         offsets = [node.start + 1]
         for escape in escapes:
             offsets.append(offsets[-1] + len(escape))
-        decoded = "".join(json.loads(f'"{e}"') if e.startswith("\\") else e for e in escapes)
+        units = [json.loads(f'"{e}"') if e.startswith("\\") else e for e in escapes]
+        decoded = "".join(units)
         cursor = 0
-        for match in SECTION.finditer(decoded):
+        if prefix is not None:
+            # The caller checked `value.startswith(text)` on the decoded value, so the prefix ends on a
+            # unit boundary: an escaped surrogate pair is two units, a literal one is one.
+            remaining = _utf16_units(prefix[0])
+            while remaining > 0:
+                remaining -= _utf16_units(units[cursor])
+                cursor += 1
+            self.collector.add(prefix[1], offsets[0], offsets[cursor])
+        for match in SECTION.finditer(decoded, cursor):
             self.collector.add(category, offsets[cursor], offsets[match.start()])
             tag = _safe(match[1], SAFE_NAME)
             self.collector.add(
@@ -512,7 +551,29 @@ class _Attributor:
         if kind == "text":
             value = block.get("text", "")
             default = "compaction_summary" if value.startswith(SUMMARY_PREFIX) else category
-            self.text(path if bare else (*path, "text"), self.provenance.get(value, default), system=system)
+            exact = self.provenance.get(value)
+            bound = self.inherited
+            if bound is not None and bound.path == path:
+                self.text(
+                    path if bare else (*path, "text"),
+                    default,
+                    system=system,
+                    prefix=(bound.context, "inherited_context"),
+                )
+                return
+            prefix = (
+                None
+                if exact is not None
+                else next(
+                    (
+                        (text, prefix_category)
+                        for text, prefix_category in self.prefixes.items()
+                        if value.startswith(text)
+                    ),
+                    None,
+                )
+            )
+            self.text(path if bare else (*path, "text"), exact or default, system=system, prefix=prefix)
         elif kind in {"thinking", "redacted_thinking"}:
             for field in ("thinking", "signature", "data"):
                 self.claim((*path, field), "thinking")
@@ -528,11 +589,72 @@ class _Attributor:
             self.claim(path, "shared")
 
 
+@dataclass(frozen=True)
+class InheritedContext:
+    """Verified parent context bound to the one child text block that carries it.
+
+    Attributes:
+        path (tuple[str | int, ...]): structural path of that block, or of bare string content.
+        context (str): exact rendered parent context, charged to `inherited_context`.
+        prompt (str): exact task prompt that follows `context` with no separator.
+    """
+
+    path: tuple[str | int, ...]
+    context: str
+    prompt: str
+
+
+def inherited_prefix(raw: str, context: str, prompt: str) -> InheritedContext:
+    """Bind independently observed parent context to the child block that must equal it plus the task.
+
+    `inherit_context` renders the parent history (`buildParentContext` in
+    `packages/subagents/src/context.ts`, ending `# Your Task (below)\\n`) and appends the task prompt
+    with no separator. The caller renders `context` from what it observed on the parent's request and
+    knows `prompt`, so the child's first user text block must be exactly `context + prompt`; a merely
+    matching suffix proves nothing.
+
+    Parameters:
+        raw (str): the child's first recorded request body.
+        context (str): exact rendered parent context the caller observed, not read from `raw`.
+        prompt (str): exact task prompt the caller passed to the child.
+
+    Returns:
+        InheritedContext: the verified block path and texts, for `request_ledger(inherited=...)`.
+
+    Raises:
+        ValueError: `context` or `prompt` is empty, or the first user message's first text is not
+            exactly `context + prompt`, e.g. no user message, a non-text first block, a shared suffix
+            without that context or extra text around it.
+    """
+    messages = json.loads(raw).get("messages", [])
+    index, content = next(
+        (
+            (number, message.get("content"))
+            for number, message in enumerate(messages)
+            if message.get("role") == "user"
+        ),
+        (0, None),
+    )
+    path: tuple[str | int, ...] = ("messages", index, "content")
+    if (
+        isinstance(content, list)
+        and content
+        and isinstance(content[0], dict)
+        and content[0].get("type") == "text"
+    ):
+        path, content = (*path, 0), content[0].get("text")
+    if not context or not prompt or content != context + prompt:
+        raise ValueError("Child first user text is not the observed parent context then the task prompt")
+    return InheritedContext(path, context, prompt)
+
+
 def request_ledger(
     raw: str,
     *,
     owners: dict[str, str] | None = None,
     provenance: dict[str, str] | None = None,
+    prefixes: dict[str, str] | None = None,
+    inherited: InheritedContext | None = None,
     previous: str | None = None,
     parent: str | None = None,
     sdk: bool = False,
@@ -545,6 +667,12 @@ def request_ledger(
         provenance (dict[str, str] | None): exact message text -> known category;
             extension:<customType> and subagent_notices must come from an observer,
             never inferred from arbitrary natural language.
+        prefixes (dict[str, str] | None): exact leading text of a message-content text block ->
+            known category, the rest of the block keeping its default; exact `provenance` wins and
+            the longest prefix applies. Top-level `system` blocks and SDK `sections` never match;
+            tagged sections in a native system delta's remainder keep their own buckets.
+        inherited (InheritedContext | None): verified parent context from `inherited_prefix`, charged
+            to `inherited_context` in its bound block only; other blocks never match it.
         previous (str | None): preceding recorded request, original body.
         parent (str | None): spawning parent's request, original body.
         sdk (bool): account for a faux factory transcript instead of an Anthropic wire body.
@@ -553,16 +681,23 @@ def request_ledger(
         Ledger: additive bytes, tool-array hash, literal prefix and marker offsets.
 
     Raises:
-        ValueError: invalid, non-object or duplicate-key JSON, an invalid provenance category,
-            or spans that are out of bounds or overlap.
+        ValueError: invalid, non-object or duplicate-key JSON, an invalid provenance or prefix
+            category, an empty prefix text, an `inherited` binding whose context and prompt are not
+            this body's first user text or whose block path differs, or spans that are out of
+            bounds or overlap.
         KeyError: a required structural field is missing, such as SDK `messages` or message `content`.
         UnicodeError: the body cannot be represented as UTF-8.
     """
+    if inherited is not None and inherited_prefix(raw, inherited.context, inherited.prompt) != inherited:
+        raise ValueError("`inherited` is bound to another block")
     categories = _categories(provenance or {})
+    if "" in (prefixes or {}):
+        raise ValueError("Empty `prefixes` text would match every block")
+    leading = _categories(prefixes or {}, name="prefixes")
     nodes = _nodes(raw)
     body = nodes[()].value
     encoded = raw.encode()
-    attributor = _Attributor(nodes, raw, owners or {}, categories)
+    attributor = _Attributor(nodes, raw, owners or {}, categories, leading, inherited=inherited)
     if sdk:
         tools = attributor.sdk_messages(body)
     else:

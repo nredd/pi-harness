@@ -1,9 +1,19 @@
-/** Read-only source/provenance evidence; request byte accounting stays in Python. */
+/**
+ * Read-only source/provenance evidence; request byte accounting stays in Python. The one write is
+ * opt-in: with `HARNESS_LEDGER_NOTE` set, each user prompt gets that text as one hidden
+ * `ledger-fixture` custom message, so the wire scenario sees a real `extension:*` row.
+ */
 import { appendFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function requestLedgerProbe(pi: ExtensionAPI): void {
 	let provenance: Record<string, string> = {};
+	pi.on("before_agent_start", (event) => {
+		const note = process.env.HARNESS_LEDGER_NOTE;
+		return note && event.messageType === "user"
+			? { message: { customType: "ledger-fixture", content: note, display: false } }
+			: undefined;
+	});
 	pi.on("context", (event) => {
 		provenance = {};
 		for (const message of event.messages) {

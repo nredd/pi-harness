@@ -4,6 +4,7 @@ pub mod atspi;
 pub mod error;
 pub mod protocol;
 pub mod state;
+pub mod testing;
 pub mod wayland;
 pub mod x11;
 

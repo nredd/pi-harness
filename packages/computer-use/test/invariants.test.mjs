@@ -220,10 +220,12 @@ test("explicit root is not replaced by a modal window behind it", () => {
 });
 
 test("macOS ScreenCaptureKit config sizes window screenshots", () => {
-	const captureFunction = swift.slice(
-		swift.indexOf("private func captureWindow"),
-		swift.indexOf("private func jpegData"),
-	);
+	// Match the declarations whatever their access modifier, and require both in order before slicing.
+	const start = swift.search(/\bfunc captureWindow\b/);
+	const end = swift.search(/\bfunc jpegData\(/);
+	assert(start >= 0, "captureWindow declaration not found");
+	assert(end > start, "jpegData declaration not found after captureWindow");
+	const captureFunction = swift.slice(start, end);
 	assert(/config\.width\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.width");
 	assert(/config\.height\s*=/.test(captureFunction), "captureWindow does not set SCStreamConfiguration.height");
 });
@@ -552,7 +554,7 @@ test("INV-19 macOS root identity resolution", () => {
 
 test("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("private func broadRootCandidateApps"), "macOS helper lacks a broad root-candidate preflight");
-	assert(swift.includes("private func cgBroadRootOwners"), "macOS helper lacks a dedicated broad-owner preflight");
+	assert(swift.includes("\tfunc cgBroadRootOwners("), "macOS helper lacks a dedicated broad-owner preflight");
 	assert(
 		swift.includes("layer == 0 || layer == popupLevel"),
 		"broad root discovery is not bounded by layer-0 and popup-menu owners",
@@ -578,7 +580,9 @@ test("INV-20 bounded broad root discovery", () => {
 		"root discovery includes unrelated menu-pairing changes",
 	);
 	assert(
-		/if windows\.isEmpty \{\s*for attribute in \[kAXMainWindowAttribute, kAXFocusedWindowAttribute\]/.test(swift),
+		/fallbackWindows: \{\s*var windows: \[AXUIElement\] = \[\]\s*for attribute in \[kAXMainWindowAttribute, kAXFocusedWindowAttribute\]/.test(
+			swift,
+		) && swift.includes("windows: capped.isEmpty ? fallbackWindows() : capped"),
 		"root discovery drops windows that AXWindows omits",
 	);
 	assert(ts.includes("async function windowDetailsForFind"), "find_roots lacks an explicit root-acquisition boundary");
@@ -877,7 +881,7 @@ async function liveChecks() {
 			process.env.PI_CU_SOCKET_PATH ?? path.join(os.homedir(), "Library/Caches/pi-computer-use/bridge.sock");
 		const diagnostics = await call(socketPath, { id: "inv-diagnostics", cmd: "diagnostics" });
 		check("LIVE diagnostics current protocol", () =>
-			assert(diagnostics.protocolVersion === 7, `protocolVersion=${diagnostics.protocolVersion}`),
+			assert(diagnostics.protocolVersion === 8, `protocolVersion=${diagnostics.protocolVersion}`),
 		);
 		const broadDiscoveryStarted = Date.now();
 		const broadRoots = await call(socketPath, { id: "inv-broad-roots", cmd: "listRoots" }, 10000);
@@ -889,14 +893,14 @@ async function liveChecks() {
 		check("LIVE broad root discovery is bounded and keeps helper alive", () => {
 			assert(Array.isArray(broadRoots?.roots), "broad listRoots did not return roots");
 			assert(broadDiscoveryMs < 10000, `broad listRoots took ${broadDiscoveryMs}ms`);
-			assert(diagnosticsAfterBroadDiscovery.protocolVersion === 7, "helper did not survive broad listRoots");
+			assert(diagnosticsAfterBroadDiscovery.protocolVersion === 8, "helper did not survive broad listRoots");
 		});
 		const abandonedRequestId = `inv-abandoned-roots-${process.pid}-${Date.now()}`;
 		await abandon(socketPath, { id: abandonedRequestId, cmd: "listRoots" });
 		const diagnosticsAfterAbandon = await waitForCompletedRequest(socketPath, abandonedRequestId);
 		check("LIVE abandoned root discovery keeps helper alive", () => {
 			assert(
-				diagnosticsAfterAbandon.protocolVersion === 7,
+				diagnosticsAfterAbandon.protocolVersion === 8,
 				"helper died after writing to an abandoned root-discovery socket",
 			);
 		});

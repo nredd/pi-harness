@@ -123,11 +123,13 @@ it("resolves a journaled transcript once per record across its journal writes", 
 	h.setResponses([toolCalls(spawn("resume", { resume: id, run_in_background: false })), answer("RESUMED")]);
 	await h.session.prompt("resume");
 	const rows = parent.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "subagents:record");
-	// Spawn, settle, the resume's start and its settle: four rows, one resolution.
+	// Spawn, settle, the resume's start and its settle: four rows, one resolution
+	// (two calls). Each run's writer claim (#1247) resolves it once more, not per
+	// row: the spawn's twice, its transcript not on disk yet, then the resume's.
 	expect(rows.length).toBeGreaterThanOrEqual(4);
 	expect(rows.every((entry) => (entry as { data: { id: string } }).data.id === id)).toBe(true);
 	const transcript = resolved().filter((path) => path === sessionFile || path === dirname(sessionFile));
-	expect(transcript.length).toBeLessThanOrEqual(2);
+	expect(transcript.length).toBeLessThanOrEqual(2 + 3);
 	h.cleanup();
 });
 

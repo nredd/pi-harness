@@ -5,8 +5,9 @@
 //! should get its own `RefStore` so that references remain scoped to a
 //! single discovery session.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::RandomState, HashMap, HashSet};
 use std::fmt;
+use std::hash::BuildHasher;
 
 /// An opaque native handle (e.g., HWND or UIA element pointer).
 ///
@@ -93,7 +94,7 @@ pub struct RefStore {
     next_window_id: u64,
     next_element_id: u64,
     windows: HashMap<u64, NativeHandle>,
-    window_ids: HashMap<NativeHandle, u64>,
+    window_ids: HashMap<(NativeHandle, usize), u64>,
     elements: HashMap<u64, NativeHandle>,
 }
 
@@ -109,15 +110,18 @@ impl RefStore {
         }
     }
 
-    /// Insert a window native handle and return its `WindowRef`.
-    pub fn insert_window(&mut self, handle: NativeHandle) -> WindowRef {
-        if let Some(id) = self.window_ids.get(&handle).copied() {
+    /// Insert a window native handle observed as instance `generation` and return
+    /// its `WindowRef`. The same handle and generation keep their ref; a new
+    /// generation (a replacement window reusing the handle) gets a new one, so an
+    /// earlier ref never comes to denote the replacement.
+    pub fn insert_window(&mut self, handle: NativeHandle, generation: usize) -> WindowRef {
+        if let Some(id) = self.window_ids.get(&(handle, generation)).copied() {
             return WindowRef { id };
         }
         let id = self.next_window_id;
         self.next_window_id += 1;
         self.windows.insert(id, handle);
-        self.window_ids.insert(handle, id);
+        self.window_ids.insert((handle, generation), id);
         WindowRef { id }
     }
 
@@ -157,8 +161,16 @@ impl RefStore {
 }
 
 impl Default for RefStore {
+    /// A store for one helper lifetime: window ref ids start at a random nonzero
+    /// 32-bit nonce in the high half, so a ref an earlier helper process issued never
+    /// denotes a window in this one, even for the same HWND and instance tag (nonce
+    /// collision ~2^-32). `new` keeps `@w1`-based numbering for scoped stores.
     fn default() -> Self {
-        Self::new()
+        let nonce = RandomState::new().hash_one(std::process::id()) as u32;
+        Self {
+            next_window_id: (u64::from(nonce.max(1)) << 32) | 1,
+            ..Self::new()
+        }
     }
 }
 

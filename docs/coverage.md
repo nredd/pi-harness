@@ -454,6 +454,53 @@ inline source tests count. Declaration-only Windows modules can lack an LLVM map
 contain block comments; the Linux declaration check is unchanged. This is not Windows ARM64 or
 live desktop evidence.
 
+The caps alone cannot see a shrinking denominator: a build or instrumentation change can drop an
+uncovered block from BOTH exports, which then agree on the smaller map, and the uncovered count
+falls without a new test (#1192). So the signal also records reviewed `mapped_totals`: per OS, per
+package-relative source, the file's SHA-256 and its mapped `lines` / `functions` (main run
+[here](https://github.com/nredd/pi-harness/actions/runs/45108874524) measured 5760 / 676 after #1264
+edited the sources; its producer `metadata.json` hashes match the recorded ones). An enforced
+`llvm-lcov` signal must record them for every OS it accounts. Accounting then fails when a source whose hash still matches its
+record maps fewer lines or functions than recorded, or leaves the signal's records. Record keys are
+canonical package-relative POSIX paths on every host: no drive, backslash, leading `/`, empty, `.` or
+`..` segment. Growth is allowed. Every run writes the current records, hashed from the checkout, to the
+summary's `measured_mapped_totals`, and `--measure` proposes them in its review diff. Records are
+separate from the uncovered caps and never loosen them.
+
+A file is stale when no current record guards its denominator: it is measured but has no record or
+its record hashes other source (a new or edited file), or it is recorded, not measured and its source
+changed or was deleted. Stale files are not compared. Every run lists them in the summary's
+`stale_mapped_totals` and logs one `STALE mapped totals, not compared (#1270)` warning per signal
+naming them. On an enforced signal it then FAILS with `Stale mapped totals (#1270)`: the PR
+that adds, edits or deletes a measured source records the refresh from a `--measure` replay of its own
+hosted artifact. If instrumentation drops mapped units of that file, the gate forces the shrink into a reviewable policy diff (a refreshed record with the
+new hash and lower total) instead of silently accepting it; it does not prove the source edit caused
+the shrink. Accounting never refreshes records from the run's own `measured_mapped_totals`; that
+would accept exactly the shrink the records guard. Report-only signals and `--measure` replays only
+warn. Unchanged sources keep the `remeasurements` ledger below.
+
+The base ratchet checks every record against the checkout. A record the policy adds or edits must
+hash the checkout's source, so a mistyped hash cannot turn a remeasurement into a permanent stale
+opt-out; it fails with `Mapped totals must hash the checkout source`, even with a ledger entry.
+Lowering a record whose source still matches the base record, or dropping the record of any source
+that still exists, is a remeasurement. It needs a new, exact `remeasurements` entry, like
+`enforcement_changes`:
+
+```json
+{
+  "package": "computer-use-windows-native",
+  "signal": "primary",
+  "os": "win32",
+  "reason": "Toolchain bump drops inlined helper regions; hosted runs <id> and <id> agree."
+}
+```
+
+Missing, blank, duplicated (a repeated base entry included), stale or recycled base entries fail.
+Needing no entry: an initial record, growth, a refresh of an edited source to its new hash, and
+removing a deleted source's record. To create or refresh records, run the replay below with
+`--measure` in place of `--base HEAD` against an artifact built from the same sources, and review the
+`mapped_totals` hunk.
+
 To replay with the matching source checkout, download the Windows artifact and copy `lcov.info`,
 `coverage.json` and `metadata.json` from its single `windows-*` directory into
 `<reports-root>/packages/computer-use/coverage/native-windows/`, and run:
@@ -471,8 +518,10 @@ and inline/source test hits do not establish runtime coverage. The separate `com
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
 It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
 `computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.
-Regions are not branches or statements; no `BRDA` is fabricated. Missing selected-host reports
-fail closed; Linux explicitly report NOT RUN. The owner permits narrow thin live
+Regions are not branches or statements; no `BRDA` is fabricated. Its darwin cap is a report-only
+reference measured locally on the PR HEAD with no margin: PR CI runs no Swift, hosted excess is
+reported and never fails accounting, and the first hosted macOS `main` artifact confirms the number.
+Missing selected-host reports fail closed; Linux explicitly report NOT RUN. The owner permits narrow thin live
 AX/CGEvent/ScreenCaptureKit adapter exceptions until a dedicated TCC runner, not blanket native
 or policy exemptions. These misses remain in raw reports. Since #347 its suites run under Vitest, and the separate `computer-use-vitest`
 policy entry (same root) measures its executable JS/TS runtime/producer inventory with Istanbul,

@@ -18,11 +18,16 @@ export const sources = [
 export const testSources = [
 	"native/macos/headless_tests.swift",
 	"native/macos/act_tests.swift",
+	"native/macos/ax_element_tests.swift",
 	"native/macos/cursor_motion_tests.swift",
+	"native/macos/image_encoding_tests.swift",
+	"native/macos/look_tests.swift",
 	"native/macos/overlay_tests.swift",
 	"native/macos/ref_look_tests.swift",
 	"native/macos/request_admission_tests.swift",
 	"native/macos/request_framing_tests.swift",
+	"native/macos/root_event_tests.swift",
+	"native/macos/root_pairing_tests.swift",
 	"native/macos/support_tests.swift",
 ];
 
