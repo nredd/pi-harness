@@ -444,18 +444,27 @@ describe("child-safe nested Agent tools", () => {
 		});
 		expect((await execute(getResult, { agent_id: "foreign" })).isError).toBe(true);
 		expect((await execute(steer, { agent_id: "foreign", message: "stop" })).isError).toBe(true);
-		expect(
-			(
-				await execute(agent, {
-					resume: "foreign",
-					subagent_type: "scout",
-					description: "resume foreign",
-					prompt: "Continue",
-				})
-			).isError,
-		).toBe(true);
+		const resumeForeign = (id: string) =>
+			execute(agent, { resume: id, subagent_type: "scout", description: "resume foreign", prompt: "Continue" });
+		expect(await resumeForeign("foreign")).toMatchObject({
+			isError: true,
+			content: [{ text: 'Nested agent not found or not owned by this parent: "foreign".' }],
+		});
+		records.set("foreign-finished", {
+			id: "foreign-finished",
+			runId: "run-foreign-finished",
+			type: "scout",
+			status: "completed",
+			parentAgentId: "other",
+			session: {},
+		});
+		for (const id of ["foreign-finished", "run-foreign-finished"]) {
+			expect(await resumeForeign(id)).toMatchObject({
+				isError: true,
+				content: [{ text: `Nested agent not found or not owned by this parent: "${id}".` }],
+			});
+		}
 		expect(manager.resume).not.toHaveBeenCalled();
-
 		// One lookup (#1204): `@` and spaces ignored, an owned child's run id answers, and an
 		// exact id or run id that is not this parent's own is refused like a miss.
 		const stop = tools(["scout"])[3]!;
@@ -484,6 +493,26 @@ describe("child-safe nested Agent tools", () => {
 		records.set("bare", { id: "bare", status: "completed", parentAgentId: "parent-1" });
 		expect((await resume("bare")).content[0].text).toBe('Failed to resume nested agent "bare".');
 		expect(manager.resume).toHaveBeenCalledTimes(1);
+	});
+
+	it("checks ownership of the successor after forwarding an old id", async () => {
+		const [agent, getResult] = tools(["scout"]);
+		records.set("mine", { id: "mine", type: "scout", status: "completed", parentAgentId: "parent-1", result: "mine" });
+		records.set("foreign", { id: "foreign", type: "scout", status: "completed", parentAgentId: "other", session: {} });
+		manager.latestId = (id) => ({ "old-owned": "mine", "old-foreign": "foreign" })[id] ?? id;
+		expect((await execute(getResult, { agent_id: "old-owned" })).content[0].text).toContain("mine");
+		expect(
+			await execute(agent, {
+				resume: "old-foreign",
+				subagent_type: "scout",
+				description: "resume",
+				prompt: "Continue",
+			}),
+		).toMatchObject({
+			isError: true,
+			content: [{ text: 'Nested agent not found or not owned by this parent: "old-foreign".' }],
+		});
+		expect(manager.resume).not.toHaveBeenCalled();
 	});
 
 	// #443 — a nested parent may stop its own running or queued child, never a
