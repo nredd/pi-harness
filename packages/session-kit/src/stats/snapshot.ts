@@ -1228,19 +1228,20 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 /**
  * Sealed legacy pi rows a clean scan revises, each mapped to the event id that replaces it. Lineage is the
  * persisted transcript origin (`SnapshotEvent.origin`): a sealed row with one is revised only when all hold:
- * the scan no longer holds it; the scan still holds another sealed row of its session at that row's published
- * origin (the transcript is still there, not replaced by another file with the same session id); the scan holds
+ * the scan no longer holds it; the scan still holds another sealed row of its session, under that session and at
+ * that row's published origin (the transcript is still there, not replaced by another file with the same session
+ * id; a correction touching every sealed row of a session has no anchor and appends, as before); the scan holds
  * exactly one legacy row at the lost row's origin of its session (`makeSnapshot` publishes `null` for a shared
  * one), in its month, under its provider and model, that is not published at all (counted or retired); and no
  * other lost row names that same successor (one-to-one: a contested successor retires nobody). Anything less
  * establishes no lineage and the row stays counted: never a guess from counts.
  */
 function lineageRetirements(sealed: readonly CompactShard[], next: MachineSnapshot): Map<string, string> {
-	const scanned = new Map<string, number | null | undefined>();
+	const scanned = new Map<string, SnapshotEvent>();
 	const at = new Map<string, SnapshotEvent>();
 	for (const shard of next.shards)
 		for (const e of shard.events) {
-			scanned.set(e.id, e.origin);
+			scanned.set(e.id, e);
 			if (typeof e.origin === "number") at.set(positionKey(e.sessionId, e.origin), e);
 		}
 	const published = new Set<string>();
@@ -1248,7 +1249,10 @@ function lineageRetirements(sealed: readonly CompactShard[], next: MachineSnapsh
 	for (const shard of sealed) {
 		for (const e of shard.events) {
 			published.add(e.id);
-			if (typeof e.origin === "number" && scanned.get(e.id) === e.origin) anchored.add(e.sessionId);
+			// Same row, same session, same origin: a fork copy elsewhere (same id, other session) anchors nothing.
+			const kept = scanned.get(e.id);
+			if (typeof e.origin === "number" && kept?.sessionId === e.sessionId && kept.origin === e.origin)
+				anchored.add(e.sessionId);
 		}
 		for (const e of shard.retired ?? []) published.add(e.id);
 	}

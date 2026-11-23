@@ -241,6 +241,41 @@ describe("row lineage", () => {
 		expect(await viewed()).toHaveLength(10);
 	});
 
+	it("retires nothing when only a fork copy in another session still holds the replaced transcript's rows", async () => {
+		await seal();
+		// A legacy fork copy: the same rows (same ids) under session f, at the same positions.
+		transcript("fork.jsonl", "f", october().slice(0, 2));
+		forget("a.jsonl");
+		transcript(
+			"b.jsonl",
+			"a",
+			october().map((r) => ({ ...r, input: (r.input ?? 0) + 100 })),
+		);
+		await exportStats(agent, out);
+		expect(retired()).toEqual([]);
+	});
+
+	it("keeps every row counted when a correction touches every sealed row of a session (no anchor)", async () => {
+		await seal();
+		transcript(
+			"a.jsonl",
+			"a",
+			october().map((r) => ({ ...r, output: 11 })),
+		);
+		await exportStats(agent, out);
+		// Over-count, never a deletion: both copies of each call stay counted, as before lineage.
+		expect(retired()).toEqual([]);
+		expect(await viewed()).toHaveLength(10);
+	});
+
+	it("keeps a single-call session's sealed row counted beside its correction (no anchor)", async () => {
+		await seal([{ ms: utc("2026-10-05") }]);
+		transcript("a.jsonl", "a", [{ ms: utc("2026-10-05"), output: 11 }]);
+		await exportStats(agent, out);
+		expect(retired()).toEqual([]);
+		expect((await viewed()).map((c) => c.output)).toEqual([10, 11]);
+	});
+
 	it("retires no row when two lost rows name one successor", async () => {
 		await seal();
 		forget("a.jsonl");

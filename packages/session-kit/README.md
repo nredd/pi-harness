@@ -895,9 +895,14 @@ transcripts of one session share is published as `null`, never guessed. On expor
 an origin is retired only when all of these hold, else it stays counted:
 
 - the scan no longer holds the row's fingerprint
-- the scan still holds another sealed row of that session at its published origin, so the
-  transcript is still there (not replaced by another file with the same session id after the usage
-  cache was rebuilt)
+- the scan still holds another sealed row of that session, under that session (a fork copy of the
+  row in another session does not count) and at its published origin, so the transcript is still
+  there (not replaced by another file with the same session id after the usage cache was rebuilt).
+  LIMIT: a correction that touches every sealed row of a session (a single-call session, one counter
+  re-read for all rows, or its other calls all in the active month) has no anchor, so nothing
+  retires and both copies stay counted: an over-count as before lineage, never a deletion. Follow-up
+  [#1376](https://github.com/nredd/pi-harness/issues/1376): anchor on the previous snapshot's
+  active-month rows
 - the scan holds a legacy row at that origin of that session, in the same UTC month, under the same
   provider and model
 - that successor is not published at all yet (counted or retired)
@@ -908,7 +913,7 @@ A retired row is never deleted: its shard is rewritten with the row moved from `
 naming its `successor` and `reason` (`revised`), and the successor is published beside it. A retired
 row survives every later export, lossless packing past 32 shards and month regeneration; a scanned row
 identical to a retired one is not counted again. Rows published before lineage have no origin, so a
-correction of one still appends beside it (no backfill). Lineage relies on append-only transcripts: a
+correction of one still appends beside it (no backfill), and so does a correction with no anchor (above). Lineage relies on append-only transcripts: a
 rewritten transcript that puts a new call at a published call's origin, same month and model, retires
 the old row (kept in `retired`, so the double count turns into a recorded replacement, never a loss).
 `--replace-harnesses` rebuilds from the scan and drops retired rows with the rest of the history.
