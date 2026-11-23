@@ -758,9 +758,13 @@ append-only late events, session-end extensions and quota observations. A correc
 call (same harness/session/entry identity, different timestamp/counters) or changed session start/child
 attribution retires the affected months' references and regenerates those months from the clean
 scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
-corrections regenerate both affected months. Only the superseded rows are dropped: whatever else the
-retired shards held that the scan no longer reproduces (calls and sessions archived only in published
-history, later session ends, quota readings) is carried into delta shards of the regenerated month. Entry identities shared by distinct sessions are not
+corrections regenerate both affected months. Only the superseded rows are dropped: every other event,
+session end and quota reading the retired shards held that the scan no longer reproduces (calls and
+sessions archived only in published history, later session ends, quota readings) is carried into delta
+shards of the regenerated month. Past 32 shards the carries are packed losslessly (every distinct quota
+reading and session end is kept, never compacted away); if the month still needs more than 32 shards the
+export is refused before anything is published, leaving the previous manifest and shards intact, and
+`--replace-harnesses` is the explicit way through. Entry identities shared by distinct sessions are not
 revisions of one another. Legacy events without an `entryId` retain tuple matching: corrected
 counters or timestamps cannot be identified and can append beside the old row in a sealed month.
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
