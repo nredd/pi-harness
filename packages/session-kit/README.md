@@ -896,8 +896,26 @@ there could never apply, and the next export could not tell those months from on
 export sealed. Waiting keeps all history. `--replace-harnesses` publishes just after the published
 export (viewers import it) and drops sealed history absent from the scan; until the clock reaches that
 month, each export needs it again. The bound comes only from the readable manifest (including one whose
-shards are unreadable): with it unreadable, denied (`EACCES`/`EPERM`) or missing, the export uses the
-wall clock.
+shards are unreadable): nothing else records the last published instant, so with it unreadable, denied
+(`EACCES`/`EPERM`) or missing, the export uses the wall clock rather than guess a watermark. An ordinary
+export over a corrupt manifest, and a `--replace-harnesses` export over a corrupt, denied or missing one
+(missing while this outbox's bookkeeping or shard files remain), still publishes and exits 0 but warns
+`no readable published manifest bounds this export (<manifest.json unreadable|EACCES on
+manifest.json|manifest.json missing>); published at <exportedAt> by this clock, so viewers holding a
+later snapshot of this machine keep it until this clock passes it`. An ordinary export over a denied or
+missing manifest still refuses (`history-unreadable`, `manifest-missing`); a denied shard is retryable
+I/O that fails the export, not an unbounded one. The publication itself is complete (a viewer holding
+nothing of this machine imports it), but a viewer holding a later snapshot rejects its older `exportedAt`
+and reports it as `Incomplete snapshot <machine id>` until this clock passes the lost watermark, which
+nothing here can detect. Restoring `manifest.json` from the sync checkout before exporting keeps the
+bound. The warning fires once: the wall-clock publication writes a new manifest that bounds later
+exports, and the lost watermark is forgotten, so a wrapper that ignores warnings never notices. The
+same applies to a far-future clock, which predates this warning: with no readable manifest the
+later-month and 366-day refusals have nothing to compare, so that instant is published with exit 0
+and every later honest export is bounded by it (and refused as `watermark-ahead` while it is more
+than 366 days ahead). A first export (no manifest and nothing left of an earlier one) does not warn.
+A persisted watermark that survives the manifest is not implemented
+([#1325](https://github.com/nredd/pi-harness/issues/1325)).
 
 A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000
 (where `YYYY-MM` months stop sorting after sealed ones), is refused first, before the damaged-history
