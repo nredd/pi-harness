@@ -299,16 +299,44 @@ impl AtspiClient {
         self.request(member, proxy.call(member, &())).await
     }
 
-    /// The live `Parent` link, as the provider reports it now.
+    /// The live `Parent` link, as the provider reports it now; an unimplemented `Parent` is an
+    /// error here.
     async fn parent(&self, accessible: &AccessibleRef) -> Result<AccessibleRef, ProtocolError> {
+        self.parent_link(accessible)
+            .await?
+            .ok_or_else(|| atspi_error("the provider does not implement `Parent`"))
+    }
+
+    /// The live `Parent` link, or `None` only when the provider replies that it does not
+    /// implement the property (`UnknownProperty`). Any other failure, including a timeout, is
+    /// an error: it does not show the provider lacks the link.
+    async fn parent_link(
+        &self,
+        accessible: &AccessibleRef,
+    ) -> Result<Option<AccessibleRef>, ProtocolError> {
         let proxy = self.proxy(accessible, ACCESSIBLE).await?;
         let property = "Parent";
-        let (destination, path): (String, OwnedObjectPath) =
-            self.request(property, proxy.get_property(property)).await?;
-        Ok(AccessibleRef {
-            destination,
-            path: path.to_string(),
-        })
+        let reply: zbus::Result<(String, OwnedObjectPath)> =
+            wait_for_reply(self.request_timeout, property, proxy.get_property(property)).await?;
+        match reply {
+            Ok((destination, path)) => Ok(Some(AccessibleRef {
+                destination,
+                path: path.to_string(),
+            })),
+            Err(error) if unknown_property(&error) => Ok(None),
+            Err(error) => Err(atspi_error(error)),
+        }
+    }
+
+    /// Whether `child`'s live `Parent` is still `parent`, the node that listed it. Only a
+    /// provider that does not implement `Parent` keeps the `GetChildren` edge unconfirmed; a
+    /// failed or timed-out read fails closed (#1233).
+    async fn parent_is(&self, child: &AccessibleRef, parent: &AccessibleRef) -> bool {
+        match self.parent_link(child).await {
+            Ok(Some(live)) => live == *parent,
+            Ok(None) => true,
+            Err(_) => false,
+        }
     }
 
     /// Refuse unless every live ancestor of `accessible`, up to and including `root`, is on the
@@ -354,9 +382,8 @@ impl AtspiClient {
     }
 
     /// Whether the edge from `parent` to `child` may still be followed: `parent` keeps the
-    /// readable role it was read with, and `child`'s live `Parent`, when the provider reports
-    /// one, is `parent` (#1233). A provider whose `Parent` read fails keeps the `GetChildren`
-    /// edge.
+    /// readable role it was read with, and `child`'s live `Parent` is `parent` (#1233), see
+    /// `parent_is`.
     async fn edge_confirmed(
         &self,
         parent: &AccessibleRef,
@@ -364,10 +391,7 @@ impl AtspiClient {
         child: &AccessibleRef,
     ) -> bool {
         self.role_access(parent).await == RoleAccess::Readable(recorded)
-            && self
-                .parent(child)
-                .await
-                .map_or(true, |live| live == *parent)
+            && self.parent_is(child, parent).await
     }
 
     /// Whether a container still has both live role fields it was read with.
@@ -692,9 +716,11 @@ impl AtspiClient {
     /// Preserve partial observations without mistaking unread nodes for absent nodes. A
     /// protected node, or one without a confirmed role name, protects its subtree: its children
     /// are never read, and the node is `unread` when it has any (#1233). Each child is read only
-    /// while the node it was listed by keeps its readable role and, when the provider reports a
-    /// live `Parent`, is that parent; and before returning, every container is re-read once, so
-    /// one that turned protected meanwhile is redacted and its subtree dropped.
+    /// while the node it was listed by keeps its readable role and is the child's live `Parent`
+    /// (see `parent_is`). Before returning, every container's role and every node's live
+    /// `Parent` are re-read once: a container that turned protected meanwhile is redacted and
+    /// its subtree dropped, and a node that moved, or whose `Parent` can no longer be read, is
+    /// dropped with its subtree and its listing parent marked `unread`.
     pub async fn snapshot_from(
         &self,
         start: &AccessibleRef,
@@ -821,22 +847,38 @@ impl AtspiClient {
         for node in &mut result {
             node.unread |= unread_parents.contains(&node.accessible);
         }
+        // A node that left the parent that listed it, e.g. moved into a protected container
+        // while its text was read.
+        let mut moved = HashSet::new();
+        for node in &result {
+            if let Some(parent) = &node.parent {
+                if !self.parent_is(&node.accessible, parent).await {
+                    moved.insert(node.accessible.clone());
+                }
+            }
+        }
         let mut turned = HashSet::new();
         for (container, (role, role_name)) in &containers {
             if !self.still_readable(container, *role, role_name).await {
                 turned.insert(container.clone());
             }
         }
-        if !turned.is_empty() {
+        if !turned.is_empty() || !moved.is_empty() {
             incomplete = true;
             root_fields_incomplete |= turned.contains(start);
             // Breadth-first order lists every parent before its children.
             let mut dropped = HashSet::new();
+            let mut abandoned = HashSet::new();
             result.retain_mut(|node| {
-                if node
-                    .parent
-                    .as_ref()
-                    .is_some_and(|parent| turned.contains(parent) || dropped.contains(parent))
+                let has_moved = moved.contains(&node.accessible);
+                if let Some(parent) = node.parent.as_ref().filter(|_| has_moved) {
+                    abandoned.insert(parent.clone());
+                }
+                if has_moved
+                    || node
+                        .parent
+                        .as_ref()
+                        .is_some_and(|parent| turned.contains(parent) || dropped.contains(parent))
                 {
                     dropped.insert(node.accessible.clone());
                     return false;
@@ -852,6 +894,9 @@ impl AtspiClient {
                 }
                 true
             });
+            for node in &mut result {
+                node.unread |= abandoned.contains(&node.accessible);
+            }
         }
         Ok(Snapshot {
             nodes: result,
@@ -1376,6 +1421,13 @@ type Attribution = Result<Option<Executable>, ProtocolError>;
 fn connection_gone(error: &zbus::Error) -> bool {
     matches!(error, zbus::Error::MethodError(name, _, _)
         if name.as_str() == "org.freedesktop.DBus.Error.NameHasNoOwner")
+}
+
+/// The provider replied `org.freedesktop.DBus.Error.UnknownProperty`: the object does not
+/// implement the property. `Properties.Get` replies parse as `fdo::Error`, so that name always
+/// arrives as this variant.
+fn unknown_property(error: &zbus::Error) -> bool {
+    matches!(error, zbus::Error::FDO(error) if matches!(**error, zbus::fdo::Error::UnknownProperty(_)))
 }
 
 fn atspi_error(error: impl std::fmt::Display) -> ProtocolError {

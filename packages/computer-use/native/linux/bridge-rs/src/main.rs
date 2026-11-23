@@ -2063,6 +2063,10 @@ mod tests {
 
     /// Fixture role name that makes `GetRoleName` fail with a non-timeout error.
     const FAILING_ROLE_NAME: &str = "<GetRoleName fails>";
+    /// Fixture `Parent` that fails with a fast non-timeout error.
+    const FAILING_PARENT: (&str, &str) = ("<Parent fails>", "/");
+    /// Fixture `Parent` that never replies.
+    const STALLED_PARENT: (&str, &str) = ("<Parent stalls>", "/");
 
     struct PeerNode {
         name: &'static str,
@@ -2071,7 +2075,8 @@ mod tests {
         role_name: &'static str,
         stalled_children: Option<StalledReply>,
         child: Option<&'static str>,
-        /// The live `Parent` (bus name, path); `None` fails the read.
+        /// The live `Parent` (bus name, path); `None` does not implement the property, and
+        /// `FAILING_PARENT` and `STALLED_PARENT` fail or stall the read.
         parent: Option<(&'static str, &'static str)>,
         text: bool,
     }
@@ -2125,11 +2130,15 @@ mod tests {
         }
 
         #[zbus(property)]
-        fn parent(&self) -> zbus::fdo::Result<(&str, OwnedObjectPath)> {
-            let (destination, path) = self
-                .parent
-                .ok_or_else(|| zbus::fdo::Error::Failed("parent unavailable".into()))?;
-            Ok((destination, OwnedObjectPath::try_from(path).unwrap()))
+        async fn parent(&self) -> zbus::fdo::Result<(&str, OwnedObjectPath)> {
+            match self.parent {
+                None => Err(zbus::fdo::Error::UnknownProperty("no Parent".into())),
+                Some(FAILING_PARENT) => Err(zbus::fdo::Error::Failed("parent unavailable".into())),
+                Some(STALLED_PARENT) => std::future::pending().await,
+                Some((destination, path)) => {
+                    Ok((destination, OwnedObjectPath::try_from(path).unwrap()))
+                }
+            }
         }
     }
 
@@ -3182,6 +3191,65 @@ mod tests {
         }
     }
 
+    /// A readable text field whose live `Parent` the test controls.
+    struct MovingField {
+        parent: watch::Receiver<&'static str>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Accessible")]
+    impl MovingField {
+        #[zbus(property)]
+        fn name(&self) -> &str {
+            CONTAINED_SECRET
+        }
+
+        #[zbus(property)]
+        fn description(&self) -> &str {
+            ""
+        }
+
+        fn get_role_name(&self) -> &str {
+            "entry"
+        }
+
+        fn get_role(&self) -> u32 {
+            61
+        }
+
+        fn get_children(&self) -> Vec<(&str, OwnedObjectPath)> {
+            Vec::new()
+        }
+
+        fn get_interfaces(&self) -> Vec<&str> {
+            vec![TEXT]
+        }
+
+        #[zbus(property)]
+        fn parent(&self) -> (&str, OwnedObjectPath) {
+            (
+                ":1.1",
+                OwnedObjectPath::try_from(*self.parent.borrow()).unwrap(),
+            )
+        }
+    }
+
+    /// Field text that moves the field under the protected vault during the next `GetText`
+    /// once armed, without changing any role.
+    struct MovingText {
+        parent: Arc<watch::Sender<&'static str>>,
+        armed: Arc<AtomicBool>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl MovingText {
+        fn get_text(&self, _start: i32, _end: i32) -> &str {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.parent.send("/window/vault").unwrap();
+            }
+            "private fixture text"
+        }
+    }
+
     const PASSWORD_ROLE: u32 = 40;
     /// A wait budget that a request resolving on its first snapshot never reaches.
     const FIRST_SNAPSHOT_WAIT_MS: u64 = 3_000;
@@ -3490,6 +3558,109 @@ mod tests {
             },
         )
         .await;
+
+        // The field moves under a protected vault while its text is read, and no role changes:
+        // neither a full look nor a scope at the root or at the readable panel it left, whose
+        // own ancestry checks all pass, returns what was read.
+        let (parent, field_parent) = watch::channel("/window/panel");
+        let parent = Arc::new(parent);
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/window",
+                    PeerNode {
+                        name: "Window",
+                        role: watch::channel(Some(23)).1,
+                        role_name: "frame",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel"),
+                        parent: None,
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel",
+                    PeerNode {
+                        name: "Panel",
+                        role: watch::channel(Some(39)).1,
+                        role_name: "panel",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel/field"),
+                        parent: Some((":1.1", "/window")),
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/vault",
+                    PeerNode {
+                        name: "Vault",
+                        role: watch::channel(Some(PASSWORD_ROLE)).1,
+                        role_name: "password text",
+                        stalled_role: None,
+                        stalled_children: None,
+                        child: Some("/window/panel/field"),
+                        parent: Some((":1.1", "/window")),
+                        text: false,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel/field",
+                    MovingField {
+                        parent: field_parent,
+                    },
+                )?
+                .serve_at(
+                    "/window/panel/field",
+                    MovingText {
+                        parent: Arc::clone(&parent),
+                        armed: Arc::clone(&armed),
+                    },
+                )
+            },
+            async |connection| {
+                let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                let look = peer_request(&state, &connection, "look", look_args.clone())
+                    .await
+                    .result
+                    .unwrap();
+                let panel = &look["outline"]["children"][0];
+                assert_eq!(panel["children"][0]["title"], CONTAINED_SECRET);
+                let [panel_look, _] = scoped_requests(&root_ref, &look, panel);
+                let [root_look, (_, mut root_wait)] =
+                    scoped_requests(&root_ref, &look, &look["outline"]);
+                root_wait["timeoutMs"] = json!(100);
+                for (cmd, args) in [
+                    ("look", look_args),
+                    panel_look,
+                    root_look,
+                    ("atspiWaitFor", root_wait),
+                ] {
+                    parent.send("/window/panel").unwrap();
+                    armed.store(true, Ordering::SeqCst);
+                    let reply = peer_request(&state, &connection, cmd, args.clone()).await;
+                    assert!(!armed.load(Ordering::SeqCst), "{args} never read the text");
+                    let result = reply.result.unwrap();
+                    let text = result.to_string();
+                    assert!(!text.contains(CONTAINED_SECRET), "{args}: {text}");
+                    assert!(!text.contains("private fixture text"), "{args}: {text}");
+                    if cmd == "atspiWaitFor" {
+                        assert_eq!(result["found"], false, "{text}");
+                        continue;
+                    }
+                    let left = if args.get("scopeRef") == Some(&panel["ref"]) {
+                        &result["outline"]
+                    } else {
+                        &result["outline"]["children"][0]
+                    };
+                    assert_eq!(left["title"], "Panel", "{text}");
+                    assert_eq!(left["truncated"], true, "{text}");
+                    assert_eq!(left["children"], json!([]), "{text}");
+                }
+            },
+        )
+        .await;
     }
 
     /// A `GetChildren` edge is followed only when the child's live `Parent`, when readable, is
@@ -3497,7 +3668,12 @@ mod tests {
     /// field whose live parent is protected.
     #[tokio::test]
     async fn get_children_alias_never_bypasses_a_protected_parent() {
-        for (field_parent, visible) in [("/window/sibling", true), ("/window/panel", false)] {
+        for (field_parent, visible) in [
+            ((":1.1", "/window/sibling"), true),
+            ((":1.1", "/window/panel"), false),
+            // A `Parent` that never replies does not confirm the sibling's edge.
+            (STALLED_PARENT, false),
+        ] {
             let reads = Arc::new(AtomicUsize::new(0));
             let (state, root_ref) = peer_root_state();
             with_peer(
@@ -3541,10 +3717,7 @@ mod tests {
                             text: false,
                         },
                     )?
-                    .serve_at(
-                        "/window/panel/field",
-                        contained_field(Some((":1.1", field_parent))),
-                    )?
+                    .serve_at("/window/panel/field", contained_field(Some(field_parent)))?
                     .serve_at("/window/panel/field", PeerText::new(Arc::clone(&reads)))
                 },
                 async |connection| {
@@ -3575,8 +3748,12 @@ mod tests {
                         json!({"rootRef":root_ref,"text":CONTAINED_SECRET,"timeoutMs":budget}),
                     )
                     .await;
-                    assert_eq!(wait.result.unwrap()["found"], visible, "{field_parent}");
-                    assert_eq!(reads.load(Ordering::SeqCst) > 0, visible, "{field_parent}");
+                    assert_eq!(wait.result.unwrap()["found"], visible, "{field_parent:?}");
+                    assert_eq!(
+                        reads.load(Ordering::SeqCst) > 0,
+                        visible,
+                        "{field_parent:?}"
+                    );
                 },
             )
             .await;
@@ -3654,8 +3831,24 @@ mod tests {
                 Some(ErrorCode::SecureTextUnreadable),
                 false,
             ),
-            // A provider whose `Parent` read fails keeps its `GetChildren` edges.
+            // Only a provider that does not implement `Parent` keeps its `GetChildren` edges;
+            // an explicit read still needs the live ancestry.
             (None, "panel", ErrorCode::InternalError, None, true),
+            // A `Parent` that fails, fast or by timing out, does not confirm the edge.
+            (
+                Some(FAILING_PARENT),
+                "panel",
+                ErrorCode::InternalError,
+                None,
+                false,
+            ),
+            (
+                Some(STALLED_PARENT),
+                "panel",
+                ErrorCode::Timeout,
+                None,
+                false,
+            ),
             (
                 Some((":1.2", "/window/panel")),
                 "panel",
