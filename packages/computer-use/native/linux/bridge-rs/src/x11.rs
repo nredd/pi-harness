@@ -146,51 +146,66 @@ pub fn windows_on(
 
 pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
     let (conn, screen) = connect()?;
-    let root = conn.setup().roots[screen].root;
-    let a = Atoms::new(&conn)?;
-    let active = property32(&conn, root, a.active, AtomEnum::WINDOW.into())
+    windows_of(&conn, screen)
+}
+
+/// Every client window `conn` lists on `screen`. Each read here enumerates, pairs or
+/// classifies a window, so one failed request (a dropped connection, an X11 error, e.g. a
+/// window destroyed mid-listing) fails the whole listing, never a partial one: a window
+/// skipped or a class dropped could admit a root its `WM_CLASS` blocks (#1311). Only a
+/// successful reply without the property is absence, e.g. a window with no `WM_CLASS`.
+fn windows_of(conn: &impl Connection, screen: usize) -> Result<Vec<WindowInfo>, ProtocolError> {
+    let root = conn
+        .setup()
+        .roots
+        .get(screen)
+        .ok_or_else(|| err("X11 screen is missing", ErrorCode::CapabilityDeferred))?
+        .root;
+    let a = Atoms::new(conn)?;
+    let active = property32(conn, root, a.active, AtomEnum::WINDOW.into())?
         .first()
         .copied();
-    let mut windows = property32(&conn, root, a.stacking, AtomEnum::WINDOW.into());
+    let mut windows = property32(conn, root, a.stacking, AtomEnum::WINDOW.into())?;
     if windows.is_empty() {
-        windows = property32(&conn, root, a.clients, AtomEnum::WINDOW.into());
+        windows = property32(conn, root, a.clients, AtomEnum::WINDOW.into())?;
     }
     let mut out = Vec::new();
     for (z_order, id) in windows.into_iter().rev().enumerate() {
-        let Ok(g) = conn
-            .get_geometry(id)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .ok_or(())
-        else {
-            continue;
-        };
+        let g = conn.get_geometry(id).map_err(xerr)?.reply().map_err(xerr)?;
         let translated = conn
             .translate_coordinates(id, root, 0, 0)
-            .ok()
-            .and_then(|c| c.reply().ok());
-        let states = property32(&conn, id, a.state, AtomEnum::ATOM.into());
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        let states = property32(conn, id, a.state, AtomEnum::ATOM.into())?;
+        let class = conn
+            .get_property(false, id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
+            .map_err(xerr)?
+            .reply()
+            .map_err(xerr)?;
+        // A class the reply did not carry whole (another type, or past 4 KiB) is unread,
+        // never absent.
+        let whole = class.type_ == u32::from(AtomEnum::STRING)
+            && class.format == 8
+            && class.bytes_after == 0;
+        if class.type_ != x11rb::NONE && !whole {
+            return Err(err(
+                format!("X11 WM_CLASS of window {id} is not a complete STRING"),
+                ErrorCode::InternalError,
+            ));
+        }
         out.push(WindowInfo {
             id,
-            pid: property32(&conn, id, a.pid, AtomEnum::CARDINAL.into())
+            pid: property32(conn, id, a.pid, AtomEnum::CARDINAL.into())?
                 .first()
                 .copied()
-                .unwrap_or(0) as u64,
-            title: title(&conn, id, &a),
-            wm_class: conn
-                .get_property(false, id, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 1024)
-                .ok()
-                .and_then(|cookie| cookie.reply().ok())
-                .and_then(|reply| wm_class_property(reply.format, reply.bytes_after, &reply.value)),
+                .unwrap_or(0)
+                .into(),
+            title: title(conn, id, &a)?,
+            wm_class: wm_class_property(class.format, class.bytes_after, &class.value),
             frame: Rect {
-                x: translated
-                    .as_ref()
-                    .map(|r| i32::from(r.dst_x))
-                    .unwrap_or(i32::from(g.x)),
-                y: translated
-                    .as_ref()
-                    .map(|r| i32::from(r.dst_y))
-                    .unwrap_or(i32::from(g.y)),
+                x: i32::from(translated.dst_x),
+                y: i32::from(translated.dst_y),
                 width: i32::from(g.width),
                 height: i32::from(g.height),
             },
@@ -1462,7 +1477,7 @@ fn validate_target(c: &RustConnection, root: Window, target: Window) -> Result<(
     if attributes.map_state != MapState::VIEWABLE
         || geometry.width == 0
         || geometry.height == 0
-        || property32(c, target, atoms.state, AtomEnum::ATOM.into()).contains(&atoms.hidden)
+        || property32(c, target, atoms.state, AtomEnum::ATOM.into())?.contains(&atoms.hidden)
     {
         return Err(err(
             "Owning X11 window is not mapped and visible",
@@ -1473,7 +1488,7 @@ fn validate_target(c: &RustConnection, root: Window, target: Window) -> Result<(
 }
 fn active_window(c: &RustConnection, root: Window) -> Result<Option<Window>, ProtocolError> {
     let atom = intern(c, "_NET_ACTIVE_WINDOW")?;
-    Ok(property32(c, root, atom, AtomEnum::WINDOW.into())
+    Ok(property32(c, root, atom, AtomEnum::WINDOW.into())?
         .first()
         .copied())
 }
@@ -1578,7 +1593,7 @@ struct Atoms {
     utf8: Atom,
 }
 impl Atoms {
-    fn new(c: &RustConnection) -> Result<Self, ProtocolError> {
+    fn new(c: &impl Connection) -> Result<Self, ProtocolError> {
         Ok(Self {
             clients: intern(c, "_NET_CLIENT_LIST")?,
             stacking: intern(c, "_NET_CLIENT_LIST_STACKING")?,
@@ -1614,35 +1629,40 @@ fn connect() -> Result<(RustConnection, usize), ProtocolError> {
         )
     })
 }
-fn intern(c: &RustConnection, n: &str) -> Result<Atom, ProtocolError> {
+fn intern(c: &impl Connection, n: &str) -> Result<Atom, ProtocolError> {
     c.intern_atom(false, n.as_bytes())
         .map_err(xerr)?
         .reply()
         .map(|r| r.atom)
         .map_err(xerr)
 }
-fn property32(c: &RustConnection, w: Window, p: Atom, t: Atom) -> Vec<u32> {
-    c.get_property(false, w, p, t, 0, u32::MAX)
-        .ok()
-        .and_then(|v| v.reply().ok())
-        .and_then(|v| v.value32().map(Iterator::collect))
-        .unwrap_or_default()
+/// A 32-bit property's values; empty when the window lacks it or it has another format. A
+/// failed request is an error, never an empty value.
+fn property32(c: &impl Connection, w: Window, p: Atom, t: Atom) -> Result<Vec<u32>, ProtocolError> {
+    let reply = c
+        .get_property(false, w, p, t, 0, u32::MAX)
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    Ok(reply.value32().map(Iterator::collect).unwrap_or_default())
 }
-fn title(c: &RustConnection, w: Window, a: &Atoms) -> String {
+/// `_NET_WM_NAME`, else `WM_NAME`; empty when the window has neither. A failed request is
+/// an error: the title ranks the window's pairing.
+fn title(c: &impl Connection, w: Window, a: &Atoms) -> Result<String, ProtocolError> {
     let utf = c
         .get_property(false, w, a.name, a.utf8, 0, 4096)
-        .ok()
-        .and_then(|v| v.reply().ok())
-        .and_then(|v| String::from_utf8(v.value).ok())
-        .unwrap_or_default();
-    if !utf.is_empty() {
-        return utf;
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    if let Some(utf) = String::from_utf8(utf.value).ok().filter(|t| !t.is_empty()) {
+        return Ok(utf);
     }
-    c.get_property(false, w, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 4096)
-        .ok()
-        .and_then(|v| v.reply().ok())
-        .map(|v| String::from_utf8_lossy(&v.value).into_owned())
-        .unwrap_or_default()
+    let name = c
+        .get_property(false, w, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 4096)
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    Ok(String::from_utf8_lossy(&name.value).into_owned())
 }
 fn err(m: impl Into<String>, code: ErrorCode) -> ProtocolError {
     ProtocolError::new(m, code)
@@ -2715,5 +2735,356 @@ mod tests {
             vec![3, 2, 1, 255]
         );
         assert!(decode(&[0; 2], 1, 1, 16, ImageOrder::LSB_FIRST).is_err());
+    }
+}
+
+/// `windows_of` against a scripted X server on a socket pair: real x11rb wire traffic, with
+/// a dropped connection or an X11 error injected at one named request.
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use x11rb::protocol::xproto::{BackingStore, Screen, Setup};
+    use x11rb::rust_connection::DefaultStream;
+    use x11rb::x11_utils::Serialize;
+
+    const ROOT: Window = 0x100;
+
+    /// How the server answers the faulted request.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Fault {
+        /// Close the connection instead of replying.
+        Disconnect,
+        /// Reply with `BadWindow`, keeping the connection.
+        Error,
+    }
+
+    /// A client window; `None` properties are genuinely absent (a successful empty reply).
+    struct Fake {
+        id: Window,
+        pid: u32,
+        net_name: Option<&'static str>,
+        name: Option<&'static str>,
+        /// `WM_CLASS` as its type and value.
+        class: Option<(Atom, Vec<u8>)>,
+    }
+
+    fn windows(class: Option<(Atom, Vec<u8>)>) -> Vec<Fake> {
+        vec![
+            Fake {
+                id: 0x401,
+                pid: 42,
+                net_name: Some("Vault"),
+                name: None,
+                class: Some((31, b"keepassxc\0KeePassXC\0".to_vec())),
+            },
+            // No `_NET_WM_NAME`, and `class` as `WM_CLASS`: `None` is absent, not failed.
+            Fake {
+                id: 0x402,
+                pid: 43,
+                net_name: None,
+                name: Some("Editor"),
+                class,
+            },
+        ]
+    }
+
+    fn setup() -> Vec<u8> {
+        let mut setup = Setup {
+            status: 1,
+            protocol_major_version: 11,
+            protocol_minor_version: 0,
+            length: 0,
+            release_number: 0,
+            resource_id_base: 0x0400_0000,
+            resource_id_mask: 0x001f_ffff,
+            motion_buffer_size: 0,
+            maximum_request_length: u16::MAX,
+            image_byte_order: ImageOrder::LSB_FIRST,
+            bitmap_format_bit_order: ImageOrder::LSB_FIRST,
+            bitmap_format_scanline_unit: 32,
+            bitmap_format_scanline_pad: 32,
+            min_keycode: 8,
+            max_keycode: 255,
+            vendor: b"fixture".to_vec(),
+            pixmap_formats: Vec::new(),
+            roots: vec![Screen {
+                root: ROOT,
+                default_colormap: 0,
+                white_pixel: 0,
+                black_pixel: 0,
+                current_input_masks: EventMask::NO_EVENT,
+                width_in_pixels: 1920,
+                height_in_pixels: 1080,
+                width_in_millimeters: 500,
+                height_in_millimeters: 300,
+                min_installed_maps: 1,
+                max_installed_maps: 1,
+                root_visual: 0,
+                backing_stores: BackingStore::NOT_USEFUL,
+                save_unders: false,
+                root_depth: 24,
+                allowed_depths: Vec::new(),
+            }],
+        };
+        setup.length = u16::try_from((setup.serialize().len() - 8).div_ceil(4)).unwrap();
+        setup.serialize()
+    }
+
+    /// A reply packet: `body` fills bytes 8..32, `extra` follows, padded to 4 bytes.
+    fn reply(seq: u16, data: u8, body: &[u8], extra: &[u8]) -> Vec<u8> {
+        let padded = extra.len().div_ceil(4) * 4;
+        let mut out = vec![1, data];
+        out.extend(seq.to_ne_bytes());
+        out.extend(u32::try_from(padded / 4).unwrap().to_ne_bytes());
+        out.extend(body);
+        out.resize(32, 0);
+        out.extend(extra);
+        out.resize(32 + padded, 0);
+        out
+    }
+
+    /// A `GetProperty` reply to a request for type `wanted` (0: any) of at most `longs`
+    /// 32-bit units, as X11 answers: `None` is a missing property, another type than
+    /// `wanted` carries no value, and a longer value is cut short with `bytes_after` set.
+    fn property(seq: u16, wanted: Atom, longs: u32, value: Option<(Atom, u8, Vec<u8>)>) -> Vec<u8> {
+        let (kind, format, bytes) = value.unwrap_or((0, 0, Vec::new()));
+        let max = if wanted != 0 && wanted != kind {
+            0
+        } else {
+            usize::try_from(longs).unwrap().saturating_mul(4)
+        };
+        let sent = &bytes[..bytes.len().min(max)];
+        let units = if format == 0 {
+            0
+        } else {
+            sent.len() / usize::from(format / 8)
+        };
+        let mut body = kind.to_ne_bytes().to_vec();
+        body.extend(
+            u32::try_from(bytes.len() - sent.len())
+                .unwrap()
+                .to_ne_bytes(),
+        );
+        body.extend(u32::try_from(units).unwrap().to_ne_bytes());
+        reply(seq, format, &body, sent)
+    }
+
+    fn words(values: &[u32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_ne_bytes()).collect()
+    }
+
+    /// Serve `fakes` on `stream` until the client hangs up, answering the first request
+    /// labelled `fault.0` with `fault.1`. Returns each request's label.
+    fn serve(
+        mut stream: UnixStream,
+        fakes: Vec<Fake>,
+        fault: Option<(&'static str, Fault)>,
+    ) -> Vec<String> {
+        let mut request = [0u8; 12];
+        stream.read_exact(&mut request).unwrap();
+        stream.write_all(&setup()).unwrap();
+        let mut atoms = HashMap::<Atom, String>::new();
+        let mut labels = Vec::new();
+        let mut fault = fault;
+        for seq in 1u16.. {
+            let mut header = [0u8; 4];
+            if stream.read_exact(&mut header).is_err() {
+                break;
+            }
+            let length = usize::from(u16::from_ne_bytes([header[2], header[3]])) * 4;
+            let mut body = vec![0u8; length - 4];
+            stream.read_exact(&mut body).unwrap();
+            let full = [header.to_vec(), body].concat();
+            let word = |at: usize| u32::from_ne_bytes(full[at..at + 4].try_into().unwrap());
+            let label = match full[0] {
+                16 => "intern".to_owned(),
+                20 => match word(8) {
+                    67 => "WM_CLASS".to_owned(),
+                    39 => "WM_NAME".to_owned(),
+                    atom => atoms.get(&atom).cloned().unwrap_or_default(),
+                },
+                14 => "geometry".to_owned(),
+                40 => "translate".to_owned(),
+                opcode => format!("unexpected opcode {opcode}"),
+            };
+            labels.push(label.clone());
+            match fault {
+                Some((at, how)) if at == label => {
+                    fault = None;
+                    if how == Fault::Disconnect {
+                        break;
+                    }
+                    let mut error = vec![0, 3];
+                    error.extend(seq.to_ne_bytes());
+                    error.extend(word(4).to_ne_bytes());
+                    error.extend([0, 0, full[0]]);
+                    error.resize(32, 0);
+                    stream.write_all(&error).unwrap();
+                    continue;
+                }
+                _ => {}
+            }
+            let window = word(4);
+            let fake = fakes.iter().find(|fake| fake.id == window);
+            let text = |text: Option<&str>| text.map(|t| (31, 8, t.as_bytes().to_vec()));
+            let answer = |value| property(seq, word(12), word(20), value);
+            let packet = match (full[0], label.as_str()) {
+                (16, _) => {
+                    let len = usize::from(u16::from_ne_bytes([full[4], full[5]]));
+                    let name = String::from_utf8(full[8..8 + len].to_vec()).unwrap();
+                    let atom = 0x200 + u32::try_from(atoms.len()).unwrap();
+                    atoms.insert(atom, name);
+                    reply(seq, 0, &atom.to_ne_bytes(), &[])
+                }
+                (14, _) => reply(
+                    seq,
+                    24,
+                    &[
+                        ROOT.to_ne_bytes().as_slice(),
+                        &words(&[0, 100 | (80 << 16), 0]),
+                    ]
+                    .concat(),
+                    &[],
+                ),
+                (40, _) => reply(
+                    seq,
+                    1,
+                    &[0u32.to_ne_bytes(), (10u32 | (20 << 16)).to_ne_bytes()].concat(),
+                    &[],
+                ),
+                (_, "_NET_ACTIVE_WINDOW") => answer(Some((33, 32, words(&[0x401])))),
+                (_, "_NET_CLIENT_LIST_STACKING") => {
+                    let ids = fakes.iter().map(|fake| fake.id).collect::<Vec<_>>();
+                    answer(Some((33, 32, words(&ids))))
+                }
+                (_, "_NET_WM_PID") => answer(fake.map(|fake| (6, 32, words(&[fake.pid])))),
+                (_, "_NET_WM_NAME") => {
+                    let utf8 = atoms.iter().find(|(_, name)| *name == "UTF8_STRING");
+                    let name = text(fake.and_then(|fake| fake.net_name));
+                    answer(
+                        name.zip(utf8)
+                            .map(|((_, format, name), (&utf8, _))| (utf8, format, name)),
+                    )
+                }
+                (_, "WM_NAME") => answer(text(fake.and_then(|fake| fake.name))),
+                (_, "WM_CLASS") => answer(
+                    fake.and_then(|fake| fake.class.clone())
+                        .map(|(kind, class)| (kind, 8, class)),
+                ),
+                // `_NET_WM_STATE` and anything unscripted: absent.
+                _ => answer(None),
+            };
+            stream.write_all(&packet).unwrap();
+        }
+        labels
+    }
+
+    /// `windows_of` over a fresh scripted server, and the requests it made.
+    fn listing(
+        fault: Option<(&'static str, Fault)>,
+    ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
+        classed(None, fault)
+    }
+
+    /// [`listing`] with `class` as the second window's `WM_CLASS`.
+    fn classed(
+        class: Option<(Atom, Vec<u8>)>,
+        fault: Option<(&'static str, Fault)>,
+    ) -> (Result<Vec<WindowInfo>, ProtocolError>, Vec<String>) {
+        let (client, server) = UnixStream::pair().unwrap();
+        let served = std::thread::spawn(move || serve(server, windows(class), fault));
+        let (stream, _) = DefaultStream::from_unix_stream(client).unwrap();
+        let listed = RustConnection::connect_to_stream(stream, 0)
+            .map_err(xerr)
+            .and_then(|conn| windows_of(&conn, 0));
+        (listed, served.join().unwrap())
+    }
+
+    #[test]
+    fn complete_listing_reads_class_and_keeps_an_absent_class_absent() {
+        let (listed, labels) = listing(None);
+        let listed = listed.unwrap();
+        assert!(
+            !labels.iter().any(|l| l.starts_with("unexpected")),
+            "{labels:?}"
+        );
+        let by_id = |id| listed.iter().find(|w| w.id == id).unwrap();
+        let vault = by_id(0x401);
+        assert_eq!(
+            vault.wm_class,
+            Some(("keepassxc".to_owned(), "KeePassXC".to_owned()))
+        );
+        assert_eq!(
+            (vault.pid, vault.title.as_str(), vault.focused),
+            (42, "Vault", true)
+        );
+        assert_eq!(
+            vault.frame,
+            Rect {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 80
+            }
+        );
+        // A successful reply without `WM_CLASS` is absence: the window still lists.
+        let editor = by_id(0x402);
+        assert_eq!(editor.wm_class, None);
+        assert_eq!((editor.pid, editor.title.as_str()), (43, "Editor"));
+    }
+
+    #[test]
+    fn disconnect_after_atoms_fails_the_listing() {
+        let (listed, labels) = listing(Some(("_NET_ACTIVE_WINDOW", Fault::Disconnect)));
+        assert_eq!(labels.iter().filter(|l| *l == "intern").count(), 8);
+        let error = listed.unwrap_err();
+        assert_eq!(error.code, ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn any_failed_read_fails_the_whole_listing() {
+        for at in [
+            "intern",
+            "_NET_ACTIVE_WINDOW",
+            "_NET_CLIENT_LIST_STACKING",
+            "geometry",
+            "translate",
+            "_NET_WM_STATE",
+            "WM_CLASS",
+            "_NET_WM_PID",
+            "_NET_WM_NAME",
+            "WM_NAME",
+        ] {
+            for how in [Fault::Disconnect, Fault::Error] {
+                let (listed, labels) = listing(Some((at, how)));
+                assert!(labels.iter().any(|l| l == at), "{at} never requested");
+                assert!(listed.is_err(), "{at} {how:?} still listed {listed:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_class_read_incompletely_fails_the_listing() {
+        // A `UTF8_STRING` class, and one past the 4 KiB read: unread, never absent.
+        let long = [b"vault\0".as_slice(), &[b'K'; 4096], b"\0"].concat();
+        // `UTF8_STRING` is the eighth atom `Atoms::new` interns.
+        for class in [(0x200 + 7, b"vault\0Vault\0".to_vec()), (31, long)] {
+            let (listed, _) = classed(Some(class.clone()), None);
+            assert!(listed.is_err(), "{class:?} listed {listed:?}");
+        }
+        // A whole but malformed class is read, and attributes nothing.
+        let (listed, _) = classed(Some((31, b"Vault".to_vec())), None);
+        assert_eq!(
+            listed
+                .unwrap()
+                .iter()
+                .find(|w| w.id == 0x402)
+                .unwrap()
+                .wm_class,
+            None
+        );
     }
 }
