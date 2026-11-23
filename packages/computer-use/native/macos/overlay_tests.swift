@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 private final class GlowWindow: ActivityGlowWindow {
     private(set) var events: [String] = []
@@ -163,4 +164,73 @@ func runCursorLifecycleAssertions() {
     cursor = nil
     actions[2]()
     expect(surfaces[1].dismissals == 0, "an abandoned controller is not retained by its timeout")
+}
+
+@MainActor
+private final class HideCount {
+    var value = 0
+}
+
+/// The production scheduler fires once after its delay and never after cancellation.
+@MainActor
+func runCursorIdleHideAssertions() async {
+    expect(AgentCursor.idleHideDelay == .seconds(8), "the overlay hides 8 s after the last action")
+    let hides = HideCount()
+    let fired = AgentCursor.idleHideScheduler(after: .milliseconds(1))({ hides.value += 1 })
+    await fired.value
+    expect(hides.value == 1, "an uncancelled idle timeout hides the overlay once")
+    let cancelled = AgentCursor.idleHideScheduler(after: .seconds(60))({ hides.value += 1 })
+    cancelled.cancel()
+    await cancelled.value
+    expect(hides.value == 1, "a cancelled idle timeout never hides the overlay")
+}
+
+/// Cursor geometry on exact paths, then one offscreen render of the overlay view; no window is created.
+@MainActor
+func runCursorRenderAssertions() {
+    let origin = CGPoint(x: 100, y: 100)
+    let east = agentCursorShape(at: origin, heading: -.pi)
+    expect(east.contains(CGPoint(x: 106, y: 100)) && east.contains(CGPoint(x: 95, y: 106)),
+           "an unrotated dart covers its axis ahead of the notch and its rear barbs")
+    expect(!east.contains(CGPoint(x: 96, y: 100)), "the notch behind the dart stays open")
+    expect(!east.contains(CGPoint(x: 113.5, y: 100)) && east.contains(CGPoint(x: 111.5, y: 100)),
+           "corners are rounded: the sharp tip at +14 is cut back")
+    let bounds = east.boundingRect
+    expect(bounds.minX > 91 && bounds.maxX < 113 && bounds.minY > 91 && bounds.maxY < 109,
+           "the dart stays inside its rounded control points")
+    let diagonal = agentCursorShape(at: origin, heading: .pi / 4)
+    let tip = CGPoint(x: 100 - 6 / 2.0.squareRoot(), y: 100 - 6 / 2.0.squareRoot())
+    expect(diagonal.contains(tip) && !east.contains(CGPoint(x: 100, y: 94)),
+           "the dart tip follows heading + pi")
+    expect(!diagonal.contains(CGPoint(x: 100 + 6 / 2.0.squareRoot(), y: 100 + 6 / 2.0.squareRoot())),
+           "the rotated notch stays open")
+
+    func render(_ renderer: AgentCursorRenderer) -> NSBitmapImageRep? {
+        let image = ImageRenderer(content: AgentCursorView(renderer: renderer).frame(width: 200, height: 200))
+        image.scale = 1
+        return image.cgImage.map(NSBitmapImageRep.init(cgImage:))
+    }
+    func alpha(_ bitmap: NSBitmapImageRep, _ x: Int, _ y: Int) -> CGFloat {
+        bitmap.colorAt(x: x, y: y)?.alphaComponent ?? -1
+    }
+    let hidden = AgentCursorRenderer()
+    guard let empty = render(hidden), empty.pixelsWide == 200, empty.pixelsHigh == 200 else {
+        expect(false, "the cursor view renders offscreen")
+        return
+    }
+    expect((0..<200).allSatisfy { x in (0..<200).allSatisfy { y in alpha(empty, x, y) == 0 } },
+           "a renderer still at its offscreen origin draws nothing")
+    let visible = AgentCursorRenderer()
+    visible.setInitialPosition(origin)
+    guard let drawn = render(visible), let body = drawn.colorAt(x: Int(tip.x), y: Int(tip.y))?
+        .usingColorSpace(.sRGB) else {
+        expect(false, "the cursor view renders its dart")
+        return
+    }
+    expect(body.alphaComponent > 0.99 && body.redComponent > 0.9 && body.blueComponent < 0.5,
+           "the dart body is an opaque orange gradient")
+    let bloom = alpha(drawn, 100 + 12, 100 + 12)
+    expect(bloom > 0.01 && bloom < 0.6, "a translucent bloom surrounds the dart")
+    expect(alpha(drawn, 100 + 20, 100 + 20) == 0 && alpha(drawn, 10, 10) == 0,
+           "nothing is drawn past the bloom radius")
 }
