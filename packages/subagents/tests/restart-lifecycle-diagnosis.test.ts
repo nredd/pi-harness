@@ -15,9 +15,9 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { outcomes, toolCalls } from "@nredd/pi-test-lib/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { afterEach, expect, it, vi } from "vitest";
 import * as agentRunner from "../src/agent-runner.ts";
 import { canonicalChildPath, RECENT_CHILD_WRITE_SECONDS } from "../src/saved-child-session.ts";

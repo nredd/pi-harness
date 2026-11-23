@@ -8,9 +8,9 @@
  */
 import { join } from "node:path";
 import { type AgentSession, type ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { text, toolCalls } from "@nredd/pi-test-lib/faux";
+import { fauxAssistantMessage, fauxToolCall } from "@nredd/pi-test-lib/harness";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resumeAgent, staleCtxOutcome } from "../src/agent-runner.ts";
 import { answer, ScenarioSession, spawn } from "./fixtures/scenario-session.ts";

@@ -2449,9 +2449,9 @@ The initial migration moves 49 exact historical bullets. Eighteen bullets remain
 `[Unreleased]`: the repeated issue/category groups `330.fixed` (five), `436.fixed` (two),
 `548.fixed` (two), `264.fixed` (two), six unattributed bullets and the PR-only `#196` bullet.
 The nonbullet `#900` breaking warning also remains verbatim. No historical issue IDs were
-invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode
-and resource-sampler now use the same fragment contract; their READMEs record retained legacy
-entries. Preset, subscription-router and computer-use remain outside this migration.
+invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode,
+resource-sampler, preset and subscription-router now use the same fragment contract; their READMEs
+record retained legacy entries. Computer-use remains outside this migration.
 
 ### Contributing
 
@@ -2483,6 +2483,25 @@ suite on Node and Bun. `test:e2e` defaults to scripted faux providers;
 `PI_E2E_LIVE=1 npm run test:e2e` uses the operator's login (optional `PI_PROVIDER` /
 `PI_MODEL`), not an isolated gate. Benchmarks are opt-in and separate from ordinary performance
 tests, which assert operation counts. The benchmark entry points and sampling behavior remain unchanged. `ScenarioSession` uses `@nredd/pi-test-lib/harness`; only an explicit `terminal: true` loads `tests/fixtures/scenario-terminal.ts` and the fork's interactive host. The fixed stock Pi `1.5.2` headless scope is `tests/{scenario-session-headless,session-scenarios,steer-resume-scenarios,stop-subagent-scenarios}.test.ts` (29 cases on Node and Bun), including a native subprocess that observes the import boundary, persists a real physical child session and removes its temporary roots. Injected eager testing imports and a terminal request are negative controls. This is not full upstream compatibility: requester-bound routing and stale-context recovery (`tests/stale-ctx-*.test.ts`), terminal/workflow rendering, credential-command retries, detached-session reload, fatal startup and injected-home discovery remain fork contracts, with their existing assertions retained in the full fork suite. Stock tests do not manufacture `ctx.session`, resource-loader `homeDir` or `ExtensionStartupError`.
+
+`tests/{restart-lifecycle-diagnosis,stale-ctx-captured,stale-ctx-recovery}.test.ts` import
+`createHarness` and the faux builders from `@nredd/pi-test-lib/harness`, not the fork's `/testing`
+root. They still run only against the fork: the shared harness changes their imports, not their
+fork contracts.
+
+`tests/fixture-boundary.test.ts` bundles those three entries with esbuild and rejects any
+`@earendil-works/pi-coding-agent` or `@earendil-works/pi-tui` `/testing` import it can see: static
+imports and `import()`/`require()` with a literal specifier. It does not see computed specifiers
+(`import(name)`) or `/testing` subpaths of other forked packages. It resolves
+`@nredd/pi-test-lib/*` with `require.resolve` (CJS condition), while Vitest uses the import
+condition. `ScenarioSession`'s on-demand `./scenario-terminal.ts` edge is external in that graph;
+only the test's control case and `scenario-session-headless.test.ts` check it.
+
+Still open under #916: `tests/integration/probes/compaction-children.test.ts`,
+`packages/session-kit/tests/{monitor/extension-terminal,scenarios/titles}.test.ts` and
+`packages/todo/tests/fixtures/settled-row.ts` still import the fork's headless `/testing` root.
+The interactive hosts (`/testing/interactive`, `pi-tui/testing`) stay on the fork by design. The
+list of core internals the interactive harness needs is not written yet.
 
 Read affected modules completely and check installed SDK types before changing APIs. Keep changes
 small, avoid unnecessary `any` and abstractions, and follow root Biome/type rules. Use

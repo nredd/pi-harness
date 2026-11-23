@@ -16,10 +16,10 @@ vi.mock("../src/cdp.ts", async (importOriginal) => {
 
 const { listCdpPageContexts, cdpSnapshotForContext } = await import("../src/cdp.ts");
 const { shutdownComputerUseSession, testing } = await import("../src/bridge.ts");
-const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
+const FAKE_BROWSER = fileURLToPath(new URL("../test/fixtures/fake-browser.mjs", import.meta.url));
 
 describe.skipIf(process.platform === "win32")("launch_browser observation after start", () => {
-	let scratch;
+	let scratch: string;
 
 	beforeEach(({ onTestFinished }) => {
 		scratch = makeTestTempDir("pi-cu-observe-", onTestFinished);
