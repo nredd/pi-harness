@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { beforeEach, describe, expect, it } from "vitest";
 import { cachePath, dedupCalls, flatten, loadUsage, opaqueId, parseSession } from "../../src/stats/load.ts";
@@ -103,6 +104,36 @@ it("atomically enrolls one identity under concurrent first readers, and never re
 	);
 	await expect(machineIdentity(a)).rejects.toThrow("Invalid installation identity");
 	expect(readFileSync(join(a, "pi-session-kit", "machine.json"), "utf8")).toContain("not-a-uuid");
+});
+
+it("reports malformed identity JSON by path and fixed reason, never quoting its bytes", async () => {
+	const path = join(a, "pi-session-kit", "machine.json");
+	await machineIdentity(a);
+	writeFileSync(path, '{"token":SECRET-IDENTITY-CANARY}');
+	const error = await machineIdentity(a).catch((cause: unknown) => cause);
+	expect(error).toBeInstanceOf(Error);
+	expect((error as Error).message).toBe(`Invalid installation identity in ${JSON.stringify(path)}: not valid JSON`);
+	expect(inspect(error, { depth: Number.POSITIVE_INFINITY, showHidden: true })).not.toContain("SECRET-IDENTITY");
+	expect(error).not.toHaveProperty("refusal");
+	await expect(exportStats(a, repo)).rejects.toThrow(error as Error);
+	// A filesystem error says nothing about the contents: it passes through untouched.
+	rmSync(path);
+	mkdirSync(path);
+	await expect(machineIdentity(a)).rejects.toThrow("Not a bounded regular snapshot file");
+});
+
+it("keeps a scan diagnostic one line when its path holds U+2028 or U+2029", async () => {
+	const path = join(a, "sessions", "bad\u2028line\u2029para.jsonl");
+	sessionFile(path, { startMs: at("2026-09-30"), lines: [`${CANARY}{broken`] });
+	const error = await exportStats(a, repo).catch((cause: unknown) => cause);
+	const lines = (error as Error).message.split(/\r\n|[\n\r\u2028\u2029]/);
+	expect(lines).toHaveLength(2);
+	expect(lines[1]).toContain("\\u2028line\\u2029para");
+	expect(JSON.parse(lines[1]?.slice("pi-stats-scan: ".length) ?? "")).toEqual({
+		path,
+		line: 2,
+		reason: "invalid-record",
+	});
 });
 
 it("cleans temporary output when atomic publication cannot replace a directory", async () => {

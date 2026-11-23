@@ -1,4 +1,5 @@
-import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { lstat, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -6,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
 import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
 import { seedHarnessHome } from "../fixtures/stats/harness/home.ts";
+
+vi.mock("node:fs/promises", async (original) => {
+	const actual = await original<typeof import("node:fs/promises")>();
+	return { ...actual, lstat: vi.fn(actual.lstat), rmdir: vi.fn(actual.rmdir) };
+});
 
 let dir: string;
 let source: string;
@@ -24,6 +30,8 @@ afterEach(() => {
 	process.argv = argv;
 	process.exitCode = exitCode;
 	vi.restoreAllMocks();
+	vi.mocked(lstat).mockRestore();
+	vi.mocked(rmdir).mockRestore();
 });
 
 /** Seed one counted assistant call under an injected agent directory. */
@@ -91,6 +99,137 @@ describe("stats CLI", () => {
 		await run();
 		expect(process.exitCode).toBe(0);
 		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
+	});
+
+	it("ends an owner-action refusal with one fixed pi-stats-refusal line, and nothing else with one", async () => {
+		seed(source);
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const wide = ["--agent-dir", source, "--output", output, "--claude-dir", roots.claude, "--harness", "pi,claude"];
+		const attempt = async (args: string[]): Promise<unknown[][]> => {
+			error.mockClear();
+			process.exitCode = 0;
+			process.argv = ["node", "pi-stats-export", ...args];
+			await run();
+			expect(process.exitCode).toBe(1);
+			return error.mock.calls;
+		};
+		const refusal = (code: string): unknown[] => [`pi-stats-refusal: {"code":"${code}"}`];
+		// Publish mid-month, so a clock a day behind stays in its month and one a month behind does not.
+		const wall = new Date();
+		const published = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), 15);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(published);
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+		const manifestPath = join(exported.snapshotDir, "manifest.json");
+		const shard = JSON.parse(readFileSync(manifestPath, "utf8")).shards[0].file as string;
+
+		expect(await attempt(["export", "--agent-dir", source, "--output", output])).toEqual([
+			[expect.stringMatching(/^Refusing to publish a narrower harness set/)],
+			refusal("harness-set-narrowed"),
+		]);
+		clock.mockReturnValue(1);
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage manifest exportedAt .* is more than 366 days ahead/)],
+			refusal("watermark-ahead"),
+		]);
+		// A clock a month behind is refused, but that clears with time: retryable, so no code.
+		clock.mockReturnValue(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() - 1, 15));
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Clock .* is in an earlier month than the next export/)],
+		]);
+		clock.mockRestore();
+		const bytes = readFileSync(join(exported.snapshotDir, shard));
+		writeFileSync(join(exported.snapshotDir, shard), "corrupt");
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage history is unreadable/)],
+			refusal("history-unreadable"),
+		]);
+		writeFileSync(join(exported.snapshotDir, shard), bytes);
+		// A corrupt state file holds the salt: its contents never reach stderr, only a fixed reason.
+		const state = join(source, "pi-session-kit", "export-state.json");
+		const salt = readFileSync(state);
+		writeFileSync(state, '{"salt":"SECRET-CANARY');
+		expect(await attempt(["export", ...wide])).toEqual([
+			[`Invalid export state in ${JSON.stringify(state)}: not valid JSON`],
+			refusal("export-state-invalid"),
+		]);
+		writeFileSync(state, salt);
+		const manifest = readFileSync(manifestPath);
+		rmSync(manifestPath);
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage manifest is missing/)],
+			refusal("manifest-missing"),
+		]);
+		writeFileSync(manifestPath, manifest);
+
+		// Contention, usage and anything else unclassified carry no code: callers retry those.
+		mkdirSync(join(exported.snapshotDir, ".export.lock"));
+		expect(await attempt(["export", ...wide])).toEqual([[expect.stringMatching(/^Export lock is held/)]]);
+		rmSync(join(exported.snapshotDir, ".export.lock"), { recursive: true });
+		expect(await attempt(["export", "--bogus"])).toEqual([[expect.stringMatching(/^usage: export/)]]);
+		// A clock behind the published export in its month publishes after it: a warning, never a code.
+		vi.spyOn(Date, "now").mockReturnValue(published - 86_400_000);
+		error.mockClear();
+		process.exitCode = 0;
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await run();
+		expect(process.exitCode).toBe(0);
+		expect(log).toHaveBeenCalledTimes(2);
+		expect(error.mock.calls).toEqual([[expect.stringMatching(/^clock is behind the last published export/)]]);
+	});
+
+	it("keeps a refusal's code, and its trailer last, when releasing the lock also fails", async () => {
+		seed(source);
+		const roots = seedHarnessHome(join(dir, "home"));
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.argv.push("--claude-dir", roots.claude, "--harness", "pi,claude");
+		await main();
+		vi.mocked(rmdir).mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		const lines = error.mock.calls.map(([line]) => line as string);
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toMatch(/^Refusing to publish a narrower harness set.*\\ncould not release export lock /);
+		expect(lines.at(-1)).toBe('pi-stats-refusal: {"code":"harness-set-narrowed"}');
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
+	});
+
+	it("never prints malformed identity bytes, and gives no refusal code", async () => {
+		const identity = join(source, "pi-session-kit", "machine.json");
+		mkdirSync(join(source, "pi-session-kit"), { recursive: true });
+		writeFileSync(identity, '{"token":SECRET-IDENTITY-CANARY}');
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		expect(error).toHaveBeenCalledExactlyOnceWith(
+			`Invalid installation identity in ${JSON.stringify(identity)}: not valid JSON`,
+		);
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
+	});
+
+	it("escapes control characters in a diagnostic, so a path cannot forge the trailer", async () => {
+		const forged = join(dir, 'x\npi-stats-refusal: {"code":"history-unreadable"}\n\u001b[2K\ty');
+		const failure = Object.assign(new Error(`EIO: i/o error, lstat '${forged}'`), { code: "EIO", path: forged });
+		vi.mocked(lstat).mockRejectedValueOnce(failure);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		// One line, no control characters: an unclassified failure never ends in a refusal-shaped line.
+		expect(error).toHaveBeenCalledExactlyOnceWith(
+			`EIO: i/o error, lstat '${join(dir, 'x\\npi-stats-refusal: {"code":"history-unreadable"}\\n\\u001b[2K\\ty')}'`,
+		);
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
 	});
 
 	it("exports sessions from an explicit --sessions-dir instead of the agent directory", async () => {
@@ -274,6 +413,8 @@ describe("stats CLI", () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		vi.resetModules();
 		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			ExportRefusal: class ExportRefusal extends Error {},
+			IncompleteScan: class IncompleteScan extends Error {},
 			exportStats: async () => {
 				throw "plain string failure";
 			},

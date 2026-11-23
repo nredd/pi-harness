@@ -546,7 +546,9 @@ then run `rmdir` on the reported lock directory and retry the export. No export 
 by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
 with the lock path. A failed publication still reports the original error; if releasing the lock
 also fails, it is an `AggregateError` whose message is the original error followed by the same lock
-warning, with `errors` `[original, unlock]` and the original as `cause`. A lock that vanishes before
+warning, with `errors` `[original, unlock]` and the original as `cause`. A refusal (below) is the
+exception: it stays a top-level `ExportRefusal` with the same `refusal` code and the refusal message
+followed by the lock warning, and its `cause` is that `AggregateError` of `[refusal, unlock]`. A lock that vanishes before
 its age is read is still contention; any other failure to inspect it is reported with its code.
 `pi-usage-sync`
 separately serializes whole sync runs.
@@ -564,11 +566,45 @@ records on local stderr. Lines are physical, one-based (including skipped empty/
 `0` means a filesystem operation or an unavailable cached record, not a known line. Reasons are
 `invalid-record`, `read-directory`, `read-file`, `write-cache`, or `cached-invalid-record`.
 Paths are JSON-quoted, capped at 1024 characters and have C1 and all Unicode `Bidi_Control` characters
-(including ALM, LRM and RLM) neutralized; JSON escaping preserves C0 safety. No raw
+(including ALM, LRM and RLM) neutralized; JSON escaping preserves C0 safety, and U+2028/U+2029 are
+escaped as `\u2028`/`\u2029` so each record stays one line for any reader. No raw
 records, parser/OS exception text, prompts, message IDs or credentials are reported. These local
 locations never enter usage shards or manifests. Bad cached files are re-read to recover locations;
 deleted/former-root bad records remain fail-closed with an unknown line. Wrappers must explicitly
 forward this bounded protocol; forwarding arbitrary exporter stderr is not safe.
+
+An export refused until the owner acts exits 1 and ends stderr with exactly one
+`pi-stats-refusal: {"code":...}` line after the message. Retrying it unchanged does not help until the owner acts (but see the
+clock-dependent note below). Codes:
+`history-unreadable`, `history-over-budget`, `manifest-missing`,
+`harness-set-narrowed`, `harness-set-unknown` (the safeguards above that only a repair or an explicit
+`--replace-harnesses` gets past), `watermark-ahead` (an implausible published `exportedAt`;
+`--replace-harnesses` does not bypass it) and `export-state-invalid` (export state or outbox bookkeeping that
+reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
+the file, which holds the salt, nor attaching its parse error). Each code comes from one fixed
+refusal site, never from matching a message. Clock-dependent refusals may clear with time: an
+ordinary export refused because its next instant falls in a later month than its clock succeeds once
+the clock reaches that month, so it has no code and callers retry it. `watermark-ahead` is owner
+action for a corrupt or hostile watermark, but a lead merely over 366 days clears once it falls to
+366 days: on it a wrapper should recheck until a bounded deadline, not stop for good (only the year
+10000 ceiling never clears). `history-unreadable` means a published shard is
+missing (`ENOENT`) or fails its digest/parse/validation, or reading `manifest.json` is denied
+(`EACCES`/`EPERM`, persistent until the owner fixes its permissions). A denied manifest is reported as
+`Published usage manifest is not readable (<EACCES|EPERM> on manifest.json); restore read access to it
+and retry before considering --replace-harnesses, which drops published history absent from this
+scan`: restoring access keeps archived history, while `--replace-harnesses` publishes over it by
+rename, like a corrupt manifest. Any other filesystem error reading the manifest, a
+shard or the state (`EIO`, `EMFILE`, `EBUSY`, a denied shard or state read, ...) says nothing
+about the file, stays fatal under `--replace-harnesses` too, and is not a refusal. A malformed
+`machine.json` is reported as `Invalid installation identity in <path>: not valid JSON`, never
+quoting the file nor attaching its parse error; it has no code. A refusal whose lock release also fails keeps its code, with the unlock warning
+appended to the message. No line means the failure is unclassified (lock contention, I/O, an
+incomplete scan, usage, a month rollback): treat it as retryable. The diagnostic before the line is escaped to one
+line (line breaks and other control characters as `\n`, `\uXXXX`; the fixed usage text excepted),
+so a path cannot forge the line, but consumers must still accept only a complete
+`pi-stats-refusal: {"code":"<code>"}` whose code is in the list above, and only as the FINAL stderr
+line of an export that exited 1. Wrappers may stop retrying on a code; they must never add
+`--replace-harnesses` on their own. Library callers get the same code as `ExportRefusal.refusal`.
 
 CLI results:
 
@@ -790,13 +826,15 @@ An ordinary export whose next instant falls in a later month than its clock (the
 in a later month, or ends the clock's month) is refused with no cache or publication writes: `Clock
 (<now>) is in an earlier month than the next export after the last published one (<published>);
 publishing would seal months this clock has not left. Fix the clock or wait until <YYYY-MM>, or pass
---replace-harnesses to publish without published history absent from this scan`. Publishing would seal
+--replace-harnesses to publish without published history absent from this scan` (no refusal code: it
+clears with time, so wrappers retry it). Publishing would seal
 the clock's own month (and any between) while it is still in it, so later deletions and corrections
 there could never apply, and the next export could not tell those months from ones a clock-ahead
 export sealed. Waiting keeps all history. `--replace-harnesses` publishes just after the published
 export (viewers import it) and drops sealed history absent from the scan; until the clock reaches that
 month, each export needs it again. The bound comes only from the readable manifest (including one whose
-shards are unreadable): with it unreadable or missing, the export uses the wall clock.
+shards are unreadable): with it unreadable, denied (`EACCES`/`EPERM`) or missing, the export uses the
+wall clock.
 
 A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000
 (where `YYYY-MM` months stop sorting after sealed ones), is refused first, before the damaged-history
@@ -804,7 +842,7 @@ check and with no cache or publication writes, replacement included: `Published 
 exportedAt (<published>) is more than 366 days ahead of this clock (<now>) or leaves no instant before
 year 10000 to publish after it ("<dir>/manifest.json"); there is no supported in-place repair
 (https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one.
---replace-harnesses does not bypass this`. Do not lower or remove `exportedAt` by hand: that can lose
+--replace-harnesses does not bypass this` (refusal code `watermark-ahead`). Do not lower or remove `exportedAt` by hand: that can lose
 history, can invalidate the manifest (`lastGoodAt` must be at most `exportedAt`), and viewers holding
 the original timestamp reject the lower one (at the year ceiling, waiting cannot work either). The safe
 manual route is to copy `<OUT>/machines/<UUID>` somewhere safe, remove it from the outbox and export
