@@ -112,11 +112,17 @@ make help                    # every target
   namespace names) counts as visible throughout its enclosing function or the file, and any such binding
   inside the chosen `const`'s scope that may be visible at the use blocks following, so shadowing can
   only cause a miss. `let`/`var`/`using`, destructuring, namespace-block `const`, helper calls,
-  `new RegExp(...)` and imports are not followed. A `const`
+  `new RegExp(...)`, imports and `arguments` (implicitly bound by every ordinary function) are not
+  followed. Bindings are classified once per file and indexed by scope and name, so many tests reusing
+  one name stay linear. A `const`
   fixes the binding, not its contents, so a name that appears in a write target anywhere in the file
   (`expected.m = ...`, `expected[0] += ...`, `++`/`--`, `delete`, the first argument of
   `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`) is not followed under ANY of its
-  bindings, nor is a use inside a `with` body nested in the chosen `const`'s scope. Mutation through aliases or calls is not tracked: this can still produce a
+  bindings, nor is a use anywhere inside a `with` statement nested in the chosen `const`'s scope: the
+  object may shadow the name in the body, and the object expression itself is skipped too although it
+  is evaluated first (conservative, only a miss). Syntactic, so the temporal dead zone is not modeled:
+  a `const` used in a different `switch` clause than its initializer may be uninitialized at runtime,
+  and the guard still reports it. Mutation through aliases or calls is not tracked: this can still produce a
   finding for a value later overwritten; fix the test by naming the regex differently or asserting
   directly. Each initializer is walked once per matcher call, so shared initializers stay linear.
   The scan uses the `tsgo` parser on the same owned JS/TS test sources as the temp directory check,

@@ -191,7 +191,7 @@ test("resolves a name reused across scopes to its nearest const (#1315)", async 
 		'test("d", () => { const outer = { m: "ok" }; expect(x).toMatchObject(outer); });',
 		"const re = /p/;",
 		"{ list.map((re) => expect(x).toMatchObject({ m: re })); expect(y).toMatchObject({ m: re }); }",
-		"switch (k) { case 1: const cased = /c/; break; default: expect(x).toMatchObject({ m: cased }); }",
+		"switch (k) { case 1: const cased = /c/; default: expect(x).toMatchObject({ m: cased }); }",
 		"switch (k) { default: const fallback = /f/; expect(x).toMatchObject({ m: fallback }); }",
 		"with ({}) { const inside = /w/; expect(x).toMatchObject({ m: inside }); }",
 	].join("\n");
@@ -200,7 +200,7 @@ test("resolves a name reused across scopes to its nearest const (#1315)", async 
 		"a.test.ts:3:47: bare /z/ in toMatchObject via `expected` at 3:78",
 		"a.test.ts:4:15: bare /o/ in toMatchObject via `outer` at 6:30",
 		"a.test.ts:8:12: bare /p/ in toMatchObject via `re` at 9:86",
-		"a.test.ts:10:36: bare /c/ in toMatchObject via `cased` at 10:86",
+		"a.test.ts:10:36: bare /c/ in toMatchObject via `cased` at 10:79",
 		"a.test.ts:11:40: bare /f/ in toMatchObject via `fallback` at 11:74",
 		"a.test.ts:12:28: bare /w/ in toMatchObject via `inside` at 12:62",
 	]);
@@ -221,11 +221,35 @@ test("does not follow a const past a nearer binding of the name it does not mode
 		"namespace N { export const expected = 'ok'; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
 		"{ let expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 		"{ { const expected = 'ok'; } with (o) { expect(x).toMatchObject({ m: expected }); } }",
+		"{ const expected = /d/; const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 	];
 	const control = "{ { const expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }";
 	const found = [];
 	for (const body of [control, ...cases]) found.push(...(await scan(`const expected = /a/;\n${body}`)));
 	expect(found).toEqual(["a.test.ts:1:18: bare /a/ in toMatchObject via `expected` at 2:59"]);
+});
+
+test("skips arguments across a function and the object of a with statement (#1315)", async () => {
+	// A sloppy script may declare `arguments`, but the matcher gets the function's implicit arguments object.
+	const sloppy = [
+		"{ const arguments = /x/; (function () { expect(x).toMatchObject({ m: arguments }); })('ok'); }",
+		"{ const arguments = 'unused'; }",
+	].join("\n");
+	expect(await scan(sloppy, "a.test.cjs")).toEqual([]);
+	// The object is evaluated before it can shadow anything; skipping it anyway can only cause a miss.
+	expect(await scan("const re = /x/; with (expect(a).toMatchObject({ m: re })) {}", "a.test.cjs")).toEqual([]);
+});
+
+test("resolves many sibling tests reusing one name without rescanning every declaration (#1315)", async () => {
+	const lines = [];
+	for (let index = 0; index < 400; index++) {
+		const value = index % 2 === 0 ? "/r/" : "'ok'";
+		lines.push(`test("${index}", () => { const expected = { m: ${value} }; expect(a).toMatchObject(expected); });`);
+	}
+	const found = await scan(lines.join("\n"));
+	expect(found).toHaveLength(200);
+	expect(found[0]).toBe("a.test.ts:1:41: bare /r/ in toMatchObject via `expected` at 1:72");
+	expect(found[199]).toBe("a.test.ts:399:43: bare /r/ in toMatchObject via `expected` at 399:74");
 });
 
 /** `const a0 = /x/` and `depth` levels of `const aN = [aN-1, aN-1]`, matched on the last: 2^depth paths, one regex. */
