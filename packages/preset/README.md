@@ -327,10 +327,14 @@ attributes (including `text=auto`), conversion configuration or mismatched index
 endings also mean keep. The `git ls-files --eol` probe classifies raw bytes without running
 filters. Effective
 `core.filemode=false` means keep because Git status can hide executable-bit changes.
-Every tracked entry is hashed in process as a raw Git blob (file bytes or symlink target, no
-filters or stat cache) and compared with its index object ID and mode, so a same-size edit with a
-restored mtime under `core.trustctime=false` still keeps. Unmerged or unexpected index entries,
-missing or non-regular entries and tracked paths below a symlinked directory also keep.
+After the earlier holds pass, the guard hashes tracked entries in process as raw Git blobs (file
+bytes, or a symlink's target string, with no filters or stat cache) and compares each with its
+index object ID and mode, stopping at the first entry that keeps. A same-size edit with a restored
+mtime under `core.trustctime=false` therefore keeps. Parent directories are opened without
+following symlinks and the leaf is read relative to them; a symlinked parent, a parent or file
+replaced or rewritten while it is hashed, unmerged or unexpected index entries, and missing entries
+or entries that are neither regular files nor symlinks also keep. A tracked symlink compares by its
+target string only and passes when that matches.
 Limits:
 - Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
   Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
@@ -346,6 +350,11 @@ Limits:
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
   `git status` or `git diff` on a retained worktree to fill that gap.
 - The raw content comparison is a snapshot: a write after an entry is hashed is not seen.
+  Its total cost is unbounded: chunked reads bound per-file memory only and there is no time
+  budget yet (#1388); measure it before any deletion is enabled.
+- Non-goals here: the raw comparison does not detect a case-only rename under `core.ignorecase` or
+  an intent-to-add entry whose file is still empty; the index-vs-`HEAD` check in #1369 covers
+  intent-to-add. The CLI stays keep-only until #1220.
 - The guard does not check `core.ignorecase` or `core.symlinks`; the CLI authorizes nothing.
   A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
   older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.

@@ -13,10 +13,11 @@ import os
 import runpy
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from shlex import quote
 from textwrap import dedent
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -29,6 +30,7 @@ BASE = "owner/project"
 GUARD_MODULE = runpy.run_path(str(GUARD))
 GIT = GUARD_MODULE["binary"](GUARD_MODULE["GIT_LOCATIONS"], "git")
 TIMEOUT = 45
+Hook = Callable[..., Any]
 
 
 class Worktrees(NamedTuple):
@@ -599,7 +601,7 @@ def test_content_check_alone_keeps_replaced_entries(
     elif change == "deleted":
         expected = "No such file"
     else:
-        expected = "tracked path leaves the checkout: b'dir/tracked'"
+        expected = "cannot open tracked parent without following links: b'dir/tracked'"
         git(wt.path, "update-index", "--force-remove", "tracked")
         blob = git(wt.repo, "rev-parse", "HEAD:tracked").decode().strip()
         git(wt.path, "update-index", "--add", "--cacheinfo", f"100644,{blob},dir/tracked")
@@ -653,6 +655,7 @@ def test_unmerged_index_entry_keeps(wt: Worktrees, monkeypatch: pytest.MonkeyPat
     [
         (b"100644 " + b"a" * 40 + b" 0\ttracked", "incomplete index inventory"),
         (b"100644 " + b"a" * 64 + b" 0\ttracked\0", "unsupported index entry"),
+        (b"100644 " + b"a" * 40 + b" 0\tdir/../tracked\0", "unsupported index path"),
     ],
 )
 def test_malformed_index_inventory_keeps(
@@ -663,6 +666,108 @@ def test_malformed_index_inventory_keeps(
     monkeypatch.setitem(check.__globals__, "git", lambda _path, command, *_args: replies[command])
     with pytest.raises(GUARD_MODULE["KeepError"], match=reason):
         check(tmp_path)
+
+
+def hash_with(
+    root: Path, name: bytes, monkeypatch: pytest.MonkeyPatch, **hooks: Callable[[Hook], Hook]
+) -> tuple[bytes, str]:
+    """Hash one entry directly with `os` calls wrapped to inject a concurrent change.
+
+    Parameters:
+        root: Path, Resolved fixture root.
+        name: bytes, Entry path relative to the root.
+        monkeypatch: pytest.MonkeyPatch, Fixture patcher.
+        hooks: Callable[[Hook], Hook], Wrappers keyed by `os` function name; each receives the original.
+    Returns:
+        tuple[bytes, str]: Git mode and raw blob object ID.
+    Raises:
+        KeepError: The guard keeps the entry.
+    """
+    blob = GUARD_MODULE["blob"]
+    monkeypatch.setitem(blob.__globals__, "CHUNK", 4)
+    for attr, wrap in hooks.items():
+        monkeypatch.setattr(os, attr, wrap(getattr(os, attr)))
+    return blob(root, name, "sha1")
+
+
+def test_fifo_swapped_in_after_stat_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "tracked"
+    target.write_text("saved\n")
+
+    def swap(real: Hook) -> Hook:
+        def opened(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            if path == b"tracked":
+                target.unlink()
+                os.mkfifo(target)
+            return real(path, flags, *args, **kwargs)
+
+        return opened
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry is not a regular file: b'tracked'"):
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, open=swap)
+
+
+@pytest.mark.parametrize("change", ["rewrite consumed chunk", "replace after read"])
+def test_edit_consumed_chunk_during_hash_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    target = tmp_path / "tracked"
+    target.write_bytes(b"0123456789abcdef")
+    original = target.stat()
+    calls = {"read": 0, "fstat": 0}
+
+    def rewrite(real: Hook) -> Hook:
+        def read(descriptor: int, size: int) -> bytes:
+            calls["read"] += 1
+            if calls["read"] == 2:
+                with target.open("r+b") as handle:
+                    handle.write(b"WXYZ")
+                os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+            return real(descriptor, size)
+
+        return read
+
+    def replace(real: Hook) -> Hook:
+        def fstat(descriptor: int) -> os.stat_result:
+            result = real(descriptor)
+            calls["fstat"] += 1
+            if calls["fstat"] == 2:
+                copy = tmp_path / "copy"
+                copy.write_bytes(b"0123456789abcdef")
+                copy.replace(target)
+            return result
+
+        return fstat
+
+    hooks = {"read": rewrite} if change == "rewrite consumed chunk" else {"fstat": replace}
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry changed during hash: b'tracked'"):
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, **hooks)
+    assert calls["read" if change == "rewrite consumed chunk" else "fstat"] >= 2
+
+
+def test_multi_chunk_hash_matches_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "tracked"
+    target.write_bytes(b"0123456789abcdef!")
+    expected = git(tmp_path, "hash-object", "--no-filters", "tracked").decode().strip()
+    assert hash_with(tmp_path.resolve(), b"tracked", monkeypatch) == (b"100644", expected)
+
+
+def test_parent_swap_during_hash_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for parent in (tmp_path / "dir", tmp_path / "outside"):
+        parent.mkdir()
+        (parent / "tracked").write_text("saved\n")
+
+    def swap(real: Hook) -> Hook:
+        def opened(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            if path == b"tracked":
+                (tmp_path / "dir").rename(tmp_path / "moved")
+                (tmp_path / "dir").symlink_to(tmp_path / "outside")
+            return real(path, flags, *args, **kwargs)
+
+        return opened
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked parent changed during hash: b'dir/tracked'"):
+        hash_with(tmp_path.resolve(), b"dir/tracked", monkeypatch, open=swap)
 
 
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:

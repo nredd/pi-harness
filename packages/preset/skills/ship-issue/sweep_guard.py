@@ -286,11 +286,24 @@ def inventory(repo: Path) -> list[tuple[Path, list[bytes]]]:
         KeepError: Git cannot produce a valid inventory.
     """
     # Git reports the storage format from extensions.objectFormat, defaulting to SHA-1.
-    storage = git(repo, "rev-parse", "--show-object-format").strip()
-    oid_width = {b"sha1": 40, b"sha256": 64}[storage]
+    _, oid_width = object_format(repo)
     return parse_inventory(
         git(repo, "worktree", "list", "--porcelain", "-z"), oid_width
     )
+
+
+def object_format(path: Path) -> tuple[str, int]:
+    """Read the repository object hash algorithm and its hexadecimal width.
+
+    Parameters:
+        path: Path, Repository or checkout.
+    Returns:
+        tuple[str, int]: `hashlib` algorithm name and object ID width
+    Raises:
+        KeepError: Git cannot report the storage format.
+        KeyError: The storage format is not supported.
+    """
+    return HASHES[git(path, "rev-parse", "--show-object-format").strip()]
 
 
 def parse_inventory(data: bytes, oid_width: int) -> list[tuple[Path, list[bytes]]]:
@@ -488,22 +501,23 @@ def check_status(path: Path, admin: Path) -> None:
 
 
 def check_content(path: Path) -> None:
-    """Hash every tracked worktree entry raw and compare it with its index blob.
+    """Hash tracked worktree entries raw and compare them with their index blobs.
 
-    Object IDs are computed in process from `lstat`, `readlink` and raw reads, so
-    no clean filter, textconv or stat cache (`core.trustctime`) is consulted.
-    Unmerged, gitlink or other unexpected index entries keep.
+    Object IDs are computed in process from unfollowed directory descriptors,
+    `lstat`, `readlink` and raw reads, so no clean filter, textconv or stat cache
+    (`core.trustctime`) is consulted. Unmerged, gitlink or other unexpected index
+    entries keep. The scan stops at the first entry that keeps.
 
     Parameters:
         path: Path, Resolved candidate checkout.
     Returns:
         None.
     Raises:
-        KeepError: An entry is unsupported or its raw content or mode differs.
+        KeepError: An entry is unsupported, changed during the scan, or its raw
+            content or mode differs.
         OSError: A tracked entry cannot be read.
     """
-    storage = git(path, "rev-parse", "--show-object-format").strip()
-    algorithm, width = HASHES[storage]
+    algorithm, width = object_format(path)
     records = git(path, "ls-files", "--stage", "-z").split(b"\0")
     if records[-1]:
         raise KeepError("incomplete index inventory")
@@ -511,11 +525,7 @@ def check_content(path: Path) -> None:
         match = STAGE.fullmatch(record)
         if match is None or len(match[2]) != width:
             raise KeepError(f"unsupported index entry: {record!r}")
-        target = path / os.fsdecode(match[3])
-        # Never follow a symlinked parent directory out of the checkout.
-        if target.parent.resolve() != target.parent:
-            raise KeepError(f"tracked path leaves the checkout: {match[3]!r}")
-        if blob(target, algorithm) != (match[1], match[2].decode()):
+        if blob(path, match[3], algorithm) != (match[1], match[2].decode()):
             raise KeepError(f"tracked content differs from index: {match[3]!r}")
 
 
@@ -536,32 +546,121 @@ def entry_mode(info: os.stat_result) -> bytes:
     return b"unsupported"
 
 
-def blob(target: Path, algorithm: str) -> tuple[bytes, str]:
-    """Hash one worktree entry as a Git blob without filters or conversions.
+def identity(info: os.stat_result) -> tuple[int, int]:
+    """Return the device and inode that name one filesystem object.
 
     Parameters:
-        target: Path, Tracked worktree entry.
+        info: os.stat_result, Stat result.
+    Returns:
+        tuple[int, int]: Device and inode
+    Raises:
+        None.
+    """
+    return info.st_dev, info.st_ino
+
+
+def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
+    """Hash one worktree entry as a Git blob through unfollowed parent descriptors.
+
+    Every parent component is opened with `O_DIRECTORY | O_NOFOLLOW` relative
+    to the previous one and the leaf is read relative to the last. After hashing,
+    each component must still name the descriptor that was walked.
+
+    Parameters:
+        root: Path, Resolved candidate checkout.
+        name: bytes, Index path relative to the checkout.
         algorithm: str, Repository object hash algorithm.
     Returns:
         tuple[bytes, str]: Git mode and raw blob object ID
     Raises:
+        KeepError: A component is unsafe, or the entry changed while hashed.
         OSError: The entry cannot be read without following a symlink.
     """
-    mode = entry_mode(os.lstat(target))
+    *parents, leaf = name.split(b"/")
+    if any(part in (b"", b".", b"..") for part in (*parents, leaf)):
+        raise KeepError(f"unsupported index path: {name!r}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    walked = [(bytes(root), -1, os.open(root, flags))]
+    try:
+        try:
+            for part in parents:
+                walked.append(
+                    (part, walked[-1][2], os.open(part, flags, dir_fd=walked[-1][2]))
+                )
+        except OSError as exc:
+            raise KeepError(
+                f"cannot open tracked parent without following links: {name!r}"
+            ) from exc
+        result = leaf_blob(walked[-1][2], leaf, algorithm)
+        for part, parent, descriptor in walked:
+            current = os.stat(
+                part, dir_fd=None if parent < 0 else parent, follow_symlinks=False
+            )
+            if identity(current) != identity(os.fstat(descriptor)):
+                raise KeepError(f"tracked parent changed during hash: {name!r}")
+        return result
+    finally:
+        for *_, descriptor in walked:
+            os.close(descriptor)
+
+
+def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
+    """Hash one entry relative to a verified directory descriptor.
+
+    Parameters:
+        directory: int, Descriptor of the entry's walked parent.
+        leaf: bytes, Final path component.
+        algorithm: str, Repository object hash algorithm.
+    Returns:
+        tuple[bytes, str]: Git mode and raw blob object ID
+    Raises:
+        KeepError: The opened entry is not regular, or it changed while hashed.
+        OSError: The entry cannot be read without following a symlink.
+    """
+    mode = entry_mode(os.stat(leaf, dir_fd=directory, follow_symlinks=False))
     if mode == b"120000":
-        link = os.fsencode(os.readlink(target))
+        link = os.readlink(leaf, dir_fd=directory)
         digest = hashlib.new(algorithm, b"blob %d\0%s" % (len(link), link))
         return mode, digest.hexdigest()
     if mode == b"unsupported":
         return mode, ""
-    # Never block on a FIFO or follow a symlink swapped in after `lstat`.
-    descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor, "rb") as handle:
-        info = os.fstat(handle.fileno())
-        digest = hashlib.new(algorithm, b"blob %d\0" % info.st_size)
-        for chunk in iter(lambda: handle.read(CHUNK), b""):
+    # Never block on a FIFO or follow a symlink swapped in after the stat.
+    descriptor = os.open(
+        leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+    )
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise KeepError(f"tracked entry is not a regular file: {leaf!r}")
+        digest = hashlib.new(algorithm, b"blob %d\0" % before.st_size)
+        size = 0
+        while chunk := os.read(descriptor, CHUNK):
+            size += len(chunk)
             digest.update(chunk)
-    return entry_mode(info), digest.hexdigest()
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+    if (
+        size != before.st_size
+        or stamp(before) != stamp(after)
+        or identity(current) != identity(before)
+    ):
+        raise KeepError(f"tracked entry changed during hash: {leaf!r}")
+    return entry_mode(before), digest.hexdigest()
+
+
+def stamp(info: os.stat_result) -> tuple[int, ...]:
+    """Return the fields that change when an open file is rewritten.
+
+    Parameters:
+        info: os.stat_result, Open-file stat result.
+    Returns:
+        tuple[int, ...]: Device, inode, size, mtime and ctime in nanoseconds
+    Raises:
+        None.
+    """
+    return (*identity(info), info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def check_eol(data: bytes) -> None:
