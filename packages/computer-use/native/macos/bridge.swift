@@ -417,7 +417,11 @@ extension RootInventorySnapshot {
 
 /// Root changes between two listings. Absence from an incomplete listing proves nothing: a root missing
 /// from `after` closed only when `after` is complete, and one missing from `before` appeared (or newly
-/// gained focus) only when `before` is complete.
+/// gained focus) only when `before` is complete. Only a root's own focus read is compared (`rootOwnFocus`): a root present
+/// in both listings gained focus when it reads `true` after and `false` before, so a root whose focus read failed on
+/// either side (no `isFocused`, see `RootState`), a sheet whose own `AXFocused` was not read, or a menu (its focus is
+/// stamped, never read) never reports a focus change. A root new in `after` whose own focus reads `true` reports both
+/// `appeared` and `focused`.
 func rootInventoryChanges(before: RootInventorySnapshot, after: RootInventorySnapshot) -> [(change: String, root: [String: Any])] {
 	var changes: [(change: String, root: [String: Any])] = []
 	if before.complete {
@@ -426,14 +430,25 @@ func rootInventoryChanges(before: RootInventorySnapshot, after: RootInventorySna
 	if after.complete {
 		for (key, root) in before.roots where after.roots[key] == nil { changes.append(("closed", root)) }
 	}
-	for (key, root) in after.roots where (root["isFocused"] as? Bool) == true {
+	for (key, root) in after.roots where rootOwnFocus(root) == true {
 		guard let previous = before.roots[key] else {
 			if before.complete { changes.append(("focused", root)) }
 			continue
 		}
-		if (previous["isFocused"] as? Bool) != true { changes.append(("focused", root)) }
+		if rootOwnFocus(previous) == false { changes.append(("focused", root)) }
 	}
 	return changes
+}
+
+/// A root entry's own focus read, `nil` when there is none. A window's `isFocused` is its own `AXFocused` read; a sheet's
+/// is its window's (see `rootEntries`), so a sheet answers with its own read `ownFocus`; a popup menu's `isFocused` is
+/// stamped `true` without any read, so a menu has none (#1303).
+func rootOwnFocus(_ root: [String: Any]) -> Bool? {
+	switch root["kind"] as? String {
+	case "sheet": return root["ownFocus"] as? Bool
+	case "menu": return nil
+	default: return root["isFocused"] as? Bool
+	}
 }
 
 struct WindowPairing {
@@ -605,6 +620,28 @@ enum RootIdentityAttribute {
 	case subrole
 }
 
+/// The AX boolean states a root reports.
+enum RootStateAttribute {
+	case focused
+	case main
+	case minimized
+}
+
+/// Decode one root-state AX reply (`AXFocused`, `AXMain`, `AXMinimized`): only a successful reply that IS a `CFBoolean`
+/// is evidence. No reply, or any other type, e.g. a numeric `0` or `2`, is unknown (`nil`), never `false` (#1303).
+func rootStateBoolean(_ value: AnyObject?) -> Bool? {
+	guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+	return value as? Bool
+}
+
+/// A root's `AXFocused`, `AXMain` and `AXMinimized`: `nil` unless the read returned a boolean (`rootStateBoolean`). A
+/// failed, absent or undecodable read is unknown, never `false`, and its key is left out of the root entry.
+struct RootState: Equatable {
+	let focused: Bool?
+	let main: Bool?
+	let minimized: Bool?
+}
+
 /// One classified root: what `rootIdentity` keys it by, its CG pairing, and whether that key is comparable.
 struct InventoryRoot<Element> {
 	let element: Element
@@ -616,6 +653,8 @@ struct InventoryRoot<Element> {
 	let frame: CGRect
 	let pairing: WindowPairing
 	let comparable: Bool
+	/// Its own state reads. A sheet reads only its own `AXFocused`, never its window's; it is never main or minimized.
+	let state: RootState
 }
 
 /// A kept window's root and its sheets' roots.
@@ -634,6 +673,8 @@ struct RootInventoryWorld<Element: AnyObject> {
 	let frame: (Element) -> (frame: CGRect, read: Bool)
 	/// The title and frame one CG pairing scores.
 	let pairingRead: (Element) -> WindowPairingRead
+	/// One boolean state read, `nil` unless it returned a boolean (see `RootState`).
+	let state: (Element, RootStateAttribute) -> Bool?
 }
 
 extension RootInventoryWorld {
@@ -668,7 +709,8 @@ extension RootInventoryWorld {
 			let root = InventoryRoot(
 				element: window, kind: rootKind(role: role.value, subrole: subrole.value), title: title, role: role, subrole: subrole,
 				frame: kept.effectiveFrame, pairing: pairing,
-				comparable: rootIdentityComparable(pairing: pairing, fields: [title, role, subrole], frameRead: kept.axFrameRead))
+				comparable: rootIdentityComparable(pairing: pairing, fields: [title, role, subrole], frameRead: kept.axFrameRead),
+				state: RootState(focused: state(window, .focused), main: state(window, .main), minimized: state(window, .minimized)))
 			let sheets = kept.sheets.map { sheet -> InventoryRoot<Element> in
 				let sheetPairing = sheetPairings[ObjectIdentifier(sheet)] ?? unpaired
 				let sheetTitle = RootIdentityField(string(sheet, .title), fallback: title)
@@ -677,7 +719,8 @@ extension RootInventoryWorld {
 				let (sheetFrame, sheetFrameRead) = frame(sheet)
 				return InventoryRoot(
 					element: sheet, kind: "sheet", title: sheetTitle, role: sheetRole, subrole: sheetSubrole, frame: sheetFrame, pairing: sheetPairing,
-					comparable: rootIdentityComparable(pairing: sheetPairing, fields: [sheetTitle, sheetRole, sheetSubrole], frameRead: sheetFrameRead))
+					comparable: rootIdentityComparable(pairing: sheetPairing, fields: [sheetTitle, sheetRole, sheetSubrole], frameRead: sheetFrameRead),
+					state: RootState(focused: state(sheet, .focused), main: false, minimized: false))
 			}
 			return ClassifiedWindow(window: kept, root: root, sheets: sheets)
 		}
@@ -686,16 +729,30 @@ extension RootInventoryWorld {
 }
 
 /// Root entries for `windows`, each window followed by its sheets: `extras` (given the window and, for a sheet, the
-/// sheet's root) under the identity fields `rootIdentity` reads, and the `rootRef`s of the roots it cannot key.
+/// sheet's root) under the identity fields `rootIdentity` reads and the state flags, and the `rootRef`s of the roots it
+/// cannot key. A flag that was not read (see `RootState`) is left out, whatever `extras` says. `isOnscreen` is the paired
+/// CG window's (a sheet without one takes its window's), else the negated `isMinimized` of its window, else left out.
+/// A sheet's `isFocused` is its window's read focus, as root selection, `find_roots` and ref records have always read
+/// it; its own `AXFocused` read, when it returned a boolean, is `ownFocus`, the only focus `rootInventoryChanges`
+/// compares for a sheet.
 func rootEntries<Element>(
 	_ windows: [ClassifiedWindow<Element>], ref: (Element) -> String,
 	extras: (ClassifiedWindow<Element>, InventoryRoot<Element>?) -> [String: Any]
 ) -> (roots: [[String: Any]], unidentified: Set<String>) {
 	var roots: [[String: Any]] = []
 	var unidentified = Set<String>()
-	func append(_ root: InventoryRoot<Element>, extras: [String: Any]) {
+	func append(_ root: InventoryRoot<Element>, onscreen: Bool?, windowFocus: Bool? = nil, extras: [String: Any]) {
 		let rootRef = ref(root.element)
 		var entry = extras
+		if root.kind == "sheet" {
+			entry["isFocused"] = windowFocus.map { $0 as Any }
+			entry["ownFocus"] = root.state.focused.map { $0 as Any }
+		} else {
+			entry["isFocused"] = root.state.focused.map { $0 as Any }
+		}
+		entry["isMain"] = root.state.main.map { $0 as Any }
+		entry["isMinimized"] = root.state.minimized.map { $0 as Any }
+		entry["isOnscreen"] = onscreen.map { $0 as Any }
 		entry["kind"] = root.kind
 		entry["rootRef"] = rootRef
 		entry["windowRef"] = rootRef
@@ -708,8 +765,11 @@ func rootEntries<Element>(
 		roots.append(entry)
 	}
 	for window in windows {
-		append(window.root, extras: extras(window, nil))
-		for sheet in window.sheets { append(sheet, extras: extras(window, sheet)) }
+		let onscreen = window.root.pairing.candidate?.isOnscreen ?? window.root.state.minimized.map { !$0 }
+		append(window.root, onscreen: onscreen, extras: extras(window, nil))
+		for sheet in window.sheets {
+			append(sheet, onscreen: sheet.pairing.candidate?.isOnscreen ?? onscreen, windowFocus: window.root.state.focused, extras: extras(window, sheet))
+		}
 	}
 	return (roots, unidentified)
 }
@@ -2778,45 +2838,41 @@ final class Bridge {
 			),
 			string: { self.stringRead($0, attribute: Bridge.identityAttribute($1)) },
 			frame: { self.frameRead($0) },
-			pairingRead: { self.pairingRead($0) }
+			pairingRead: { self.pairingRead($0) },
+			state: { rootStateBoolean(self.copyAttribute($0, attribute: Bridge.stateAttribute($1))) }
 		)
 		let inventory = world.classify(candidates: cgWindowCandidates(pid: pid, entries: cgEntries))
-		var windowStates: [ObjectIdentifier: (isMinimized: Bool, isFocused: Bool)] = [:]
 		let entries = rootEntries(inventory.windows, ref: { self.refStore.storeWindow($0) }) { classified, sheet in
 			let window = classified.window.element
 			let pairing = classified.root.pairing
 			let candidate = pairing.candidate
 			let zIndex = classified.window.listIndex
 			guard let sheet else {
-				let isMinimized = boolAttribute(window, attribute: kAXMinimizedAttribute as CFString) ?? false
-				let isFocused = boolAttribute(window, attribute: kAXFocusedAttribute as CFString) ?? false
-				windowStates[ObjectIdentifier(window)] = (isMinimized, isFocused)
 				let sheetCount = classified.sheets.count
 				return [
 					"zOrder": candidate?.zOrder ?? zIndex,
 					"isModal": isModalRoot(window, role: classified.root.role.value, subrole: classified.root.subrole.value, sheetCount: sheetCount),
 					"scaleFactor": displayScaleFactor(for: classified.root.frame),
-					"isMinimized": isMinimized,
-					"isOnscreen": candidate?.isOnscreen ?? !isMinimized,
-					"isMain": boolAttribute(window, attribute: kAXMainAttribute as CFString) ?? false,
-					"isFocused": isFocused,
 					"metadata": rootMetadata(pairing: pairing, sheetCount: sheetCount),
 				]
 			}
-			let state = windowStates[ObjectIdentifier(window)] ?? (isMinimized: false, isFocused: false)
 			let sheetCandidate = sheet.pairing.candidate
 			return [
 				"zOrder": sheetCandidate?.zOrder ?? candidate?.zOrder ?? zIndex,
 				"isModal": true,
 				"scaleFactor": displayScaleFactor(for: sheet.frame),
-				"isMinimized": false,
-				"isOnscreen": sheetCandidate?.isOnscreen ?? candidate?.isOnscreen ?? !state.isMinimized,
-				"isMain": false,
-				"isFocused": state.isFocused,
 				"metadata": ["pairing": ["confidence": sheetCandidate == nil ? pairing.confidence : sheet.pairing.confidence, "score": sheetCandidate == nil ? pairing.score : sheet.pairing.score], "sheetCount": 0],
 			]
 		}
 		return (entries.roots, inventory.complete, entries.unidentified)
+	}
+
+	private static func stateAttribute(_ attribute: RootStateAttribute) -> CFString {
+		switch attribute {
+		case .focused: return kAXFocusedAttribute as CFString
+		case .main: return kAXMainAttribute as CFString
+		case .minimized: return kAXMinimizedAttribute as CFString
+		}
 	}
 
 	private static func identityAttribute(_ attribute: RootIdentityAttribute) -> CFString {
@@ -5987,7 +6043,7 @@ Terminal `act_ui` results say the action was delivered, or say its delivery is u
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
-- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`. `rootDelta` also treats its own snapshot as incomplete when it excludes a root it cannot key the same way in every listing (see Root discovery), so a root beside it is never proven closed.
+- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`. `rootDelta` also treats its own snapshot as incomplete when it excludes a root it cannot key the same way in every listing (see Root discovery), so a root beside it is never proven closed. The helper payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a `CFBoolean`: a failed, absent or non-boolean (e.g. numeric) reply leaves the field out instead of reading `false` (an unpaired window then omits `isOnscreen` too). A sheet's `isMain` and `isMinimized` are constant `false` and its `isFocused` is its window's read focus, as before, so selection, `find_roots` and ref records are unchanged; its own `AXFocused` read is kept apart as `ownFocus` for `rootDelta` only. For a root in both listings, `rootDelta` reports `focused` only when its own focus read `false` before and `true` after: a window's `isFocused`, a sheet's `ownFocus`, never a menu's stamped focus. So unread focus never reports a focus change, though it can hide one; a root new since a complete listing whose own focus reads `true` reports both `appeared` and `focused`, while a new menu reports only `appeared`. The TS client still parses an omitted flag as `false` (#1314).
 
 ## Ref lifecycle
 

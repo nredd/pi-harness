@@ -11,6 +11,8 @@
  *   list itself is never persisted.
  * - After a compaction, the first request outside Plan mode gets the open
  *   todo list appended once, since the compacted context no longer carries it.
+ * - A fresh parent TUI session's first request outside Plan mode gets the
+ *   previous session's open todos appended once, read-only (see `carryover.ts`).
  */
 
 import type {
@@ -37,6 +39,7 @@ import type { TaskState } from "../state/state.ts";
 import { commitState, getState, sid } from "../state/store.ts";
 import { sanitizeTerminalText } from "../tool/sanitize.ts";
 import {
+	CARRYOVER_LIST_MESSAGE_TYPE,
 	COMPACTION_LIST_MESSAGE_TYPE,
 	EMPTY_REMINDER_MESSAGE_TYPE,
 	HELD_REMINDER_MESSAGE_TYPE,
@@ -51,6 +54,7 @@ import {
 	type Task,
 	type TaskSnapshot,
 } from "../tool/types.ts";
+import { type CarriedTodos, formatCarriedTodos, loadPreviousOpenTodos, type PreviousSession } from "./carryover.ts";
 import { isChildActivation, type ToolCompletion, trackEmptyReminder } from "./empty-reminder.ts";
 import { applyPlanApproval, selectOpenPlanItems, selectPlanProgress } from "./reconcile.ts";
 import { trackStaleLists } from "./stale-reminder.ts";
@@ -482,6 +486,11 @@ export interface PlanSessionHooks {
 	sessionCompacted(sessionId: string): void;
 	/** Whether `sessionId`'s next request outside Plan mode gets the open list: the pending flag `sessionCompacted` sets. */
 	compactionListPending(sessionId: string): boolean;
+	/**
+	 * Call from `session_start` after `sessionStarted` for a fresh session: in a parent TUI session,
+	 * start reading `previous`, whose open todos the next request outside Plan mode gets once.
+	 */
+	sessionFresh(sessionId: string, previous: PreviousSession): void;
 	/** Call from `session_shutdown`. */
 	sessionEnded(sessionId: string): void;
 }
@@ -547,6 +556,8 @@ export function registerPlanHooks(
 	const stale = trackStaleLists();
 	// Sessions compacted since their last request outside Plan mode. In memory only, see the README.
 	const compacted = new Set<string>();
+	// Fresh sessions' pending reads of the previous session's open todos. In memory only.
+	const carryovers = new Map<string, Promise<CarriedTodos | undefined>>();
 	const parentTuiSessions = new Set<string>();
 	// Core needs a persisted non-assistant tail to accept a continuation after a normal reply.
 	// Keep the permission to expand that placeholder request-local, not in the restored branch.
@@ -634,19 +645,27 @@ export function registerPlanHooks(
 		pendingNudges.delete(id);
 		// Plan mode keeps a pending compaction list for the first request after it.
 		if (isPlanning(ctx, event.messages)) return undefined;
+		const carryover = carryovers.get(id);
+		carryovers.delete(id);
+		const carried = await carryover;
 		const state = getState(id);
 		const swapped = swapMarker(id, event.messages, pendingNudge, state);
+		const hidden = (customType: string, content: string) =>
+			({
+				role: "custom",
+				customType,
+				content,
+				display: false,
+				timestamp: Date.now(),
+			}) as (typeof event.messages)[number];
+		const appended: (typeof event.messages)[number][] = [];
+		if (carried) appended.push(hidden(CARRYOVER_LIST_MESSAGE_TYPE, formatCarriedTodos(carried)));
 		// One request only: an empty open list spends the pending compaction list too.
-		if (!compacted.delete(id) || !hasOpenTodos(state)) return swapped && { messages: swapped };
+		if (compacted.delete(id) && hasOpenTodos(state))
+			appended.push(hidden(COMPACTION_LIST_MESSAGE_TYPE, formatCompactionList(state)));
+		if (!appended.length) return swapped && { messages: swapped };
 		// Appended last, like the reminders, so later requests keep the cached prefix.
-		const list = {
-			role: "custom",
-			customType: COMPACTION_LIST_MESSAGE_TYPE,
-			content: formatCompactionList(state),
-			display: false,
-			timestamp: Date.now(),
-		} as (typeof event.messages)[number];
-		return { messages: [...(swapped ?? event.messages), list] };
+		return { messages: [...(swapped ?? event.messages), ...appended] };
 	});
 
 	/** The request's messages with a trailing reminder marker expanded, or `undefined` to keep them. */
@@ -689,6 +708,7 @@ export function registerPlanHooks(
 			live.add(sessionId);
 			pendingNudges.delete(sessionId);
 			compacted.delete(sessionId);
+			carryovers.delete(sessionId);
 			const parentTui = mode === "tui" && !childActivation;
 			if (parentTui) {
 				parentTuiSessions.add(sessionId);
@@ -721,12 +741,16 @@ export function registerPlanHooks(
 		compactionListPending(sessionId) {
 			return compacted.has(sessionId);
 		},
+		sessionFresh(sessionId, previous) {
+			if (parentTuiSessions.has(sessionId)) carryovers.set(sessionId, loadPreviousOpenTodos(previous));
+		},
 		sessionEnded(sessionId) {
 			live.delete(sessionId);
 			reported.delete(sessionId);
 			resumedOwners.delete(sessionId);
 			stale.rearm(sessionId);
 			compacted.delete(sessionId);
+			carryovers.delete(sessionId);
 			parentTuiSessions.delete(sessionId);
 			pendingNudges.delete(sessionId);
 			emptyTrackers.delete(sessionId);
