@@ -447,10 +447,14 @@ line and function totals in `LF/LH` and `FNF/FNH`, not one unit per `DA` or `FND
 checks those summaries against the paired JSON and rejects missing or contradictory line and
 function detail. It uses bounds, not row-count equality: `DA` merges overlapping lines and
 `FNDA` includes instantiations. Regions come from JSON only. The two hosted
-main runs [here](https://github.com/nredd/pi-harness/actions/runs/44914453077) and
-[here](https://github.com/nredd/pi-harness/actions/runs/44876056492) agree on **3000 / 324 / 4868**
-uncovered lines / functions / regions across the crate's `src/` inventory. Only lines and functions
-are capped and ratcheted. Integration tests and sysroot files are outside the denominator, but
+main runs [here](https://github.com/nredd/pi-harness/actions/runs/45204703192) and
+[here](https://github.com/nredd/pi-harness/actions/runs/45210838089), on different commits with
+unchanged crate sources, agree on **2899 / 311** uncovered lines / functions across the crate's
+`src/` inventory, the enforced cap (#696). Their uncovered regions differ (4659 and 4656), so only
+lines and functions are capped and ratcheted. Five hosted main runs on four different commits
+(45222250092, 45225473086, 45229504804, 45232543830, 45232602941) report identical raw line and
+function totals while their region counts vary between 4698 and 4701, so the counts that are
+capped do not wobble with timing. Integration tests and sysroot files are outside the denominator, but
 inline source tests count. Declaration-only Windows modules can lack an LLVM map even if they
 contain block comments; the Linux declaration check is unchanged. This is not Windows ARM64 or
 live desktop evidence.
@@ -515,7 +519,12 @@ Set `reports` to `<reports-root>`. The separate summary preserves any Ubuntu acc
 
 Native Ubuntu Linux Rust is measured separately by the
 report-only/excluded `computer-use-linux-native` signal (#758); regions are not branches or statements,
-and inline/source test hits do not establish runtime coverage. The separate `computer-use-swift` report-only/excluded
+and inline/source test hits do not establish runtime coverage. Its advisory reference is the
+**727 / 106** uncovered lines / functions on which Ubuntu main runs
+[here](https://github.com/nredd/pi-harness/actions/runs/45225473086) and
+[here](https://github.com/nredd/pi-harness/actions/runs/45229504804) agree for the same crate
+sources (#696). Both runs were cancelled or superseded overall; their computer-use jobs succeeded and
+produced the reports. The separate `computer-use-swift` report-only/excluded
 signal (#757) links every shipped Swift source into a headless instrumented binary on macOS.
 It preserves actual per-file LLVM lines/functions/regions and profile/toolchain metadata in the
 `computer-use-swift-macos-14` hosted artifact, with line/function LCOV in ordinary accounting.
