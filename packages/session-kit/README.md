@@ -508,6 +508,7 @@ node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
   [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE]
   [--replace-harnesses]
 node ARTIFACT import --agent-dir DIR --input REPO
+node ARTIFACT clean-recovery --agent-dir DIR --output OUT
 ```
 
 `--replace-harnesses` publishes this scan as a replacement generation. It bypasses the
@@ -600,6 +601,9 @@ CLI results:
   stdout. `stale` lists `{machineId, harness, lastGoodAt}` for every cached machine harness whose
   `lastGoodAt` is more than 2 days behind its manifest `exportedAt` (data carried through failures);
   each is also a stderr line, and none changes the exit code.
+- Clean-recovery: `{ "machineId", "snapshotDir", "removed": [..], "kept": [{ "file", "reason" }] }` on
+  stdout, plus `warnings` when an unlink failed (see recovery cleanup below). It exits 0 whatever it
+  kept; a refusal removes nothing and exits 1.
 - Exactly one JSON object is emitted. Diagnostics go to stderr.
   Exit contract: an export that published a snapshot exits 0, however many harnesses `failed`
   (kept or lost) and however many times in a row: those are fields of the JSON result, plus a
@@ -752,6 +756,27 @@ Only recorded lost harnesses stay lost; an enrolled tool that never had data rem
 and fresh. Recover or back up the frozen files before accepting replacement with
 `--replace-harnesses`. Cleanup continues per file with safe errno counts; post-publication errors
 warn without skipping export-state bookkeeping.
+
+Frozen recovery files are never pruned by an export, so repeated read failures or bookkeeping losses
+can accumulate superseded generations. `clean-recovery` is the explicit, recovery-only way to drop
+the redundant ones; no export runs it, so a scheduled sync never does. It takes the outbox's export
+lock (contention fails exactly like an export) and refuses, removing nothing, unless the active
+manifest is this machine's v3 manifest and every shard it references authenticates, the outbox has
+its own bookkeeping with a captured `recoveryFiles` set, and `lostHarnesses` is empty (a lost
+harness's history may live only in frozen files). Then a frozen file is removed only when the active
+manifest does not reference it, it is a regular `.json.gz` file whose bytes match the SHA-256 in its
+name and decode as this machine's shard of its month, and the active snapshot already holds every
+row of it: each event byte-for-byte by identity (a corrected call is not covered), each session
+within the merged active session's span and child marker, and each quota reading by an at least as
+fresh reading of the same window that resets no earlier (the reading `mergeQuota` would pick
+anyway). Everything else stays frozen and is listed in `kept` with a reason: `active`, `missing`,
+`legacy` (a v1/v2 `.json` shard, never compared), `unreadable` (including a symlink, never
+followed) or `not covered`. Removed names leave `recoveryFiles` first, and `recoveryPending` clears
+once the set is empty; only then are the files unlinked, so an interruption or an unlink failure
+(warned as `redundant recovery file removal failed (the next export prunes them): <errno counts>`)
+leaves only redundant, unprotected files for the next export to prune. Coverage is judged against
+the active snapshot as it is now: once removed, those rows are as protected as any other published
+history, no more. Shard files outside the frozen set are left to export pruning.
 
 The active UTC month replaces its previous generation. Past-month files stay immutable for
 append-only late events, session-end extensions and quota observations. A corrected identified

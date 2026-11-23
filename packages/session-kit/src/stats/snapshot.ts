@@ -1045,35 +1045,47 @@ function monthDelta(full: CompactShard, old: readonly CompactShard[]): CompactSh
 	return nonempty(delta) ? delta : undefined;
 }
 
-/** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
-async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
-	const cleanupErrors = new Map<string, number>();
-	const recordCleanupError = (error: unknown): void => {
-		const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
-		const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
-		cleanupErrors.set(code, (cleanupErrors.get(code) ?? 0) + 1);
-	};
-	const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
-		recordCleanupError(error);
-		return [];
-	});
-	for (const entry of entries) {
-		if (entry.isFile() && SHARD_FILE.test(entry.name) && !keep.has(entry.name)) {
-			try {
-				await unlink(join(snapshotDir, entry.name));
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") recordCleanupError(error);
-			}
+/** Count a failure by its safe errno code only: never a path or message. */
+function countErrno(errors: Map<string, number>, error: unknown): void {
+	const raw = (error as NodeJS.ErrnoException | null | undefined)?.code;
+	const code = typeof raw === "string" && /^E[A-Z0-9_]{1,23}$/.test(raw) ? raw : "UNKNOWN";
+	errors.set(code, (errors.get(code) ?? 0) + 1);
+}
+
+/** Best-effort, per-file unlink in `snapshotDir`; an already absent file is not a failure. */
+async function removeFiles(snapshotDir: string, files: readonly string[], errors: Map<string, number>): Promise<void> {
+	for (const file of files) {
+		try {
+			await unlink(join(snapshotDir, file));
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException | null | undefined)?.code !== "ENOENT") countErrno(errors, error);
 		}
 	}
-	return cleanupErrors.size
+}
+
+/** One warning with sorted errno counts, or none. */
+const errnoWarning = (what: string, errors: ReadonlyMap<string, number>): string[] =>
+	errors.size
 		? [
-				`obsolete shard cleanup failed: ${[...cleanupErrors]
+				`${what}: ${[...errors]
 					.sort(([a], [b]) => codeUnits(a, b))
 					.map(([code, count]) => `${code}=${count}`)
 					.join(", ")}`,
 			]
 		: [];
+
+/** Best-effort cleanup of only unreferenced, unprotected content-addressed files. */
+async function pruneOutbox(snapshotDir: string, keep: ReadonlySet<string>): Promise<string[]> {
+	const cleanupErrors = new Map<string, number>();
+	const entries = await readdir(snapshotDir, { withFileTypes: true }).catch((error: unknown) => {
+		countErrno(cleanupErrors, error);
+		return [];
+	});
+	const obsolete = entries
+		.filter((entry) => entry.isFile() && SHARD_FILE.test(entry.name) && !keep.has(entry.name))
+		.map((entry) => entry.name);
+	await removeFiles(snapshotDir, obsolete, cleanupErrors);
+	return errnoWarning("obsolete shard cleanup failed", cleanupErrors);
 }
 
 /** What an export that published a snapshot reports. `warnings` are things that did not stop publication. */
@@ -1093,6 +1105,17 @@ export async function exportStats(
 ): Promise<ExportResult> {
 	const identity = await machineIdentity(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
+	return withExportLock(snapshotDir, () => publishStats(dir, snapshotDir, root, options, identity));
+}
+
+/**
+ * Run `work` holding the outbox's exclusive export lock. A lock release failure after `work` succeeded is a
+ * warning on its result; after it failed, both errors are reported.
+ */
+async function withExportLock<T extends { warnings?: string[] }>(
+	snapshotDir: string,
+	work: () => Promise<T>,
+): Promise<T> {
 	const lock = join(snapshotDir, ".export.lock");
 	await mkdir(snapshotDir, { recursive: true });
 	// The portable kit cannot import the dev-tools lock. Fail closed on contention or a
@@ -1118,9 +1141,9 @@ export async function exportStats(
 				: `Export lock is held at ${details}; retry after the other export finishes. If this persists, verify no export is running before removing the lock directory`;
 		throw Object.assign(new Error(message, { cause: error }), { code: error.code, path: lock });
 	});
-	let outcome: { ok: true; result: ExportResult } | { ok: false; error: unknown };
+	let outcome: { ok: true; result: T } | { ok: false; error: unknown };
 	try {
-		outcome = { ok: true, result: await publishStats(dir, snapshotDir, root, options, identity) };
+		outcome = { ok: true, result: await work() };
 	} catch (error) {
 		outcome = { ok: false, error };
 	}
@@ -1426,6 +1449,128 @@ async function publishStats(
 		...(external.length ? { harnesses: report } : {}),
 		...(warnings.length ? { warnings } : {}),
 	};
+}
+
+/**
+ * Why `cleanRecovery` kept a frozen recovery file: the active manifest references it, it is gone, it is a
+ * legacy `.json` shard, it does not authenticate as this machine's v3 shard, or the active snapshot lacks
+ * some of its rows.
+ */
+export type KeptReason = "active" | "missing" | "legacy" | "unreadable" | "not covered";
+/** What an explicit recovery cleanup did. */
+export interface CleanupResult {
+	machineId: string;
+	snapshotDir: string;
+	/** Frozen files proven redundant: dropped from the recovery set, then unlinked (see `warnings`). */
+	removed: string[];
+	/** Frozen files that stay protected, with why. */
+	kept: { file: string; reason: KeptReason }[];
+	warnings?: string[];
+}
+
+/** Whether the active snapshot already holds every row of `shard`, so a viewer would see nothing more. */
+function coveredBy(active: readonly CompactShard[]): (shard: CompactShard) => boolean {
+	const events = new Map(active.flatMap((s) => s.events.map((e) => [e.id, JSON.stringify(e)] as const)));
+	const sessions = mergeSessionMetadata(
+		active.flatMap((s) => s.sessions.map((x) => ({ path: x.id, startMs: x.startMs, endMs: x.endMs, child: x.child }))),
+	);
+	const quota = active.flatMap((s) => s.quota);
+	return (shard) =>
+		shard.events.every((e) => events.get(e.id) === JSON.stringify(e)) &&
+		shard.sessions.every((s) => {
+			const merged = sessions.get(s.id);
+			return (
+				merged !== undefined && merged.startMs <= s.startMs && merged.endMs >= s.endMs && (merged.child || !s.child)
+			);
+		}) &&
+		// Same rule as `compactDeltas`: an at-least-as-fresh reading that resets no earlier always wins `mergeQuota`.
+		shard.quota.every((q) =>
+			quota.some((a) => quotaKey(a) === quotaKey(q) && compareFreshness(a, q) >= 0 && a.resetAt >= q.resetAt),
+		);
+}
+
+/** `undefined` when the frozen `file` is an authenticated v3 shard of this machine the active snapshot covers. */
+async function keptReason(
+	snapshotDir: string,
+	manifest: Manifest,
+	file: string,
+	covered: (shard: CompactShard) => boolean,
+): Promise<KeptReason | undefined> {
+	if (!file.endsWith(".json.gz")) return "legacy";
+	let shard: Shard;
+	try {
+		// The name is the only reference a frozen file has: `<month>-<sha256>.json.gz` (`SHARD_FILE`).
+		const ref = {
+			month: file.slice(0, 7),
+			file,
+			sha256: file.slice(8, 72),
+			bytes: (await lstat(join(snapshotDir, file))).size,
+		};
+		shard = (await readShard(snapshotDir, manifest, ref, MAX_BYTES)).shard;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable";
+	}
+	return covered(shard as CompactShard) ? undefined : "not covered";
+}
+
+/**
+ * Explicit, recovery-only cleanup of frozen shard files; no export ever runs it. Under the outbox's export lock,
+ * and only when its active v3 manifest and every shard it references authenticate and its own bookkeeping records
+ * a recovery set with no lost harness, a frozen file the manifest does not reference is removed only if it
+ * authenticates as this machine's v3 shard and the active snapshot holds every row of it. Everything else stays
+ * frozen, with a reason. The set shrinks before any unlink, so an interruption leaves only redundant files.
+ */
+export async function cleanRecovery(dir: string, output: string): Promise<CleanupResult> {
+	const identity = await machineIdentity(dir);
+	const snapshotDir = join(output, "machines", identity.machineId);
+	const refused = (why: string): Error => new Error(`Recovery cleanup refused: ${why}; nothing was removed`);
+	if (!(await lstat(snapshotDir).catch(() => undefined))?.isDirectory())
+		throw refused(`no outbox for this machine at ${JSON.stringify(snapshotDir)}`);
+	return withExportLock(snapshotDir, async () => {
+		const previous = await loadPrevious(snapshotDir);
+		if (
+			previous === null ||
+			previous === "unreadable" ||
+			"damaged" in previous ||
+			previous.manifest.version !== 3 ||
+			previous.manifest.machineId !== identity.machineId
+		)
+			throw refused(
+				"the active manifest or a shard it references does not authenticate as this machine's v3 snapshot; export first",
+			);
+		const statePath = await outboxStateFile(dir, snapshotDir);
+		await privateOutboxes(dirname(statePath));
+		const own = await ownOutbox(statePath);
+		if (own === null || own.recoveryFiles === null)
+			throw refused(
+				"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first",
+			);
+		if (own.lostHarnesses.length > 0)
+			throw refused(`recovery of lost ${own.lostHarnesses.join(", ")} history is pending and may need frozen files`);
+		const referenced = new Set(previous.manifest.shards.map((ref) => ref.file));
+		const covered = coveredBy(previous.shards as CompactShard[]);
+		const removed: string[] = [];
+		const kept: CleanupResult["kept"] = [];
+		for (const file of own.recoveryFiles) {
+			const reason = referenced.has(file) ? "active" : await keptReason(snapshotDir, previous.manifest, file, covered);
+			if (reason === undefined) removed.push(file);
+			else kept.push({ file, reason });
+		}
+		const warnings: string[] = [];
+		if (removed.length > 0) {
+			const recoveryFiles = own.recoveryFiles.filter((file) => !removed.includes(file));
+			// Unprotect first: a crash or failed unlink then leaves only redundant files, which the next export prunes.
+			await recordOutbox(statePath, {
+				...own,
+				recoveryFiles,
+				recoveryPending: own.recoveryPending && recoveryFiles.length > 0,
+			});
+			const errors = new Map<string, number>();
+			await removeFiles(snapshotDir, removed, errors);
+			warnings.push(...errnoWarning("redundant recovery file removal failed (the next export prunes them)", errors));
+		}
+		return { machineId: identity.machineId, snapshotDir, removed, kept, ...(warnings.length ? { warnings } : {}) };
+	});
 }
 
 const globalPath = (dir: string): string => join(dir, "pi-session-kit", "stats-global.json");

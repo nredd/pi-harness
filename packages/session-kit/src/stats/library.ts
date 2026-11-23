@@ -57,9 +57,11 @@ export {
 } from "./load.ts";
 export {
 	atomicJson,
+	type CleanupResult,
 	type Combined,
 	type CombinedOptions,
 	type Coverage,
+	cleanRecovery,
 	coverageLabel,
 	decodeShard,
 	type ExportOptions,
@@ -72,6 +74,7 @@ export {
 	type HarnessStatus,
 	type Identity,
 	importStats,
+	type KeptReason,
 	loadCombined,
 	type MachineCoverage,
 	type MachineSnapshot,

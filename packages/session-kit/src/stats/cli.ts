@@ -4,13 +4,14 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
-import { exportStats, importStats } from "./snapshot.ts";
+import { cleanRecovery, exportStats, importStats } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
 	"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] " +
 	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO | " +
-	"subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
+	"clean-recovery --agent-dir DIR --output OUT | subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
+	"  clean-recovery: remove frozen recovery shard files the active snapshot fully covers; never part of an export\n" +
 	"  --replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
 	"clock-rollback, unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
 	"published history absent from the scan (sealed months included), and viewers holding a newer snapshot never import it; " +
@@ -82,6 +83,15 @@ export async function main(): Promise<void> {
 					`${name}: scan incomplete (${status.consecutiveFailures} in a row), ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`,
 				);
 		}
+	} else if (
+		command === "clean-recovery" &&
+		output !== undefined &&
+		input === undefined &&
+		!EXPORT_ONLY.some((f) => options.has(f))
+	) {
+		const result = await cleanRecovery(dir, resolve(output));
+		console.log(JSON.stringify(result));
+		for (const warning of result.warnings ?? []) console.error(warning);
 	} else if (
 		command === "import" &&
 		input !== undefined &&

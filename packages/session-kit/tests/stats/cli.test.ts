@@ -269,6 +269,50 @@ describe("stats CLI", () => {
 		);
 	});
 
+	it("cleans recovery only on its own command with only its own flags", async () => {
+		seed(source);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const clean = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+		process.argv = clean;
+		await expect(main()).rejects.toThrow("Recovery cleanup refused: no outbox for this machine");
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		await main();
+		process.argv = clean;
+		await main();
+		const cleaned = JSON.parse(log.mock.calls[1]?.[0] as string);
+		expect(cleaned).toMatchObject({ removed: [], kept: [] });
+		for (const extra of [["--input", output], ["--harness", "pi"], ["--replace-harnesses"]]) {
+			process.argv = [...clean, ...extra];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+		process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source];
+		await expect(main()).rejects.toThrow("clean-recovery --agent-dir DIR --output OUT");
+	});
+
+	it("prints recovery cleanup warnings and still exits 0", async () => {
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by an earlier test
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const warning = "redundant recovery file removal failed (the next export prunes them): EACCES=1";
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			cleanRecovery: async () => ({ machineId: "m", snapshotDir: "d", removed: ["f"], kept: [], warnings: [warning] }),
+			exportStats: async () => ({}),
+			importStats: async () => ({}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string).removed).toEqual(["f"]);
+		expect(error).toHaveBeenCalledExactlyOnceWith(warning);
+		expect(process.exitCode ?? 0).toBe(0);
+	});
+
 	it("reports a non-Error failure generically", async () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		vi.resetModules();
