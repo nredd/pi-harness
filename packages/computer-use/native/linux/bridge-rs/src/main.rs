@@ -25,24 +25,100 @@ const EXIT_RELEASE_DEBT: i32 = 3;
 /// stuck on an X11 reply that never comes cannot unwind, so the helper names what it may
 /// hold and exits within the client's 750 ms SIGTERM-to-SIGKILL grace instead.
 const EXIT_JOIN_LIMIT: Duration = Duration::from_millis(300);
+/// How long a helper exiting past `EXIT_JOIN_LIMIT` gives replies already queued, e.g.
+/// `cancelled` for requests that never started, to reach stdout before it exits anyway.
+const EXIT_FLUSH_LIMIT: Duration = Duration::from_millis(200);
+/// The client's SIGTERM-to-SIGKILL grace (`HELPER_TERMINATE_GRACE_MS`).
+const KILL_GRACE: Duration = Duration::from_millis(750);
+// The exit past stuck requests waits out both limits; it must stay inside the grace.
+const _: () =
+    assert!(EXIT_JOIN_LIMIT.as_millis() + EXIT_FLUSH_LIMIT.as_millis() < KILL_GRACE.as_millis());
 const DEFAULT_MAX_NODES: usize = 512;
+
+/// An item for the stdout writer: a reply, or a marker it acknowledges once every reply
+/// queued before it was written and flushed.
+enum Outgoing {
+    Reply(Response),
+    Written(tokio::sync::oneshot::Sender<()>),
+}
+
+/// The request side of the stdout writer's queue.
+#[derive(Clone)]
+struct Replies(mpsc::UnboundedSender<Outgoing>);
+impl Replies {
+    /// Queue `response`; it is dropped if the writer already stopped.
+    fn send(&self, response: Response) {
+        let _ = self.0.send(Outgoing::Reply(response));
+    }
+}
+
+/// Write each queued reply as one flushed JSON line, until the queue closes or a write
+/// fails.
+async fn write_replies(
+    mut out: impl tokio::io::AsyncWrite + Unpin,
+    mut queue: mpsc::UnboundedReceiver<Outgoing>,
+) {
+    while let Some(item) = queue.recv().await {
+        match item {
+            Outgoing::Reply(response) => {
+                if let Ok(mut line) = serde_json::to_vec(&response) {
+                    line.push(b'\n');
+                    if out.write_all(&line).await.is_err() {
+                        return;
+                    }
+                    let _ = out.flush().await;
+                }
+            }
+            Outgoing::Written(done) => {
+                let _ = done.send(());
+            }
+        }
+    }
+}
+
+/// How the exit wait ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Drained {
+    /// Every request finished and the writer wrote every reply.
+    All,
+    /// A request was still running at `EXIT_JOIN_LIMIT`.
+    Stuck,
+}
+
+/// Wait for in-flight requests once shutdown began, at most `EXIT_JOIN_LIMIT`. When they
+/// all finish, close the queue and wait for the writer. When one is stuck, e.g. on an X11
+/// reply that never comes, give replies already queued at most `EXIT_FLUSH_LIMIT` to be
+/// written, then return anyway: on that path replies are best effort, since a writer
+/// blocked on stdout must not keep the helper past the client's kill grace.
+async fn drain(
+    requests: &mut tokio::task::JoinSet<()>,
+    output: Replies,
+    writer: tokio::task::JoinHandle<()>,
+) -> Drained {
+    let joined = tokio::time::timeout(EXIT_JOIN_LIMIT, async {
+        while requests.join_next().await.is_some() {}
+    })
+    .await
+    .is_ok();
+    if joined {
+        drop(output);
+        let _ = writer.await;
+        return Drained::All;
+    }
+    let (done, written) = tokio::sync::oneshot::channel();
+    // A writer that stopped dropped the marker with the queue: nothing more is written.
+    if output.0.send(Outgoing::Written(done)).is_ok() {
+        let _ = tokio::time::timeout(EXIT_FLUSH_LIMIT, written).await;
+    }
+    Drained::Stuck
+}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() {
     let state = Arc::new(Mutex::new(HelperState::default()));
-    let (output, mut responses) = mpsc::unbounded_channel::<Response>();
-    let writer = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
-        while let Some(response) = responses.recv().await {
-            if let Ok(mut line) = serde_json::to_vec(&response) {
-                line.push(b'\n');
-                if stdout.write_all(&line).await.is_err() {
-                    return;
-                }
-                let _ = stdout.flush().await;
-            }
-        }
-    });
+    let (queue, responses) = mpsc::unbounded_channel();
+    let output = Replies(queue);
+    let writer = tokio::spawn(write_replies(tokio::io::stdout(), responses));
 
     let semaphore = Arc::new(tokio::sync::Semaphore::new(REQUEST_WORKERS));
     let mut requests = tokio::task::JoinSet::new();
@@ -65,7 +141,7 @@ async fn main() {
         let request = match serde_json::from_str::<Request>(&line) {
             Ok(request) => request,
             Err(error) => {
-                let _ = output.send(Response::err(
+                output.send(Response::err(
                     &id,
                     ProtocolError::new(
                         format!("Invalid request: {error}"),
@@ -86,11 +162,11 @@ async fn main() {
             biased;
             permit = semaphore.clone().acquire_owned() => permit,
             () = shutdown.recv() => {
-                let _ = output.send(Response::err(&request.id, shutting_down()));
+                output.send(Response::err(&request.id, shutting_down()));
                 break;
             }
             () = input_closed.notified() => {
-                let _ = output.send(Response::err(&request.id, shutting_down()));
+                output.send(Response::err(&request.id, shutting_down()));
                 break;
             }
         };
@@ -100,7 +176,7 @@ async fn main() {
         // Shutdown, e.g. stdin EOF, may have begun while this request waited for a
         // worker: it never started, so it does not start now.
         if saturated && InputState::shared().is_cancelled() {
-            let _ = output.send(Response::err(&request.id, shutting_down()));
+            output.send(Response::err(&request.id, shutting_down()));
             continue;
         }
         let state = Arc::clone(&state);
@@ -108,7 +184,7 @@ async fn main() {
         requests.spawn(async move {
             let _permit = permit;
             let response = handle_request(&state, &request).await;
-            let _ = output.send(response);
+            output.send(response);
         });
     }
     // Stdin EOF, a read error or a signal: stop physical input before its next unit.
@@ -117,21 +193,14 @@ async fn main() {
     // Requests read but never started are answered, not dropped: none of them ran.
     while let Ok(line) = lines.try_recv() {
         if let Some(id) = extract_id(&line) {
-            let _ = output.send(Response::err(&id, shutting_down()));
+            output.send(Response::err(&id, shutting_down()));
         }
     }
-    let joined = tokio::time::timeout(EXIT_JOIN_LIMIT, async {
-        while requests.join_next().await.is_some() {}
-    })
-    .await
-    .is_ok();
-    if !joined {
+    if drain(&mut requests, output, writer).await == Drained::Stuck {
         // A stuck request still holds whatever it pressed: its press was registered
         // before submission, so name it and every owed release, then leave.
         std::process::exit(exit_status(InputState::shared().possibly_held()));
     }
-    drop(output);
-    let _ = writer.await;
     // Tokio's stdin reads on a blocking thread that runtime shutdown would wait on
     // until EOF; every reply is written, so leave now.
     std::process::exit(settle_before_exit().await);
@@ -1561,6 +1630,135 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
+
+    /// A stdout that accepts no bytes until `opens` (never when `None`), then records them.
+    struct ScriptedStdout {
+        opens: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+        written: Arc<Mutex<Vec<u8>>>,
+    }
+    impl tokio::io::AsyncWrite for ScriptedStdout {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            bytes: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let Some(opens) = self.opens.as_mut() else {
+                // Blocked for good, as a reader that stopped reading a full pipe.
+                return std::task::Poll::Pending;
+            };
+            std::task::ready!(opens.as_mut().poll(cx));
+            self.written.lock().unwrap().extend_from_slice(bytes);
+            std::task::Poll::Ready(Ok(bytes.len()))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Run the exit wait on the paused clock, as `main` does after saturated shutdown: one
+    /// request stuck for good, a `cancelled` reply queued for `ninth`, and a stdout that
+    /// opens `opens` after shutdown began. Returns the outcome, the virtual time the wait
+    /// took, and the reply ids written by then.
+    async fn saturated_exit(opens: Option<Duration>) -> (Drained, Duration, Vec<String>) {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let stdout = ScriptedStdout {
+            opens: opens.map(|after| Box::pin(tokio::time::sleep(after))),
+            written: Arc::clone(&written),
+        };
+        let (queue, responses) = mpsc::unbounded_channel();
+        let output = Replies(queue);
+        let writer = tokio::spawn(write_replies(stdout, responses));
+        let mut requests = tokio::task::JoinSet::new();
+        let held = output.clone();
+        requests.spawn(async move {
+            // Stuck on an X11 reply that never comes, still owning a reply sender.
+            let _output = held;
+            std::future::pending::<()>().await;
+        });
+        output.send(Response::err("ninth", shutting_down()));
+        let started = tokio::time::Instant::now();
+        let drained = drain(&mut requests, output, writer).await;
+        let elapsed = started.elapsed();
+        let ids = String::from_utf8(written.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| {
+                let reply: Value = serde_json::from_str(line).unwrap();
+                assert_eq!(reply["error"]["code"], "cancelled", "{reply}");
+                reply["id"].as_str().unwrap().to_owned()
+            })
+            .collect();
+        (drained, elapsed, ids)
+    }
+
+    /// The whole exit past a stuck request, flush included, within the client's grace.
+    const SATURATED_EXIT: Duration = EXIT_JOIN_LIMIT.saturating_add(EXIT_FLUSH_LIMIT);
+
+    #[tokio::test(start_paused = true)]
+    async fn saturated_exit_flushes_queued_replies_inside_the_kill_grace() {
+        // Stdout opens just before the flush limit: the queued reply is written once.
+        let just_in_time = SATURATED_EXIT - Duration::from_millis(1);
+        let (drained, elapsed, ids) = saturated_exit(Some(just_in_time)).await;
+        assert_eq!(drained, Drained::Stuck);
+        assert_eq!(ids, ["ninth"]);
+        assert_eq!(elapsed, just_in_time);
+        assert!(elapsed < KILL_GRACE, "{elapsed:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn saturated_exit_leaves_a_blocked_stdout_at_its_deadline() {
+        // A stdout opening just past the limit, or never, is not waited for: best effort.
+        for opens in [Some(SATURATED_EXIT + Duration::from_millis(1)), None] {
+            let (drained, elapsed, ids) = saturated_exit(opens).await;
+            assert_eq!(drained, Drained::Stuck, "{opens:?}");
+            assert!(ids.is_empty(), "{opens:?}: {ids:?}");
+            assert_eq!(elapsed, SATURATED_EXIT, "{opens:?}");
+            assert!(elapsed < KILL_GRACE, "{opens:?}: {elapsed:?}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exit_waits_for_every_reply_once_all_requests_finish() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let stdout = ScriptedStdout {
+            // Past both limits: with no request stuck, the writer is waited out.
+            opens: Some(Box::pin(tokio::time::sleep(KILL_GRACE))),
+            written: Arc::clone(&written),
+        };
+        let (queue, responses) = mpsc::unbounded_channel();
+        let output = Replies(queue);
+        let writer = tokio::spawn(write_replies(stdout, responses));
+        let mut requests = tokio::task::JoinSet::new();
+        let replying = output.clone();
+        requests.spawn(async move { replying.send(Response::ok("done", json!({}))) });
+        assert_eq!(drain(&mut requests, output, writer).await, Drained::All);
+        let written = String::from_utf8(written.lock().unwrap().clone()).unwrap();
+        assert_eq!(written.lines().count(), 1, "{written}");
+        assert!(written.contains("\"id\":\"done\""), "{written}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exit_wait_ends_when_the_writer_already_stopped() {
+        let (queue, responses) = mpsc::unbounded_channel();
+        drop(responses);
+        let mut requests = tokio::task::JoinSet::new();
+        requests.spawn(std::future::pending::<()>());
+        let writer = tokio::spawn(async {});
+        let started = tokio::time::Instant::now();
+        let drained = drain(&mut requests, Replies(queue), writer).await;
+        assert_eq!(drained, Drained::Stuck);
+        // No flush wait for a writer that is gone.
+        assert_eq!(started.elapsed(), EXIT_JOIN_LIMIT);
+    }
 
     fn node() -> NodeSnapshot {
         NodeSnapshot {
