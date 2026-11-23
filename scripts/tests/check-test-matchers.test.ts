@@ -167,7 +167,7 @@ test("leaves a name alone unless one const binding in scope holds it (#1302)", a
 		"const { picked } = { picked: /g/ };",
 		"const loop = { m: loop }, ping = pong, pong = ping;",
 		"const spread = /h/;",
-		"namespace N { const spaced = /i/; expect(x).toMatchObject({ m: spaced }); }",
+		"namespace N { export const own = /i/; expect(x).toMatchObject({ m: own }); }",
 		"declare const ambient: RegExp;",
 		"expect(x).toMatchObject({ m: early });",
 		"{ const early = /j/; }",
@@ -222,11 +222,61 @@ test("does not follow a const past a nearer binding of the name it does not mode
 		"{ let expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 		"{ { const expected = 'ok'; } with (o) { expect(x).toMatchObject({ m: expected }); } }",
 		"{ const expected = /d/; const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
+		"function g() { for (var expected of []) {} expect(x).toMatchObject({ m: expected }); }",
+		"function g() { { var { expected } = { expected: 'ok' }; } expect(x).toMatchObject({ m: expected }); }",
+		"namespace N { export const { expected } = { expected: 'ok' }; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"declare namespace N { const expected = 'ok'; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"declare namespace N { const expected = { m: /x/ }; const used = expect(x).toMatchObject(expected); }",
+		"namespace N { const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 	];
 	const control = "{ { const expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }";
 	const found = [];
 	for (const body of [control, ...cases]) found.push(...(await scan(`const expected = /a/;\n${body}`)));
 	expect(found).toEqual(["a.test.ts:1:18: bare /a/ in toMatchObject via `expected` at 2:59"]);
+});
+
+test("follows a local namespace-block const and scopes catch, for header and destructured bindings exactly (#1334)", async () => {
+	const source = [
+		"namespace N { const spaced = /i/; expect(x).toMatchObject({ m: spaced }); }",
+		"namespace O.P { const deep = /q/; expect(x).toMatchObject({ m: deep }); }",
+		"const caught = /c/;",
+		"try {} catch (caught) {} try {} catch ({ caught }) {}",
+		"const header = /h/;",
+		"for (let header = 0; ; ) break; for (const header in {}); for (const { header } of []); for (using header of []);",
+		"const picked = /p/;",
+		"{ const { picked } = { picked: 'ok' }; } switch (k) { case 1: let [picked] = []; } namespace Q { const { picked } = {}; }",
+		"for (const body of [1]) { const body = /b/; expect(x).toMatchObject({ m: body }); }",
+		"expect(x).toMatchObject({ m: caught, header, picked });",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:30: bare /i/ in toMatchObject via `spaced` at 1:64",
+		"a.test.ts:2:30: bare /q/ in toMatchObject via `deep` at 2:64",
+		"a.test.ts:9:40: bare /b/ in toMatchObject via `body` at 9:74",
+		"a.test.ts:3:16: bare /c/ in toMatchObject via `caught` at 10:30",
+		"a.test.ts:5:16: bare /h/ in toMatchObject via `header` at 10:38",
+		"a.test.ts:7:16: bare /p/ in toMatchObject via `picked` at 10:46",
+	]);
+});
+
+test("vetoes a const only for writes inside its scope (#1334)", async () => {
+	const source = [
+		'test("a", () => { const expected = { m: /x/ }; expect(a).toMatchObject(expected); });',
+		'test("b", () => { const expected = { m: /y/ }; expected.m = "ok"; expect(b).toMatchObject(expected); });',
+		"const outer = { m: /o/ };",
+		"function f(outer) { outer.m = 'ok'; }",
+		"const looped = { m: /l/ }; for (looped.m of ['ok']); for (const each in looped);",
+		"const each = { m: /e/ }, keyed = { m: /k/ }; for (keyed.k in { a: 1 });",
+		"expect(x).toMatchObject({ outer, looped, each, keyed });",
+		// The pattern records the later `expected.z` before the walk reaches the earlier write inside the arrow.
+		"[x[(() => { const expected = { m: /w/ }; expected.m = 'ok'; expect(a).toMatchObject(expected); })()], expected.z] = [];",
+	].join("\n");
+	// `outer` stays vetoed: the write inside its scope hits a parameter, but resolving writes would add machinery.
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:41: bare /x/ in toMatchObject via `expected` at 1:72",
+		"a.test.ts:6:19: bare /e/ in toMatchObject via `each` at 7:42",
+	]);
+	// A write at position 0 starts exactly where the file scope does.
+	expect(await scan("expected.m = 'ok'; const expected = { m: /s/ }; expect(x).toMatchObject(expected);")).toEqual([]);
 });
 
 test("skips arguments across a function and the object of a with statement (#1315)", async () => {
@@ -250,6 +300,19 @@ test("resolves many sibling tests reusing one name without rescanning every decl
 	expect(found).toHaveLength(200);
 	expect(found[0]).toBe("a.test.ts:1:41: bare /r/ in toMatchObject via `expected` at 1:72");
 	expect(found[199]).toBe("a.test.ts:399:43: bare /r/ in toMatchObject via `expected` at 399:74");
+});
+
+test("vetoes per scope across many sibling tests that each write their own name (#1334)", async () => {
+	// Pins behavior, not complexity: the per-use write lookup is a binary search, a linear scan gives the same findings.
+	const lines = [];
+	for (let index = 0; index < 400; index++) {
+		const write = index % 2 === 0 ? " expected.n = 1;" : "";
+		lines.push(`test("${index}", () => { const expected = { m: /r/ };${write} expect(a).toMatchObject(expected); });`);
+	}
+	const found = await scan(lines.join("\n"));
+	expect(found).toHaveLength(200);
+	expect(found[0]).toBe("a.test.ts:2:41: bare /r/ in toMatchObject via `expected` at 2:72");
+	expect(found[199]).toBe("a.test.ts:400:43: bare /r/ in toMatchObject via `expected` at 400:74");
 });
 
 /** `const a0 = /x/` and `depth` levels of `const aN = [aN-1, aN-1]`, matched on the last: 2^depth paths, one regex. */
