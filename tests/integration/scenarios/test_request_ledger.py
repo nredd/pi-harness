@@ -39,6 +39,26 @@ NOTE = "Fixture extension note"
 EXTENSION = "extension:ledger-fixture"
 
 
+def _parent_context(user: str) -> str:
+    """Render the parent context `inherit_context` prepends, from the parent's observed user text.
+
+    Mirrors `buildParentContext` in `packages/subagents/src/context.ts`: the scripted parent turn has
+    one user prompt and a text-free `Agent` tool call; the hidden custom note is not a session message.
+
+    Parameters:
+        user (str): the parent's first user text, as observed on its first wire request.
+
+    Returns:
+        str: exact rendered context, followed on the wire by the child task prompt with no separator.
+    """
+    return (
+        "# Parent Conversation Context\n"
+        "The following is the conversation history from the parent session that spawned you.\n"
+        "Use this context to understand what has been discussed and decided so far.\n\n"
+        f"[User]: {user.strip()}\n\n---\n# Your Task (below)\n"
+    )
+
+
 def _capture(box: Sandbox) -> tuple[list[RecordedRequest], list[dict[str, Any]]]:
     """Run the actual installed stack and one built-in child through the native adapter.
 
@@ -129,6 +149,12 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
         tuple[list[dict[str, Any]], list[Ledger]]: original rows and normalized comparison.
     """
     requests, evidence = _capture(box)
+    parent = requests[0].body
+    assert isinstance(parent, dict)
+    observed = parent["messages"][0]["content"]
+    observed = observed if isinstance(observed, str) else observed[0]["text"]
+    assert observed == SPAWN, observed
+    context = _parent_context(observed)
     rows: list[dict[str, Any]] = []
     stable_rows: list[Ledger] = []
     for index, request in enumerate(requests):
@@ -139,12 +165,12 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
             for tool in metadata.get("tools", [])
         }
         provenance = metadata.get("provenance", {})
-        prefixes = inherited_prefix(request.raw_body, CHILD_PROMPT) if child else {}
+        inherited = inherited_prefix(request.raw_body, context, CHILD_PROMPT) if child else None
         ledger = request_ledger(
             request.raw_body,
             owners=owners,
             provenance=provenance,
-            prefixes=prefixes,
+            inherited=inherited,
             previous=requests[index - 1].raw_body if index else None,
             parent=requests[0].raw_body if child else None,
         )
@@ -154,11 +180,8 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
         # The probe's note is one hidden custom message: on the wire it is a plain user block.
         assert ledger["buckets"].get(EXTENSION) == (None if child else len(NOTE.encode()))
         if child:
-            inherited = next(iter(prefixes))
-            assert inherited.startswith("# Parent Conversation Context\n"), inherited
-            assert f"[User]: {SPAWN}" in inherited, inherited
             assert ledger["buckets"]["inherited_context"] == len(
-                json.dumps(inherited, ensure_ascii=False)[1:-1].encode()
+                json.dumps(context, ensure_ascii=False)[1:-1].encode()
             )
             assert ledger["buckets"]["user"] == len(CHILD_PROMPT.encode())
         else:
@@ -178,7 +201,7 @@ def _measure(box: Sandbox, run: int) -> tuple[list[dict[str, Any]], list[Ledger]
                 stable,
                 owners=owners,
                 provenance={_normalized(value, box): category for value, category in provenance.items()},
-                prefixes=inherited_prefix(stable, CHILD_PROMPT) if child else {},
+                inherited=inherited_prefix(stable, context, CHILD_PROMPT) if child else None,
                 previous=_normalized(requests[index - 1].raw_body, box) if index else None,
                 parent=_normalized(requests[0].raw_body, box) if child else None,
             )

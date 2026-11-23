@@ -2,8 +2,8 @@
 
 Only explicit wire structure or exact caller-supplied provenance is attributed.
 The wire adapter erases custom-message types; absent provenance remains shared.
-Exact caller-supplied text prefixes split one text block, e.g. inherited parent
-context that a subagent prepends to its own task prompt.
+Exact caller-supplied text prefixes split one text block; inherited parent context
+that a subagent prepends to its own task prompt is verified and bound to that block.
 JSON envelope syntax and control fields are serialization overhead. Tool objects,
 call arguments and result values are indivisible serialized components, including
 their internal syntax. XML sections count their escaped contents and tags, not
@@ -333,6 +333,8 @@ class _Attributor:
         owners: dict[str, str],
         provenance: dict[str, str],
         prefixes: dict[str, str],
+        *,
+        inherited: InheritedContext | None = None,
     ) -> None:
         """Bind the indexed body and attribution inputs.
 
@@ -342,12 +344,14 @@ class _Attributor:
             owners (dict[str, str]): tool name -> owner label.
             provenance (dict[str, str]): validated exact text -> category.
             prefixes (dict[str, str]): validated exact text prefix -> category, longest first.
+            inherited (InheritedContext | None): verified parent context, re-verified against this body.
         """
         self.nodes = nodes
         self.raw = raw
         self.owners = owners
         self.provenance = provenance
         self.prefixes = dict(sorted(prefixes.items(), key=lambda item: -len(item[0])))
+        self.inherited = inherited
         self.collector = SpanCollector(raw)
         self.calls: dict[str, str] = {}
 
@@ -548,6 +552,15 @@ class _Attributor:
             value = block.get("text", "")
             default = "compaction_summary" if value.startswith(SUMMARY_PREFIX) else category
             exact = self.provenance.get(value)
+            bound = self.inherited
+            if bound is not None and bound.path == path:
+                self.text(
+                    path if bare else (*path, "text"),
+                    default,
+                    system=system,
+                    prefix=(bound.context, "inherited_context"),
+                )
+                return
             prefix = (
                 None
                 if exact is not None
@@ -576,38 +589,63 @@ class _Attributor:
             self.claim(path, "shared")
 
 
-def inherited_prefix(raw: str, prompt: str) -> dict[str, str]:
-    """Name the exact parent context a child prepended to the task prompt its caller passed.
+@dataclass(frozen=True)
+class InheritedContext:
+    """Verified parent context bound to the one child text block that carries it.
 
-    `inherit_context` renders the parent history into the child's first user text block, then
-    appends the task prompt. The caller knows that prompt, so every character before it is exact
-    `inherited_context`; nothing is inferred from the rendered history itself.
+    Attributes:
+        path (tuple[str | int, ...]): structural path of that block, or of bare string content.
+        context (str): exact rendered parent context, charged to `inherited_context`.
+        prompt (str): exact task prompt that follows `context` with no separator.
+    """
+
+    path: tuple[str | int, ...]
+    context: str
+    prompt: str
+
+
+def inherited_prefix(raw: str, context: str, prompt: str) -> InheritedContext:
+    """Bind independently observed parent context to the child block that must equal it plus the task.
+
+    `inherit_context` renders the parent history (`buildParentContext` in
+    `packages/subagents/src/context.ts`, ending `# Your Task (below)\\n`) and appends the task prompt
+    with no separator. The caller renders `context` from what it observed on the parent's request and
+    knows `prompt`, so the child's first user text block must be exactly `context + prompt`; a merely
+    matching suffix proves nothing.
 
     Parameters:
         raw (str): the child's first recorded request body.
-        prompt (str): the exact task prompt the caller passed to the child.
+        context (str): exact rendered parent context the caller observed, not read from `raw`.
+        prompt (str): exact task prompt the caller passed to the child.
 
     Returns:
-        dict[str, str]: one leading text -> `inherited_context`, for `request_ledger(prefixes=...)`.
+        InheritedContext: the verified block path and texts, for `request_ledger(inherited=...)`.
 
     Raises:
-        ValueError: `prompt` is empty, or the first user message's first text does not end with
-            `prompt` after a non-empty context, e.g. no user message, a non-text first block or a
-            different task.
+        ValueError: `context` or `prompt` is empty, or the first user message's first text is not
+            exactly `context + prompt`, e.g. no user message, a non-text first block, a shared suffix
+            without that context or extra text around it.
     """
     messages = json.loads(raw).get("messages", [])
-    content = next((message.get("content") for message in messages if message.get("role") == "user"), None)
-    block = content[0] if isinstance(content, list) and content else None
-    text = (
-        content
-        if isinstance(content, str)
-        else block.get("text")
-        if isinstance(block, dict) and block.get("type") == "text"
-        else None
+    index, content = next(
+        (
+            (number, message.get("content"))
+            for number, message in enumerate(messages)
+            if message.get("role") == "user"
+        ),
+        (0, None),
     )
-    if not prompt or not isinstance(text, str) or not text.endswith(prompt) or text == prompt:
-        raise ValueError("Child task prompt does not follow inherited parent context")
-    return {text[: -len(prompt)]: "inherited_context"}
+    path: tuple[str | int, ...] = ("messages", index, "content")
+    if (
+        isinstance(content, list)
+        and content
+        and isinstance(content[0], dict)
+        and content[0].get("type") == "text"
+    ):
+        path, content = (*path, 0), content[0].get("text")
+    if not context or not prompt or content != context + prompt:
+        raise ValueError("Child first user text is not the observed parent context then the task prompt")
+    return InheritedContext(path, context, prompt)
 
 
 def request_ledger(
@@ -616,6 +654,7 @@ def request_ledger(
     owners: dict[str, str] | None = None,
     provenance: dict[str, str] | None = None,
     prefixes: dict[str, str] | None = None,
+    inherited: InheritedContext | None = None,
     previous: str | None = None,
     parent: str | None = None,
     sdk: bool = False,
@@ -632,6 +671,8 @@ def request_ledger(
             known category, the rest of the block keeping its default; exact `provenance` wins and
             the longest prefix applies. Top-level `system` blocks and SDK `sections` never match;
             tagged sections in a native system delta's remainder keep their own buckets.
+        inherited (InheritedContext | None): verified parent context from `inherited_prefix`, charged
+            to `inherited_context` in its bound block only; other blocks never match it.
         previous (str | None): preceding recorded request, original body.
         parent (str | None): spawning parent's request, original body.
         sdk (bool): account for a faux factory transcript instead of an Anthropic wire body.
@@ -641,10 +682,14 @@ def request_ledger(
 
     Raises:
         ValueError: invalid, non-object or duplicate-key JSON, an invalid provenance or prefix
-            category, an empty prefix text, or spans that are out of bounds or overlap.
+            category, an empty prefix text, an `inherited` binding whose context and prompt are not
+            this body's first user text or whose block path differs, or spans that are out of
+            bounds or overlap.
         KeyError: a required structural field is missing, such as SDK `messages` or message `content`.
         UnicodeError: the body cannot be represented as UTF-8.
     """
+    if inherited is not None and inherited_prefix(raw, inherited.context, inherited.prompt) != inherited:
+        raise ValueError("`inherited` is bound to another block")
     categories = _categories(provenance or {})
     if "" in (prefixes or {}):
         raise ValueError("Empty `prefixes` text would match every block")
@@ -652,7 +697,7 @@ def request_ledger(
     nodes = _nodes(raw)
     body = nodes[()].value
     encoded = raw.encode()
-    attributor = _Attributor(nodes, raw, owners or {}, categories, leading)
+    attributor = _Attributor(nodes, raw, owners or {}, categories, leading, inherited=inherited)
     if sdk:
         tools = attributor.sdk_messages(body)
     else:
