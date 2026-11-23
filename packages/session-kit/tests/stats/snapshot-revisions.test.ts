@@ -366,6 +366,8 @@ it.each(["deleted state", "moved outbox"])(
 		}
 		const snapshotDir = join(target, "machines", basename(first.snapshotDir));
 		for (let i = 0; i < 2; i++) {
+			// Past every earlier export instant, so no clock warning joins the expected ones.
+			vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + 1000 * (i + 1));
 			seed(9 + i);
 			const result = await exportStats(agent, target);
 			expect(readdirSync(snapshotDir)).toContain(original.file);
@@ -1206,71 +1208,80 @@ it("keeps unidentified legacy events stable across repeated sealed-month exports
 
 it("clock rollback preserves sealed history", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
+	const call = (day: string, input: number) =>
+		assistantLine({ ms: at(day), provider: "physical", model: "fixture", input });
 	vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
-	sessionFile(path, {
-		startMs: at("2026-10-20"),
-		lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
-	});
+	sessionFile(path, { startMs: at("2026-10-20"), lines: [call("2026-10-20", 7)] });
 	const first = await exportStats(agent, out);
 	// November seals October; the archived call then exists only in published history.
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
 	await exportStats(agent, out);
-	const sealed = readFileSync(join(first.snapshotDir, "manifest.json"));
-	const files = readdirSync(first.snapshotDir).sort();
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const sealed = manifest(first.snapshotDir).shards.map((ref) => ref.file);
 	rmSync(path);
 	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+	// Back in October, a new call: published just after the November export, October stays sealed.
 	vi.mocked(Date.now).mockReturnValue(at("2026-10-25"));
-	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
-	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(sealed);
-	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	sessionFile(join(agent, "sessions", "late.jsonl"), { startMs: at("2026-10-25"), lines: [call("2026-10-25", 8)] });
+	const behind = await exportStats(agent, out);
+	expect(behind.warnings).toEqual([
+		`clock is behind the last published export (${new Date(at("2026-10-25")).toISOString()} < ` +
+			`${new Date(at("2026-11-02")).toISOString()}); published at ${new Date(at("2026-11-02") + 1).toISOString()} instead`,
+	]);
+	const after = manifest(first.snapshotDir);
+	expect(after.exportedAt).toBe(at("2026-11-02") + 1);
+	expect(after.shards.map((ref) => ref.file)).toEqual(expect.arrayContaining(sealed));
+	// A viewer holding the November snapshot takes this one as newer, without losing the archived call.
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	expect((await loadCombined(viewer)).calls.map((call) => call.input)).toEqual([7]);
-	// An explicit replacement is the owner's way past a clock that ran ahead.
+	expect((await loadCombined(viewer)).calls.map((c) => c.input).sort()).toEqual([7, 8]);
+	// An explicit replacement is monotonic too: viewers import it, and it drops what the scan lacks.
 	await exportStats(agent, out, undefined, { replaceHarnesses: true });
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-10-25"));
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 2);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((c) => c.input)).toEqual([8]);
 });
 
-it("refuses a same-month clock rollback before the scan, salt or bookkeeping can write", async () => {
+it("publishes a same-month clock rollback strictly after the last published export", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (input: number) =>
 		assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input });
 	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7)] });
 	const first = await exportStats(agent, out);
-	// Exact equality is not a rollback.
-	await exportStats(agent, out);
-	const files = (): Record<string, Buffer | undefined> => {
-		const read = (file: string) => {
-			try {
-				return readFileSync(file);
-			} catch {
-				return undefined;
-			}
-		};
-		return {
-			cache: read(join(agent, "pi-session-kit", "stats-cache.json")),
-			salt: read(join(agent, "pi-session-kit", "export-state.json")),
-			bookkeeping: read(outboxStatePath(agent, first.snapshotDir)),
-			manifest: read(join(first.snapshotDir, "manifest.json")),
-		};
-	};
-	// A changed transcript would make the loader rewrite its cache, and a missing salt would be created.
-	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7), line(8)] });
-	rmSync(join(agent, "pi-session-kit", "export-state.json"));
-	const before = files();
-	expect(before.cache && before.bookkeeping && before.manifest && !before.salt).toBeTruthy();
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
-	const behind = new Date(at("2026-11-02") - 1).toISOString();
-	const published = new Date(at("2026-11-02")).toISOString();
-	await expect(exportStats(agent, out)).rejects.toThrow(
-		`Clock is behind the last published export (${behind} < ${published}); refusing to reopen sealed months. ` +
-			"Fix the clock, or pass --replace-harnesses to publish anyway: that drops sealed history absent from " +
-			"this scan, and viewers that imported the newer snapshot keep it and never import this replacement; they " +
-			`accept this machine again only from a later export timestamped at or after ${published}`,
-	);
-	expect(files()).toEqual(before);
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
-	await exportStats(agent, out);
 	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02"));
+	// Exporting again within the same millisecond is not a clock problem: no warning, still strictly later.
+	expect((await exportStats(agent, out)).warnings).toBeUndefined();
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7), line(8)] });
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
+	const behind = await exportStats(agent, out);
+	expect(behind.warnings?.[0]).toMatch(/^clock is behind the last published export/);
+	expect(manifest(first.snapshotDir)).toMatchObject({
+		exportedAt: at("2026-11-02") + 2,
+		lastGoodAt: { pi: at("2026-11-02") + 2 },
+	});
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	expect((await loadCombined(viewer)).calls.map((c) => c.input).sort()).toEqual([7, 8]);
+	// A clock past the published export publishes its own instant again.
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	expect((await exportStats(agent, out)).warnings).toBeUndefined();
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-03"));
+});
+
+it("keeps a replacement over damaged history monotonic", async () => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-11-01"),
+		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+	});
+	const first = await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const shard = manifest(first.snapshotDir).shards[0];
+	if (!shard) throw new Error("Missing shard");
+	writeFileSync(join(first.snapshotDir, shard.file), "corrupt");
+	vi.mocked(Date.now).mockReturnValue(at("2026-11-01"));
+	await exportStats(agent, out, undefined, { replaceHarnesses: true });
+	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 });
 
 it("checks and publishes one export instant taken before the published manifest is read", async () => {
@@ -1289,7 +1300,11 @@ it("checks and publishes one export instant taken before the published manifest 
 		});
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
 	advanceDuringRead(at("2026-11-03"));
-	await expect(exportStats(agent, out)).rejects.toThrow("Clock is behind the last published export");
+	expect((await exportStats(agent, out)).warnings?.[0]).toMatch(/^clock is behind the last published export/);
+	expect(manifest(first.snapshotDir)).toMatchObject({
+		exportedAt: at("2026-11-02") + 1,
+		lastGoodAt: { pi: at("2026-11-02") + 1 },
+	});
 	vi.mocked(Date.now).mockReturnValue(at("2026-11-04"));
 	advanceDuringRead(at("2026-11-05"));
 	await exportStats(agent, out);

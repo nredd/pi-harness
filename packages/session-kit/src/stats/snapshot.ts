@@ -790,10 +790,10 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 export interface ExportOptions {
 	harnesses?: readonly Harness[];
 	/**
-	 * Publish this scan as a replacement generation. Bypasses the narrower-set, clock-rollback,
-	 * unreadable-history and missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
-	 * from the scan, sealed months included. Viewers holding a newer snapshot never import the replacement;
-	 * they accept this machine again only from a later export timestamped at or after the snapshot they hold.
+	 * Publish this scan as a replacement generation. Bypasses the narrower-set, unreadable-history and
+	 * missing-manifest safeguards and clears frozen recovery files, so it drops published history absent
+	 * from the scan, sealed months included. Like any export it is timestamped after the readable published
+	 * manifest, so viewers import it; without one, viewers holding a newer snapshot keep their copy.
 	 */
 	replaceHarnesses?: boolean;
 	roots?: Partial<HarnessRoots>;
@@ -837,10 +837,12 @@ type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unread
 
 /**
  * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
- * invalid), and the first authenticated shard the expansion budget could not hold.
+ * invalid), the first authenticated shard the expansion budget could not hold, and the manifest's own
+ * `exportedAt`, which still bounds the next publication instant.
  */
 interface Damaged {
 	damaged: string[];
+	exportedAt: number;
 	overBudget?: string;
 }
 
@@ -868,11 +870,11 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 			else overBudget ??= ref.file;
 		}
 	}
-	if (damaged.length > 0 || overBudget !== undefined) return { damaged, overBudget };
+	if (damaged.length > 0 || overBudget !== undefined) return { damaged, overBudget, exportedAt: manifest.exportedAt };
 	try {
 		validateSnapshot({ manifest, shards });
 	} catch {
-		return { damaged: [] };
+		return { damaged: [], exportedAt: manifest.exportedAt };
 	}
 	return { manifest, shards, expandedSizes };
 }
@@ -1147,24 +1149,29 @@ async function publishStats(
 	identity: Identity,
 ): Promise<ExportResult> {
 	const wanted = new Set<Harness>(options.harnesses ?? ["pi"]);
-	// One instant, taken first, is both checked and published.
-	const exportedAt = Date.now();
+	// The wall clock is read once, first, so the manifest read cannot move it.
+	const now = Date.now();
 	const loadedPrevious = await loadPrevious(snapshotDir);
 	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
-	// Sealing follows the wall clock: behind the published export, months it sealed would reopen as
-	// the active month, be replaced by the scan and pruned. Refuse before the salt, the scan cache or any
-	// bookkeeping can be written.
-	const publishedAt = previous !== null && previous !== "unreadable" ? previous.manifest.exportedAt : 0;
-	if (exportedAt < publishedAt && !options.replaceHarnesses) {
-		const published = new Date(publishedAt).toISOString();
-		throw new Error(
-			`Clock is behind the last published export (${new Date(exportedAt).toISOString()} < ${published}); ` +
-				"refusing to reopen sealed months. Fix the clock, or pass --replace-harnesses to publish anyway: " +
-				"that drops sealed history absent from this scan, and viewers that imported the newer snapshot keep " +
-				"it and never import this replacement; they accept this machine again only from a later export " +
-				`timestamped at or after ${published}`,
-		);
-	}
+	// The publication instant is monotonic over the readable manifest: strictly after the last published
+	// export, even when this clock is behind it. Sealing follows that instant, so months the published
+	// export sealed stay sealed (never reopened, replaced by the scan and pruned), and viewers holding the
+	// published snapshot accept this one as newer. Without a readable manifest there is nothing to follow.
+	const publishedAt =
+		loadedPrevious === null || loadedPrevious === "unreadable"
+			? 0
+			: "damaged" in loadedPrevious
+				? loadedPrevious.exportedAt
+				: loadedPrevious.manifest.exportedAt;
+	const exportedAt = Math.max(now, publishedAt + 1);
+	// Exporting twice within one millisecond is not a clock problem; only a clock behind it is reported.
+	const clockWarning =
+		now < publishedAt
+			? [
+					`clock is behind the last published export (${new Date(now).toISOString()} < ` +
+						`${new Date(publishedAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
+				]
+			: [];
 	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
 	// stale recovery state over this one's.
 	const statePath = await outboxStateFile(dir, snapshotDir);
@@ -1223,7 +1230,7 @@ async function publishStats(
 	}
 	const external = EXTERNAL_HARNESSES.filter((h) => wanted.has(h));
 	const scans = await loadHarnesses({
-		now: exportedAt,
+		now,
 		harnesses: external,
 		roots: options.roots,
 		env: options.env,
@@ -1392,7 +1399,8 @@ async function publishStats(
 	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
-	const warnings = recoveryPending ? ["recovery files retained: explicit replacement required"] : [];
+	const warnings = [...clockWarning];
+	if (recoveryPending) warnings.push("recovery files retained: explicit replacement required");
 	if (unaccounted.length > 0)
 		warnings.push(
 			`no bookkeeping for this outbox: froze ${unaccounted.length} unaccounted shard files as recovery files; ` +

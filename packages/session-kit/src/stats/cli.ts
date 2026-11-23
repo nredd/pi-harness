@@ -12,9 +12,9 @@ const USAGE =
 	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO | " +
 	"subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
 	"  --replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
-	"clock-rollback, unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
-	"published history absent from the scan (sealed months included), and viewers holding a newer snapshot never import it; " +
-	"they accept this machine again only from a later export timestamped at or after the snapshot they hold";
+	"unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
+	"published history absent from the scan (sealed months included). Without a readable published manifest, " +
+	"viewers holding a newer snapshot keep it until this machine exports a later one";
 const FLAGS = [
 	"--agent-dir",
 	"--output",

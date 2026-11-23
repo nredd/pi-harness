@@ -1025,12 +1025,12 @@ describe("exportStats with harnesses", () => {
 				JSON.stringify({ ...base, exportedAt: ahead, lastGoodAt: { opencode: ahead } }),
 			);
 			const options = { harnesses: ["pi", "opencode"] as Harness[], roots, home, loadSqlite: busyDb(roots) };
-			// A clock behind the published export would reopen sealed months: only explicit replacement proceeds.
-			await expect(exportStats(agent, repo, undefined, options)).rejects.toThrow("Clock is behind");
-			const result = await exportStats(agent, repo, undefined, { ...options, replaceHarnesses: true });
+			// A clock behind the published export publishes just after it, so the carried mark stays before it.
+			const result = await exportStats(agent, repo, undefined, options);
 			const m = manifestOf(result.snapshotDir);
-			expect(m.exportedAt).toBeLessThan(ahead);
-			expect(m.lastGoodAt?.opencode).toBe(m.exportedAt);
+			expect(m.exportedAt).toBe(ahead + 1);
+			expect(m.lastGoodAt?.opencode).toBe(ahead);
+			expect(result.warnings?.[0]).toMatch(/^clock is behind the last published export/);
 			expect(() => validateManifest(m)).not.toThrow();
 		});
 
