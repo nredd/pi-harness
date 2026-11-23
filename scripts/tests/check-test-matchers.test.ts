@@ -167,7 +167,7 @@ test("leaves a name alone unless one const binding in scope holds it (#1302)", a
 		"const { picked } = { picked: /g/ };",
 		"const loop = { m: loop }, ping = pong, pong = ping;",
 		"const spread = /h/;",
-		"namespace N { const spaced = /i/; expect(x).toMatchObject({ m: spaced }); }",
+		"namespace N { export const own = /i/; expect(x).toMatchObject({ m: own }); }",
 		"declare const ambient: RegExp;",
 		"expect(x).toMatchObject({ m: early });",
 		"{ const early = /j/; }",
@@ -222,11 +222,56 @@ test("does not follow a const past a nearer binding of the name it does not mode
 		"{ let expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 		"{ { const expected = 'ok'; } with (o) { expect(x).toMatchObject({ m: expected }); } }",
 		"{ const expected = /d/; const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
+		"function g() { for (var expected of []) {} expect(x).toMatchObject({ m: expected }); }",
+		"function g() { { var { expected } = { expected: 'ok' }; } expect(x).toMatchObject({ m: expected }); }",
+		"namespace N { export const { expected } = { expected: 'ok' }; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"declare namespace N { const expected: string; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"namespace N { const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
 	];
 	const control = "{ { const expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }";
 	const found = [];
 	for (const body of [control, ...cases]) found.push(...(await scan(`const expected = /a/;\n${body}`)));
 	expect(found).toEqual(["a.test.ts:1:18: bare /a/ in toMatchObject via `expected` at 2:59"]);
+});
+
+test("follows a local namespace-block const and scopes catch, for header and destructured bindings exactly (#1334)", async () => {
+	const source = [
+		"namespace N { const spaced = /i/; expect(x).toMatchObject({ m: spaced }); }",
+		"namespace O.P { const deep = /q/; expect(x).toMatchObject({ m: deep }); }",
+		"const caught = /c/;",
+		"try {} catch (caught) {} try {} catch ({ caught }) {}",
+		"const header = /h/;",
+		"for (let header = 0; ; ) break; for (const header in {}); for (const { header } of []); for (using header of []);",
+		"const picked = /p/;",
+		"{ const { picked } = { picked: 'ok' }; } switch (k) { case 1: let [picked] = []; } namespace Q { const { picked } = {}; }",
+		"for (const body of [1]) { const body = /b/; expect(x).toMatchObject({ m: body }); }",
+		"expect(x).toMatchObject({ m: caught, header, picked });",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:30: bare /i/ in toMatchObject via `spaced` at 1:64",
+		"a.test.ts:2:30: bare /q/ in toMatchObject via `deep` at 2:64",
+		"a.test.ts:9:40: bare /b/ in toMatchObject via `body` at 9:74",
+		"a.test.ts:3:16: bare /c/ in toMatchObject via `caught` at 10:30",
+		"a.test.ts:5:16: bare /h/ in toMatchObject via `header` at 10:38",
+		"a.test.ts:7:16: bare /p/ in toMatchObject via `picked` at 10:46",
+	]);
+});
+
+test("vetoes a const only for writes inside its scope (#1334)", async () => {
+	const source = [
+		'test("a", () => { const expected = { m: /x/ }; expect(a).toMatchObject(expected); });',
+		'test("b", () => { const expected = { m: /y/ }; expected.m = "ok"; expect(b).toMatchObject(expected); });',
+		"const outer = { m: /o/ };",
+		"function f(outer) { outer.m = 'ok'; }",
+		"const looped = { m: /l/ }; for (looped.m of ['ok']); for (const each in looped);",
+		"const each = { m: /e/ }, keyed = { m: /k/ }; for (keyed.k in { a: 1 });",
+		"expect(x).toMatchObject({ outer, looped, each, keyed });",
+	].join("\n");
+	// `outer` stays vetoed: the write inside its scope hits a parameter, but resolving writes would add machinery.
+	expect(await scan(source)).toEqual([
+		"a.test.ts:1:41: bare /x/ in toMatchObject via `expected` at 1:72",
+		"a.test.ts:6:19: bare /e/ in toMatchObject via `each` at 7:42",
+	]);
 });
 
 test("skips arguments across a function and the object of a with statement (#1315)", async () => {
