@@ -431,12 +431,15 @@ private final class FakeListing {
     }
 }
 
+/// `rootDelta` between two snapshots as sorted `"<change>:<ref>"` strings.
+private func refChanges(_ bridge: Bridge, _ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
+    bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
+}
+
 /// A failed pairing or identity read, injected below production classification, keeps the root out of `rootDelta`
 /// (#1287): a later successful read of the same field never vouches for the failed one.
 private func assertClassifiedIdentity(_ bridge: Bridge) {
-    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
-        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
-    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
     let doc = FakeRoot("doc")
     func paired(_ fail: [String: [Bool]] = [:]) -> FakeListing {
         let listing = FakeListing([doc])
@@ -512,14 +515,13 @@ private func assertClassifiedIdentity(_ bridge: Bridge) {
     expect(separated.entries.map { $0["windowId"] as? Int } == [7, 8], "a sheet with a CG window of its own pairs with it")
     expect(Set(separated.snapshot.roots.keys) == ["window:7", "window:8"] && separated.snapshot.complete, "exclusive claims key both roots by their CG window ids")
     assertContestedPairings(bridge)
+    assertStateReads(bridge)
 }
 
 /// One conservative rule (`contestedClaims`): a CG candidate claimed by more than one root, or by a root whose pairing
 /// read failed, keys none of its claimants, so neither the listing order nor an unread competitor moves an identity (#1287).
 private func assertContestedPairings(_ bridge: Bridge) {
-    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
-        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
-    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
     let frame = FakeListing.frame
     let titledDoc = CGWindowCandidate(windowId: 9, title: "Doc", bounds: frame, isOnscreen: false, layer: 0, zOrder: 0)
     let farFrame = CGRect(x: 0, y: 0, width: 800, height: 600)
@@ -576,15 +578,12 @@ private func assertContestedPairings(_ bridge: Bridge) {
     expect(Set(forward.snapshot.roots.keys) == ["window:7"] && Set(reverse.snapshot.roots.keys) == ["window:7"], "only the window keeps its identity")
     expect(!forward.snapshot.complete && !reverse.snapshot.complete, "the contested sheets leave both snapshots incomplete")
     expect(changes(forward.snapshot, reverse.snapshot).isEmpty && changes(reverse.snapshot, forward.snapshot).isEmpty, "reordering the sheets reports no change")
-    assertStateReads(bridge)
 }
 
 /// `AXFocused`, `AXMain` and `AXMinimized` are reported only as read (`RootState`): a failed read is left out, never
 /// `false`, so `rootDelta` never reports a focus change from it, and a sheet never reports its window's focus (#1303).
 private func assertStateReads(_ bridge: Bridge) {
-    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] {
-        bridge.rootSnapshotDelta(before: before, after: after, pid: 5).map { "\($0["change"] as? String ?? "?"):\($0["ref"] as? String ?? "?")" }.sorted()
-    }
+    func changes(_ before: RootInventorySnapshot, _ after: RootInventorySnapshot) -> [String] { refChanges(bridge, before, after) }
     func snapshot(_ roots: [String: [String: Any]]) -> RootInventorySnapshot { RootInventorySnapshot(roots: roots, complete: true) }
     let unread: [String: Any] = ["rootRef": "w"]
     let unfocused: [String: Any] = ["rootRef": "w", "isFocused": false]
