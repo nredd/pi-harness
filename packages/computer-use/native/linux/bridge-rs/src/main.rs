@@ -542,33 +542,43 @@ async fn look_root(
     Ok(json!({ "root": json }))
 }
 
-/// Run a blocking `read` on its own thread once `enrichment`'s slot is free, all within
-/// `enrichment.deadline`; `None` past it. Concurrent requests (e.g. one `listRoots` per
-/// app) take turns rather than fail. A read still blocked is left behind rather than
-/// awaited, so it cannot hold the reply, and keeps the slot until it returns, so a stuck X
-/// server never accumulates threads: later requests time out waiting, spawning none.
+/// Run a blocking `read` on its own thread once `enrichment`'s slot is free, all before one
+/// absolute deadline `enrichment.deadline` from the call; `None` past it. Concurrent
+/// requests (e.g. a look-root lookup and a `listRoots`) take turns rather than fail. A read
+/// still blocked is left behind rather than awaited, so it cannot hold the reply, and keeps
+/// the slot until it returns, so a stuck X server never accumulates threads: later requests
+/// time out waiting, spawning none.
+///
+/// A timer polls its future first, so a task resumed late can find the permit or the reply
+/// ready after the deadline passed: the deadline is checked again after the permit, before
+/// any spawn, and after the reply, which is refused once observed past it.
 async fn bounded<T: Send + 'static>(
     enrichment: &Enrichment,
     read: impl FnOnce() -> T + Send + 'static,
 ) -> Option<T> {
-    let listing = async {
-        let slot = enrichment.slot.acquire().await.ok()?;
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        // A failed spawn drops the closure, and the permit with it.
-        std::thread::Builder::new()
-            .name("x11-enrichment".into())
-            .spawn(move || {
-                let value = read();
-                drop(slot);
-                let _ = sender.send(value);
-            })
-            .ok()?;
-        receiver.await.ok()
-    };
-    tokio::time::timeout(enrichment.deadline, listing)
+    let deadline = tokio::time::Instant::now() + enrichment.deadline;
+    let in_time = || tokio::time::Instant::now() < deadline;
+    let slot = tokio::time::timeout_at(deadline, enrichment.slot.acquire())
         .await
-        .ok()
-        .flatten()
+        .ok()?
+        .ok()?;
+    if !in_time() {
+        return None;
+    }
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    // A failed spawn drops the closure, and the permit with it.
+    std::thread::Builder::new()
+        .name("x11-enrichment".into())
+        .spawn(move || {
+            let _ = sender.send(read());
+            drop(slot);
+        })
+        .ok()?;
+    let value = tokio::time::timeout_at(deadline, receiver)
+        .await
+        .ok()?
+        .ok()?;
+    in_time().then_some(value)
 }
 
 async fn resolve_root(
@@ -3632,22 +3642,25 @@ mod tests {
                 assert!(root["metadata"]["wmClass"].is_null());
 
                 // A stalled listing whose window has a blocked class never holds the reply,
-                // and never reads as a clean check (#1311).
+                // and never reads as a clean check (#1311): discovery replies while the
+                // stalled read still holds the listing slot.
                 let (release, stalled) = std::sync::mpsc::channel::<()>();
-                let started = Instant::now();
+                let stalling = enrichment(Duration::from_millis(50));
                 let root = list(
                     Box::new(move || {
-                        let _ = stalled.recv_timeout(Duration::from_secs(5));
+                        // A hang guard only: the reply must come while this read still blocks.
+                        let _ = stalled.recv_timeout(Duration::from_secs(60));
                         blocked()
                     }),
-                    enrichment(Duration::from_millis(50)),
+                    stalling,
                 )
                 .await;
-                assert!(started.elapsed() < Duration::from_secs(2));
+                assert_eq!(stalling.slot.available_permits(), 0);
                 assert_eq!(root["metadata"]["x11Pairing"], "unavailable");
                 assert!(root["metadata"]["wmClass"].is_null());
                 assert_eq!(root["blockAliases"], json!([]));
                 drop(release);
+                slot_freed(stalling);
 
                 // Discovery shares the look-root listing slot: while that listing is stuck, a
                 // listing spawns no thread and reports `unavailable`.
@@ -3700,7 +3713,53 @@ mod tests {
             async { release.send(()).unwrap() },
         );
         assert_eq!((first, second), (Some(Ok(1)), Some(Ok(2))));
-        assert_eq!(slot.slot.available_permits(), 1);
+        slot_freed(slot);
+    }
+
+    /// Wait for `enrichment`'s listing thread to release its slot, which it does after its
+    /// reply is sent.
+    fn slot_freed(enrichment: &Enrichment) {
+        let started = Instant::now();
+        while enrichment.slot.available_permits() == 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "slot never freed"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bounded_rejects_late_ready_result() {
+        // Polled by hand: the task is resumed only once its deadline and its permit or
+        // reply are both ready, and a timer polls its future first.
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let past = Duration::from_millis(51);
+
+        // The reply arrives in time but is read past the deadline: refused.
+        let slot = enrichment(Duration::from_millis(50));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let mut late = std::pin::pin!(bounded(slot, move || held.recv().map(|()| 7)));
+        assert!(late.as_mut().poll(&mut cx).is_pending());
+        release.send(()).unwrap();
+        slot_freed(slot);
+        tokio::time::advance(past).await;
+        assert_eq!(late.as_mut().poll(&mut cx), std::task::Poll::Ready(None));
+
+        // A queued request whose permit frees after its deadline spawns no listing.
+        let slot = enrichment(Duration::from_millis(50));
+        let busy = slot.slot.try_acquire().unwrap();
+        let spawned = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&spawned);
+        let mut queued = std::pin::pin!(bounded(slot, move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert!(queued.as_mut().poll(&mut cx).is_pending());
+        tokio::time::advance(past).await;
+        drop(busy);
+        assert_eq!(queued.as_mut().poll(&mut cx), std::task::Poll::Ready(None));
+        slot_freed(slot);
+        assert_eq!(spawned.load(Ordering::SeqCst), 0);
     }
 
     /// A bus connector for requests that must be refused before reaching AT-SPI.
