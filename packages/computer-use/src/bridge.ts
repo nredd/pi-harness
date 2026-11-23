@@ -406,6 +406,8 @@ interface WindowRefRecord {
 	windowTitle: string;
 	windowId?: number;
 	nativeWindowRef?: string;
+	/** See `CurrentTarget.rootKind`. */
+	rootKind?: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
 	isMinimized: boolean;
@@ -920,6 +922,7 @@ function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): Windo
 		windowTitle: window.title || "(untitled)",
 		windowId: window.windowId,
 		nativeWindowRef: window.windowRef,
+		rootKind: window.kind,
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -973,6 +976,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 		windowTitle: window.title || "(untitled)",
 		windowId: typeof window.windowId === "number" ? window.windowId : 0,
 		nativeWindowRef: window.windowRef,
+		rootKind: window.kind,
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -1009,6 +1013,7 @@ function setCurrentTarget(target: ResolvedTarget): void {
 		windowId: target.windowId,
 		windowRef: target.windowRef,
 		nativeWindowRef: target.nativeWindowRef,
+		rootKind: target.rootKind,
 	};
 }
 
@@ -2816,18 +2821,21 @@ function macosRefEpoch(ref: string): string | undefined {
  * Whether `root` is the saved root by its CG window id. One macOS helper process (one random hex epoch in its
  * `w<epoch>-<n>` refs) never gives two windows one ref nor one window two refs, so between refs of one epoch the
  * native ref decides: a shared window id (an older helper gave a sheet its window's) never stands in for another
- * root's ref. After a helper restart the epochs differ and the window id still re-identifies the root.
+ * root's ref. After a helper restart the epochs differ and the window id still re-identifies the root, but only as
+ * the same kind of root: a saved sheet's id never matches a window, nor a saved window's a sheet. A target saved
+ * without its kind (restored from a session file) keeps the id alone.
  */
 function windowIdIdentifies(
-	saved: { windowId?: number; nativeWindowRef?: string },
-	root: Pick<HelperWindow, "windowId" | "rootRef" | "windowRef">,
+	saved: { windowId?: number; nativeWindowRef?: string; rootKind?: string },
+	root: Pick<HelperWindow, "windowId" | "rootRef" | "windowRef" | "kind">,
 ): boolean {
 	if (!saved.windowId || saved.windowId <= 0 || root.windowId !== saved.windowId) return false;
 	const savedRef = saved.nativeWindowRef;
 	const rootRef = root.rootRef ?? root.windowRef;
-	if (!savedRef || !rootRef || rootRef === savedRef) return true;
-	const epoch = macosRefEpoch(savedRef);
-	return epoch === undefined || epoch !== macosRefEpoch(rootRef);
+	if (savedRef && rootRef === savedRef) return true;
+	const epoch = savedRef ? macosRefEpoch(savedRef) : undefined;
+	if (epoch !== undefined && rootRef && epoch === macosRefEpoch(rootRef)) return false;
+	return !saved.rootKind || (saved.rootKind === "sheet") === (root.kind === "sheet");
 }
 
 function clearDesktopOperationState(state: OperationState): void {
