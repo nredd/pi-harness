@@ -105,7 +105,7 @@ import {
 	UI_TEXT_PAGE_CHARS,
 } from "./output.ts";
 import type { PermissionStatus } from "./permissions.ts";
-import { toFiniteNumber } from "./platform/coerce.ts";
+import { toFiniteNumber, toOptionalBoolean } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import { LINUX_X11_CHECKED } from "./platform/linux/backend.ts";
 import type {
@@ -281,10 +281,11 @@ interface ListWindowsDetails {
 		nativeWindowRef?: string;
 		framePoints: FramePoints;
 		scaleFactor: number;
-		isMinimized: boolean;
-		isOnscreen: boolean;
-		isMain: boolean;
-		isFocused: boolean;
+		/** Unread state flags stay `undefined` (omitted from stored details), never `false`. */
+		isMinimized?: boolean;
+		isOnscreen?: boolean;
+		isMain?: boolean;
+		isFocused?: boolean;
 		isModal: boolean;
 		sheetCount?: number;
 		role?: string;
@@ -390,10 +391,10 @@ interface ResolvedTarget extends CurrentTarget {
 	windowRef: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
-	isMinimized: boolean;
-	isOnscreen: boolean;
-	isMain: boolean;
-	isFocused: boolean;
+	isMinimized?: boolean;
+	isOnscreen?: boolean;
+	isMain?: boolean;
+	isFocused?: boolean;
 }
 
 interface WindowRefRecord {
@@ -411,10 +412,10 @@ interface WindowRefRecord {
 	rootKind?: string;
 	framePoints: FramePoints;
 	scaleFactor: number;
-	isMinimized: boolean;
-	isOnscreen: boolean;
-	isMain: boolean;
-	isFocused: boolean;
+	isMinimized?: boolean;
+	isOnscreen?: boolean;
+	isMain?: boolean;
+	isFocused?: boolean;
 }
 
 interface RuntimeState {
@@ -470,6 +471,7 @@ const savedStates = new SavedStates();
 export const testing = {
 	assertBrowserTransactionAction,
 	savedState: (stateId: string) => savedStates.get(stateId),
+	storedRootRef: (ref: string) => runtimeState.windowRefs.get(ref),
 	runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn),
 	buildToolResult,
 	browserObservationResult,
@@ -621,10 +623,6 @@ function trimOrUndefined(value: string | undefined): string | undefined {
 
 function normalizeText(value: string): string {
 	return value.trim().toLowerCase();
-}
-
-function toBoolean(value: unknown): boolean {
-	return value === true;
 }
 
 function outlineNodeCenter(node: OutlineNode): { x: number; y: number } {
@@ -1796,7 +1794,7 @@ async function performListWindows(
 		.sort(
 			(a, b) =>
 				b.match!.score - a.match!.score ||
-				Number(b.root.isFocused) - Number(a.root.isFocused) ||
+				Number(b.root.isFocused === true) - Number(a.root.isFocused === true) ||
 				a.root.zOrder - b.root.zOrder ||
 				a.order - b.order,
 		);
@@ -4392,10 +4390,10 @@ export function reconstructStateFromBranch(ctx: ExtensionContext): void {
 						h: Math.max(1, toFiniteNumber(window.framePoints?.h, 1)),
 					},
 					scaleFactor: Math.max(1, toFiniteNumber(window.scaleFactor, 1)),
-					isMinimized: toBoolean(window.isMinimized),
-					isOnscreen: toBoolean(window.isOnscreen),
-					isMain: toBoolean(window.isMain),
-					isFocused: toBoolean(window.isFocused),
+					isMinimized: toOptionalBoolean(window.isMinimized),
+					isOnscreen: toOptionalBoolean(window.isOnscreen),
+					isMain: toOptionalBoolean(window.isMain),
+					isFocused: toOptionalBoolean(window.isFocused),
 				};
 				runtimeState.windowRefs.set(record.ref, record);
 				runtimeState.windowRefByIdentity.set(windowRecordIdentity(record), record.ref);
