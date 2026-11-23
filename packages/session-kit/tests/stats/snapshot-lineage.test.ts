@@ -153,6 +153,22 @@ describe("row lineage", () => {
 		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 44, 10, 10]);
 	});
 
+	it("keeps retired rows when sealed deltas compact past the cap", async () => {
+		await seal();
+		const rows = october();
+		for (let revision = 1; revision <= 40; revision++) {
+			// A late call extends the session end (one more session row per delta) beside each correction.
+			rows.push({ ms: utc("2026-10-06", revision), input: 1_000 + revision });
+			rows[2] = { ...(rows[2] as Row), output: 10 + revision };
+			transcript("a.jsonl", "a", rows);
+			await exportStats(agent, out);
+		}
+		expect(outbox().manifest.shards.filter((ref) => ref.month === "2026-10").length).toBeLessThanOrEqual(32);
+		expect(counted()).toHaveLength(45);
+		expect(retired()).toHaveLength(40);
+		expect(await viewed()).toHaveLength(45);
+	});
+
 	it("leaves a retired row retired when the scan reproduces it", async () => {
 		await seal();
 		transcript("a.jsonl", "a", october(1));
