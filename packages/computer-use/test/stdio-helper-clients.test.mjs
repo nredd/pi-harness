@@ -339,11 +339,16 @@ describe("Windows helper client", () => {
 		await assert.rejects(client.command("unversioned"), /expected 6, got unknown\./);
 	});
 
-	test("a command that gets no reply times out and a late reply is ignored", async () => {
+	test("a command that gets no reply times out as reply_lost and a late reply is ignored", async () => {
 		install();
 		const engine = envelope("Windows", { hang: silent() });
 		const { client, children } = await windows({ helper: { engine } });
-		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
+		// The request was written: the helper may have run it, so its effect is unknown (#1190).
+		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), (error) => {
+			assert.equal(error.message, "Helper command 'hang' timed out after 30ms.");
+			assert.equal(error.code, "reply_lost");
+			return true;
+		});
 		children[0].stdout.write(
 			`${JSON.stringify({ protocolVersion: 6, id: engine.requests[0].id, ok: true, result: {} })}\n`,
 		);

@@ -100,7 +100,10 @@ describe("Windows helper post-write cancellation (#750)", () => {
 				if (completion === "non-error-throw") assert.equal(result.error.message, "write failed");
 				if (completion === "error") assert.equal(result.error.code, "permission_denied");
 				if (completion === "protocol") assert.match(result.error.message, /protocol mismatch/);
-				if (completion === "timeout") assert.match(result.error.message, /timed out after 30000ms/);
+				if (completion === "timeout") {
+					assert.match(result.error.message, /timed out after 30000ms/);
+					assert.equal(result.error.code, "reply_lost");
+				}
 				if (completion === "close") assert.equal(result.error.code, "helper_disconnected");
 				if (completion === "dispose") assert.match(result.error.message, /session ended/);
 			}

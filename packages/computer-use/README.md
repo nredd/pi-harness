@@ -26,6 +26,10 @@ requests are rejected and the helper is stopped; a later request starts a fresh 
 Windows helper commands reject with `Operation aborted.` when their signal aborts after sending,
 without waiting for the command deadline. Cancellation clears the local pending request, timer and
 listener; late replies are ignored. It does not stop native work already sent or kill the helper.
+A Windows helper command that gets no reply by its deadline rejects with code `reply_lost` (the
+`Helper command '<cmd>' timed out` message is unchanged): the helper may have run it, so `act_ui`
+stops that step as `unknown` with `stoppedAt`, keeps the completed prefix and says not to replay.
+An abort or a helper exit after sending keeps its own error (`helper_disconnected` for an exit).
 Deterministic client tests use scripted stdio helpers, not Windows UI or native coverage.
 
 ## Windows native helper safety

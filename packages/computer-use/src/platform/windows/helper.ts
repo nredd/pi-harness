@@ -216,8 +216,13 @@ export class WindowsHelperClient {
 				reject(error);
 			};
 			const onAbort = () => fail(new Error("Operation aborted."));
+			// Armed in the same tick as the write below, so it fires only after the request was written: the helper may
+			// have run it, in part or in full. `reply_lost` makes `act_ui` stop that step as `unknown`, never replay it.
 			const timer = setTimeout(
-				() => fail(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`)),
+				() =>
+					fail(
+						Object.assign(new Error(`Helper command '${cmd}' timed out after ${timeoutMs}ms.`), { code: "reply_lost" }),
+					),
 				timeoutMs,
 			);
 			this.pending.set(id, {
