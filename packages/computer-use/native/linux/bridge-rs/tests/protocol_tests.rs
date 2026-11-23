@@ -25,8 +25,13 @@ struct Helper {
 impl Helper {
     /// Spawn the helper with no display, so physical input can never reach a desktop.
     fn spawn() -> Self {
+        Self::spawn_with(&[])
+    }
+    /// `spawn` with extra environment variables, e.g. a testing-build seam.
+    fn spawn_with(vars: &[(&str, &str)]) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_linux-bridge"));
         command
+            .envs(vars.iter().copied())
             .env_remove("DISPLAY")
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("XDG_SESSION_TYPE")
@@ -73,6 +78,17 @@ impl Helper {
             .recv_timeout(DEADLINE)
             .expect("helper replied before the deadline");
         serde_json::from_str(&line).expect("reply is JSON")
+    }
+    /// Every reply not yet read, up to stdout closing; call after the helper exited.
+    fn rest(&self) -> Vec<Value> {
+        let mut rest = Vec::new();
+        loop {
+            match self.lines.recv_timeout(DEADLINE) {
+                Ok(line) => rest.push(serde_json::from_str(&line).expect("reply is JSON")),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return rest,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!("stdout still open: {rest:?}"),
+            }
+        }
     }
     fn close_stdin(&mut self) {
         drop(self.stdin.take());
@@ -363,7 +379,10 @@ fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
     let stall_ms = u64::try_from(STALL.as_millis()).expect("stall fits u64");
     // With a stalled press, and with blocking observations alone.
     for (ending, press) in [("TERM", true), ("EOF", true), ("TERM", false)] {
-        let mut helper = Helper::spawn();
+        // The writer holds every reply until the stuck exit path starts its flush, so the
+        // ninth's reply arrives only if that path flushes (#1342).
+        let mut helper =
+            Helper::spawn_with(&[("PI_CU_TESTING_HOLD_REPLIES_UNTIL_EXIT_FLUSH", "1")]);
         if press {
             // The shift press stalls, as an X11 reply that never comes would.
             helper.send(&typing(
@@ -398,11 +417,13 @@ fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
         let status = helper.wait(DEADLINE);
         let elapsed = started.elapsed();
         let stderr = helper.stderr();
-        // The helper gives up on the stuck requests after its 300 ms join limit, inside the
-        // kill grace. This wall clock also counts the test's own scheduling, so it allows 2 s
-        // of slack for a loaded runner: still far below the stall a starved shutdown waits out.
+        // The helper gives up on the stuck requests after its 300 ms join limit and at most
+        // 200 ms of reply flush, inside the kill grace; the unit tests
+        // `saturated_exit_*` in `src/main.rs` pin that on a paused clock. This wall clock
+        // also counts the test's own scheduling, so it allows 4 s of slack for a loaded
+        // runner: it only proves shutdown is not starved, well below the stall it waits out.
         assert!(
-            elapsed < KILL_GRACE + Duration::from_secs(2),
+            elapsed < KILL_GRACE + Duration::from_secs(4),
             "{ending}: {elapsed:?}"
         );
         if press {
@@ -414,5 +435,12 @@ fn every_worker_stalled_in_blocking_x11_still_exits_within_the_kill_grace() {
         } else {
             assert!(status.success(), "{ending}: nothing is held: {stderr}");
         }
+        // The ninth never started; its `cancelled` reply is flushed before the exit, once.
+        // The stuck requests never reply. Held until the flush, it proves the stuck path
+        // flushes at all; how long it waits is the paused-clock unit tests' job.
+        let rest = helper.rest();
+        assert_eq!(rest.len(), 1, "{ending}: {rest:?}");
+        assert_eq!(rest[0]["id"], "ninth", "{ending}: {rest:?}");
+        assert_eq!(rest[0]["error"]["code"], "cancelled", "{ending}: {rest:?}");
     }
 }
