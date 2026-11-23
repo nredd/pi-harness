@@ -629,7 +629,12 @@ describe("Linux helper client", () => {
 		install();
 		// The #1346 helper: protocol 10, current architecture and invariants, no `features`.
 		const stale = linuxEngine({
-			diagnostics: ok({ protocolVersion: 10, architectureVersion: 1, invariants: REQUIRED_INVARIANTS, features: undefined }),
+			diagnostics: ok({
+				protocolVersion: 10,
+				architectureVersion: 1,
+				invariants: REQUIRED_INVARIANTS,
+				features: undefined,
+			}),
 		});
 		const fresh = linuxEngine({ look: ok("fresh") });
 		let generation = 0;
