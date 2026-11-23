@@ -10,6 +10,8 @@ import type { PlatformDiagnostics } from "../types.ts";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
+/** The package prebuilt that setup installs ahead of any source build, so a stale one is reinstalled. */
+const LINUX_PREBUILT_PATH = path.join(PACKAGE_ROOT, "prebuilt", "linux", process.arch, "linux-bridge");
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const HELPER_PROBE_TIMEOUT_MS = 5_000;
@@ -173,14 +175,16 @@ function probeReason(error: unknown): string {
 
 /**
  * Require every `LINUX_REQUIRED_HELPER_FEATURES` entry in `diagnostics.features`. A missing or malformed list
- * lacks them all: a helper that does not report a feature is treated as not having it.
+ * lacks them all: a helper that does not report a feature is treated as not having it. Setup copies a package
+ * prebuilt before it would build from source, so the message also names the prebuilt that a rebuild would
+ * otherwise reinstall.
  */
 export function assertLinuxHelperFeatures(diagnostics: PlatformDiagnostics): void {
 	const reported = new Set(Array.isArray(diagnostics.features) ? diagnostics.features : []);
 	const missing = LINUX_REQUIRED_HELPER_FEATURES.filter((feature) => !reported.has(feature));
 	if (missing.length > 0) {
 		throw new Error(
-			`Linux helper lacks required features: ${missing.join(", ")}. Rebuild it with \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\`.`,
+			`Linux helper lacks required features: ${missing.join(", ")}. Rebuild it with \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\`. Setup installs a prebuilt before building from source: if \`${LINUX_PREBUILT_PATH}\` exists, remove it or rebuild it with \`npm run build:linux\`, or setup reinstalls the same stale helper.`,
 		);
 	}
 }

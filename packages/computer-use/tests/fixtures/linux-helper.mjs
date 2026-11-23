@@ -14,7 +14,6 @@ export async function linuxHelperClient(script) {
 		profile: "envelope",
 		protocolVersion: 10,
 		platform: "Linux",
-		diagnostics: { features: ["snapshot-deadline"] },
 	});
 	Object.assign(engine.handlers, script(children));
 	const spawn = createFakeSpawn({
@@ -27,6 +26,8 @@ export async function linuxHelperClient(script) {
 	vi.resetModules();
 	vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	const helper = await import("../../src/platform/linux/helper.ts");
+	// Report every feature the client requires, so `diagnostics` passes `assertLinuxHelperFeatures`.
+	engine.diagnostics.features = [...helper.LINUX_REQUIRED_HELPER_FEATURES];
 	const client = new helper.LinuxHelperClient({ helperPath: "/nonexistent/linux-bridge" });
 	vi.spyOn(client, "ensureInstalled").mockResolvedValue(undefined);
 	return { client, children, spawn, helper };

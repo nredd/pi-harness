@@ -8,11 +8,14 @@ import os from "node:os";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { assertPlatformArchitecture } from "../src/platform/architecture.ts";
+import { LINUX_HELPER_PROTOCOL_VERSION, LINUX_REQUIRED_HELPER_FEATURES } from "../src/platform/linux/helper.ts";
 import {
 	body,
 	createFakeChild,
 	createFakeSpawn,
 	createHelperEngine,
+	defaultDiagnostics,
 	fail,
 	ok,
 	raw,
@@ -86,7 +89,7 @@ function envelope(platform, handlers = {}, extra = {}) {
 		handlers,
 		diagnostics: {
 			invariants: REQUIRED_INVARIANTS,
-			...(platform === "Linux" ? { features: ["snapshot-deadline"] } : {}),
+			...(platform === "Linux" ? { features: [...LINUX_REQUIRED_HELPER_FEATURES] } : {}),
 		},
 		...extra,
 	});
@@ -657,7 +660,7 @@ describe("Linux helper client", () => {
 				protocolVersion: 10,
 				architectureVersion: 1,
 				invariants: REQUIRED_INVARIANTS,
-				features: "snapshot-deadline",
+				features: LINUX_REQUIRED_HELPER_FEATURES.join(","),
 			}),
 		});
 		const { client } = await linux({ setup: installing, helper: { engine } });
@@ -665,10 +668,26 @@ describe("Linux helper client", () => {
 			assert.ok(error.message.startsWith(`Linux helper installed at ${helperPath} failed validation: `));
 			assert.match(
 				error.message,
-				/failed validation: Linux helper lacks required features: snapshot-deadline\. Rebuild it with `PI_COMPUTER_USE_ALLOW_BUILD=1 node \S*setup-helper\.mjs --platform linux`\. Re-run setup or delete it\.$/,
+				new RegExp(
+					`failed validation: Linux helper lacks required features: ${LINUX_REQUIRED_HELPER_FEATURES.join(", ")}\\. ` +
+						"Rebuild it with `PI_COMPUTER_USE_ALLOW_BUILD=1 node \\S*setup-helper\\.mjs --platform linux`\\. " +
+						`Setup installs a prebuilt before building from source: if \`\\S*prebuilt[\\\\/]linux[\\\\/]${process.arch}[\\\\/]linux-bridge\` exists, ` +
+						"remove it or rebuild it with `npm run build:linux`, or setup reinstalls the same stale helper\\. " +
+						"Re-run setup or delete it\\.$",
+				),
 			);
 			return true;
 		});
+	});
+
+	test("a pre-#1352 client's checks (protocol and architecture only) accept a helper that reports `features`", () => {
+		// An older client runs exactly these two checks and ignores unknown `diagnostics` fields.
+		const diagnostics = defaultDiagnostics(10, {
+			invariants: REQUIRED_INVARIANTS,
+			features: [...LINUX_REQUIRED_HELPER_FEATURES],
+		});
+		assert.equal(diagnostics.protocolVersion, LINUX_HELPER_PROTOCOL_VERSION, "`features` needs no protocol bump");
+		assert.doesNotThrow(() => assertPlatformArchitecture("Linux", diagnostics));
 	});
 
 	test("a rejected helper that setup replaces is re-probed and then used", async () => {

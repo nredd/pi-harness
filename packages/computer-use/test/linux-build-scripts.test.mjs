@@ -94,9 +94,13 @@ test("Linux build/setup scripts and process lifetime", async () => {
 	].map((match) => match[1]);
 	assert.ok(tsInvariants.length > 0);
 	assert.deepEqual(rustInvariants, tsInvariants, "Rust and TS architecture invariants drifted");
-	const rustFeatures = [...(nativeSource.match(/"features": \[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([a-z-]+)"/g)].map(
-		(match) => match[1],
-	);
+	// Anchored to the `diagnostics` reply: its `features` list directly follows `invariants`, comments allowed between.
+	const rustFeatures = [
+		...(
+			nativeSource.match(/"invariants": \[[^\]]*\],\s*(?:\/\/[^\n]*\n\s*)*"features": \[([^\]]*)\]/)?.[1] ?? ""
+		).matchAll(/"([a-z-]+)"/g),
+	].map((match) => match[1]);
+	assert.ok(rustFeatures.length > 0, "no `features` list found after `invariants` in the Rust `diagnostics` reply");
 	const tsFeatures = [
 		...(helperSource.match(/LINUX_REQUIRED_HELPER_FEATURES = \[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([a-z-]+)"/g),
 	].map((match) => match[1]);
