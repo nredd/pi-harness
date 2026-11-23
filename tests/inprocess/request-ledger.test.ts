@@ -64,6 +64,11 @@ const WRAPPED_SUMMARY = `The conversation history before this point was compacte
  * `packages/subagents/src/context.ts`, which walks every branch entry in order: the turns compaction
  * replaced still render, then the compaction summary and the spawn prompt. Thinking, the hidden custom
  * note and the text-free `Agent` call are not rendered.
+ *
+ * This is a hand copy of the rendering for ONE scenario (default `inherit_context`, a compaction summary
+ * and a split turn); branch summaries and include/exclude settings are not exercised here. It pins
+ * today's behavior, including that compaction-replaced turns still reach the child: if
+ * `buildParentContext` is later fixed to skip them, update this constant in the same change.
  */
 const PARENT_CONTEXT =
 	"# Parent Conversation Context\n" +
@@ -146,6 +151,8 @@ for item in json.load(sys.stdin):
     print(json.dumps({"session": session, **row, "synthetic": {"usage": "faux, not reported"}}))
     previous[session] = raw`,
 		],
+		// `stdio: "pipe"` captures the partitioner's stderr so a refusal's `ValueError` text is part of the thrown error the
+		// refusal cases assert on.
 		{ cwd: INTEGRATION, input: JSON.stringify(captures), encoding: "utf8", stdio: "pipe", timeout: 10_000 },
 	);
 	return rows
