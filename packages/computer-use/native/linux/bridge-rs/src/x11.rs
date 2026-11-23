@@ -340,8 +340,13 @@ fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
 /// Refuse with `input_deadline_expired` once `deadline` passed: the client stopped waiting
 /// for the reply, so nothing may reach the desktop for it any more. `None` sets no deadline.
 pub fn admit_before(deadline: Option<Instant>) -> Result<(), ProtocolError> {
+    admit_by(deadline, Instant::now())
+}
+
+/// [`admit_before`] at `now`.
+fn admit_by(deadline: Option<Instant>, now: Instant) -> Result<(), ProtocolError> {
     match deadline {
-        Some(deadline) if Instant::now() >= deadline => Err(err(
+        Some(deadline) if now >= deadline => Err(err(
             "The request deadline passed; no further input was sent for it",
             ErrorCode::InputDeadlineExpired,
         )),
@@ -647,6 +652,11 @@ pub trait InputSink {
     fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError>;
     /// Post one event unconditionally.
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure>;
+    /// The instant request deadlines are checked against: the clock, unless a test sink
+    /// runs it ahead to expire a deadline at a scripted point.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
 /// The logical button core pointer state shows for physical button `detail` under the
@@ -1280,6 +1290,10 @@ impl<S: InputSink> Input<S> {
         self.admit()?;
         self.sink.admit_point(x, y)
     }
+    /// Refuse once the request deadline passed, by the sink's clock.
+    fn admit_deadline(&self) -> Result<(), ProtocolError> {
+        admit_by(self.deadline, self.sink.now())
+    }
     fn key_code(&self, sym: u32) -> Result<Keycode, ProtocolError> {
         self.sink
             .keycode(sym)?
@@ -1289,7 +1303,7 @@ impl<S: InputSink> Input<S> {
     /// during those blocking reads.
     fn fake_at(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
         self.preflight_point(x, y)?;
-        admit_before(self.deadline)?;
+        self.admit_deadline()?;
         self.post(event, detail, x, y)
     }
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
@@ -1377,7 +1391,7 @@ impl<'a, S: InputSink> Held<'a, S> {
         admit()?;
         // Last, after the blocking state and target reads: a press is never submitted
         // past the deadline.
-        admit_before(self.input.deadline)?;
+        self.input.admit_deadline()?;
         let owed = Owed {
             event: release,
             detail,
@@ -2754,11 +2768,12 @@ mod tests {
 
     #[test]
     fn a_deadline_after_a_press_still_sends_its_release() {
-        // Shift is pressed in time; the target check before `a` blocks past the deadline.
-        // `a` is never pressed, and the release shift is owed still goes out (#1341).
-        let deadline = Instant::now() + Duration::from_millis(500);
-        let sink = RecordingSink::default().stall_admissions_until(1, deadline);
-        let input = Input::with_sink(sink).with_deadline(deadline);
+        // Shift is pressed in time; the deadline passes in the target check before `a`,
+        // scripted at that admission rather than raced against the clock. `a` is never
+        // pressed, and the release shift is owed still goes out (#1341).
+        let sink = RecordingSink::default().expire_at_admission(1);
+        let input =
+            Input::with_sink(sink).with_deadline(Instant::now() + Duration::from_secs(3600));
         let error = input.type_text("A").unwrap_err();
         assert_eq!(error.code, ErrorCode::InputDeadlineExpired);
         // The release follows the refused press's target check, so the recording marks it

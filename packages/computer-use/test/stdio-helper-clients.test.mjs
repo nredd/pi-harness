@@ -50,6 +50,18 @@ afterEach(() => {
 	vi.resetModules();
 });
 
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+/** Run the rest of the test as `platform` with `process.hrtime.bigint()` reading `monoNs`, restored when it finishes. */
+function onPlatform(platform, onTestFinished, monoNs = 5_000_000_000_000n) {
+	Object.defineProperty(process, "platform", { ...realPlatform, value: platform });
+	const hrtime = vi.spyOn(process.hrtime, "bigint").mockReturnValue(monoNs);
+	onTestFinished(() => {
+		Object.defineProperty(process, "platform", realPlatform);
+		hrtime.mockRestore();
+	});
+}
+
 /** Make `helperPath` an executable (or remove its exec bit). */
 function install(executable = true) {
 	writeFileSync(helperPath, "#!/bin/sh\n");
@@ -550,7 +562,10 @@ describe("Linux helper client", () => {
 		assert.deepEqual(third.children[0].signals, ["SIGTERM"], "a helper the signal ended is not SIGKILLed");
 	});
 
-	test("an installed, compatible helper is probed once and serves commands with no setup", async () => {
+	test("an installed, compatible helper is probed once and serves commands with no setup", async ({
+		onTestFinished,
+	}) => {
+		onPlatform("linux", onTestFinished);
 		install();
 		const engine = linuxEngine({ look: ok({ roots: [] }) });
 		const { client, spawn, module } = await linux({ helper: { engine } });
@@ -565,7 +580,8 @@ describe("Linux helper client", () => {
 			engine.requests.map((request) => request.cmd),
 			["diagnostics", "look", "look"],
 		);
-		// The default 15 s timeout, less the margin, as the budget left and as an absolute wall-clock deadline.
+		// The default 15 s timeout, less the margin, as the budget left, as an absolute wall-clock deadline and, on
+		// Linux, on `CLOCK_MONOTONIC` in milliseconds (`process.hrtime` reads 5_000_000 ms here).
 		assert.equal(module.LINUX_REQUEST_DEADLINE_MARGIN_MS, 250);
 		assert.deepEqual(engine.requests[1].raw, {
 			protocolVersion: 11,
@@ -574,8 +590,45 @@ describe("Linux helper client", () => {
 			args: { app: "x" },
 			deadlineMs: 1_700_000_014_750,
 			budgetMs: 14_750,
+			deadlineMonoMs: 5_014_750,
 		});
 		assert.deepEqual(helperSpawns(spawn)[0].options.stdio, ["pipe", "pipe", "pipe"]);
+	});
+
+	test("only a Linux client sends the monotonic deadline, whole milliseconds rounded down", async ({
+		onTestFinished,
+	}) => {
+		onPlatform("darwin", onTestFinished, 5_000_000_999_999n);
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client } = await linux({ helper: { engine } });
+		await client.command("look", {}, { timeoutMs: 1_250 });
+		// Another host's clock is not the helper's: no `deadlineMonoMs`, the helper keeps the earlier of the other two.
+		assert.equal("deadlineMonoMs" in engine.requests[1].raw, false);
+		Object.defineProperty(process, "platform", { ...realPlatform, value: "linux" });
+		await client.command("look", {}, { timeoutMs: 1_250 });
+		assert.equal(engine.requests[2].raw.deadlineMonoMs, 5_001_000);
+	});
+
+	test("a timeout Node's timer cannot wait is refused before anything is written", async () => {
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client, module } = await linux({ helper: { engine } });
+		assert.equal(module.LINUX_MAX_TIMEOUT_MS, 2 ** 31 - 1);
+		// The longest timer Node waits is accepted and sent as that budget.
+		assert.equal(await client.command("look", {}, { timeoutMs: 2 ** 31 - 1 }), 1);
+		assert.equal(engine.requests.at(-1).raw.budgetMs, 2 ** 31 - 1 - 250);
+		const written = engine.requests.length;
+		// Node would fire these at once (2 ** 31) or never: refused, nothing written.
+		for (const timeoutMs of [2 ** 31, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			await assert.rejects(
+				client.command("look", {}, { timeoutMs }),
+				(error) =>
+					error instanceof RangeError &&
+					error.message === `Helper command 'look' timeout ${timeoutMs}ms is outside 0 to ${2 ** 31 - 1}ms.`,
+			);
+		}
+		assert.equal(engine.requests.length, written);
 	});
 
 	test("the request deadline budget is whole milliseconds and never negative", async () => {

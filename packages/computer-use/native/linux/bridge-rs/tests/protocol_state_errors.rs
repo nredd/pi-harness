@@ -92,41 +92,97 @@ fn dated(deadline_ms: Option<u64>, budget_ms: Option<u32>) -> Request {
 }
 
 #[test]
-fn the_request_deadline_is_the_earlier_of_its_wall_and_budget_estimates() {
+fn the_request_deadline_is_the_earliest_of_its_wall_budget_and_monotonic_estimates() {
     let wall = std::time::UNIX_EPOCH + Duration::from_millis(1_000_000);
     let received = Instant::now();
     let now = received + Duration::from_millis(40);
     let ms = Duration::from_millis;
     // The line sat 40 ms in the pipe: the wall estimate counts it, the budget does not.
     assert_eq!(
-        dated(Some(1_000_060), Some(200)).deadline_at(received, now, wall),
+        dated(Some(1_000_060), Some(200)).deadline_at(received, now, wall, 0),
         Some(now + ms(60))
     );
     // The wall clock stepped back: the monotonic budget still bounds the deadline.
     assert_eq!(
-        dated(Some(9_000_000), Some(100)).deadline_at(received, now, wall),
+        dated(Some(9_000_000), Some(100)).deadline_at(received, now, wall, 0),
         Some(received + ms(100))
     );
     // Already past on the wall clock: the deadline is now.
     assert_eq!(
-        dated(Some(999_000), Some(100)).deadline_at(received, now, wall),
+        dated(Some(999_000), Some(100)).deadline_at(received, now, wall, 0),
         Some(now)
     );
     // No overflow however far off, and a wall clock before the epoch reads as 0.
     let before_epoch = std::time::UNIX_EPOCH - ms(5);
     assert_eq!(
-        dated(Some(u64::MAX), Some(u32::MAX)).deadline_at(received, now, before_epoch),
+        dated(Some(u64::MAX), Some(u32::MAX)).deadline_at(received, now, before_epoch, 0),
         Some(received + ms(u64::from(u32::MAX)))
     );
     // Either field missing: no deadline, which the dispatcher refuses.
     for request in [dated(None, Some(100)), dated(Some(1_000_060), None)] {
-        assert_eq!(request.deadline_at(received, now, wall), None);
+        assert_eq!(request.deadline_at(received, now, wall, 0), None);
         assert_eq!(request.deadline(received), None);
     }
     assert!(dated(Some(u64::MAX), Some(100))
         .deadline(received)
         .is_some());
+    // A 15 s client timeout leaves a 14.75 s budget. The line sits 400 ms in the pipe
+    // and the wall clock steps back 1 s before the helper reads it.
+    let budget = 14_750;
+    let sent = received;
+    let received = sent + ms(400);
+    let stepped = wall + ms(400) - ms(1_000);
+    let sent_mono = 5_000_000;
+    let late = dated(Some(1_000_000 + budget), Some(14_750));
+    // Without `deadlineMonoMs` each estimate is late, the wall one by the step and the
+    // budget one by the pipe: the deadline is late by the smaller, 400 ms, past the
+    // client's own 15 s timer, which is the documented limit of this fallback.
+    let fallback = late
+        .deadline_at(received, received, stepped, sent_mono + 400)
+        .unwrap();
+    assert_eq!(fallback, sent + ms(budget + 400));
+    assert!(fallback > sent + ms(15_000));
+    // With it, on the client's clock, neither moves it: no later than the client's timer.
+    let monotonic = Request {
+        deadline_mono_ms: Some(sent_mono + budget),
+        ..late.clone()
+    };
+    let deadline = monotonic
+        .deadline_at(received, received, stepped, sent_mono + 400)
+        .unwrap();
+    assert_eq!(deadline, sent + ms(budget));
+    assert!(deadline <= sent + ms(15_000));
+    // A `deadlineMonoMs` from another clock only ever makes it earlier: one far ahead
+    // leaves the other estimates, one behind expires the request.
+    let ahead = Request {
+        deadline_mono_ms: Some(u64::MAX),
+        ..late.clone()
+    };
+    assert_eq!(
+        ahead.deadline_at(received, received, stepped, sent_mono + 400),
+        Some(fallback)
+    );
+    let behind = Request {
+        deadline_mono_ms: Some(0),
+        ..dated(Some(u64::MAX), Some(u32::MAX))
+    };
+    assert!(behind.deadline(Instant::now()).unwrap() <= Instant::now());
+    // The live monotonic clock: a deadline 60 s ahead of it is roughly 60 s off.
+    let live = Request {
+        deadline_mono_ms: Some(linux_bridge::protocol::monotonic_now_ms() + 60_000),
+        ..dated(Some(u64::MAX), Some(u32::MAX))
+    };
+    let read = Instant::now();
+    let deadline = live.deadline(read).unwrap();
+    let after = Instant::now();
+    assert!(deadline <= after + ms(60_000), "{deadline:?} {after:?}");
+    assert!(deadline > read + ms(50_000), "{deadline:?} {read:?}");
     // Negative, fractional or oversized values are malformed, not coerced.
+    let malformed = json!({
+        "protocolVersion": PROTOCOL_VERSION, "id": "x", "cmd": "act", "args": {},
+        "deadlineMs": 1, "budgetMs": 1, "deadlineMonoMs": -1
+    });
+    assert!(serde_json::from_value::<Request>(malformed).is_err());
     for (deadline, budget) in [
         (json!(-1), json!(1)),
         (json!(1), json!(1.5)),

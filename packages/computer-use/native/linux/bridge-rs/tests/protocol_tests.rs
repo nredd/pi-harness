@@ -433,32 +433,38 @@ fn a_press_stalled_past_its_deadline_posts_nothing_after_it() {
     let mut helper = Helper::spawn();
     helper.send(&diagnostics("ready"));
     assert_eq!(helper.reply()["id"], "ready");
-    // Shift is pressed at once and its post stalls 1.5 s, past the 1 s deadline. Without
-    // the deadline, `a` would be pressed and released, then shift released: four posts.
-    let mut late = typing(
-        "late",
-        "A",
-        json!({"delayMs": 1500, "delayPosts": [0], "announce": "late"}),
-    );
-    late = with_deadline(late, Duration::from_secs(1));
-    helper.send(&late);
-    let reply = helper.reply();
-    let result = &reply["result"];
-    assert_eq!(result["outcome"], "unknown", "{reply}");
-    assert_eq!(result["error"]["code"], "input_deadline_expired", "{reply}");
-    assert_eq!(result["evidence"]["deliveredUnits"], 2, "{reply}");
-    assert_eq!(
-        result["evidence"]["events"], 2,
-        "shift press and release only: {reply}"
-    );
-    assert_eq!(
-        result["evidence"]["held"],
-        json!([]),
-        "shift released: {reply}"
-    );
-    // The two posts are the press and its owed release, announced in order.
-    helper.ready("posting late 0");
-    helper.ready("posting late 1");
+    // Shift is pressed at once and the deadline passes inside its post. Without the
+    // deadline, `a` would be pressed and released, then shift released: four posts.
+    // `scripted` expires it at that post with no window to race; `timed` is the real
+    // clock, a 3 s deadline (the slack to reach the first post) and a 3.5 s stall.
+    for (id, budget, mut sink) in [
+        ("scripted", FAR, json!({"expirePosts": [0]})),
+        (
+            "timed",
+            Duration::from_secs(3),
+            json!({"delayMs": 3500, "delayPosts": [0]}),
+        ),
+    ] {
+        sink["announce"] = json!(id);
+        helper.send(&with_deadline(typing(id, "A", sink), budget));
+        let reply = helper.reply();
+        let result = &reply["result"];
+        assert_eq!(result["outcome"], "unknown", "{reply}");
+        assert_eq!(result["error"]["code"], "input_deadline_expired", "{reply}");
+        assert_eq!(result["evidence"]["deliveredUnits"], 2, "{reply}");
+        assert_eq!(
+            result["evidence"]["events"], 2,
+            "shift press and release only: {reply}"
+        );
+        assert_eq!(
+            result["evidence"]["held"],
+            json!([]),
+            "shift released: {reply}"
+        );
+        // The two posts are the press and its owed release, announced in order.
+        helper.ready(&format!("posting {id} 0"));
+        helper.ready(&format!("posting {id} 1"));
+    }
     // A request already past its deadline on arrival starts nothing.
     helper.send(&with_deadline(
         typing("expired", "a", json!({"announce": "expired"})),
@@ -475,5 +481,7 @@ fn a_press_stalled_past_its_deadline_posts_nothing_after_it() {
     let stderr = helper.stderr();
     assert!(status.success(), "{stderr}");
     assert!(!stderr.contains("posting expired"), "{stderr}");
-    assert!(!stderr.contains("posting late 2"), "{stderr}");
+    for id in ["scripted", "timed"] {
+        assert!(!stderr.contains(&format!("posting {id} 2")), "{stderr}");
+    }
 }

@@ -997,16 +997,15 @@ async fn act(
         policy.refuse_strict_headless()?;
     }
     let record = lock(state)?.look(look_id)?;
-    let client = connect().await?;
+    // The client refuses each semantic mutation past the deadline, checked after the bus
+    // connection, the proxy setup and the preparatory reads, any of which may block.
+    let client = connect().await?.with_deadline(deadline);
 
     let (x, y) = match target {
         ActTarget::Point(x, y) => (x, y),
         ActTarget::Element(reference) => {
             let node = lock(state)?.element(look_id, reference)?;
             let text = params.get("text").and_then(Value::as_str).unwrap_or("");
-            // The bus connection may have blocked: a step past the deadline starts no
-            // semantic mutation either.
-            x11::admit_before(Some(deadline))?;
             let semantic = match action {
                 "press" | "click" => Some(client.press(&node).await.map(|worked| (worked, None))),
                 "setText" | "typeText" => Some(
@@ -1025,8 +1024,16 @@ async fn act(
                     }
                     return Ok(result);
                 }
-                // Shutdown began before the mutation: nothing ran, and nothing may fall back.
-                Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
+                // Shutdown began or the deadline passed before the mutation: nothing ran,
+                // and nothing may fall back.
+                Some(Err(error))
+                    if matches!(
+                        error.code,
+                        ErrorCode::Cancelled | ErrorCode::InputDeadlineExpired
+                    ) =>
+                {
+                    return Err(error)
+                }
                 Some(Err(error)) if error.code == ErrorCode::Timeout => {
                     return Err(ProtocolError::new(
                         format!("{}; semantic action outcome is unknown", error.message),
@@ -2110,6 +2117,7 @@ mod tests {
                 args,
                 deadline_ms: Some(u64::MAX),
                 budget_ms: Some(u32::MAX),
+                deadline_mono_ms: None,
             },
             Some(far()),
             &InputState::default(),
@@ -3030,6 +3038,7 @@ mod tests {
                     args,
                     deadline_ms: Some(u64::MAX),
                     budget_ms: Some(u32::MAX),
+                    deadline_mono_ms: None,
                 },
                 Some(far()),
                 &input,
@@ -3076,6 +3085,7 @@ mod tests {
                 args,
                 deadline_ms: Some(0),
                 budget_ms: Some(0),
+                deadline_mono_ms: None,
             };
             let reply = handle_request_with(
                 &state,
@@ -3191,6 +3201,97 @@ mod tests {
         }
     }
 
+    /// An Action whose preparatory `NActions` read returns only once `deadline` passed, as
+    /// a stalled provider would; nothing is cancelled.
+    struct ExpiresDuringPreparation {
+        deadline: Instant,
+        reads: Arc<AtomicUsize>,
+        mutations: Arc<AtomicUsize>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Action")]
+    impl ExpiresDuringPreparation {
+        #[zbus(property, name = "NActions")]
+        async fn n_actions(&self) -> i32 {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep_until(self.deadline.into()).await;
+            1
+        }
+
+        async fn do_action(&self, _index: i32) -> bool {
+            self.mutations.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_press_refuses_after_preparation_deadline() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let (state, _) = peer_root_state();
+        let mut target = node();
+        target.interfaces.extend([
+            "org.a11y.atspi.Action".into(),
+            "org.a11y.atspi.EditableText".into(),
+        ]);
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![target.clone()], None);
+        let deadline = Instant::now() + Duration::from_millis(20);
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/node",
+                    ExpiresDuringPreparation {
+                        deadline,
+                        reads: Arc::clone(&reads),
+                        mutations: Arc::clone(&mutations),
+                    },
+                )?
+                .serve_at("/node", CountedEdit(Arc::clone(&mutations)))
+            },
+            async |connection| {
+                let client = || {
+                    AtspiClient::from_connection(connection.clone(), Duration::from_secs(2))
+                        .with_input_state(Arc::new(InputState::default()))
+                };
+                // In time when the press starts; the deadline passes inside `NActions`.
+                let args = json!({"lookId":look_id,"action":"press","target":{"ref":nodes[0].reference},"policy":"foreground"});
+                let error = act(
+                    &state,
+                    &args,
+                    deadline,
+                    async || Ok(client()),
+                    |_, _, _, _, _, _, _| panic!("attempted physical fallback"),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InputDeadlineExpired);
+                assert_eq!(reads.load(Ordering::SeqCst), 1, "reached NActions");
+                // The text replacement checks the same boundary, after its proxy setup.
+                assert_eq!(
+                    client()
+                        .with_deadline(deadline)
+                        .set_text(&target, "replacement")
+                        .await
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::InputDeadlineExpired
+                );
+                assert_eq!(mutations.load(Ordering::SeqCst), 0, "no semantic mutation");
+                // In time, the same replacement mutates.
+                assert!(client()
+                    .with_deadline(far())
+                    .set_text(&target, "replacement")
+                    .await
+                    .unwrap());
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+            },
+        )
+        .await;
+    }
+
     struct CountedEdit(Arc<AtomicUsize>);
 
     #[zbus::interface(name = "org.a11y.atspi.EditableText")]
@@ -3241,6 +3342,7 @@ mod tests {
                         args: json!({"lookId":look_id,"action":"press","target":{"ref":nodes[0].reference},"policy":"foreground"}),
                         deadline_ms: Some(u64::MAX),
                         budget_ms: Some(u32::MAX),
+                        deadline_mono_ms: None,
                     },
                     Some(far()),
                     &input,
@@ -5318,6 +5420,7 @@ mod tests {
                 args: json!({ "actions": steps }),
                 deadline_ms: Some(u64::MAX),
                 budget_ms: Some(u32::MAX),
+                deadline_mono_ms: None,
             },
             Some(far()),
             &InputState::default(),
