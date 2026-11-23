@@ -88,7 +88,7 @@ test.for([
 		assert.equal(execution.error.code, "timeout", "the timeout is not replaced by a postcondition verdict");
 		assert.match(
 			fake.text(result),
-			/^Action 1 timed out; whether it was delivered is unknown\. Its source root App1 \u2014 Main closed before a successor observation could be captured\.\nNo successor state was created\. Do not replay the transaction: call find_roots, then observe_ui to check whether action 1 took effect\.$/,
+			/^Action 1 timed out; whether it was delivered is unknown\.\nIts source root App1 \u2014 Main closed before a successor observation could be captured\.\nNo successor state was created\. Do not replay the transaction: call find_roots, then observe_ui to check whether action 1 took effect\.$/,
 		);
 	},
 );
@@ -106,7 +106,7 @@ test("a timed-out step reports unknown delivery when its root cannot be observed
 	assert.equal(result.details.execution.outcome, "unknown");
 	assert.match(
 		fake.text(result),
-		/^Action 1 timed out; whether it was delivered is unknown\. Its source root App1 \u2014 Main could not be observed afterward: capture failed\n/,
+		/^Action 1 timed out; whether it was delivered is unknown\.\nIts source root App1 \u2014 Main could not be observed afterward: capture failed\n/,
 	);
 });
 

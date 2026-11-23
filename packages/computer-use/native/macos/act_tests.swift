@@ -343,11 +343,35 @@ private func runKeyboardActionAssertions() throws {
     try actionFailure("invalid_args") { try keys.act("selectText", params: ["start": 0, "length": 3]) }
     let set = try keys.act("setText", policy: "ax_only", params: ["text": "replacement"])
     expect(set["outcome"] as? String == "worked" && keys.value == "replacement", "AX value write verifies readback")
+    // An accepted AXValue write with a stale or failed readback may have landed: unknown, written once (#1290).
+    for policy in ["ax_only", "background", "foreground"] {
+        for (stale, label) in [("before", "stale readback"), (nil, "failed readback")] as [(String?, String)] {
+            let write = ActFixture()
+            write.valueReads = ["before", stale]
+            let result = try write.act("setText", policy: policy, params: ["text": "new"])
+            let evidence = result["evidence"] as? [String: Any]
+            expect(result["outcome"] as? String == "unknown" && evidence?["deliveryUnknown"] as? Bool == true && result["error"] == nil, "\(policy) accepted write with a \(label) is unknown, not refused: \(result)")
+            expect((evidence?["value"] as? String) == stale, "\(policy) \(label) reports only a value it actually read")
+            expect(write.trace.filter { $0 == "set:AXValue" }.count == 1 && !write.trace.contains { $0.hasPrefix("click:") || $0.hasPrefix("type:") || $0.hasPrefix("atomic:") }, "\(policy) \(label) writes AXValue once and posts nothing")
+        }
+    }
     keys.web = true
     try actionFailure("foreground_required") { try keys.act("setText", policy: "ax_only") }
     keys.trace = []
     _ = try keys.act("setText", policy: "background", params: ["text": "new"])
     expect(keys.trace.contains("atomic:new:1234:pid"), "web replacement posts atomic text after selecting the original value")
+    // Posted replacement text whose readback is stale or failed may have landed: unknown, never `didnt`.
+    for (reads, label) in [(["before", "before", "before"], "stale readback"), (["before", "before", nil], "failed readback"), (["before", "before", "new"], "confirmed readback")] as [([String?], String)] {
+        let web = ActFixture()
+        web.web = true
+        web.valueReads = reads
+        let result = try web.act("setText", policy: "background", params: ["text": "new"])
+        let evidence = result["evidence"] as? [String: Any]
+        let confirmed = reads.last == "new"
+        expect(result["outcome"] as? String == (confirmed ? "worked" : "unknown") && (evidence?["deliveryUnknown"] as? Bool == true) == !confirmed && result["error"] == nil, "web \(label) after posting text: \(result)")
+        expect((evidence?["value"] as? String) == reads.last ?? nil, "web \(label) reports only a value it actually read")
+        expect(web.trace.filter { $0.hasPrefix("atomic:") }.count == 1, "web \(label) posts the replacement once")
+    }
     keys.trace = []
     _ = try keys.act("paste", coords: true, params: ["text": "temporary", "preserveFocus": true])
     expect(Array(keys.trace.prefix(9)) == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "clipboard:temporary", "layout", "keyboard", "keyCode:9:1234:hid"], "paste checks focus before reading, before writing and after layout lookup")
