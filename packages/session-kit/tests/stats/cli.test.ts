@@ -263,9 +263,10 @@ describe("stats CLI", () => {
 		// The usage text names what replacement bypasses and costs.
 		await expect(main()).rejects.toThrow(
 			"--replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
-				"clock-rollback, unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
-				"published history absent from the scan (sealed months included), and viewers holding a newer snapshot never import it; " +
-				"they accept this machine again only from a later export timestamped at or after the snapshot they hold",
+				"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
+				"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
+				"the replacement keep it until this machine exports a later one\n" +
+				"  A clock behind the last published export in its month still publishes, just after it, with a warning",
 		);
 	});
 
