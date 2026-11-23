@@ -142,7 +142,8 @@ function namesOf(file: SourceFile): FileNames {
 		else base.forEachChild(write);
 	}
 
-	function visit(node: Node): void {
+	/** Record `node`'s binding and writes, then recurse; named apart from the matcher walk's `visit` for LCOV. */
+	function scan(node: Node): void {
 		const bound = BINDS.some((binds) => binds(node)) ? (node as Node & { name?: Node }).name : undefined;
 		if (bound !== undefined && isIdentifier(bound)) {
 			const existing = bindings.get(bound.text);
@@ -167,9 +168,9 @@ function namesOf(file: SourceFile): FileNames {
 		) {
 			for (const target of node.arguments.slice(0, 1)) write(target);
 		}
-		node.forEachChild(visit);
+		node.forEachChild(scan);
 	}
-	visit(file);
+	scan(file);
 	return { bindings, written };
 }
 
