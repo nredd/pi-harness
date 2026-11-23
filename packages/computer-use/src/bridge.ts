@@ -107,6 +107,7 @@ import {
 import type { PermissionStatus } from "./permissions.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
+import { LINUX_X11_CHECKED } from "./platform/linux/backend.ts";
 import type {
 	FramePoints,
 	PlatformFrontmostResult as FrontmostResult,
@@ -1099,9 +1100,6 @@ async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise
 		);
 	return current;
 }
-
-/** `atspiLookRoot` X11 statuses under which a root's class aliases are complete: see `revalidateLookRoot`. */
-const LINUX_X11_CHECKED = new Set<unknown>(["paired", "ambiguous", "unpaired", "absent"]);
 
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {

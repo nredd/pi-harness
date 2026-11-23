@@ -53,13 +53,15 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 		ensureReady: async (_ctx: unknown, state: unknown) => state,
 	});
 	// `lookRootClient` answers `atspiLookRoot` through a real helper client instead, e.g. over a no-reply transport.
-	// `x11Pairing` is the X11 status every `atspiLookRoot` reply reports for its root.
+	// `x11Pairing` is the X11 status every `atspiLookRoot` reply reports for its root, `listX11Pairing` the one every
+	// `listRoots` reply reports for each root (#1311).
 	const state: {
 		roots: Root[];
 		lookRootError?: Error;
 		lookRootClient?: Pick<typeof linuxHelper, "command">;
 		x11Pairing?: unknown;
-	} = { roots: initial, x11Pairing: "paired" };
+		listX11Pairing?: unknown;
+	} = { roots: initial, x11Pairing: "paired", listX11Pairing: "paired" };
 	// Like the helper, every listing replaces the handle table: a root it omits loses its `@w` handle, and a
 	// later listing issues a new one (#1300).
 	let handles = new Map<string, string>();
@@ -74,7 +76,7 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 				const roots = listed.map((root) => {
 					const rootRef = handles.get(nativeIdentity(root)) ?? `@w${++minted}`;
 					next.set(nativeIdentity(root), rootRef);
-					return { ...root, rootRef };
+					return { ...root, rootRef, metadata: { ...root.metadata, x11Pairing: state.listX11Pairing } };
 				});
 				handles = next;
 				return { roots };
@@ -215,9 +217,15 @@ test("The Linux backend reads appId only from the helper's executable field", as
 	onTestFinished(() => vi.restoreAllMocks());
 	vi.spyOn(linuxHelper, "command").mockResolvedValue({
 		roots: [
-			{ pid: 1, appName: "Editor", appId: "fixture-editor", processName: "fixture-editor" },
+			{
+				pid: 1,
+				appName: "Editor",
+				appId: "fixture-editor",
+				processName: "fixture-editor",
+				metadata: { x11Pairing: "paired" },
+			},
 			// A protocol 5 helper copied the accessible name into `processName`.
-			{ pid: 2, appName: "Editor", processName: "keepassxc" },
+			{ pid: 2, appName: "Editor", processName: "keepassxc", metadata: { x11Pairing: "paired" } },
 		],
 	});
 	const roots = await linuxBackend.listRoots({});
@@ -225,6 +233,58 @@ test("The Linux backend reads appId only from the helper's executable field", as
 		{ appName: "Editor", appId: "fixture-editor" },
 		{ appName: "Editor", appId: undefined },
 	]);
+});
+
+test("Linux discovery never admits a root whose X11 class evidence is missing (#1311)", async ({ onTestFinished }) => {
+	// An allowed executable whose window class is blocked: the X11 listing that would report it stalled, so the
+	// helper lists the root with no class alias and `x11Pairing: unavailable`.
+	const { state, find, observe, looks } = useLinuxRoots(onTestFinished, [linuxRoot(301, "Editor", "fixture-editor")]);
+	const [{ windowRef }] = await find();
+	const listing = async () => {
+		const [root] = await find();
+		return { blocked: root.blocked, unresolved: root.identityUnresolved, appId: root.appId };
+	};
+	for (const x11Pairing of ["unavailable", undefined, "bogus", 1]) {
+		state.listX11Pairing = x11Pairing;
+		expect(await listing(), String(x11Pairing)).toEqual({ blocked: true, unresolved: true, appId: undefined });
+		// observe_ui re-lists the root it resolves: the same missing evidence refuses it before any look.
+		await expect(observe(windowRef), String(x11Pairing)).rejects.toMatchObject({
+			code: "app_blocked",
+			message: expect.stringMatching(/identity could not be determined/),
+		});
+	}
+	expect(looks()).toBe(0);
+	for (const x11Pairing of ["absent", "paired", "ambiguous", "unpaired"]) {
+		state.listX11Pairing = x11Pairing;
+		expect(await listing(), x11Pairing).toEqual({ blocked: false, unresolved: undefined, appId: "fixture-editor" });
+		await observe(windowRef);
+	}
+	expect(looks()).toBe(4);
+	// A root admitted and observed is refused once a later listing loses its class evidence.
+	state.listX11Pairing = "unavailable";
+	await expect(observe(windowRef)).rejects.toMatchObject({ code: "app_blocked" });
+	expect(looks()).toBe(4);
+});
+
+test("The Linux backend lists a root without class evidence as unidentified", async ({ onTestFinished }) => {
+	onTestFinished(() => vi.restoreAllMocks());
+	const root = (x11Pairing: unknown) => ({
+		pid: 1,
+		appName: "Editor",
+		appId: "fixture-editor",
+		isFocused: true,
+		metadata: { x11Pairing, wmClass: null },
+	});
+	const command = vi.spyOn(linuxHelper, "command");
+	for (const [x11Pairing, appId] of [
+		["unavailable", undefined],
+		["absent", "fixture-editor"],
+	] as const) {
+		command.mockResolvedValue({ roots: [root(x11Pairing)] });
+		expect((await linuxBackend.listRoots({ pid: 1 }))[0].appId, x11Pairing).toBe(appId);
+		expect((await linuxBackend.listApps())[0].appId, x11Pairing).toBe(appId);
+		expect((await linuxBackend.getFrontmost()).appId, x11Pairing).toBe(appId);
+	}
 });
 
 test("Linux WM_CLASS and an ambiguous exe link name can only add a block", async ({ onTestFinished }) => {

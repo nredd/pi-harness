@@ -1,5 +1,4 @@
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -14,7 +13,7 @@ use linux_bridge::x11::{self, Input, InputSink, InputState, PhysicalPolicy, Sess
 use linux_bridge::{ErrorCode, ProtocolError, Request, Response};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 
 const REQUEST_WORKERS: usize = 8;
 /// How long an exiting helper tries to settle owed releases on a fresh connection; the
@@ -427,18 +426,49 @@ fn portal_diagnostics(probe: Option<Result<PortalCapabilities, PortalError>>) ->
 }
 
 async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Value, ProtocolError> {
-    let client = AtspiClient::connect().await?;
-    let mut roots = client
+    list_roots_with(
+        state,
+        args,
+        AtspiClient::connect,
+        x11::list_display_windows,
+        &X11_ENRICHMENT,
+    )
+    .await
+}
+
+/// The AT-SPI root inventory, each root's X11 class evidence read through `enrichment` like
+/// [`look_root`]'s, and reported per root as `metadata.x11Pairing` with the same values: a
+/// failed, timed-out or still-stuck listing is `unavailable` for every root, never a clean
+/// check, so discovery cannot admit a class-blocked window while the X server stalls (#1311).
+async fn list_roots_with(
+    state: &Arc<Mutex<HelperState>>,
+    args: &Value,
+    connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
+    windows: impl FnOnce() -> Result<Option<Vec<x11::WindowInfo>>, ProtocolError> + Send + 'static,
+    enrichment: &Enrichment,
+) -> Result<Value, ProtocolError> {
+    let mut roots = connect()
+        .await?
         .list_roots(args.get("pid").and_then(Value::as_u64))
         .await?;
-    if let Ok(windows) = x11::list_windows() {
-        x11::enrich_roots(&mut roots, &windows);
-    }
+    let pairings = match bounded(enrichment, windows).await {
+        Some(Ok(Some(windows))) => x11::enrich_roots(&mut roots, &windows)
+            .into_iter()
+            .map(x11::Pairing::as_str)
+            .collect(),
+        Some(Ok(None)) => vec!["absent"; roots.len()],
+        _ => vec!["unavailable"; roots.len()],
+    };
     let stored = lock(state)?.replace_roots(roots);
     let windows = stored
         .iter()
+        .zip(pairings)
         .enumerate()
-        .map(|(index, (reference, root))| root_json(reference, root, index))
+        .map(|(index, ((reference, root), pairing))| {
+            let mut json = root_json(reference, root, index);
+            json["metadata"]["x11Pairing"] = json!(pairing);
+            json
+        })
         .collect::<Vec<_>>();
     Ok(json!({
         "stateId": fresh_state_id(),
@@ -447,42 +477,22 @@ async fn list_roots(state: &Arc<Mutex<HelperState>>, args: &Value) -> Result<Val
     }))
 }
 
-/// The X11 window listing that may add a class alias to an `atspiLookRoot` root.
+/// The X11 window listing that may add a class alias to a `listRoots` or `atspiLookRoot`
+/// root; both share [`X11_ENRICHMENT`].
 struct Enrichment {
-    /// How long a lookup waits for the listing.
+    /// How long a request waits for the listing, its turn at the slot included.
     deadline: Duration,
-    /// Set from the spawn of a listing thread until its read returns: a stalled X server
-    /// then holds one thread and one connection, never one per lookup, and lookups in the
-    /// meantime report `unavailable` at once.
-    in_flight: &'static AtomicBool,
+    /// One permit, held from the spawn of a listing thread until its read returns: a
+    /// stalled X server then holds one thread and one connection, never one per request,
+    /// and requests in the meantime wait at most `deadline` and report `unavailable`.
+    slot: &'static Semaphore,
 }
 
-static X11_ENRICHMENT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static X11_ENRICHMENT_SLOT: Semaphore = Semaphore::const_new(1);
 static X11_ENRICHMENT: Enrichment = Enrichment {
     deadline: Duration::from_secs(2),
-    in_flight: &X11_ENRICHMENT_IN_FLIGHT,
+    slot: &X11_ENRICHMENT_SLOT,
 };
-
-/// A claim on an [`Enrichment`]'s single listing slot, released on drop.
-struct InFlight(&'static AtomicBool);
-
-impl InFlight {
-    /// Claim the slot, or `None` while another listing still runs.
-    fn claim(slot: &'static AtomicBool) -> Option<Self> {
-        // Never build `Self` for a held slot: dropping it would release the holder's claim.
-        if slot.swap(true, Ordering::AcqRel) {
-            None
-        } else {
-            Some(Self(slot))
-        }
-    }
-}
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
 
 /// The live root of `lookId`'s retained look, found by the AT-SPI bus name and object path
 /// the look retains, never by an inventory `@w` handle a later listing may reissue (#1300).
@@ -532,29 +542,33 @@ async fn look_root(
     Ok(json!({ "root": json }))
 }
 
-/// Run a blocking `read` on its own thread for at most `enrichment.deadline`; `None` past
-/// it, or at once while an earlier read still holds the slot. A read still blocked is left
-/// behind rather than awaited, so it cannot hold the reply, and keeps the slot until it
-/// returns, so a stuck X server never accumulates threads.
+/// Run a blocking `read` on its own thread once `enrichment`'s slot is free, all within
+/// `enrichment.deadline`; `None` past it. Concurrent requests (e.g. one `listRoots` per
+/// app) take turns rather than fail. A read still blocked is left behind rather than
+/// awaited, so it cannot hold the reply, and keeps the slot until it returns, so a stuck X
+/// server never accumulates threads: later requests time out waiting, spawning none.
 async fn bounded<T: Send + 'static>(
     enrichment: &Enrichment,
     read: impl FnOnce() -> T + Send + 'static,
 ) -> Option<T> {
-    let slot = InFlight::claim(enrichment.in_flight)?;
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    // A failed spawn drops the closure, and the claim with it.
-    std::thread::Builder::new()
-        .name("x11-enrichment".into())
-        .spawn(move || {
-            let value = read();
-            drop(slot);
-            let _ = sender.send(value);
-        })
-        .ok()?;
-    tokio::time::timeout(enrichment.deadline, receiver)
+    let listing = async {
+        let slot = enrichment.slot.acquire().await.ok()?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        // A failed spawn drops the closure, and the permit with it.
+        std::thread::Builder::new()
+            .name("x11-enrichment".into())
+            .spawn(move || {
+                let value = read();
+                drop(slot);
+                let _ = sender.send(value);
+            })
+            .ok()?;
+        receiver.await.ok()
+    };
+    tokio::time::timeout(enrichment.deadline, listing)
         .await
-        .ok()?
         .ok()
+        .flatten()
 }
 
 async fn resolve_root(
@@ -1423,7 +1437,7 @@ mod tests {
     use super::*;
     use linux_bridge::testing::RecordingSink;
     use std::collections::HashSet;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
 
@@ -3297,7 +3311,7 @@ mod tests {
     fn enrichment(deadline: Duration) -> &'static Enrichment {
         Box::leak(Box::new(Enrichment {
             deadline,
-            in_flight: Box::leak(Box::new(AtomicBool::new(false))),
+            slot: Box::leak(Box::new(Semaphore::new(1))),
         }))
     }
 
@@ -3531,10 +3545,10 @@ mod tests {
                     assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
                 }
                 assert_eq!(spawned.load(Ordering::SeqCst), 0);
-                assert!(single.in_flight.load(Ordering::SeqCst));
+                assert_eq!(single.slot.available_permits(), 0);
                 drop(release);
                 let freed = Instant::now();
-                while single.in_flight.load(Ordering::SeqCst) {
+                while single.slot.available_permits() == 0 {
                     assert!(freed.elapsed() < Duration::from_secs(5), "slot never freed");
                     tokio::time::sleep(Duration::from_millis(1)).await;
                 }
@@ -3563,6 +3577,130 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn list_roots_reports_x11_class_evidence_per_root() {
+        let state = Arc::new(Mutex::new(HelperState::default()));
+        let frame = observed_root().frame.unwrap();
+        let extents = Arc::new(Mutex::new(Some(frame.clone())));
+        with_peer(
+            |server| {
+                server
+                    .serve_at("/org/freedesktop/DBus", OwnerPid)?
+                    .serve_at("/org/a11y/atspi/accessible/root", Inventory(&["/app"]))?
+                    .serve_at("/app", Inventory(&["/window"]))?
+                    .serve_at("/window", LiveWindow)?
+                    .serve_at("/window", LiveExtents(Arc::clone(&extents)))
+            },
+            async |connection| {
+                let connect = async || {
+                    Ok(AtspiClient::from_connection(
+                        connection.clone(),
+                        Duration::from_millis(250),
+                    ))
+                };
+                type Windows =
+                    Box<dyn FnOnce() -> Result<Option<Vec<x11::WindowInfo>>, ProtocolError> + Send>;
+                let list = async |windows: Windows, enrichment: &'static Enrichment| {
+                    let listed = list_roots_with(&state, &json!({}), connect, windows, enrichment)
+                        .await
+                        .unwrap();
+                    assert_eq!(listed["roots"].as_array().unwrap().len(), 1);
+                    listed["roots"][0].clone()
+                };
+                let ample = enrichment(X11_ENRICHMENT.deadline);
+                let blocked = move || Ok(Some(vec![editor_window(71, &frame, "KeePassXC")]));
+
+                // A completed listing pairs the window: its class is evidence.
+                let root = list(Box::new(blocked.clone()), ample).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "paired");
+                assert_eq!(root["metadata"]["wmClass"]["class"], "KeePassXC");
+                assert_eq!(root["windowId"], 71);
+                let root = list(Box::new(|| Ok(Some(vec![]))), ample).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "unpaired");
+                // No X display: confirmed absence of class evidence.
+                let root = list(Box::new(|| Ok(None)), ample).await;
+                assert_eq!(root["metadata"]["x11Pairing"], "absent");
+                // A configured display that cannot be listed is missing evidence, never absence.
+                let root = list(
+                    Box::new(|| Err(capability("X11 unavailable: connection refused"))),
+                    ample,
+                )
+                .await;
+                assert_eq!(root["metadata"]["x11Pairing"], "unavailable");
+                assert!(root["metadata"]["wmClass"].is_null());
+
+                // A stalled listing whose window has a blocked class never holds the reply,
+                // and never reads as a clean check (#1311).
+                let (release, stalled) = std::sync::mpsc::channel::<()>();
+                let started = Instant::now();
+                let root = list(
+                    Box::new(move || {
+                        let _ = stalled.recv_timeout(Duration::from_secs(5));
+                        blocked()
+                    }),
+                    enrichment(Duration::from_millis(50)),
+                )
+                .await;
+                assert!(started.elapsed() < Duration::from_secs(2));
+                assert_eq!(root["metadata"]["x11Pairing"], "unavailable");
+                assert!(root["metadata"]["wmClass"].is_null());
+                assert_eq!(root["blockAliases"], json!([]));
+                drop(release);
+
+                // Discovery shares the look-root listing slot: while that listing is stuck, a
+                // listing spawns no thread and reports `unavailable`.
+                let shared = enrichment(Duration::from_millis(50));
+                let (release, stuck) = std::sync::mpsc::channel::<()>();
+                lock(&state).unwrap().replace_roots(vec![observed_root()]);
+                let (look_id, _) =
+                    lock(&state)
+                        .unwrap()
+                        .insert_look(observed_root(), vec![node()], None);
+                let found = look_root(
+                    &state,
+                    &json!({ "lookId": look_id }),
+                    connect,
+                    move || {
+                        let _ = stuck.recv();
+                        Ok(None)
+                    },
+                    shared,
+                )
+                .await
+                .unwrap();
+                assert_eq!(found["root"]["metadata"]["x11Pairing"], "unavailable");
+                let spawned = Arc::new(AtomicUsize::new(0));
+                let counted = Arc::clone(&spawned);
+                let root = list(
+                    Box::new(move || {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        Ok(None)
+                    }),
+                    shared,
+                )
+                .await;
+                assert_eq!(root["metadata"]["x11Pairing"], "unavailable");
+                assert_eq!(spawned.load(Ordering::SeqCst), 0);
+                drop(release);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_x11_listings_take_turns_rather_than_fail() {
+        // One listing per app: the second waits for the slot within its deadline, then runs.
+        let slot = enrichment(Duration::from_secs(5));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let (first, second, ()) = tokio::join!(
+            bounded(slot, move || held.recv().map(|()| 1)),
+            bounded(slot, || Ok::<_, std::sync::mpsc::RecvError>(2)),
+            async { release.send(()).unwrap() },
+        );
+        assert_eq!((first, second), (Some(Ok(1)), Some(Ok(2))));
+        assert_eq!(slot.slot.available_permits(), 1);
     }
 
     /// A bus connector for requests that must be refused before reaching AT-SPI.
