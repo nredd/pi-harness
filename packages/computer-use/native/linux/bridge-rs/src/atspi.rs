@@ -725,14 +725,14 @@ impl AtspiClient {
     ) -> Result<Snapshot, ProtocolError> {
         wait_for_reply(self.snapshot_timeout, "snapshot", async {
             self.confirm_readable_scope(root, start).await?;
-            let snapshot = self.unbounded_snapshot(start, max_nodes, max_depth).await?;
+            let snapshot = self.snapshot_impl(start, max_nodes, max_depth).await?;
             self.confirm_readable_scope(root, start).await?;
             Ok(snapshot)
         })
         .await?
     }
 
-    /// `unbounded_snapshot` within one `snapshot_timeout` for traversal and final validation;
+    /// `snapshot_impl` within one `snapshot_timeout` for traversal and final validation;
     /// past it the snapshot is a `timeout`, never a partial one whose validation did not run.
     pub async fn snapshot_from(
         &self,
@@ -743,7 +743,7 @@ impl AtspiClient {
         wait_for_reply(
             self.snapshot_timeout,
             "snapshot",
-            self.unbounded_snapshot(start, max_nodes, max_depth),
+            self.snapshot_impl(start, max_nodes, max_depth),
         )
         .await?
     }
@@ -755,8 +755,9 @@ impl AtspiClient {
     /// (see `parent_is`). Before returning, every container's role and every node's live
     /// `Parent` are re-read once: a container that turned protected meanwhile is redacted and
     /// its subtree dropped, and a node that moved, or whose `Parent` can no longer be read, is
-    /// dropped with its subtree and its listing parent marked `unread`.
-    async fn unbounded_snapshot(
+    /// dropped with its subtree and its listing parent marked `unread`. It still has the node,
+    /// depth and per-request bounds but no deadline of its own; `snapshot_from` adds it.
+    async fn snapshot_impl(
         &self,
         start: &AccessibleRef,
         max_nodes: usize,
