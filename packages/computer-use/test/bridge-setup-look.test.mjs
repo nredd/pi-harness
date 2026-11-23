@@ -943,7 +943,14 @@ describe("outline node helpers through inspect, act and expand", () => {
 					canIncrement: true,
 				}),
 				makeNode("b", { title: "", label: "", canDecrement: true, pictureOnly: true }),
-				makeNode("c", { title: "Group", label: "Group", truncated: true, children: [] }),
+				// Clear of the picture: OCR over an unread subtree is dropped (#1263).
+				makeNode("c", {
+					title: "Group",
+					label: "Group",
+					truncated: true,
+					rect: { x: 100, y: 100, w: 50, h: 20 },
+					children: [],
+				}),
 			],
 		});
 

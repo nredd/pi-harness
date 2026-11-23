@@ -205,6 +205,14 @@ export function isConfirmedReadable(node: OutlineNode): boolean {
 }
 
 /**
+ * Whether OCR may not be placed over `node`: it is protected or unconfirmed, or unread (`truncated`), so an unseen
+ * descendant such as a secure field can sit anywhere in its rect.
+ */
+function coversUnreadablePixels(node: OutlineNode): boolean {
+	return !isConfirmedReadable(node) || node.truncated;
+}
+
+/**
  * Whether `rect` is a known region with positive area. Parse and restore keep only rects whose four fields are finite
  * numbers, so anything else is already `undefined` here.
  */
@@ -244,8 +252,8 @@ function redactPicture(node: OutlineNode): void {
 }
 
 /**
- * Drop text that may show the pixels of a protected or unconfirmed node (#1263): a `text` box on another node, or
- * a picture-only node (whose title is OCR text), that overlaps such a node's rect. Fails closed: when any such
+ * Drop text that may show the pixels of a protected, unconfirmed or unread node (#1263): a `text` box on another
+ * node, or a picture-only node (whose title is OCR text), that overlaps such a node's rect. Fails closed: when any such
  * node has no known area, every box and picture-only title goes, and while one exists a box with no known area goes
  * too. The one exception is trusted provenance: a box the Linux helper derived from its readable node's own AX value
  * (`source: "value"` and the same string), enclosed by that node's rect, under the protected ancestor. A redacted
@@ -260,7 +268,7 @@ function dropTextOverProtected(root: OutlineNode): void {
 		if (hasArea(node.rect)) regions.push({ node, rect: node.rect });
 		else unknownRegion = true;
 	};
-	for (const node of nodes) if (!isConfirmedReadable(node)) addRegion(node);
+	for (const node of nodes) if (coversUnreadablePixels(node)) addRegion(node);
 	if (!regions.length && !unknownRegion) return;
 
 	const mustDropBox = (owner: OutlineNode, text: OutlineText): boolean => {
@@ -272,12 +280,17 @@ function dropTextOverProtected(root: OutlineNode): void {
 		);
 	};
 
-	// Picture-only closure as a worklist: a redacted picture-only node is a new region, which may expose another.
+	// Picture-only closure as a worklist: a redacted picture-only node is a new region, which may expose another. A
+	// picture-only node is never exposed by its own region (helpers send none with an unread subtree).
 	const pictures = nodes.filter((node) => node.pictureOnly && isConfirmedReadable(node));
 	for (let index = 0; index < regions.length && !unknownRegion; index += 1) {
 		const region = regions[index];
 		for (const picture of pictures) {
-			if (isConfirmedReadable(picture) && (!hasArea(picture.rect) || overlaps(region.rect, picture.rect))) {
+			if (
+				picture !== region.node &&
+				isConfirmedReadable(picture) &&
+				(!hasArea(picture.rect) || overlaps(region.rect, picture.rect))
+			) {
 				redactPicture(picture);
 				addRegion(picture);
 			}

@@ -938,6 +938,17 @@ describe("OCR text over a protected node (#1263)", () => {
 		]);
 	});
 
+	test("visual OCR over an unread subtree is dropped; an unread node without a rect drops it all", () => {
+		const unread = { ref: "u", role: "AXGroup", truncated: true, rect: { x: 90, y: 40, w: 100, h: 40 } };
+		const outline = window([unread, farText(), picture("pic_1", SECRET, { x: 100, y: 50, w: 30, h: 10 })], {
+			text: [box(SECRET, { x: 95, y: 45, w: 30, h: 10 }), box("Shown", { x: 250, y: 10, w: 30, h: 10 })],
+		});
+		assert.deepEqual([texts(outline, "w"), texts(outline, "t")], [["Shown"], [SECRET]]);
+		assert.equal(byWire(outline, "pic_1").title, PROTECTED_LABEL);
+		const rectless = window([{ ...unread, rect: { x: 0, y: 0, w: 0, h: 0 } }, farText()]);
+		assert.deepEqual(texts(rectless, "t"), []);
+	});
+
 	test("an unconfirmed node alone filters OCR on restore and graft", () => {
 		const outline = restored([
 			restoredNode("@e2", { role: "AXGroup", wireRef: "old", unconfirmed: true, rect: { x: 0, y: 140, w: 60, h: 30 } }),

@@ -330,7 +330,7 @@ const graftBase = () =>
 		],
 	});
 
-const scopedLook = () =>
+const scopedLook = (over = {}) =>
 	outlineOf({
 		ref: "pane",
 		role: "AXList",
@@ -371,6 +371,7 @@ const scopedLook = () =>
 			},
 			{ role: "AXRow", title: "No wire ref" },
 		],
+		...over,
 	});
 
 describe("graftScopedOutline", () => {
@@ -429,8 +430,8 @@ describe("graftScopedOutline", () => {
 			assert.equal(target[flag], true, flag);
 		assert.equal(target.truncated, true, "a scoped root that is still unread stays truncated (#1190)");
 		assert.deepEqual(target.scrollExtent, { seen: 2, total: 9 });
-		// The box is in scoped space, so its rect is cleared rather than compared with full-look rects (#1263).
-		assert.deepEqual(target.text, [{ string: "scoped text", confidence: 0.5, rect: undefined }]);
+		// The box is in scoped space, so its rect is cleared; the target is still unread, so the unplaced box goes (#1263).
+		assert.deepEqual(target.text, []);
 	});
 
 	test("target without a rect stays rectless; scoped text without rect stays rectless", () => {
@@ -521,7 +522,8 @@ describe("graftScopedOutline", () => {
 
 	test("grafted descendants lose their rects; reused node rects are cleared too; text rects too", () => {
 		const outline = graftBase();
-		graftScopedOutline(outline, "@e2", scopedLook());
+		// A read target: with nothing unreadable in the outline, unplaced boxes stay.
+		graftScopedOutline(outline, "@e2", scopedLook({ truncated: false }));
 		const byWire = (wire) => outline.nodes.find((node) => node.wireRef === wire);
 		for (const wire of ["keep", "fresh", "fresh-kid", "gone"])
 			assert.equal(byWire(wire).rect, undefined, `${wire} rect`);
