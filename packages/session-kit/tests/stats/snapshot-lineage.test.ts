@@ -273,7 +273,7 @@ describe("row lineage", () => {
 const MACHINE = "6f1c2a43-8a8f-4a7e-9f43-0d4f3c8a1b2e";
 const manifest: Manifest = { version: 3, machineId: MACHINE, label: "m", exportedAt: 1, lastGoodAt: {}, shards: [] };
 const SESSION = "a".repeat(64);
-function row(extra: Partial<SnapshotEvent> = {}): SnapshotEvent {
+function legacyEvent(extra: Partial<SnapshotEvent> = {}): SnapshotEvent {
 	const e = {
 		harness: "pi" as const,
 		entryId: null,
@@ -305,8 +305,8 @@ const retire = (e: SnapshotEvent, successor: string, extra: Partial<RetiredEvent
 };
 
 describe("lineage validation", () => {
-	const live = row({ output: 2, origin: 0 });
-	const old = row({ output: 1 });
+	const live = legacyEvent({ output: 2, origin: 0 });
+	const old = legacyEvent({ output: 1 });
 
 	it("round-trips a lineage shard through its compact wire form", () => {
 		const shard = lineageShard([live], [retire(old, live.id)]);
@@ -315,9 +315,14 @@ describe("lineage validation", () => {
 	});
 
 	it.each([
-		["an origin on an identified row", [row({ entryId: "b".repeat(24), origin: 0 })], [], "Invalid event origin"],
-		["a negative origin", [row({ origin: -1 })], [], "Invalid event origin"],
-		["no lineage at all", [row({ origin: null })], [], "Lineage shard without lineage"],
+		[
+			"an origin on an identified row",
+			[legacyEvent({ entryId: "b".repeat(24), origin: 0 })],
+			[],
+			"Invalid event origin",
+		],
+		["a negative origin", [legacyEvent({ origin: -1 })], [], "Invalid event origin"],
+		["no lineage at all", [legacyEvent({ origin: null })], [], "Lineage shard without lineage"],
 		["a retired row that is also counted", [live], [retire(live, old.id)], "Invalid retired event"],
 		["a self-successor", [live], [retire(old, old.id)], "Invalid retired event"],
 		["another reason", [live], [retire(old, live.id, { reason: "x" as never })], "Invalid retired event"],
@@ -325,7 +330,7 @@ describe("lineage validation", () => {
 		[
 			"a retired identified row",
 			[live],
-			[retire(row({ entryId: "b".repeat(24), output: 3 }), live.id)],
+			[retire(legacyEvent({ entryId: "b".repeat(24), output: 3 }), live.id)],
 			"Invalid retired event",
 		],
 		["a duplicate event", [live, live], [], "Invalid snapshot event"],
@@ -345,7 +350,7 @@ describe("lineage validation", () => {
 	it.each([
 		[
 			"a successor that is not published",
-			[lineageShard([live], [retire(old, row({ output: 9 }).id)])],
+			[lineageShard([live], [retire(old, legacyEvent({ output: 9 }).id)])],
 			"Invalid row lineage",
 		],
 		[
@@ -357,7 +362,7 @@ describe("lineage validation", () => {
 			"a row retired twice",
 			[
 				lineageShard([live], [retire(old, live.id)]),
-				lineageShard([row({ output: 5, origin: 1 })], [retire(old, live.id)]),
+				lineageShard([legacyEvent({ output: 5, origin: 1 })], [retire(old, live.id)]),
 			],
 			"Duplicate retired identity",
 		],
@@ -366,7 +371,7 @@ describe("lineage validation", () => {
 	});
 
 	it("accepts a retired row whose successor was retired in turn", () => {
-		const middle = row({ output: 3 });
+		const middle = legacyEvent({ output: 3 });
 		const shard = lineageShard([live], [retire(old, middle.id), retire(middle, live.id)]);
 		expect(() => validateSnapshot({ manifest, shards: [shard] })).not.toThrow();
 	});

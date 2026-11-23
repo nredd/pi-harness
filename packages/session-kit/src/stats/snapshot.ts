@@ -565,7 +565,7 @@ function compactJson(shard: Shard): string {
 	const models = new Map(pairs.map((pair, i) => [pair, i]));
 	const epoch = Date.parse(`${shard.month}-01T00:00:00Z`);
 	const lineage = shard.version === LINEAGE_VERSION;
-	const row = (e: Omit<SnapshotEvent, "origin">): unknown[] => [
+	const wireRow = (e: Omit<SnapshotEvent, "origin">): unknown[] => [
 		sessions.get(e.sessionId),
 		HARNESSES.indexOf(e.harness as Harness),
 		e.entryId === null ? null : packedId(e.entryId),
@@ -588,10 +588,10 @@ function compactJson(shard: Shard): string {
 		d: [...shard.sessions]
 			.sort((a, b) => codeUnits(a.id, b.id))
 			.map((s) => [sessions.get(s.id), s.startMs - epoch, s.endMs - s.startMs, s.child ? 1 : 0]),
-		e: [...shard.events].sort(order).map((e) => (lineage ? [...row(e), e.origin] : row(e))),
+		e: [...shard.events].sort(order).map((e) => (lineage ? [...wireRow(e), e.origin] : wireRow(e))),
 		q: shard.quota,
 		// Retired rows: the event row, then the successor's packed id and the reason code (1: `revised`).
-		...(lineage ? { x: [...retired].sort(order).map((e) => [...row(e), packedId(e.successor), 1]) } : {}),
+		...(lineage ? { x: [...retired].sort(order).map((e) => [...wireRow(e), packedId(e.successor), 1]) } : {}),
 	};
 	return JSON.stringify(compact);
 }
