@@ -203,10 +203,13 @@ says it may still be running. The chosen file is read once and its todos are rep
 header in those same bytes still has its session id, this cwd and no `parentSession`, so a file
 replaced after the scan shows nothing. A chosen session with nothing open, or one that cannot be read,
 shows nothing; the scan never falls back to an older session. Like the compaction list, the pending
-read lives in memory, so a session switch before the first request drops it. RPC parents get it
-because their client keeps driving the session and issues its own `/new`; one-shot print and JSON
-runs never do, since their output is scripted and the list could name a live sibling's todos
-([#1321](https://github.com/nredd/pi-harness/issues/1321)).
+read lives in memory, so a session switch before the first request drops it. RPC startup accepts
+the same live-sibling risk as TUI startup: the scan can select a still-running same-cwd sibling, and
+the same-bytes header check confirms its id, cwd and missing `parentSession`, not that it ended.
+The client's ability to issue `/new` does not make that scan safer. The line between modes is what
+the session is for: a client-driven TUI or RPC session can use a read-only handoff, while a one-shot
+print or JSON run is scripted output and should not get unrelated todos in its model context, so it
+never gets the list ([#1321](https://github.com/nredd/pi-harness/issues/1321)).
 
 ### Session switches and survivors
 

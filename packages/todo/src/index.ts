@@ -316,7 +316,7 @@ export default function (
 		// detach live agents that pi-subagents re-announces below.
 		await planHooks.sessionStarted(id, event.reason === "startup", ctx.sessionManager.getBranch(), ctx.mode);
 		// A fresh session surfaces, never imports, the open todos its predecessor left.
-		if (previous) planHooks.sessionFresh(id, previous);
+		if (previous) planHooks.sessionFresh(id, previous, ctx.mode);
 		// The session this activation's subagents report to: a headless run's
 		// only session, or the UI foreground (a child session never rebinds it).
 		if (!ctx.hasUI) {
