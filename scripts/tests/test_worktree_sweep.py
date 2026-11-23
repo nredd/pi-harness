@@ -373,7 +373,7 @@ def test_unknown_scope_is_keep_only_with_fixture_evidence(wt: Worktrees, case: s
     if case == "clean":
         assert results[-1]["reasons"] == [
             "cannot establish a complete external borrower scope",
-            "status not collected: tracked worktree changes were not compared",
+            "status not collected: `git status` was not run",
         ]
     if case == "borrowed scratch":
         assert "untracked or ignored paths" in str(results[0]["reasons"])
@@ -430,7 +430,7 @@ def test_shipped_cli_is_keep_only(wt: Worktrees) -> None:
         "verdict": "keep",
         "reasons": [
             "cannot establish a complete external borrower scope",
-            "status not collected: tracked worktree changes were not compared",
+            "status not collected: `git status` was not run",
         ],
     }
     assert receipt.read_text().splitlines() == ["list", "view"]
@@ -458,7 +458,7 @@ def test_cli_output_cannot_emit_eligible_when_assess_returns_eligible(wt: Worktr
     assert result["verdict"] == "keep"
     assert result["reasons"] == [
         "cannot establish a complete external borrower scope",
-        "status not collected: tracked worktree changes were not compared",
+        "status not collected: `git status` was not run",
     ]
 
 
@@ -496,7 +496,8 @@ def test_dirty_or_ignored(wt: Worktrees, name: str) -> None:
     code, (result,) = run(wt, borrower_gitdirs=None)
     assert code == 0
     assert result["verdict"] == "keep"
-    assert ("status not collected" if name == "tracked" else name) in str(result["reasons"])
+    expected = "tracked content differs from index: b'tracked'" if name == "tracked" else name
+    assert expected in str(result["reasons"])
 
 
 @pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
@@ -523,20 +524,145 @@ def test_disabled_filemode_hides_executable_bit_change(wt: Worktrees) -> None:
     keep(wt, "core.filemode")
 
 
-def test_disabled_trustctime_hides_same_size_edit_with_restored_mtime(wt: Worktrees) -> None:
+def closed_scope(wt: Worktrees) -> dict[str, object]:
+    """Return the internal assessment for the candidate under an explicit closed scope.
+
+    Parameters:
+        wt: Worktrees, Candidate and evidence fixture.
+    Returns:
+        dict[str, object]: The single fixture verdict record.
+    Raises:
+        AssertionError: The scan did not produce exactly one record.
+    """
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    return result
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_disabled_trustctime_same_size_edit_with_restored_mtime(wt: Worktrees, edited: bool) -> None:
     git(wt.path, "config", "core.trustctime", "false")
     target = wt.path / "tracked"
     os.utime(target, (1, 1))
     git(wt.path, "update-index", "--refresh")
     original = target.stat()
-    target.write_text("other\n")
+    target.write_text("other\n" if edited else "saved\n")
     os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
     assert git(wt.path, "status", "--porcelain") == b""
-    assert git(wt.path, "hash-object", "--no-filters", "tracked") != git(wt.path, "rev-parse", "HEAD:tracked")
+    raw = git(wt.path, "hash-object", "--no-filters", "tracked")
+    assert (raw != git(wt.path, "rev-parse", "HEAD:tracked")) is edited
     quiet(wt)
     os.utime(wt.admin / "index", (10, 10))
     assert git(wt.path, "--no-optional-locks", "status", "--porcelain") == b""
-    keep(wt, "core.trustctime")
+    result = closed_scope(wt)
+    if edited:
+        assert result["verdict"] == "keep"
+        assert result["reasons"] == ["tracked content differs from index: b'tracked'"]
+    else:
+        assert result["verdict"] == "eligible", result
+
+
+@pytest.mark.parametrize("change", ["executable", "link target"])
+def test_tracked_mode_or_link_change_keeps(wt: Worktrees, change: str) -> None:
+    name = "tracked"
+    if change == "executable":
+        (wt.path / name).chmod(0o755)
+    else:
+        name = "link"
+        (wt.path / name).symlink_to("aaaa")
+        git(wt.path, "add", name)
+        git(wt.path, "commit", "-m", "Link")
+        wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+        (wt.path / name).unlink()
+        (wt.path / name).symlink_to("bbbb")
+    quiet(wt)
+    result = closed_scope(wt)
+    assert result["verdict"] == "keep"
+    assert result["reasons"] == [f"tracked content differs from index: b'{name}'"]
+
+
+@pytest.mark.parametrize("change", ["symlink to copy", "fifo", "deleted", "symlinked parent"])
+def test_content_check_alone_keeps_replaced_entries(
+    wt: Worktrees, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    # Earlier line-ending and untracked checks also keep these end to end.
+    target = wt.path / "tracked"
+    copy = wt.repo.parent / "copy"
+    copy.mkdir()
+    (copy / "tracked").write_bytes(target.read_bytes())
+    target.unlink()
+    expected = "tracked content differs from index: b'tracked'"
+    if change == "symlink to copy":
+        target.symlink_to(copy / "tracked")
+    elif change == "fifo":
+        os.mkfifo(target)
+    elif change == "deleted":
+        expected = "No such file"
+    else:
+        expected = "tracked path leaves the checkout: b'dir/tracked'"
+        git(wt.path, "update-index", "--force-remove", "tracked")
+        blob = git(wt.repo, "rev-parse", "HEAD:tracked").decode().strip()
+        git(wt.path, "update-index", "--add", "--cacheinfo", f"100644,{blob},dir/tracked")
+        (wt.path / "dir").symlink_to(copy)
+    monkeypatch.setattr(os, "environ", git_env())
+    with pytest.raises((GUARD_MODULE["KeepError"], OSError), match=expected):
+        GUARD_MODULE["check_content"](wt.path.resolve())
+
+
+def test_unchanged_tracked_symlink_and_executable_are_clean(wt: Worktrees) -> None:
+    (wt.path / "link").symlink_to("tracked")
+    (wt.path / "tool").write_text("#!/bin/sh\n")
+    (wt.path / "tool").chmod(0o755)
+    git(wt.path, "add", "link", "tool")
+    git(wt.path, "commit", "-m", "Link and tool")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    quiet(wt)
+    result = closed_scope(wt)
+    assert result["verdict"] == "eligible", result
+
+
+def test_sha256_content_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--template=", "--object-format=sha256")
+    (repo / "tracked").write_text("saved\n")
+    git(repo, "add", "tracked")
+    monkeypatch.setattr(os, "environ", git_env())
+    GUARD_MODULE["check_content"](repo.resolve())
+    (repo / "tracked").write_text("other\n")
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked content differs from index"):
+        GUARD_MODULE["check_content"](repo.resolve())
+
+
+def test_unmerged_index_entry_keeps(wt: Worktrees, monkeypatch: pytest.MonkeyPatch) -> None:
+    git(wt.path, "switch", "-c", "side")
+    (wt.path / "tracked").write_text("side\n")
+    git(wt.path, "commit", "-am", "Side")
+    git(wt.path, "switch", "merged")
+    (wt.path / "tracked").write_text("main\n")
+    git(wt.path, "commit", "-am", "Main")
+    with pytest.raises(subprocess.CalledProcessError):
+        git(wt.path, "merge", "side")
+    monkeypatch.setattr(os, "environ", git_env())
+    with pytest.raises(GUARD_MODULE["KeepError"], match="unsupported index entry"):
+        GUARD_MODULE["check_content"](wt.path.resolve())
+
+
+@pytest.mark.parametrize(
+    ("stage", "reason"),
+    [
+        (b"100644 " + b"a" * 40 + b" 0\ttracked", "incomplete index inventory"),
+        (b"100644 " + b"a" * 64 + b" 0\ttracked\0", "unsupported index entry"),
+    ],
+)
+def test_malformed_index_inventory_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: bytes, reason: str
+) -> None:
+    replies = {"rev-parse": b"sha1\n", "ls-files": stage}
+    check = GUARD_MODULE["check_content"]
+    monkeypatch.setitem(check.__globals__, "git", lambda _path, command, *_args: replies[command])
+    with pytest.raises(GUARD_MODULE["KeepError"], match=reason):
+        check(tmp_path)
 
 
 def test_known_owner_or_retained_empty_claim(wt: Worktrees) -> None:
@@ -852,7 +978,7 @@ def test_command_diagnostics_including_whitespace_keep(wt: Worktrees) -> None:
         (
             "git@github.com:source/project.git",
             '[{"number": 123, "state": "MERGED"}]',
-            "tracked worktree changes were not compared",
+            "`git status` was not run",
         ),
     ],
 )
@@ -1125,7 +1251,7 @@ def test_filter_activated_after_attribute_scan_is_not_run(wt: Worktrees) -> None
     assert not marker.exists()
     assert code == 0
     assert result["verdict"] == "keep"
-    assert "status not collected" in str(result["reasons"])
+    assert "tracked content differs from index: b'tracked'" in str(result["reasons"])
 
 
 @pytest.mark.parametrize("attr", ["text eol=lf", "text=auto"])

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -53,9 +55,10 @@ TIMEOUT = 30
 MAX_TREE_ENTRIES = 100_000
 QUIET_SECONDS = 3600
 UNKNOWN_SCOPE = "cannot establish a complete external borrower scope"
-STATUS_NOT_COLLECTED = (
-    "status not collected: tracked worktree changes were not compared"
-)
+STATUS_NOT_COLLECTED = "status not collected: `git status` was not run"
+CHUNK = 1 << 20
+HASHES = {b"sha1": ("sha1", 40), b"sha256": ("sha256", 64)}
+STAGE = re.compile(rb"(100644|100755|120000) ([a-f0-9]+) 0\t(.+)", re.DOTALL)
 PR_FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
 OPERATIONS = (
     "rebase-apply",
@@ -481,10 +484,84 @@ def check_status(path: Path, admin: Path) -> None:
         raise KeepError(
             "`core.filemode` is disabled; executable-bit changes may be hidden"
         )
-    if config(path, "core.trustctime", "--type=bool") == "false":
-        raise KeepError(
-            "`core.trustctime` is disabled; restored mtimes may hide content changes"
-        )
+    check_content(path)
+
+
+def check_content(path: Path) -> None:
+    """Hash every tracked worktree entry raw and compare it with its index blob.
+
+    Object IDs are computed in process from `lstat`, `readlink` and raw reads, so
+    no clean filter, textconv or stat cache (`core.trustctime`) is consulted.
+    Unmerged, gitlink or other unexpected index entries keep.
+
+    Parameters:
+        path: Path, Resolved candidate checkout.
+    Returns:
+        None.
+    Raises:
+        KeepError: An entry is unsupported or its raw content or mode differs.
+        OSError: A tracked entry cannot be read.
+    """
+    storage = git(path, "rev-parse", "--show-object-format").strip()
+    algorithm, width = HASHES[storage]
+    records = git(path, "ls-files", "--stage", "-z").split(b"\0")
+    if records[-1]:
+        raise KeepError("incomplete index inventory")
+    for record in records[:-1]:
+        match = STAGE.fullmatch(record)
+        if match is None or len(match[2]) != width:
+            raise KeepError(f"unsupported index entry: {record!r}")
+        target = path / os.fsdecode(match[3])
+        # Never follow a symlinked parent directory out of the checkout.
+        if target.parent.resolve() != target.parent:
+            raise KeepError(f"tracked path leaves the checkout: {match[3]!r}")
+        if blob(target, algorithm) != (match[1], match[2].decode()):
+            raise KeepError(f"tracked content differs from index: {match[3]!r}")
+
+
+def entry_mode(info: os.stat_result) -> bytes:
+    """Map a stat result to the index mode Git would record for it.
+
+    Parameters:
+        info: os.stat_result, Unfollowed or open-file stat result.
+    Returns:
+        bytes: Git mode, or `unsupported` for any other file type
+    Raises:
+        None.
+    """
+    if stat.S_ISLNK(info.st_mode):
+        return b"120000"
+    if stat.S_ISREG(info.st_mode):
+        return b"100755" if info.st_mode & stat.S_IXUSR else b"100644"
+    return b"unsupported"
+
+
+def blob(target: Path, algorithm: str) -> tuple[bytes, str]:
+    """Hash one worktree entry as a Git blob without filters or conversions.
+
+    Parameters:
+        target: Path, Tracked worktree entry.
+        algorithm: str, Repository object hash algorithm.
+    Returns:
+        tuple[bytes, str]: Git mode and raw blob object ID
+    Raises:
+        OSError: The entry cannot be read without following a symlink.
+    """
+    mode = entry_mode(os.lstat(target))
+    if mode == b"120000":
+        link = os.fsencode(os.readlink(target))
+        digest = hashlib.new(algorithm, b"blob %d\0%s" % (len(link), link))
+        return mode, digest.hexdigest()
+    if mode == b"unsupported":
+        return mode, ""
+    # Never block on a FIFO or follow a symlink swapped in after `lstat`.
+    descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        digest = hashlib.new(algorithm, b"blob %d\0" % info.st_size)
+        for chunk in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(chunk)
+    return entry_mode(info), digest.hexdigest()
 
 
 def check_eol(data: bytes) -> None:
