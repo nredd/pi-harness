@@ -585,9 +585,10 @@ reads but does not validate; reported as `Invalid export state in <path>: <reaso
 the file, which holds the salt, nor attaching its parse error). `clean-recovery` (below) uses the same
 protocol, and every refusal it makes is owner action: retrying the cleanup alone never helps, only the
 owner or a later export changing the outbox does. Its codes: `recovery-outbox-missing` (no outbox
-directory for this machine under `--output`), `recovery-snapshot-unverified` (the active manifest is missing,
-corrupt, denied (`EACCES`/`EPERM`), not v3 or not this machine's, or a shard it references is missing or
-corrupt), `recovery-set-unrecorded`
+directory for this machine under `--output`), `recovery-snapshot-unverified` (the active manifest is missing or
+denied (`EACCES`/`EPERM`), or a shard it references is missing or corrupt: an ordinary export refuses
+those too and `--replace-harnesses` would drop the history, so restore the manifest, the referenced
+shards or read access, then retry; or the manifest is corrupt, not v3 or not this machine's: export first), `recovery-set-unrecorded`
 (the outbox has no bookkeeping of its own with a recorded recovery set) and `recovery-harness-lost`
 (a lost harness's history may live only in frozen files); its `export-state-invalid` is the same
 bookkeeping check as an export's. An uncoded cleanup failure (lock contention, `EIO` or any other

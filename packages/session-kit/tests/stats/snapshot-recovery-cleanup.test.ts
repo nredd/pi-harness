@@ -46,6 +46,9 @@ afterEach(() => {
 });
 
 const MONTH = "2026-10";
+const missingOrDamaged =
+	"Recovery cleanup refused: the active manifest or a shard it references is missing, denied or damaged; " +
+	"restore the manifest, the referenced shards or read access, then retry; nothing was removed";
 const hex = (seed: string): string => createHash("sha256").update(seed).digest("hex");
 const SESSION = hex("session");
 const manifestOf = (): Manifest => JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
@@ -341,13 +344,14 @@ describe("cleanRecovery", () => {
 	});
 
 	/** Run `swap` once, at the recheck's `lstat` of the active shard: after the manifest was read, before the unlink. */
-	async function duringRecheck(swap: () => void): Promise<void> {
+	/** Run `swap` during the active-shard pass of recheck `n` (1-based), after its manifest read. */
+	async function duringRecheck(swap: () => void, n = 1): Promise<void> {
 		const active = join(snapshotDir, manifestOf().shards[0]?.file as string);
 		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 		let reads = 0;
 		vi.mocked(lstat).mockImplementation(async (path, options) => {
 			const info = await actual.lstat(path, options);
-			if (String(path) === active && ++reads === 2) swap();
+			if (String(path) === active && ++reads === n + 1) swap();
 			return info;
 		});
 	}
@@ -370,17 +374,23 @@ describe("cleanRecovery", () => {
 		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 	});
 
-	it("stops when the manifest turns unreadable during the recheck", async () => {
-		publish([activeShard()]);
-		const candidate = write(shard({ events: [event(1)], sessions: [session()] })).file;
-		bookkeeping([candidate]);
-		await duringRecheck(() => writeFileSync(join(snapshotDir, "manifest.json"), "corrupt"));
-		expect(await cleanRecovery(agent, out)).toMatchObject({
-			removed: [],
-			kept: [{ file: candidate, reason: "changed" }],
-		});
-		expect(existsSync(join(snapshotDir, candidate))).toBe(true);
-		expect(stateOf().recoveryFiles).toEqual([candidate]);
+	it.each([
+		["malformed JSON", "corrupt"],
+		["valid JSON with an invalid schema", "{}"],
+	])("stops, recording earlier unlinks, when the manifest turns into %s during a recheck", async (_, bytes) => {
+		publish([shard({ events: [event(1), event(2)], sessions: [session()] })]);
+		const first = write(shard({ events: [event(1)], sessions: [session()] })).file;
+		const second = write(shard({ events: [event(2)], sessions: [session()] })).file;
+		bookkeeping([first, second]);
+		await duringRecheck(() => writeFileSync(join(snapshotDir, "manifest.json"), bytes), 2);
+		const result = await cleanRecovery(agent, out);
+		expect(result).toMatchObject({ removed: [first], failed: [], kept: [{ file: second, reason: "changed" }] });
+		expect(result.warnings).toEqual([
+			"recovery cleanup stopped: the active manifest changed; 1 redundant files left in place",
+		]);
+		expect(existsSync(join(snapshotDir, first))).toBe(false);
+		expect(existsSync(join(snapshotDir, second))).toBe(true);
+		expect(stateOf().recoveryFiles).toEqual([second]);
 	});
 
 	it("stops, keeping everything protected, on a transient read error during the recheck", async () => {
@@ -510,18 +520,29 @@ describe("cleanRecovery", () => {
 		const manifest = join(snapshotDir, "manifest.json");
 		chmodSync(manifest, 0o000);
 		onTestFinished(() => chmodSync(manifest, 0o600));
-		await expect(cleanRecovery(agent, out)).rejects.toMatchObject({ refusal: "recovery-snapshot-unverified" });
+		await expect(cleanRecovery(agent, out)).rejects.toMatchObject({
+			refusal: "recovery-snapshot-unverified",
+			message: missingOrDamaged,
+		});
+		// An ordinary export refuses it too, so the cleanup must not send the owner there.
+		await expect(exportStats(agent, out)).rejects.toMatchObject({ refusal: "history-unreadable" });
 	});
 
 	const refusal = (why: string) => `Recovery cleanup refused: ${why}; nothing was removed`;
 	const unauthenticated = refusal(
-		"the active manifest or a shard it references does not authenticate as this machine's v3 snapshot; export first",
+		"the active manifest does not authenticate as this machine's v3 snapshot; export first",
 	);
 	const unaccounted = refusal(
 		"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first",
 	);
 	it.each([
-		["a missing manifest", () => write(activeShard()), unauthenticated, "recovery-snapshot-unverified"],
+		[
+			"a missing manifest",
+			() => write(activeShard()),
+			missingOrDamaged,
+			"recovery-snapshot-unverified",
+			"manifest-missing",
+		],
 		[
 			"a corrupt manifest",
 			() => {
@@ -537,8 +558,9 @@ describe("cleanRecovery", () => {
 				publish([activeShard()]);
 				writeFileSync(join(snapshotDir, manifestOf().shards[0]?.file as string), "corrupt");
 			},
-			unauthenticated,
+			missingOrDamaged,
 			"recovery-snapshot-unverified",
+			"history-unreadable",
 		],
 		["a v2 manifest", () => publish([], { version: 2 }), unauthenticated, "recovery-snapshot-unverified"],
 		[
@@ -578,21 +600,26 @@ describe("cleanRecovery", () => {
 			"Invalid export state in",
 			"export-state-invalid",
 		],
-	])("refuses with %s and changes nothing", async (_, arrange, message, code) => {
-		arrange();
-		const frozen = write(shard({ events: [event(1)], sessions: [session()] })).file;
-		const listing = () => readdirSync(out, { recursive: true }).map(String).sort();
-		const before = listing();
-		const state = () => {
-			const path = outboxStatePath(agent, snapshotDir);
-			return existsSync(path) ? readFileSync(path) : undefined;
-		};
-		const recorded = state();
-		const error = await cleanRecovery(agent, out).catch((e: unknown) => e);
-		expect(error).toBeInstanceOf(ExportRefusal);
-		expect(error).toMatchObject({ refusal: code, message: expect.stringContaining(message) });
-		expect(listing()).toEqual(before);
-		expect(state()).toEqual(recorded);
-		expect(existsSync(join(snapshotDir, frozen))).toBe(true);
-	});
+	] as [string, () => void, string, string, string?][])(
+		"refuses with %s and changes nothing",
+		async (_, arrange, message, code, exported) => {
+			arrange();
+			const frozen = write(shard({ events: [event(1)], sessions: [session()] })).file;
+			const listing = () => readdirSync(out, { recursive: true }).map(String).sort();
+			const before = listing();
+			const state = () => {
+				const path = outboxStatePath(agent, snapshotDir);
+				return existsSync(path) ? readFileSync(path) : undefined;
+			};
+			const recorded = state();
+			const error = await cleanRecovery(agent, out).catch((e: unknown) => e);
+			expect(error).toBeInstanceOf(ExportRefusal);
+			expect(error).toMatchObject({ refusal: code, message: expect.stringContaining(message) });
+			expect(listing()).toEqual(before);
+			expect(state()).toEqual(recorded);
+			expect(existsSync(join(snapshotDir, frozen))).toBe(true);
+			// Where the cleanup says to restore rather than export, an ordinary export refuses as well.
+			if (exported !== undefined) await expect(exportStats(agent, out)).rejects.toMatchObject({ refusal: exported });
+		},
+	);
 });

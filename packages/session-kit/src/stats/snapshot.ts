@@ -1811,24 +1811,32 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 	});
 	if (!outbox?.isDirectory())
 		throw refused("recovery-outbox-missing", `no outbox for this machine at ${JSON.stringify(snapshotDir)}`);
-	/** The active snapshot, when it authenticates as this machine's v3 snapshot. */
-	const authenticated = async (): Promise<Exclude<Previous, null | "unreadable"> | undefined> => {
-		const previous = await loadPrevious(snapshotDir);
-		return previous === null ||
-			previous === "unreadable" ||
-			"damaged" in previous ||
-			previous.manifest.version !== 3 ||
-			previous.manifest.machineId !== identity.machineId
+	/** `loaded` when it authenticates as this machine's v3 snapshot. */
+	const verified = (loaded: Previous | Damaged): Exclude<Previous, null | "unreadable"> | undefined =>
+		loaded === null ||
+		loaded === "unreadable" ||
+		"damaged" in loaded ||
+		loaded.manifest.version !== 3 ||
+		loaded.manifest.machineId !== identity.machineId
 			? undefined
-			: previous;
-	};
+			: loaded;
+	const authenticated = async () => verified(await loadPrevious(snapshotDir));
 	return withExportLock(snapshotDir, async () => {
 		// Transient I/O reading the active snapshot (EIO, EMFILE, a denied shard) throws uncoded: retry it.
-		const previous = await authenticated();
+		const loaded = await loadPrevious(snapshotDir);
+		// An ordinary export refuses these too (`manifest-missing`, `history-unreadable`), and its override would
+		// drop the history: only restoring the files or read access helps.
+		if (loaded === null || (loaded !== "unreadable" && "damaged" in loaded))
+			throw refused(
+				"recovery-snapshot-unverified",
+				"the active manifest or a shard it references is missing, denied or damaged; " +
+					"restore the manifest, the referenced shards or read access, then retry",
+			);
+		const previous = verified(loaded);
 		if (previous === undefined)
 			throw refused(
 				"recovery-snapshot-unverified",
-				"the active manifest or a shard it references does not authenticate as this machine's v3 snapshot; export first",
+				"the active manifest does not authenticate as this machine's v3 snapshot; export first",
 			);
 		const statePath = await outboxStateFile(dir, snapshotDir);
 		await privateOutboxes(dirname(statePath));
@@ -1861,7 +1869,9 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 			const now = await authenticated().catch(() => undefined);
 			if (now === undefined || JSON.stringify(now.manifest) !== expected) return false;
 			// Reread after the shard pass: a restore that swapped manifest.json during it is otherwise unseen.
-			const manifest = await jsonFile(join(snapshotDir, "manifest.json")).then(validateManifest, () => undefined);
+			const manifest = await jsonFile(join(snapshotDir, "manifest.json"))
+				.then(validateManifest)
+				.catch(() => undefined);
 			if (manifest === undefined || JSON.stringify(manifest) !== expected) return false;
 			return frozenShard(snapshotDir, previous.manifest, file).then(
 				() => true,

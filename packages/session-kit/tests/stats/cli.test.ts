@@ -445,8 +445,7 @@ describe("stats CLI", () => {
 			`Recovery cleanup refused: ${why}; nothing was removed`,
 			`pi-stats-refusal: {"code":"${code}"}`,
 		];
-		const unverified =
-			"the active manifest or a shard it references does not authenticate as this machine's v3 snapshot; export first";
+		const unverified = "the active manifest does not authenticate as this machine's v3 snapshot; export first";
 		const unrecorded =
 			"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first";
 		const missing = await clean();
