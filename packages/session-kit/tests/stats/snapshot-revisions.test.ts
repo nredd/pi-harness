@@ -30,7 +30,7 @@ import {
 	type Shard,
 	type SnapshotQuota,
 } from "../../src/stats/snapshot.ts";
-import { assistantLine, at, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
 import { CANARY, claudeRow, writeLines } from "../fixtures/stats/harness/fixtures.ts";
 import { seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
@@ -48,6 +48,8 @@ vi.mock("node:fs/promises", async (original) => {
 		writeFile: vi.fn(actual.writeFile),
 	};
 });
+/** A UTC instant. Snapshot months are UTC, so fixtures and the pinned clock must not depend on the host time zone. */
+const utc = (day: string, hour = 12): number => Date.parse(`${day}T${String(hour).padStart(2, "0")}:00:00Z`);
 let root: string;
 let agent: string;
 let out: string;
@@ -57,7 +59,7 @@ beforeEach(({ onTestFinished }) => {
 	agent = join(root, "agent");
 	out = join(root, "out");
 	viewer = join(root, "viewer");
-	vi.spyOn(Date, "now").mockReturnValue(at("2026-11-02"));
+	vi.spyOn(Date, "now").mockReturnValue(utc("2026-11-02"));
 });
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -71,12 +73,6 @@ afterEach(() => {
 	vi.mocked(writeFile).mockRestore();
 });
 const manifest = (path: string): Manifest => JSON.parse(readFileSync(join(path, "manifest.json"), "utf8")) as Manifest;
-/** A UTC instant. Snapshot months are UTC, so month-boundary fixtures must not depend on the host time zone. */
-const utc = (day: string, hour = 12): number => Date.parse(`${day}T${String(hour).padStart(2, "0")}:00:00Z`);
-/** Pin the export clock to a UTC instant early in November, the active month. */
-const utcClock = (): void => {
-	vi.mocked(Date.now).mockReturnValue(utc("2026-11-02"));
-};
 
 it.each(["2026-10-31T23:58:00Z", "2026-11-01T00:00:01Z"])(
 	"replaces a streaming call sealed before its final counters at %s",
@@ -85,7 +81,7 @@ it.each(["2026-10-31T23:58:00Z", "2026-11-01T00:00:01Z"])(
 		const roots = seedHarnessHome(home);
 		const path = join(roots.claude, "projects", `-Users-${CANARY}-work`, "sess-A.jsonl");
 		const options = { harnesses: ["claude"] as const, roots, home, env: {} };
-		const clock = vi.spyOn(Date, "now").mockReturnValue(at("2026-10-31", 23));
+		const clock = vi.spyOn(Date, "now").mockReturnValue(utc("2026-10-31", 23));
 		writeLines(path, [
 			claudeRow({
 				id: "stream",
@@ -98,7 +94,7 @@ it.each(["2026-10-31T23:58:00Z", "2026-11-01T00:00:01Z"])(
 		writeLines(path, [
 			claudeRow({ id: "stream", requestId: "request", ts: finalTime, usage: { input_tokens: 10, output_tokens: 500 } }),
 		]);
-		clock.mockReturnValue(at("2026-11-01", 1));
+		clock.mockReturnValue(utc("2026-11-01", 1));
 		await exportStats(agent, out, undefined, options);
 		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 		const combined = await loadCombined(viewer);
@@ -109,20 +105,20 @@ it.each(["2026-10-31T23:58:00Z", "2026-11-01T00:00:01Z"])(
 
 it.each(["start", "child"])("regenerates sealed metadata after its %s changes", async (change) => {
 	const path = join(agent, "sessions", "fixture.jsonl");
-	const first = assistantLine({ ms: at("2026-10-16"), provider: "physical", model: "fixture", input: 7 });
-	sessionFile(path, { startMs: at("2026-10-15"), lines: [first] });
+	const first = assistantLine({ ms: utc("2026-10-16"), provider: "physical", model: "fixture", input: 7 });
+	sessionFile(path, { startMs: utc("2026-10-15"), lines: [first] });
 	await exportStats(agent, out);
 	sessionFile(path, {
-		startMs: at(change === "start" ? "2026-09-30" : "2026-10-15"),
+		startMs: utc(change === "start" ? "2026-09-30" : "2026-10-15"),
 		...(change === "child" ? { parentSession: "fixture-parent", name: "Explore#1234abcd" } : {}),
-		lines: [first, assistantLine({ ms: at("2026-10-17"), provider: "physical", model: "fixture", input: 9 })],
+		lines: [first, assistantLine({ ms: utc("2026-10-17"), provider: "physical", model: "fixture", input: 9 })],
 	});
 	await exportStats(agent, out);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	const combined = await loadCombined(viewer);
 	expect(combined.calls).toHaveLength(2);
 	expect(combined.sessionMetadata?.[0]).toMatchObject({
-		startMs: at(change === "start" ? "2026-09-30" : "2026-10-15"),
+		startMs: utc(change === "start" ? "2026-09-30" : "2026-10-15"),
 		child: change === "child",
 	});
 });
@@ -133,7 +129,6 @@ it.each([
 ])(
 	"keeps sealed session ends under the corrected %s after the late calls are truncated",
 	async (change, start, month) => {
-		utcClock();
 		const line = (day: string, input: number) =>
 			assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input });
 		// Two sessions sealed in one shard, so their carried ends share one shard of the corrected month.
@@ -183,7 +178,6 @@ it.each([
 );
 
 it("does not repeat a sealed end the corrected scan reproduces", async () => {
-	utcClock();
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const lines = [assistantLine({ ms: utc("2026-10-16"), provider: "physical", model: "fixture", input: 7 })];
 	sessionFile(path, { startMs: utc("2026-10-15"), lines });
@@ -212,7 +206,6 @@ const publishedSessions = (snapshotDir: string) => {
 };
 
 it("keeps a distinct earlier sealed end beside the corrected scan end", async () => {
-	utcClock();
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (day: string, input: number) =>
 		assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input });
@@ -238,7 +231,6 @@ it("keeps a distinct earlier sealed end beside the corrected scan end", async ()
 });
 
 it("drops an active-month end after a child correction", async () => {
-	utcClock();
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (ms: number, input: number) => assistantLine({ ms, provider: "physical", model: "fixture", input });
 	const early = line(utc("2026-10-16"), 7);
@@ -263,7 +255,6 @@ it("drops an active-month end after a child correction", async () => {
 });
 
 it("covers archived calls when the start moves out of the active month", async () => {
-	utcClock();
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (day: string, input: number) =>
 		assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input });
@@ -282,7 +273,6 @@ it("covers archived calls when the start moves out of the active month", async (
 });
 
 it("does not floor a session at a reassigned call", async () => {
-	utcClock();
 	const a = join(agent, "sessions", "a.jsonl");
 	const b = join(agent, "sessions", "b.jsonl");
 	const line = (ms: number, input: number) => assistantLine({ ms, provider: "physical", model: "fixture", input });
@@ -324,7 +314,6 @@ it("does not floor a session at a reassigned call", async () => {
 });
 
 it("floors a session at its call kept in an unrevised sealed month", async () => {
-	utcClock();
 	const a = join(agent, "sessions", "a.jsonl");
 	const line = (ms: number, input: number) => assistantLine({ ms, provider: "physical", model: "fixture", input });
 	const moved = line(utc("2026-10-20"), 8);
@@ -349,7 +338,6 @@ it("floors a session at its call kept in an unrevised sealed month", async () =>
 });
 
 it("does not carry a sealed end that precedes the corrected start", async () => {
-	utcClock();
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const early = assistantLine({ ms: utc("2026-09-11"), provider: "physical", model: "fixture", input: 7 });
 	sessionFile(path, { startMs: utc("2026-09-10"), lines: [early] });
@@ -367,7 +355,6 @@ it("does not carry a sealed end that precedes the corrected start", async () => 
 });
 
 it("lets the active month drop a sealed end when the corrected start moves into it", async () => {
-	utcClock();
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (ms: number, input: number) => assistantLine({ ms, provider: "physical", model: "fixture", input });
 	const early = line(utc("2026-10-16"), 7);
@@ -392,10 +379,10 @@ it.each([70 * 1024 * 1024, 128 * 1024 * 1024])(
 	"bounds total machine expansion with %i bytes charged per shard and retains last-good",
 	async (chargedBytes) => {
 		sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-			startMs: at("2026-01-01"),
+			startMs: utc("2026-01-01"),
 			lines: [
-				assistantLine({ ms: at("2026-01-01"), provider: "physical", model: "fixture", input: 7 }),
-				assistantLine({ ms: at("2026-02-01"), provider: "physical", model: "fixture", input: 9 }),
+				assistantLine({ ms: utc("2026-01-01"), provider: "physical", model: "fixture", input: 7 }),
+				assistantLine({ ms: utc("2026-02-01"), provider: "physical", model: "fixture", input: 9 }),
 			],
 		});
 		await exportStats(agent, out);
@@ -423,7 +410,7 @@ it("rejects a real gzip stream expanding beyond 128 MiB", () => {
 		version: 3,
 		machineId: "11111111-1111-4111-8111-111111111111",
 		label: "fixture",
-		exportedAt: at("2026-11-02"),
+		exportedAt: utc("2026-11-02"),
 		lastGoodAt: {},
 		shards: [],
 	};
@@ -454,7 +441,7 @@ it("preserves recovery files and keeps a vanished harness lost across repeated u
 	for (let run = 0; run < 3; run++) {
 		// After one recovery export, the active snapshot no longer contains Claude rows.
 		if (run < 2) writeFileSync(join(first.snapshotDir, "manifest.json"), "corrupt");
-		vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + (run + 1) * 60_000);
+		vi.mocked(Date.now).mockReturnValue(utc("2026-11-02") + (run + 1) * 60_000);
 		const result = await exportStats(agent, out, undefined, options);
 		expect(readdirSync(first.snapshotDir)).toContain(ref.file);
 		expect(readFileSync(join(first.snapshotDir, valid.file))).toEqual(validBytes);
@@ -493,7 +480,7 @@ it("clears a lost harness after a clean reappearance before a later absence", as
 
 	rmSync(join(agent, "pi-session-kit", "stats-harness-cache.json"), { force: true });
 	mkdirSync(roots.claude, { recursive: true });
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-03"));
 	const restored = await exportStats(agent, out, undefined, options);
 	expect(restored.harnesses?.claude).toEqual({ found: true, problems: [] });
 	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBe(Date.now());
@@ -504,7 +491,7 @@ it("clears a lost harness after a clean reappearance before a later absence", as
 	// No rows survive the clean scan, and the next manifest is unreadable.
 	rmSync(roots.claude, { recursive: true });
 	writeFileSync(manifestPath, "corrupt");
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-04"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-04"));
 	const absent = await exportStats(agent, out, undefined, options);
 	expect(absent.harnesses?.claude).toEqual({ found: false, problems: [] });
 	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBe(Date.now());
@@ -524,7 +511,7 @@ it("does not carry a freshness mark from an older export that stamped a lost har
 	const previous = manifest(first.snapshotDir);
 	previous.lastGoodAt = { ...previous.lastGoodAt, claude: previous.exportedAt };
 	writeFileSync(manifestPath, JSON.stringify(previous));
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-03"));
 	const next = await exportStats(agent, out, undefined, options);
 	expect(next.harnesses?.claude?.failed).toBe("lost");
 	expect(manifest(first.snapshotDir).lastGoodAt?.claude).toBeUndefined();
@@ -638,7 +625,7 @@ it.each(["deleted state", "moved outbox"])(
 		const snapshotDir = join(target, "machines", basename(first.snapshotDir));
 		for (let i = 0; i < 2; i++) {
 			// Past every earlier export instant, so no clock warning joins the expected ones.
-			vi.mocked(Date.now).mockReturnValue(at("2026-11-02") + 1000 * (i + 1));
+			vi.mocked(Date.now).mockReturnValue(utc("2026-11-02") + 1000 * (i + 1));
 			seed(9 + i);
 			const result = await exportStats(agent, target);
 			expect(readdirSync(snapshotDir)).toContain(original.file);
@@ -724,8 +711,8 @@ it.each(["EACCES", "ENOENT"])(
 	"handles orphan removal %s after publication without failing the export",
 	async (code) => {
 		sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-			startMs: at("2026-10-01"),
-			lines: [assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
+			startMs: utc("2026-10-01"),
+			lines: [assistantLine({ ms: utc("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
 		});
 		const first = await exportStats(agent, out);
 		const orphan = `2025-01-${"a".repeat(64)}.json`;
@@ -744,8 +731,8 @@ it.each(["EACCES", "ENOENT"])(
 
 it("continues pruning other entries and reports errno counts without raw error details", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-10-01"),
-		lines: [assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-10-01"),
+		lines: [assistantLine({ ms: utc("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const first = await exportStats(agent, out);
 	const orphans = ["a", "b", "c", "d"].map((id) => `2025-01-${id.repeat(64)}.json`);
@@ -878,8 +865,8 @@ it.each([
 	["shard", "readFile"],
 ])("passes a one-shot %s %s I/O error through unclassified, so the next export publishes", async (target, call) => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-10-10"),
-		lines: [assistantLine({ ms: at("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
+		startMs: utc("2026-10-10"),
+		lines: [assistantLine({ ms: utc("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
 	});
 	const first = await exportStats(agent, out);
 	const published = manifest(first.snapshotDir);
@@ -930,15 +917,15 @@ it.each([
 	["EIO", true],
 ])("handles a persistent %s reading the manifest (replaceHarnesses: %s)", async (code, replaceHarnesses) => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-10-10"),
-		lines: [assistantLine({ ms: at("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
+		startMs: utc("2026-10-10"),
+		lines: [assistantLine({ ms: utc("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
 	});
 	const first = await exportStats(agent, out);
 	const path = join(first.snapshotDir, "manifest.json");
 	const before = readFileSync(path);
 	const files = readdirSync(first.snapshotDir).sort();
 	// A later clock and a new call, so a replacement proves it published this scan, not the old manifest.
-	const later = at("2026-11-02") + 60_000;
+	const later = utc("2026-11-02") + 60_000;
 	vi.mocked(Date.now).mockReturnValue(later);
 	sessionFile(join(agent, "sessions", "later.jsonl"), {
 		startMs: later,
@@ -1022,19 +1009,19 @@ it("compacts sealed deltas without rewriting the base or losing archived calls",
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const lines = Array.from({ length: 100 }, (_, i) => {
 		const row = JSON.parse(
-			assistantLine({ ms: at("2026-10-01") + i, provider: "physical", model: "fixture", input: i + 1 }),
+			assistantLine({ ms: utc("2026-10-01") + i, provider: "physical", model: "fixture", input: i + 1 }),
 		);
 		row.id = `fixture-${i}`;
 		return JSON.stringify(row);
 	});
-	sessionFile(path, { startMs: at("2026-10-01"), lines });
+	sessionFile(path, { startMs: utc("2026-10-01"), lines });
 	const first = await exportStats(agent, out);
 	const before = manifest(first.snapshotDir);
 	const ref = before.shards[0];
 	if (!ref) throw new Error("Missing shard");
 	const original = readFileSync(join(first.snapshotDir, ref.file));
 	const latePath = join(agent, "sessions", "archived.jsonl");
-	const lateMs = at("2026-10-02");
+	const lateMs = utc("2026-10-02");
 	sessionFile(latePath, {
 		startMs: lateMs,
 		lines: [assistantLine({ ms: lateMs, provider: "physical", model: "fixture", input: 500 })],
@@ -1057,11 +1044,11 @@ it("compacts sealed deltas without rewriting the base or losing archived calls",
 			);
 		}
 		const row = JSON.parse(
-			assistantLine({ ms: at("2026-10-01") + i, provider: "physical", model: "fixture", input: i + 1 }),
+			assistantLine({ ms: utc("2026-10-01") + i, provider: "physical", model: "fixture", input: i + 1 }),
 		);
 		row.id = `fixture-${i}`;
 		lines.push(JSON.stringify(row));
-		sessionFile(path, { startMs: at("2026-10-01"), lines });
+		sessionFile(path, { startMs: utc("2026-10-01"), lines });
 		await exportStats(agent, out);
 		peak = Math.max(peak, manifest(first.snapshotDir).shards.length);
 	}
@@ -1080,7 +1067,7 @@ it("compacts sealed deltas without rewriting the base or losing archived calls",
 	const imported = await loadCombined(viewer);
 	expect(imported.calls.map((call) => call.input)).toEqual([...Array.from({ length: 140 }, (_, i) => i + 1), 500]);
 	expect(imported.sessions).toHaveLength(2);
-	expect(imported.sessions.map((session) => session.endMs)).toEqual([at("2026-10-01") + 139, lateMs]);
+	expect(imported.sessions.map((session) => session.endMs)).toEqual([utc("2026-10-01") + 139, lateMs]);
 });
 
 it("compacts an already over-cap month missing from the scan and keeps last-good on digest mismatch", async () => {
@@ -1101,9 +1088,9 @@ it("compacts an already over-cap month missing from the scan and keeps last-good
 					limitId: "fixture",
 					window: "daily",
 					usedPercent: i,
-					resetAt: at("2026-10-02"),
+					resetAt: utc("2026-10-02"),
 					durationMs: 86_400_000,
-					observedAt: at("2026-10-01") + i,
+					observedAt: utc("2026-10-01") + i,
 					planType: null,
 					account: "",
 				},
@@ -1163,7 +1150,7 @@ async function sealedFixture(rows: Partial<Shard>[]) {
 	return { before, snapshotDir };
 }
 
-const quotaRow = (i: number, resetAt = at("2026-10-03"), limitId = "fixture"): SnapshotQuota => ({
+const quotaRow = (i: number, resetAt = utc("2026-10-03"), limitId = "fixture"): SnapshotQuota => ({
 	harness: "pi",
 	provider: "physical",
 	limitId,
@@ -1171,15 +1158,15 @@ const quotaRow = (i: number, resetAt = at("2026-10-03"), limitId = "fixture"): S
 	usedPercent: i,
 	resetAt,
 	durationMs: 86_400_000,
-	observedAt: at("2026-10-01") + i,
+	observedAt: utc("2026-10-01") + i,
 	planType: null,
 	account: "",
 });
 const filler = Array.from({ length: 30 }, (_, i) => ({ quota: [quotaRow(i, undefined, "filler")] }));
 const session = (i: number) => ({
 	id: i.toString(16).padStart(64, "0"),
-	startMs: at("2026-10-01"),
-	endMs: at("2026-10-01"),
+	startMs: utc("2026-10-01"),
+	endMs: utc("2026-10-01"),
 	child: false,
 });
 const event = (i: number, sessionId: string) => {
@@ -1187,7 +1174,7 @@ const event = (i: number, sessionId: string) => {
 		harness: "pi" as const,
 		entryId: null,
 		sessionId,
-		ms: at("2026-10-01"),
+		ms: utc("2026-10-01"),
 		provider: "physical",
 		model: "fixture",
 		input: i,
@@ -1202,7 +1189,7 @@ const event = (i: number, sessionId: string) => {
 it("does not publish if preserving quota winners would exceed the cap", async () => {
 	const { before, snapshotDir } = await sealedFixture([
 		{},
-		...Array.from({ length: 32 }, (_, i) => ({ quota: [quotaRow(i, at("2026-12-01") - i)] })),
+		...Array.from({ length: 32 }, (_, i) => ({ quota: [quotaRow(i, utc("2026-12-01") - i)] })),
 	]);
 	await expect(exportStats(agent, out)).rejects.toThrow("Sealed month quota history exceeds shard limit");
 	expect(manifest(snapshotDir)).toEqual(before);
@@ -1211,16 +1198,16 @@ it("does not publish if preserving quota winners would exceed the cap", async ()
 
 it("publishes unrelated usage when the sealed base dominates all quota deltas", async () => {
 	const { before, snapshotDir } = await sealedFixture([
-		{ quota: [quotaRow(99, at("2026-12-02"))] },
-		...Array.from({ length: 32 }, (_, i) => ({ quota: [quotaRow(i, at("2026-12-01") - i)] })),
+		{ quota: [quotaRow(99, utc("2026-12-02"))] },
+		...Array.from({ length: 32 }, (_, i) => ({ quota: [quotaRow(i, utc("2026-12-01") - i)] })),
 	]);
 	const base = before.shards[0];
 	if (!base) throw new Error("Missing base");
 	const path = join(snapshotDir, base.file);
 	const bytes = readFileSync(path);
 	sessionFile(join(agent, "sessions", "new.jsonl"), {
-		startMs: at("2026-11-01"),
-		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-11-01"),
+		lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	await exportStats(agent, out);
 	const after = manifest(snapshotDir);
@@ -1228,14 +1215,14 @@ it("publishes unrelated usage when the sealed base dominates all quota deltas", 
 	expect(readFileSync(path)).toEqual(bytes);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	const combined = await loadCombined(viewer);
-	expect(combined.quota).toEqual([quotaRow(99, at("2026-12-02"))]);
+	expect(combined.quota).toEqual([quotaRow(99, utc("2026-12-02"))]);
 	expect(combined.calls.map((row) => row.input)).toEqual([7]);
 });
 
 it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", async (reset) => {
 	// Run compaction both before and after the newer observation expires.
-	const earlyReset = at(reset);
-	const lateReset = at("2026-12-01");
+	const earlyReset = utc(reset);
+	const lateReset = utc("2026-12-01");
 	const { snapshotDir } = await sealedFixture([
 		{ quota: [quotaRow(99, earlyReset, "base")], sessions: [session(101)] },
 		{ quota: [quotaRow(99, earlyReset, "base")], sessions: [session(101), session(102)] },
@@ -1244,7 +1231,7 @@ it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", 
 		{ quota: [{ ...quotaRow(2, earlyReset), usedPercent: 0 }] },
 		...filler,
 	]);
-	const times = [at("2026-10-02"), earlyReset - 1, earlyReset, lateReset - 1, lateReset, lateReset + 1];
+	const times = [utc("2026-10-02"), earlyReset - 1, earlyReset, lateReset - 1, lateReset, lateReset + 1];
 	const read = (dir: string) => Promise.all(times.map(async (now) => (await loadCombined(dir, undefined, now)).quota));
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	const before = await read(viewer);
@@ -1258,15 +1245,15 @@ it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", 
 });
 
 it("hands a fresher base reading over to an older, later-resetting delta at the base reset", async () => {
-	const baseReset = at("2026-10-03");
-	const deltaReset = at("2026-12-01");
+	const baseReset = utc("2026-10-03");
+	const deltaReset = utc("2026-12-01");
 	const { before, snapshotDir } = await sealedFixture([
 		{ quota: [quotaRow(99, baseReset)] },
 		{ quota: [quotaRow(1, deltaReset)] },
-		{ quota: [quotaRow(2, at("2026-10-02"))] },
+		{ quota: [quotaRow(2, utc("2026-10-02"))] },
 		...filler,
 	]);
-	const times = [at("2026-10-02"), baseReset - 1, baseReset, baseReset + 1, deltaReset - 1, deltaReset];
+	const times = [utc("2026-10-02"), baseReset - 1, baseReset, baseReset + 1, deltaReset - 1, deltaReset];
 	const read = async (dir: string) => {
 		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
 		return Promise.all(times.map(async (now) => (await loadCombined(dir, undefined, now)).quota));
@@ -1283,12 +1270,12 @@ it("hands a fresher base reading over to an older, later-resetting delta at the 
 });
 
 it("keeps reader quota order when compacting a reverse-month manifest", async () => {
-	const november = at("2026-11-01");
-	vi.mocked(Date.now).mockReturnValue(at("2026-12-01"));
+	const november = utc("2026-11-01");
+	vi.mocked(Date.now).mockReturnValue(utc("2026-12-01"));
 	const { before, snapshotDir } = await sealedFixture([
-		{ month: "2026-11", quota: [{ ...quotaRow(5, at("2026-12-01"), "z-november"), observedAt: november }] },
-		{ quota: [quotaRow(6, at("2026-10-03"), "a-october")] },
-		{ quota: [quotaRow(7, at("2026-10-02"), "a-october")] },
+		{ month: "2026-11", quota: [{ ...quotaRow(5, utc("2026-12-01"), "z-november"), observedAt: november }] },
+		{ quota: [quotaRow(6, utc("2026-10-03"), "a-october")] },
+		{ quota: [quotaRow(7, utc("2026-10-02"), "a-october")] },
 		...filler,
 		{ quota: [quotaRow(31, undefined, "filler")] },
 	]);
@@ -1296,7 +1283,7 @@ it("keeps reader quota order when compacting a reverse-month manifest", async ()
 	const read = async (dir: string) => {
 		expect(await importStats(dir, out)).toMatchObject({ imported: 1, problems: [] });
 		return Promise.all(
-			[at("2026-10-01"), at("2026-10-02"), at("2026-12-01")].map(
+			[utc("2026-10-01"), utc("2026-10-02"), utc("2026-12-01")].map(
 				async (now) => (await loadCombined(dir, undefined, now)).quota,
 			),
 		);
@@ -1439,8 +1426,8 @@ it.each(["previous manifest read", "manifest rename", "pruning", "state recordin
 	async (checkpoint) => {
 		const seed = (input: number) =>
 			sessionFile(join(agent, "sessions", "active.jsonl"), {
-				startMs: at("2026-11-01"),
-				lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input })],
+				startMs: utc("2026-11-01"),
+				lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input })],
 			});
 		seed(3);
 		const first = await exportStats(agent, out);
@@ -1545,7 +1532,7 @@ it("preserves non-contention errors when acquiring the lock", async () => {
 });
 
 it.each(["published", "failed", "refused"])("keeps the %s export outcome when unlocking fails", async (outcome) => {
-	const ms = at("2026-11-01");
+	const ms = utc("2026-11-01");
 	sessionFile(join(agent, "sessions", "new.jsonl"), {
 		startMs: ms,
 		lines: [assistantLine({ ms, provider: "physical", model: "fixture", input: 7 })],
@@ -1610,17 +1597,17 @@ it("appends a delta when distinct sessions share a preserved entry identity", as
 	const a = join(agent, "sessions", "a.jsonl");
 	const b = join(agent, "sessions", "b.jsonl");
 	const row = (id: string, input: number) => {
-		const value = JSON.parse(assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input }));
+		const value = JSON.parse(assistantLine({ ms: utc("2026-10-01"), provider: "physical", model: "fixture", input }));
 		value.id = id;
 		return JSON.stringify(value);
 	};
 	const firstCall = row("deadbeef", 7);
-	sessionFile(a, { startMs: at("2026-10-01"), lines: [firstCall] });
-	sessionFile(b, { startMs: at("2026-10-01"), lines: [row("deadbeef", 9)] });
+	sessionFile(a, { startMs: utc("2026-10-01"), lines: [firstCall] });
+	sessionFile(b, { startMs: utc("2026-10-01"), lines: [row("deadbeef", 9)] });
 	const first = await exportStats(agent, out);
 	const before = manifest(first.snapshotDir);
 	expect(before.shards).toHaveLength(1);
-	sessionFile(a, { startMs: at("2026-10-01"), lines: [firstCall, row("late", 11)] });
+	sessionFile(a, { startMs: utc("2026-10-01"), lines: [firstCall, row("late", 11)] });
 	await exportStats(agent, out);
 	const after = manifest(first.snapshotDir);
 	expect(after.shards).toEqual(expect.arrayContaining(before.shards));
@@ -1631,9 +1618,9 @@ it("appends a delta when distinct sessions share a preserved entry identity", as
 });
 
 it("keeps unidentified legacy events stable across repeated sealed-month exports", async () => {
-	const row = JSON.parse(assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input: 7 }));
+	const row = JSON.parse(assistantLine({ ms: utc("2026-10-01"), provider: "physical", model: "fixture", input: 7 }));
 	delete row.id;
-	sessionFile(join(agent, "sessions", "fixture.jsonl"), { startMs: at("2026-10-01"), lines: [JSON.stringify(row)] });
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), { startMs: utc("2026-10-01"), lines: [JSON.stringify(row)] });
 	const first = await exportStats(agent, out);
 	const before = manifest(first.snapshotDir);
 	await exportStats(agent, out);
@@ -1658,12 +1645,12 @@ const laterMonth = (now: number, published: number, month: string) => ({
 it("clock rollback preserves sealed history", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const call = (day: string, input: number) =>
-		assistantLine({ ms: at(day), provider: "physical", model: "fixture", input });
-	vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
-	sessionFile(path, { startMs: at("2026-10-20"), lines: [call("2026-10-20", 7)] });
+		assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input });
+	vi.mocked(Date.now).mockReturnValue(utc("2026-10-20"));
+	sessionFile(path, { startMs: utc("2026-10-20"), lines: [call("2026-10-20", 7)] });
 	const first = await exportStats(agent, out);
 	// November seals October; the archived call then exists only in published history.
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-02"));
 	await exportStats(agent, out);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	const manifestPath = join(first.snapshotDir, "manifest.json");
@@ -1673,10 +1660,10 @@ it("clock rollback preserves sealed history", async () => {
 	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
 	// Back in October, a new call: publishing after the November export would seal October while this
 	// clock is in it, so the ordinary export refuses and the published history stays as it was.
-	vi.mocked(Date.now).mockReturnValue(at("2026-10-25"));
-	sessionFile(join(agent, "sessions", "late.jsonl"), { startMs: at("2026-10-25"), lines: [call("2026-10-25", 8)] });
+	vi.mocked(Date.now).mockReturnValue(utc("2026-10-25"));
+	sessionFile(join(agent, "sessions", "late.jsonl"), { startMs: utc("2026-10-25"), lines: [call("2026-10-25", 8)] });
 	await expect(exportStats(agent, out)).rejects.toMatchObject(
-		laterMonth(at("2026-10-25"), at("2026-11-02"), "2026-11"),
+		laterMonth(utc("2026-10-25"), utc("2026-11-02"), "2026-11"),
 	);
 	expect(readFileSync(manifestPath)).toEqual(bytes);
 	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
@@ -1684,17 +1671,17 @@ it("clock rollback preserves sealed history", async () => {
 	// An explicit replacement is monotonic: viewers import it, and it drops what the scan lacks.
 	const replaced = await exportStats(agent, out, undefined, { replaceHarnesses: true });
 	expect(replaced.warnings?.[0]).toMatch(/^clock is behind the last published export/);
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(manifest(first.snapshotDir).exportedAt).toBe(utc("2026-11-02") + 1);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	expect((await loadCombined(viewer)).calls.map((c) => c.input)).toEqual([8]);
 });
 
 it("does not prematurely seal a newly seen wall month", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
-	const watermark = at("2026-11-02") + 300 * 86_400_000;
+	const watermark = utc("2026-11-02") + 300 * 86_400_000;
 	sessionFile(path, {
-		startMs: at("2026-11-01"),
-		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-11-01"),
+		lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const first = await exportStats(agent, out, undefined, { replaceHarnesses: true });
 	const manifestPath = join(first.snapshotDir, "manifest.json");
@@ -1702,7 +1689,7 @@ it("does not prematurely seal a newly seen wall month", async () => {
 	const bytes = readFileSync(manifestPath);
 	// Publishing after the watermark would seal November with this call in it, so deleting it later could
 	// never remove it: refused, nothing published.
-	await expect(exportStats(agent, out)).rejects.toMatchObject(laterMonth(at("2026-11-02"), watermark, "2027-08"));
+	await expect(exportStats(agent, out)).rejects.toMatchObject(laterMonth(utc("2026-11-02"), watermark, "2027-08"));
 	expect(readFileSync(manifestPath)).toEqual(bytes);
 	// November stays open while the wall clock is in it: a deleted transcript leaves the next publication.
 	rmSync(path);
@@ -1715,8 +1702,8 @@ it("refuses an ordinary export whose next instant crosses into the next month", 
 	const last = Date.UTC(2026, 10, 30, 23, 59, 59, 999);
 	vi.mocked(Date.now).mockReturnValue(last);
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-11-01"),
-		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-11-01"),
+		lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const first = await exportStats(agent, out);
 	await expect(exportStats(agent, out)).rejects.toMatchObject(laterMonth(last, last, "2026-12"));
@@ -1728,28 +1715,28 @@ it("refuses an ordinary export whose next instant crosses into the next month", 
 it("publishes a same-month clock rollback strictly after the last published export", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const line = (input: number) =>
-		assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input });
-	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7)] });
+		assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input });
+	sessionFile(path, { startMs: utc("2026-11-01"), lines: [line(7)] });
 	const first = await exportStats(agent, out);
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02"));
+	expect(manifest(first.snapshotDir).exportedAt).toBe(utc("2026-11-02"));
 	// Exporting again within the same millisecond is not a clock problem: no warning, still strictly later.
 	expect((await exportStats(agent, out)).warnings).toBeUndefined();
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(manifest(first.snapshotDir).exportedAt).toBe(utc("2026-11-02") + 1);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
-	sessionFile(path, { startMs: at("2026-11-01"), lines: [line(7), line(8)] });
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
+	sessionFile(path, { startMs: utc("2026-11-01"), lines: [line(7), line(8)] });
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-02") - 1);
 	const behind = await exportStats(agent, out);
 	expect(behind.warnings?.[0]).toMatch(/^clock is behind the last published export/);
 	expect(manifest(first.snapshotDir)).toMatchObject({
-		exportedAt: at("2026-11-02") + 2,
-		lastGoodAt: { pi: at("2026-11-02") + 2 },
+		exportedAt: utc("2026-11-02") + 2,
+		lastGoodAt: { pi: utc("2026-11-02") + 2 },
 	});
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	expect((await loadCombined(viewer)).calls.map((c) => c.input).sort()).toEqual([7, 8]);
 	// A clock past the published export publishes its own instant again.
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-03"));
 	expect((await exportStats(agent, out)).warnings).toBeUndefined();
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-03"));
+	expect(manifest(first.snapshotDir).exportedAt).toBe(utc("2026-11-03"));
 });
 
 it("deletes from the active month under a same-month rollback while archived sealed rows survive", async () => {
@@ -1783,17 +1770,17 @@ it("deletes from the active month under a same-month rollback while archived sea
 
 it("keeps a replacement over damaged history monotonic", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-11-01"),
-		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-11-01"),
+		lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const first = await exportStats(agent, out);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 	const shard = manifest(first.snapshotDir).shards[0];
 	if (!shard) throw new Error("Missing shard");
 	writeFileSync(join(first.snapshotDir, shard.file), "corrupt");
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-01"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-01"));
 	await exportStats(agent, out, undefined, { replaceHarnesses: true });
-	expect(manifest(first.snapshotDir).exportedAt).toBe(at("2026-11-02") + 1);
+	expect(manifest(first.snapshotDir).exportedAt).toBe(utc("2026-11-02") + 1);
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 });
 
@@ -1802,13 +1789,13 @@ describe("implausible watermark", () => {
 	/** Seal October, then leave it only in published history, with the manifest's `exportedAt` set to `watermark`. */
 	const sealWith = async (watermark: number): Promise<{ dir: string; files: string[]; bytes: Buffer }> => {
 		const path = join(agent, "sessions", "fixture.jsonl");
-		vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
+		vi.mocked(Date.now).mockReturnValue(utc("2026-10-20"));
 		sessionFile(path, {
-			startMs: at("2026-10-20"),
-			lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
+			startMs: utc("2026-10-20"),
+			lines: [assistantLine({ ms: utc("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
 		});
 		const first = await exportStats(agent, out);
-		vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+		vi.mocked(Date.now).mockReturnValue(utc("2026-11-02"));
 		await exportStats(agent, out);
 		rmSync(path);
 		rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
@@ -1829,13 +1816,13 @@ describe("implausible watermark", () => {
 	it.each([
 		["year +010000", Date.UTC(10000, 0, 1)],
 		["the JS max timestamp", 8_640_000_000_000_000],
-		["5 years ahead", at("2031-11-02")],
-		["366 days and 1 ms ahead", at("2026-11-02") + 366 * DAY + 1],
+		["5 years ahead", utc("2031-11-02")],
+		["366 days and 1 ms ahead", utc("2026-11-02") + 366 * DAY + 1],
 	])("refuses %s, replacement included, and keeps sealed history", async (_, watermark) => {
 		const sealed = await sealWith(watermark);
 		for (const replaceHarnesses of [false, true])
 			await expect(exportStats(agent, out, undefined, { replaceHarnesses })).rejects.toMatchObject(
-				refusal(sealed.dir, watermark, at("2026-11-02")),
+				refusal(sealed.dir, watermark, utc("2026-11-02")),
 			);
 		expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
 		expect(readdirSync(sealed.dir).sort()).toEqual(sealed.files);
@@ -1844,7 +1831,7 @@ describe("implausible watermark", () => {
 	it.each([false, true])(
 		"refuses a watermark ahead of damaged history (replaceHarnesses %s)",
 		async (replaceHarnesses) => {
-			const watermark = at("2031-11-02");
+			const watermark = utc("2031-11-02");
 			const sealed = await sealWith(watermark);
 			const shard = manifest(sealed.dir).shards[0];
 			if (!shard) throw new Error("Missing shard");
@@ -1852,7 +1839,7 @@ describe("implausible watermark", () => {
 			const files = readdirSync(sealed.dir).sort();
 			// The damaged-history policy would recommend --replace-harnesses, which cannot bypass this.
 			await expect(exportStats(agent, out, undefined, { replaceHarnesses })).rejects.toMatchObject(
-				refusal(sealed.dir, watermark, at("2026-11-02")),
+				refusal(sealed.dir, watermark, utc("2026-11-02")),
 			);
 			expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
 			expect(readdirSync(sealed.dir).sort()).toEqual(files);
@@ -1864,10 +1851,10 @@ describe("implausible watermark", () => {
 		["30 days", 30 * DAY],
 		["exactly 366 days", 366 * DAY],
 	])("refuses an ordinary export behind a watermark %s ahead; a replacement publishes after it", async (_, lead) => {
-		const watermark = at("2026-11-02") + lead;
+		const watermark = utc("2026-11-02") + lead;
 		const sealed = await sealWith(watermark);
 		await expect(exportStats(agent, out)).rejects.toMatchObject(
-			laterMonth(at("2026-11-02"), watermark, new Date(watermark + 1).toISOString().slice(0, 7)),
+			laterMonth(utc("2026-11-02"), watermark, new Date(watermark + 1).toISOString().slice(0, 7)),
 		);
 		expect(readFileSync(join(sealed.dir, "manifest.json"))).toEqual(sealed.bytes);
 		expect(readdirSync(sealed.dir).sort()).toEqual(sealed.files);
@@ -1888,8 +1875,8 @@ describe("implausible watermark", () => {
 
 it("checks and publishes one export instant taken before the published manifest is read", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-11-01"),
-		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-11-01"),
+		lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const first = await exportStats(agent, out);
 	const manifestPath = join(first.snapshotDir, "manifest.json");
@@ -1900,19 +1887,19 @@ it("checks and publishes one export instant taken before the published manifest 
 			if (path === manifestPath) vi.mocked(Date.now).mockReturnValue(to);
 			return actual.readFile(path, options);
 		});
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-02") - 1);
-	advanceDuringRead(at("2026-11-03"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-02") - 1);
+	advanceDuringRead(utc("2026-11-03"));
 	expect((await exportStats(agent, out)).warnings?.[0]).toMatch(/^clock is behind the last published export/);
 	expect(manifest(first.snapshotDir)).toMatchObject({
-		exportedAt: at("2026-11-02") + 1,
-		lastGoodAt: { pi: at("2026-11-02") + 1 },
+		exportedAt: utc("2026-11-02") + 1,
+		lastGoodAt: { pi: utc("2026-11-02") + 1 },
 	});
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-04"));
-	advanceDuringRead(at("2026-11-05"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-04"));
+	advanceDuringRead(utc("2026-11-05"));
 	await exportStats(agent, out);
 	expect(manifest(first.snapshotDir)).toMatchObject({
-		exportedAt: at("2026-11-04"),
-		lastGoodAt: { pi: at("2026-11-04") },
+		exportedAt: utc("2026-11-04"),
+		lastGoodAt: { pi: utc("2026-11-04") },
 	});
 });
 
@@ -1920,15 +1907,15 @@ it.each(["bookkeeping kept", "bookkeeping lost", "no shards"])(
 	"treats a deleted manifest as lost history, not a first export (%s)",
 	async (variant) => {
 		const path = join(agent, "sessions", "fixture.jsonl");
-		vi.mocked(Date.now).mockReturnValue(at("2026-10-20"));
+		vi.mocked(Date.now).mockReturnValue(utc("2026-10-20"));
 		if (variant !== "no shards")
 			sessionFile(path, {
-				startMs: at("2026-10-20"),
-				lines: [assistantLine({ ms: at("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
+				startMs: utc("2026-10-20"),
+				lines: [assistantLine({ ms: utc("2026-10-20"), provider: "physical", model: "fixture", input: 7 })],
 			});
 		const first = await exportStats(agent, out);
 		// November seals October; the archived call then exists only in published history.
-		vi.mocked(Date.now).mockReturnValue(at("2026-11-02"));
+		vi.mocked(Date.now).mockReturnValue(utc("2026-11-02"));
 		await exportStats(agent, out);
 		rmSync(path, { force: true });
 		rmSync(join(agent, "pi-session-kit", "stats-cache.json"), { force: true });
@@ -1938,7 +1925,7 @@ it.each(["bookkeeping kept", "bookkeeping lost", "no shards"])(
 		const files = readdirSync(first.snapshotDir).sort();
 		expect(files.length > 0 || variant === "no shards").toBe(true);
 		const state = variant === "bookkeeping lost" ? undefined : readFileSync(statePath);
-		vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+		vi.mocked(Date.now).mockReturnValue(utc("2026-11-03"));
 		await expect(exportStats(agent, out)).rejects.toMatchObject({
 			message:
 				`Published usage manifest is missing from ${JSON.stringify(first.snapshotDir)}, but this outbox published ` +
@@ -1957,8 +1944,8 @@ it.each(["bookkeeping kept", "bookkeeping lost", "no shards"])(
 
 it("publishes a genuinely first export with no manifest, bookkeeping or shards", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-11-01"),
-		lines: [assistantLine({ ms: at("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-11-01"),
+		lines: [assistantLine({ ms: utc("2026-11-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const result = await exportStats(agent, out);
 	expect(result.warnings).toBeUndefined();
@@ -1969,9 +1956,9 @@ it.each(["corrupt", "missing"])("keeps the active manifest when one shard among 
 	const path = join(agent, "sessions", "fixture.jsonl");
 	const months = ["2026-08-10", "2026-09-10", "2026-10-10"];
 	sessionFile(path, {
-		startMs: at("2026-08-10"),
+		startMs: utc("2026-08-10"),
 		lines: months.map((day, i) => {
-			const row = JSON.parse(assistantLine({ ms: at(day), provider: "physical", model: "fixture", input: i + 1 }));
+			const row = JSON.parse(assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input: i + 1 }));
 			row.id = `fixture-${i}`;
 			return JSON.stringify(row);
 		}),
@@ -1989,7 +1976,7 @@ it.each(["corrupt", "missing"])("keeps the active manifest when one shard among 
 	else writeFileSync(join(first.snapshotDir, bad.file), "corrupt");
 	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
 	const files = readdirSync(first.snapshotDir).sort();
-	vi.mocked(Date.now).mockReturnValue(at("2026-11-03"));
+	vi.mocked(Date.now).mockReturnValue(utc("2026-11-03"));
 	await expect(exportStats(agent, out)).rejects.toMatchObject({
 		message: `Published usage history is unreadable (${bad.file}); restore it from the sync checkout, or pass --replace-harnesses to publish without it`,
 		refusal: "history-unreadable",
@@ -2007,9 +1994,9 @@ it.each(["corrupt", "missing"])("keeps the active manifest when one shard among 
 it("reports published history over the expansion budget apart from files to restore", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	sessionFile(path, {
-		startMs: at("2026-09-10"),
+		startMs: utc("2026-09-10"),
 		lines: ["2026-09-10", "2026-10-10"].map((day, i) =>
-			assistantLine({ ms: at(day), provider: "physical", model: "fixture", input: i + 1 }),
+			assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input: i + 1 }),
 		),
 	});
 	const first = await exportStats(agent, out);
@@ -2040,9 +2027,9 @@ it("reports published history over the expansion budget apart from files to rest
 it("names every unreadable shard and replaces history only when the owner asks", async () => {
 	const path = join(agent, "sessions", "fixture.jsonl");
 	sessionFile(path, {
-		startMs: at("2026-09-10"),
+		startMs: utc("2026-09-10"),
 		lines: ["2026-09-10", "2026-10-10"].map((day, i) =>
-			assistantLine({ ms: at(day), provider: "physical", model: "fixture", input: i + 1 }),
+			assistantLine({ ms: utc(day), provider: "physical", model: "fixture", input: i + 1 }),
 		),
 	});
 	const first = await exportStats(agent, out);
@@ -2059,8 +2046,8 @@ it("names every unreadable shard and replaces history only when the owner asks",
 
 it("atomically repairs corrupt bytes at an existing content-addressed filename", async () => {
 	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
-		startMs: at("2026-10-01"),
-		lines: [assistantLine({ ms: at("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
+		startMs: utc("2026-10-01"),
+		lines: [assistantLine({ ms: utc("2026-10-01"), provider: "physical", model: "fixture", input: 7 })],
 	});
 	const first = await exportStats(agent, out);
 	const ref = manifest(first.snapshotDir).shards[0];

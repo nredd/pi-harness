@@ -2598,7 +2598,10 @@ async function performExpandUi(
 					),
 			)
 		).value;
-		target = graftScopedOutline(outline, target.ref, scoped.parsedOutline!);
+		// A Linux scoped reply is the whole live subtree: a cached node it omits is gone (#1349).
+		target = graftScopedOutline(outline, target.ref, scoped.parsedOutline!, {
+			authoritative: currentPlatformBackend.name === "linux",
+		});
 		outline.lookId = scoped.lookId;
 		state.currentOutline = outline;
 		state.currentLook = { ...scoped, image: state.currentLook?.image, outline: outline.root, parsedOutline: outline };
