@@ -876,7 +876,7 @@ test("an output ref skips the state lookup entirely", async ({ onTestFinished })
 	const fake = await installFakeDesktop(onTestFinished);
 	await assert.rejects(
 		() => fake.call(fake.bridge.executeReadText, { ref: "@o99", stateId: "ignored" }),
-		/Output ref '@o99' is unavailable or was evicted\./,
+		/Output ref '@o99' is unavailable, was evicted, or was revoked by a later protected look\./,
 	);
 });
 

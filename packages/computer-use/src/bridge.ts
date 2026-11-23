@@ -75,6 +75,7 @@ import {
 	controlLine,
 	foldToBudget,
 	graftScopedOutline,
+	isProtectedNode,
 	type LookResponse,
 	nodeByRef,
 	type Outline,
@@ -466,7 +467,7 @@ const runtimeState: RuntimeState = {
 	nextRootRefIndex: 1,
 };
 
-const savedStates = new SavedStates();
+const savedStates = new SavedStates(() => currentPlatformBackend.name === "windows");
 /** Test seam: lets scripts run bridge internals inside an operation state. */
 export const testing = {
 	assertBrowserTransactionAction,
@@ -1333,6 +1334,15 @@ function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: Look
 	};
 }
 
+/**
+ * Whether a live look holds a protected element, which revokes older retained states of its root (#1279). A
+ * picture-only node is OCR text, not an element: its `[protected]` title marks an overlap with a protected or unread
+ * region, and a protected element there counts on its own.
+ */
+function sawProtection(outline: Outline): boolean {
+	return outline.nodes.some((node) => !node.pictureOnly && isProtectedNode(node));
+}
+
 /** Capture `resolved`, the root the caller already resolved, as the new current state. */
 async function captureCurrentTarget(
 	signal: AbortSignal | undefined,
@@ -1346,13 +1356,17 @@ async function captureCurrentTarget(
 	const baseTarget = state.currentTarget;
 	const target = await ensureTargetWindowId(resolved, signal);
 	const look = await performLook(target, { maxDimension, readText, includeImage }, signal);
+	const capture = captureForLook(look);
+	// Ordered under the root's scheduler slot, before anything can yield: a protected node revokes older states (#1279).
+	state.lookSeq = savedStates.nextLook();
+	state.protectionRevision = undefined;
+	if (sawProtection(look.parsedOutline!)) savedStates.revokeOlder(target, state.lookSeq, capture.stateId);
 	const outline = stabilizeRefs(
 		baseTarget && sameRootIdentity(baseTarget, target) ? baseOutline : undefined,
 		look.parsedOutline!,
 	);
 	look.parsedOutline = outline;
 	look.outline = outline.root;
-	const capture = captureForLook(look);
 
 	setCurrentTarget(target);
 	state.currentCapture = capture;
@@ -1944,7 +1958,10 @@ async function performReadText(
 	const ref = trimOrUndefined(params.ref);
 	if (ref?.startsWith("@o")) {
 		const page = readStoredOutput(ref, params.offset);
-		if (!page) throw new Error(`Output ref '${ref}' is unavailable or was evicted. Rerun the focused query.`);
+		if (!page)
+			throw new Error(
+				`Output ref '${ref}' is unavailable, was evicted, or was revoked by a later protected look. Rerun the focused query.`,
+			);
 		const details: ReadTextDetails = { tool: "read_text", ref, ...page };
 		const suffix = page.hasMore
 			? `\n\ncontinue: read_text({ ref: "${ref}", offset: ${page.offset + page.limit} })`
@@ -2530,7 +2547,7 @@ async function performSearchUi(
 	const noteHeader = renderNote(note);
 	const noteText = noteHeader ? `${noteHeader}\n\n` : "";
 	const escalationText = escalatedOCR
-		? " OCR text was escalated for this search after the cached outline had no matches."
+		? ` OCR text was escalated for this search after the cached outline had no matches. Use stateId ${state.currentCapture!.stateId} for subsequent queries.`
 		: "";
 	const moreText =
 		ranked.totalMatches > matches.length
@@ -2581,22 +2598,28 @@ async function performExpandUi(
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
 		const scoped = (
-			await resourceScheduler.readAt(
-				state.resourceKey!,
-				state.epoch!,
-				async () =>
-					await performLook(
-						currentTarget,
-						{
-							readText: "auto",
-							baseLookId: outline.lookId,
-							scopeRef: targetWireRef,
-							maxDimension: 1,
-							includeImage: false,
-						},
-						signal,
-					),
-			)
+			await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
+				const look = await performLook(
+					currentTarget,
+					{
+						readText: "auto",
+						baseLookId: outline.lookId,
+						scopeRef: targetWireRef,
+						maxDimension: 1,
+						includeImage: false,
+					},
+					signal,
+				);
+				const lookSeq = savedStates.nextLook();
+				if (sawProtection(look.parsedOutline!)) {
+					// The graft keeps this state; one a concurrent look revoked must not be revived by keeping it.
+					const own = savedStates.provenance(state)!;
+					if (savedStates.isRevoked(own)) throw revokedStateError(own.stateId);
+					savedStates.revokeOlder(currentTarget, lookSeq, own.stateId);
+					state.protectionRevision = savedStates.bumpProtection(own.stateId);
+				}
+				return look;
+			})
 		).value;
 		// A Linux scoped reply is the whole live subtree: a cached node it omits is gone (#1349).
 		target = graftScopedOutline(outline, target.ref, scoped.parsedOutline!, {
@@ -4286,13 +4309,19 @@ function assertKnownRootNotBlocked(tool: string, params: PolicyPreflightParams, 
 	}
 }
 
-async function executeTool<P, T>(
+function revokedStateError(stateId: string): Error {
+	return new Error(
+		`State '${stateId}' was revoked: a later look of the same root saw a protected node, so its retained text may name it. Observe the root again.`,
+	);
+}
+
+async function executeTool<P, D>(
 	tool: string,
 	ctx: ExtensionContext,
 	params: P,
 	signal: AbortSignal | undefined,
-	run: () => Promise<T>,
-): Promise<T> {
+	run: () => Promise<AgentToolResult<D>>,
+): Promise<AgentToolResult<D>> {
 	const outputRef = trimOrUndefined((params as { ref?: string } | undefined)?.ref)?.startsWith("@o") === true;
 	const requestedStateId = outputRef
 		? undefined
@@ -4302,6 +4331,8 @@ async function executeTool<P, T>(
 		throw new Error(`State '${requestedStateId}' is unavailable or was evicted. Observe the root again.`);
 	}
 	const operation = savedStates.hydrate(stateRecord);
+	const hydrated = savedStates.provenance(operation);
+	if (hydrated && savedStates.isRevoked(hydrated)) throw revokedStateError(hydrated.stateId);
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
 			await ensureReady(ctx, signal, () => {
@@ -4317,8 +4348,14 @@ async function executeTool<P, T>(
 			return { result };
 		});
 		const result = await pending.result;
+		// A concurrent live look can revoke the state this result read; nothing below yields until the output is stored.
+		const final = savedStates.provenance(operation);
+		if (final && savedStates.isRevoked(final))
+			throw new Error(
+				`${revokedStateError(final.stateId).message} This call's result was withheld; any actions it ran may have taken effect.`,
+			);
 		persistOperation(operation);
-		return result;
+		return applyOutputEnvelope(tool, result, final ? () => savedStates.isRevoked(final) : undefined);
 	});
 }
 
@@ -4334,7 +4371,7 @@ function makeToolExecutor<P, D>(
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
 		try {
-			return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)));
+			return await executeTool(tool, ctx, params, signal, () => perform(params, signal));
 		} catch (error) {
 			throw boundToolError(tool, error);
 		}
@@ -4511,7 +4548,7 @@ The exact registered descriptions, prompt guidance, parameters, enums, and const
 
 `find_roots` returns roots such as `@r1`. Every desktop window, transient surface, and CDP page participates in that same forest. `observe_ui` returns element refs such as `@e12` and a `stateId`.
 
-Every tool that consumes an `@e` ref also requires its owning `stateId`. A state remains queryable while it is in the bounded store, but a mutation from an old resource epoch is rejected as stale. `act_ui` returns the next usable `stateId`; consume it directly instead of observing again. Observe again only after an uncertain external mutation or state eviction.
+Every tool that consumes an `@e` ref also requires its owning `stateId`. A state remains queryable while it is in the bounded store and no later look of its root saw a protected element, but a mutation from an old resource epoch is rejected as stale. `act_ui` returns the next usable `stateId`; consume it directly instead of observing again. Observe again only after an uncertain external mutation, state eviction or revocation.
 
 Truncated textual output receives an immutable session-local ref such as `@o1`. Continue it with `read_text({ ref: "@o1", offset })`; output refs don't use a UI state id. Tool-provided `@o` offsets are UTF-8 byte offsets, while `@e` text offsets count Unicode characters.
 
