@@ -64,6 +64,11 @@ export interface Call {
 	session: string;
 	/** Opaque preserved entry identity; absent on old transcripts. */
 	entryId?: string;
+	/**
+	 * Legacy pi calls only (no `entryId`): the call's position among its transcript's counted calls. Transcripts
+	 * are append-only, so a corrected counter or timestamp keeps it; the export persists it as row lineage.
+	 */
+	origin?: number;
 	ms: number;
 	provider: string;
 	model: string;
@@ -499,10 +504,12 @@ export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"
 			const raw = nth(file.models, index);
 
 			const slash = raw.indexOf("/");
+			const entryId = file.entryIds?.[i] ?? undefined;
 			candidates.push({
 				harness: "pi",
 				session,
-				entryId: file.entryIds?.[i] ?? undefined,
+				entryId,
+				...(entryId === undefined ? { origin: i } : {}),
 				ms,
 				provider: file.modelPairs?.[index]?.[0] ?? raw.slice(0, slash),
 				model: file.modelPairs?.[index]?.[1] ?? raw.slice(slash + 1),
