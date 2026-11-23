@@ -378,6 +378,12 @@ a noise bitmap must encode larger at quality 1.0 than at 0.1. `native/macos/look
 capture: root and scope-ref resolution, downscaled JPEG and frame-sized image spaces, the scale factor,
 the truncated outline root, the stored look record and base-look ref transfer across eviction. It
 never requests `readText: always`, so Vision OCR stays unexecuted.
+`native/macos/act_tests.swift` also drives `act` through its edge branches on the injected `ActWorld`:
+stale look ids, a missing or half target, missing keys, text, start or action name, a refound cached
+handle, a frameless ref, AX value, range and action refusals with their single refind retry, ref paste
+focus evidence and the sheet-count window change. A twice-refused `setText` is pinned only to post
+nothing and leave the value under every policy (refusal or `didnt` both pass); its HID focus steal and
+misleading error code are #1365.
 Successful AX reads, observer registration and real captures stay live-only.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
