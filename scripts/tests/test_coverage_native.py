@@ -740,7 +740,9 @@ def test_stale_mapped_totals_fail_only_enforced_signals(tmp_path: Path) -> None:
     stale = {"windows/primary": {"win32": [MAIN_RS]}}
     with pytest.raises(ValueError, match=rf"'windows/primary/win32' \['{MAIN_RS}'\]$") as raised:
         check_stale_mapped_totals(cfg, stale)
-    assert "`--measure`" in str(raised.value)
+    assert "replay the matching hosted coverage artifact against the source checkout" in str(raised.value)
+    assert "`scripts/coverage_accounting.py --measure`, see docs/coverage.md" in str(raised.value)
+    assert "update `mapped_totals` in coverage/policy.json" in str(raised.value)
     assert "needs no `remeasurements` entry" in str(raised.value)
     check_stale_mapped_totals(cfg, {})
     check_stale_mapped_totals(cfg, stale, measure=True)

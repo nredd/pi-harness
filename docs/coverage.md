@@ -472,8 +472,9 @@ changed or was deleted. Stale files are not compared. Every run lists them in th
 `stale_mapped_totals` and logs one `STALE mapped totals, not compared (#1270)` warning per signal
 naming them. On an enforced signal it then FAILS with `Stale mapped totals (#1270)`: the PR
 that adds, edits or deletes a measured source records the refresh from a `--measure` replay of its own
-hosted artifact, so a source edit cannot ship beside an instrumentation change that drops mapped units
-of the same file. Accounting never refreshes records from the run's own `measured_mapped_totals`; that
+hosted artifact. If instrumentation drops mapped units of that file, the gate forces the shrink into a reviewable policy diff (a refreshed record with the
+new hash and lower total) instead of silently accepting it; it does not prove the source edit caused
+the shrink. Accounting never refreshes records from the run's own `measured_mapped_totals`; that
 would accept exactly the shrink the records guard. Report-only signals and `--measure` replays only
 warn. Unchanged sources keep the `remeasurements` ledger below.
 

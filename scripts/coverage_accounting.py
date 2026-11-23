@@ -2099,10 +2099,12 @@ def check_stale_mapped_totals(
 ) -> None:
     """Fail an enforced signal whose mapped denominators no current record guards (#1270).
 
-    A stale record is not compared, so a source edit could ship with an instrumentation change that
-    drops mapped units of the same file. The PR that changes the source refreshes its records from a
-    reviewed `--measure` replay instead; refreshing automatically from this run's own totals would
-    accept exactly that shrink. Report-only signals and `--measure` replays keep the warning.
+    A stale record is not compared, so an instrumentation change that drops mapped units of an edited
+    file would pass silently. Failing forces the PR that changes the source to record a refresh from
+    a reviewed `--measure` replay: any shrink becomes a reviewable policy diff (a refreshed record with
+    the new hash and lower total). It does not prove the source edit caused the shrink. Refreshing
+    automatically from this run's own totals would accept the shrink unreviewed. Report-only signals
+    and `--measure` replays keep the warning.
 
     Parameters:
         policy (Policy): Policy naming each signal's enforcement.
@@ -2122,9 +2124,11 @@ def check_stale_mapped_totals(
             unguarded += [f"'{label}/{runner_os}' {paths}" for runner_os, paths in sorted(platforms.items())]
     if unguarded:
         raise ValueError(
-            "Stale mapped totals (#1270): replay this source's artifact with `--measure` and record "
-            "its proposed `mapped_totals` (a refresh of new, edited or deleted source needs no "
-            f"`remeasurements` entry): {'; '.join(unguarded)}"
+            "Stale mapped totals (#1270): replay the matching hosted coverage artifact against the "
+            "source checkout (`scripts/coverage_accounting.py --measure`, see docs/coverage.md), "
+            "review the proposed records and update `mapped_totals` in coverage/policy.json (a "
+            "refresh of new, edited or deleted source needs no `remeasurements` entry): "
+            f"{'; '.join(unguarded)}"
         )
 
 
