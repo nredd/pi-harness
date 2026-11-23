@@ -541,17 +541,27 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
     Parameters:
         None.
     Returns:
-        None: Every ported suite is a conventional test file with no stale helper entry.
+        None: Every pinned suite sits in its pinned directory and format with no stale helper entry.
     Raises:
-        AssertionError: A suite leaves `test/` and `tests/`, or a helper entry still names its old script.
+        AssertionError: A pinned `test/*.test.mjs` suite is missing from `test/`, a pinned
+            `tests/*.test.ts` suite is missing from `tests/`, a pinned stem exists in both, or a
+            helper entry still names its old script.
     """
     cfg = Policy.model_validate_json((ROOT / "coverage/policy.json").read_text())
     helpers = {helper.path for helper in cfg.verification_helpers}
     package = ROOT / "packages/computer-use"
-    suites = sorted([*(package / "test").glob("*.test.mjs"), *(package / "tests").glob("*.test.ts")])
-    # The 26 ported suites plus #551, #637, #672, #646 and #648, by stem: losing or renaming any fails,
-    # while new suites (#645 adds many) and #871 moves to `tests/*.test.ts` need no edit here.
-    required = {
+    old_suites = {suite.name.removesuffix(".test.mjs") for suite in (package / "test").glob("*.test.mjs")}
+    new_suites = {suite.name.removesuffix(".test.ts") for suite in (package / "tests").glob("*.test.ts")}
+    # The 26 ported suites plus #551, #637, #672, #646 and #648, by stem and directory: each #871 slice
+    # moves its stems from `in_test` to `in_tests`, so the pin proves where and in which format each lives.
+    in_tests = {
+        "managed-browser-headless",
+        "managed-browser-launch",
+        "managed-browser-observe",
+        "managed-browser-profile",
+        "managed-browser-stuck",
+    }
+    in_test = {
         "act-outcomes",
         "app-policy",
         "async",
@@ -568,8 +578,6 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
         "macos-helper-path",
         "macos-native-pure",
         "macos-observe-target",
-        "managed-browser-headless",
-        "managed-browser-profile",
         "outline-store",
         "platform-linux",
         "platform-windows",
@@ -582,8 +590,11 @@ def test_ported_computer_suites_are_conventional_tests() -> None:
         "windows-build-scripts",
         "wsl2-diagnostics",
     }
-    assert required <= {suite.name.removesuffix(".test.mjs").removesuffix(".test.ts") for suite in suites}
-    for suite in suites:
+    assert in_test <= old_suites
+    assert in_tests <= new_suites
+    assert not in_tests & old_suites
+    assert not in_test & new_suites
+    for suite in [*(package / "test").glob("*.test.mjs"), *(package / "tests").glob("*.test.ts")]:
         assert is_test_path(suite.relative_to(ROOT))
     for moved in [
         "check-linux-build-scripts.mjs",

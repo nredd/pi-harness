@@ -1200,10 +1200,12 @@ native/linux/bridge-rs/         Linux AT-SPI2 helper (Rust)
 scripts/build-native.mjs         macOS helper build script
 scripts/setup-helper.mjs         macOS helper install script
 test/*.test.mjs                  Vitest suites not yet moved to tests/ (#871), e.g. invariants
-tests/*.test.ts                  Vitest suites, e.g. managed browser launch and profiles
+tests/*.test.ts                  Vitest suites, not typechecked yet (#1374), e.g. managed browser
 scripts/check-*.mjs              Repository gates (docs, package assets, commits, sync ledger)
 scripts/pi-cubench-agent.mjs     Cubench gateway adapter using registered Pi tools
 ```
+
+`tsconfig.json` includes `extensions/` and `src/` only, so `npm run typecheck` does not cover `tests/*.test.ts`: their type annotations are not checked. Adding `tests/` to the `include` waits for the remaining `test/` suites to move (#1374). Fixtures stay split across `test/fixtures/` and `tests/fixtures/` until then.
 
 The public tool surface lives in `extensions/computer-use.ts`. Keep it small. Internal complexity belongs in `src/bridge.ts`, `src/outline.ts`, `src/note.ts`, and the native helper.
 

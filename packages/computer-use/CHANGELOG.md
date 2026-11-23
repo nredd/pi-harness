@@ -5,7 +5,7 @@ All notable changes to `@nredd/pi-computer-use` are documented here.
 ## [Unreleased]
 
 - Move the entry to `src/index.ts`, retire the inherited website/media/workflows, preserve prose, and build native payloads instead of committing them (#870).
-- Tests: move the five `managed-browser-*` suites from `test/*.test.mjs` to `tests/*.test.ts`, unchanged apart from fixture paths (#871).
+- Tests: move the five `managed-browser-*` suites from `test/*.test.mjs` to `tests/*.test.ts`, unchanged apart from fixture paths and type-only `let` annotations (#871). `tests/` is outside the `tsconfig.json` `include`, so they are not typechecked yet (#1374).
 
 ### Fixed
 
