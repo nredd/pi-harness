@@ -75,6 +75,7 @@ import {
 	controlLine,
 	foldToBudget,
 	graftScopedOutline,
+	isConfirmedReadable,
 	type LookResponse,
 	nodeByRef,
 	type Outline,
@@ -2105,7 +2106,9 @@ interface AbsenceUnproven {
  * the condition's scope, above it, or (unless exact) inside it is unread (`truncated`). The Windows UIA wait does
  * not report its own truncation, so absence is checked here on every platform. Element wire refs are look-local and
  * public refs carry over structurally, so a moved scope can arrive under a fresh ref: a scope ref missing from the
- * successor proves nothing while the condition shows anywhere in it. `undefined` when corroborated.
+ * successor proves nothing while the condition shows anywhere in it. An exact scope node marked `childrenUnread`
+ * (its own fields read, only its descendants unread) does not block: nothing below it can hold a condition on the
+ * node itself. Every other `truncated` node in the scope or above it still does. `undefined` when corroborated.
  */
 function absenceUnproven(
 	outline: Outline,
@@ -2115,10 +2118,13 @@ function absenceUnproven(
 	const scope = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
 	if (condition.scopeRef && !scope && outlineConditionPresent(outline, { ...condition, scopeRef: undefined }))
 		return { reason: "scope_unmatched", unreadRefs: [] };
+	const readExactScope =
+		condition.scopeExact && scope?.childrenUnread === true && isConfirmedReadable(scope) ? scope : undefined;
 	const unreadRefs = outline.nodes
 		.filter(
 			(node) =>
 				node.truncated &&
+				node !== readExactScope &&
 				(!scope ||
 					nodeWithinScope(scope, node.ref, false) ||
 					(!condition.scopeExact && nodeWithinScope(node, scope.ref, false))),
@@ -4588,6 +4594,10 @@ failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
+An exact `ref` scope the macOS helper marks `childrenUnread` (its own fields
+read, only its `AXChildren` unread) does not block: nothing below it can hold
+the condition. A bare `truncated` (Linux, Windows, older helpers) and every
+unread ancestor still do.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 

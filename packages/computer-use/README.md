@@ -1898,10 +1898,10 @@ failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
-Known gap: `truncated` does not say whether a node's own fields or only its
-descendants are unread, so an exact `ref` scope whose own `AXChildren` read keeps
-failing on macOS stays `inconclusive`, though nothing below it can hold the
-condition (#1310).
+An exact `ref` scope the macOS helper marks `childrenUnread` (its own fields
+read, only its `AXChildren` unread) does not block: nothing below it can hold
+the condition. A bare `truncated` (Linux, Windows, older helpers) and every
+unread ancestor still do (#1310).
 
 Batch steps only when the second step does not need to inspect the result of the first:
 
@@ -2670,6 +2670,7 @@ An advertised AX action is a delivery capability, not proof of an application-le
 
 - An empty outline usually indicates missing Accessibility trust, an inaccessible target, or an app that exposes no useful AX hierarchy.
 - `truncated` means the bounded walk did not retrieve the complete descendant tree.
+- `childrenUnread` comes with `truncated` when the node's own fields were read and only its descendants are unread, so `wait_for` and `act_ui` `expect` can prove an exact `ref` absent on it.
 - `pictureOnly` means the element came from visual evidence and cannot be targeted by AX ref.
 - A supported action describes what the element reports, not whether the app will honor it.
 - AX frames and Core Graphics windows are paired heuristically; low-confidence pairing must not be treated as exact identity.

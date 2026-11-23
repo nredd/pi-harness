@@ -10,6 +10,8 @@ afterEach(() => {
 });
 
 const UNREAD = { truncated: true };
+/** The macOS marker for a node whose own fields were read but whose descendants were not (#1310). */
+const CHILDREN_UNREAD = { truncated: true, childrenUnread: true };
 
 /** A focused window with the saved root's title but another identity, e.g. a second document named alike. */
 const lookalike = () =>
@@ -81,6 +83,29 @@ test.for([
 		condition: { ref: "@e2" },
 		unread: ["@e2"],
 	},
+	{
+		name: "an exact scope under an ancestor whose children are unread",
+		tree: () => [
+			wireNode("outer", "AXGroup", "Outer", {
+				...CHILDREN_UNREAD,
+				children: [wireNode("inner", "AXGroup", "Inner")],
+			}),
+		],
+		condition: { ref: "@e3" },
+		unread: ["@e2"],
+	},
+	{
+		name: "a subtree scope whose children are unread",
+		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
+		condition: { scopeRef: "@e2" },
+		unread: ["@e2"],
+	},
+	{
+		name: "a protected exact scope whose children are unread",
+		tree: () => [wireNode("outer", "AXGroup", "Outer", { ...CHILDREN_UNREAD, subrole: "AXSecureTextField" })],
+		condition: { ref: "@e2" },
+		unread: ["@e2"],
+	},
 ])(
 	"a helper's gone is inconclusive with $name in the successor",
 	async ({ tree, condition, unread }, { onTestFinished }) => {
@@ -124,6 +149,11 @@ test.for([
 		condition: { ref: "@e2" },
 	},
 	{ name: "a vanished scope", tree: () => [wireButton("b1", "Other")], condition: { scopeRef: "@e3" } },
+	{
+		name: "an exact scope whose children alone are unread",
+		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
+		condition: { ref: "@e2" },
+	},
 ])("a helper's gone is corroborated with $name", async ({ tree, condition }, { onTestFinished }) => {
 	const fake = await installFakeDesktop(onTestFinished);
 	fake.tree = [wireNode("outer", "AXGroup", "Outer", { children: [wireNode("inner", "AXGroup", "Inner")] })];
@@ -685,4 +715,51 @@ test("wait_for never corroborates an absence from a same-title window", async ({
 		assert.match(result.details.observationError, reason);
 		assert.equal(fake.looks.length, looks, "the lookalike is never observed");
 	}
+});
+
+test("a Linux exact scope sent without a truncated marker stays unread despite childrenUnread", async ({
+	onTestFinished,
+}) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	// Linux omits the marker on a node whose own fields it could not read; only an explicit `truncated` pairs.
+	fake.parseOptions = { unmarkedNodesUnread: true };
+	fake.tree = [wireNode("outer", "AXGroup", "Outer", { truncated: false })];
+	const { stateId } = await fake.observe();
+	fake.waitFor = async () => {
+		fake.tree = [wireNode("outer", "AXGroup", "Outer", { childrenUnread: true })];
+		return { found: true, gone: true, nodeCount: 1 };
+	};
+	const result = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		text: "Target",
+		until: "absent",
+		ref: "@e2",
+	});
+	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
+});
+
+test.for([
+	{ name: "children-unread", marker: CHILDREN_UNREAD, status: "verified" },
+	{ name: "bare truncated", marker: UNREAD, status: "inconclusive" },
+])("act_ui checks an exact ref absence on a $name successor node", async ({ marker, status }, { onTestFinished }) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.tree = [wireButton("go", "Go")];
+	const { stateId } = await fake.observe();
+	fake.actBatchResult = {
+		outcome: "worked",
+		performed: { delivery: "ax", transaction: true, actionCount: 1 },
+		steps: [{ outcome: "worked", performed: { delivery: "ax" } }],
+	};
+	// The node stops showing "Go" while its `AXChildren` read keeps failing; the native exact wait says `gone`.
+	fake.waitFor = async () => {
+		fake.tree = [wireButton("go", "Stop", marker)];
+		return { found: true, gone: true, nodeCount: 1 };
+	};
+	const result = await fake.call(fake.bridge.executeAct, {
+		stateId,
+		actions: [{ action: "press", ref: "@e2" }],
+		expect: { ref: "@e2", text: "Go", until: "absent", timeoutMs: 250 },
+	});
+	assert.equal(result.details.execution.verification.status, status);
 });
