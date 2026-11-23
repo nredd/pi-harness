@@ -759,14 +759,9 @@ call (same harness/session/entry identity, different timestamp/counters) or chan
 attribution retires the affected months' references and regenerates those months from the clean
 scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
 corrections regenerate both affected months. Entry identities shared by distinct sessions are not
-revisions of one another. Legacy events without an `entryId` retain tuple matching, so a corrected
-counter or timestamp is a new fingerprint. Those revisions retire a sealed month under one explicit
-rule: within one harness, session, provider and model, the clean scan holds at least as many legacy
-rows no published shard held as the sealed legacy rows it no longer holds. Even then the month is
-regenerated only when nothing else would be dropped: every other sealed event, quota reading and
-session end of that month must still be in the scan. Otherwise the corrected row still appends beside
-the old one (e.g. after the transcript or its cache was removed, or the replacement changed model),
-since its history cannot be told apart from a lost call. Old file bytes are not changed, only superseded.
+revisions of one another. Legacy events without an `entryId` retain tuple matching: corrected
+counters or timestamps cannot be identified and can append beside the old row in a sealed month.
+This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 Sealing follows the wall clock, so an export whose clock is behind the readable published
 `exportedAt` is refused before anything is written (not the scan cache, the salt or the outbox's

@@ -981,51 +981,6 @@ function revisedMonths(previous: MachineSnapshot, next: MachineSnapshot): Set<st
 	return revised;
 }
 
-/**
- * Legacy rows carry no entry identity, so a corrected one is a new fingerprint beside the old row.
- * Retire a sealed month for that only under an explicit rule: within one harness, session, provider and
- * model, the clean scan has at least as many legacy rows no shard held as it lost sealed legacy rows.
- * Even then the month is regenerated only if that drops nothing else: every other event, quota reading
- * and session bound it held is still in the scan. Otherwise it keeps appending, as before.
- */
-function legacyRevisedMonths(
-	previous: readonly CompactShard[],
-	next: readonly CompactShard[],
-	sealedMonth: (month: string) => boolean,
-): Set<string> {
-	const group = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.provider, e.model]);
-	const nextIds = new Set(next.flatMap((shard) => shard.events.map((event) => event.id)));
-	const priorIds = new Set(previous.flatMap((shard) => shard.events.map((event) => event.id)));
-	const balance = new Map<string, number>();
-	const lost: { event: SnapshotEvent; month: string }[] = [];
-	for (const shard of previous) {
-		if (!sealedMonth(shard.month)) continue;
-		for (const event of shard.events)
-			if (!nextIds.has(event.id)) {
-				lost.push({ event, month: shard.month });
-				if (event.entryId === null) balance.set(group(event), (balance.get(group(event)) ?? 0) - 1);
-			}
-	}
-	for (const shard of next)
-		for (const event of shard.events)
-			if (event.entryId === null && !priorIds.has(event.id))
-				balance.set(group(event), (balance.get(group(event)) ?? 0) + 1);
-	const short = new Set([...balance].filter(([, n]) => n < 0).map(([key]) => key));
-	const superseded = (e: SnapshotEvent): boolean => e.entryId === null && !short.has(group(e));
-	const candidates = new Set(lost.filter(({ event }) => superseded(event)).map(({ month }) => month));
-	for (const { event, month } of lost) if (!superseded(event)) candidates.delete(month);
-	const quota = new Set(next.flatMap((shard) => shard.quota.map((q) => JSON.stringify(q))));
-	const ends = new Map(next.flatMap((shard) => shard.sessions.map((s) => [s.id, s.endMs] as const)));
-	for (const shard of previous) {
-		if (!candidates.has(shard.month)) continue;
-		const kept =
-			shard.quota.every((q) => quota.has(JSON.stringify(q))) &&
-			shard.sessions.every((s) => (ends.get(s.id) ?? -1) >= s.endMs);
-		if (!kept) candidates.delete(shard.month);
-	}
-	return candidates;
-}
-
 /** Compact late updates without rewriting the base or consulting the current transcript scan. */
 function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
 	const baseSessions = new Map(base.sessions.map((session) => [session.id, session]));
@@ -1369,10 +1324,6 @@ async function publishStats(
 			: null;
 	const current = monthOf(exportedAt);
 	const revised = sealed ? revisedMonths(sealed, snapshot) : new Set<string>();
-	// loadPrevious validated every shard against this v3 manifest, so each carries its quota array.
-	const sealedShards = (sealed?.shards ?? []) as CompactShard[];
-	for (const month of legacyRevisedMonths(sealedShards, snapshot.shards, (m) => m < current && !revised.has(m)))
-		revised.add(month);
 	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
 	if (sealed)
 		for (const [i, shard] of sealed.shards.entries()) {
