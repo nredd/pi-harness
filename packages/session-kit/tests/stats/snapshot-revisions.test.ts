@@ -784,7 +784,9 @@ it("compacts sealed deltas without rewriting the base or losing archived calls",
 	}
 	const after = manifest(first.snapshotDir);
 	expect(peak).toBe(32);
-	expect(after.shards).toHaveLength(11);
+	// The first overflow (31 ends of one session) still packs losslessly; the next compacts to the
+	// maximum end, then 8 more deltas.
+	expect(after.shards).toHaveLength(10);
 	expect(after.shards).toContainEqual(ref);
 	expect(after.shards.reduce((n, s) => n + s.bytes, 0)).toBeLessThan(ref.bytes + 41 * 256);
 	await exportStats(agent, out);
@@ -965,7 +967,8 @@ it.each(["2026-10-03", "2026-11-03"])("quota winner changes after reset on %s", 
 	const before = await read(viewer);
 	expect(before.map((q) => q.find((row) => row.limitId === "fixture")?.usedPercent)).toEqual([2, 2, 1, 1, 2, 2]);
 	await exportStats(agent, out);
-	expect(manifest(snapshotDir).shards).toHaveLength(3);
+	// 30 filler readings of one window still pack losslessly beside the base.
+	expect(manifest(snapshotDir).shards).toHaveLength(31);
 	const fresh = join(root, "fresh");
 	expect(await importStats(fresh, out)).toMatchObject({ imported: 1, problems: [] });
 	expect(await read(fresh)).toEqual(before);

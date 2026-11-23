@@ -116,6 +116,12 @@ export const EMPTY_REMINDER_MESSAGE_TYPE = "rpiv-todo-empty-reminder";
 export const COMPACTION_LIST_MESSAGE_TYPE = "rpiv-todo-compaction-list";
 
 /**
+ * Hidden custom message the `context` hook appends to a fresh session's first request, listing the
+ * open todos the previous session last recorded. Read-only and never persisted.
+ */
+export const CARRYOVER_LIST_MESSAGE_TYPE = "rpiv-todo-carryover-list";
+
+/**
  * Custom (non-message) entry recording a spent stale- or empty-list prompt budget. Session start
  * restores the budget from it, never from the transcript marker the continuation still needs.
  */
