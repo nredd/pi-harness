@@ -30,7 +30,7 @@ export interface ExhaustionMark {
 	evidence?: "inferred" | "observed";
 	expiry?: "hinted" | "window-reset" | "backoff";
 	cause?: "quota" | "billing";
-	/** When an evidence-carrying mark was written. */
+	/** When an evidence-carrying mark was written. Provenance only: dedupe keys on the failure (L7), never on this. */
 	markedAt?: number;
 }
 
@@ -77,8 +77,9 @@ export class ExhaustionTracker {
 		const families = decision.scope === "model" ? decision.families : undefined;
 		const key = scopeKey(model.provider, families);
 		const previous = this.marks.get(key);
-		// One failure, keyed by model and message timestamp, counts once while its mark is live.
-		// Distinct failures count separately even when both precede the first confirmation.
+		// L7: one failure, keyed by model and message timestamp, counts once while its mark is live.
+		// Distinct failures count separately even when both precede the first confirmation, so dedupe
+		// never compares `markedAt` with the failure time.
 		const failure = decision.evidenceAt === undefined ? undefined : `${refKey(model)}@${decision.evidenceAt}`;
 		const counted = previous !== undefined && previous.until > now ? this.counted.get(key) : undefined;
 		if (previous && failure !== undefined && counted?.has(failure)) return previous;

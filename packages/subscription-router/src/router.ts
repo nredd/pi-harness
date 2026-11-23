@@ -354,9 +354,9 @@ export class Router {
 	): Promise<boolean> {
 		const decision = await env.refresh(model, signal, failedAt, failed);
 		if (!decision?.block || signal?.aborted || decision[COLLECTOR_EVIDENCE]?.aborted) return false;
-		// C9: an inferred mark comes from this requester's failure, so it is committed only while the
-		// requester's selection is still current, checked right before the write. A read-confirmed
-		// mark is shared provider state and stays shared, as it always was.
+		// C9 applies to inferred marks only: an inferred mark comes from this requester's failure, so
+		// it is committed only while the requester's selection is still current, checked right before
+		// the write. A read-confirmed mark is shared provider state and is written regardless.
 		if (decision.evidence !== undefined && !isCurrent(env)) return false;
 		return this.tracker.record(model, decision) !== undefined;
 	}

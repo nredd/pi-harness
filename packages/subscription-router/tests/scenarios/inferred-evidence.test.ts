@@ -372,6 +372,7 @@ describe("collected providers keep read-only confirmation", () => {
 		expect(mark && markEvidence(mark)).toBe("read");
 	});
 
+	// Decision record: a weak match never reads.
 	it("S15: a weak gate match never reads or marks, even when a fresh read would show the block", async () => {
 		const s = await run({ chain: [SONNET, NEON], tokens: OAUTH });
 		const before = s.fetches.length;

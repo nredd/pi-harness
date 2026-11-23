@@ -378,7 +378,8 @@ it.each<[string, string, FailureClassification]>([
 	["llama.cpp 429", "llama.cpp error (429): Daily limit reached", daily],
 	["llama.cpp 503", "llama.cpp error (503): Daily quota exceeded", other],
 	["System One API 503", "System One API error (503): Daily quota exceeded", other],
-	["unknown label error prefix 503", "Gateway error (503): Daily quota exceeded", daily],
+	// Decision record: unlisted wrapper labels are ignored by design, so the body reads as daily.
+	["unlisted label error prefix 503", "Gateway error (503): Daily quota exceeded", daily],
 ])("reads statuses only from core wrappers: %s", (_name, text, expected) => {
 	expect(classify(text, NOW)).toStrictEqual(expected);
 });
@@ -419,6 +420,7 @@ it.each<[string, string, FailureClassification]>([
 });
 
 // S7: per-minute never marks, so explicit per-minute evidence beats billing and daily wording.
+// Decision record: an explicit, unquoted or structured per-minute limit beats a 402; a quoted one does not.
 it.each<[string, string, FailureClassification]>([
 	[
 		"billing wording with a PerMinute quotaId",

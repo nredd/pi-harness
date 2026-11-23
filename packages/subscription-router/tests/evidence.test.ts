@@ -17,7 +17,7 @@ import {
 	readEvidence,
 	type UsageRead,
 } from "../src/evidence.ts";
-import { ExhaustionTracker, markEvidence } from "../src/exhaustion.ts";
+import { type ExhaustionMark, ExhaustionTracker, markEvidence } from "../src/exhaustion.ts";
 import { classify, nextPacificMidnight } from "../src/failure.ts";
 import { isQuotaError, type RouteEnv, Router } from "../src/router.ts";
 import {
@@ -589,6 +589,7 @@ describe("inferred marks", () => {
 		expect(later).toMatchObject({ confirmations: 2, until: T0 + 1000 + 10 * MINUTE });
 	});
 
+	// Decision record: dedupe follows L7, never `markedAt >= evidenceAt`.
 	it("L7: dedupes on model and failure timestamp, not on when the mark was written", () => {
 		const { clock, tracker } = tracked();
 		const billing = { block: true, window: "inferred:billing", scope: "provider", evidence: "inferred" } as const;
@@ -843,6 +844,29 @@ describe("routing on the composed chain", () => {
 		const message = fauxAssistantMessage("", { stopReason: "error", errorMessage: DAILY, timestamp: T0 });
 		expect(await router.confirm(asModel(CARBON), env, controller.signal, T0, message)).toBe(false);
 		expect(tracker.active()).toEqual([]);
+	});
+
+	// Decision record: C9 applies to inferred marks only.
+	it("C9: a stale selection drops an inferred mark but still writes a read-confirmed one", async () => {
+		const tracker = new ExhaustionTracker(() => T0);
+		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => T0);
+		const stale = (decision: UsageDecision): RouteEnv => ({
+			resolve: (entry) => asModel(entry),
+			refresh: async () => decision,
+			assertCurrent: () => {
+				throw new Error("selection changed");
+			},
+		});
+		const message = fauxAssistantMessage("", { stopReason: "error", errorMessage: BARE, timestamp: T0 });
+		const inferred = { block: true, window: "inferred:backoff", evidence: "inferred", evidenceAt: T0 } as const;
+		expect(await router.confirm(asModel(CARBON), stale(inferred), undefined, T0, message)).toBe(false);
+		expect(tracker.active()).toEqual([]);
+		const read = { provider: "anthropic", id: "claude-sonnet-5" };
+		expect(
+			await router.confirm(asModel(read), stale({ block: true, window: "five_hour" }), undefined, T0, message),
+		).toBe(true);
+		expect(tracker.active()).toMatchObject([{ provider: "anthropic", window: "five_hour" }]);
+		expect(markEvidence(tracker.active()[0] as ExhaustionMark)).toBe("read");
 	});
 });
 

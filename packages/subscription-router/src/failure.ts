@@ -38,6 +38,8 @@ const LEADING_STATUS = /^(?:HTTP(?:\/\d(?:\.\d)?)?\s+)?([45]\d{2})(?=$|\s|:)(?!\
 // `<provider> API error` (`OpenAI`, `Azure OpenAI`, `Mistral`, `System One API`); the classifier
 // transports use the fixed labels `OpenAI Decisions error` and `llama.cpp error`. Any other
 // parenthesized number is prose, so it can neither invent a status nor outrank the body's structured one.
+// Unlisted labels are ignored by design (`Gateway error (503): ...` is prose): a new core wrapper
+// label must be added here.
 const PREFIXED_STATUS = /^(?:[^{}()\r\n]* API|OpenAI Decisions|llama\.cpp) error \(([45]\d{2})\): /;
 const JSON_TOKEN =
 	/\s*(?:"(?:[^"\\\r\n]|\\.)*"|[{}[\],:]|true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.+-]))/y;
@@ -213,7 +215,8 @@ export function classify(errorMessage: string | undefined, now: number, minHintM
 		interactionsDaily
 	) {
 		const windows = quotaIds.join(" ");
-		// S7: per-minute never marks, so an explicit per-minute window beats billing and daily wording.
+		// S7: per-minute never marks, so an explicit per-minute window beats billing (a 402 included)
+		// and daily wording.
 		// The prose fallback accepts explicit window tokens, not arbitrary mentions of the word daily.
 		// Against billing only a structured window or unquoted wording counts: a quoted value (a plan
 		// named "PerMinute") echoes the request and must not veto a payment failure.

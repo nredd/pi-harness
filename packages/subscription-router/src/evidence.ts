@@ -83,7 +83,7 @@ export function composeEvidence(
 /**
  * Never-mark rules: auth (401/403), 5xx, transport, safety, per-minute and weak (a stray gate match
  * with no quota verdict, S15) failures, whatever their wording. Checked before any adapter, so not
- * even a collected provider's read can mark one.
+ * even a collected provider's read can mark one: a weak match never reads.
  */
 export function neverMarks({ message, failedAt }: FailureContext, settings?: ProviderConfig["failure"]): boolean {
 	if (message?.stopReason !== "error") return false;
