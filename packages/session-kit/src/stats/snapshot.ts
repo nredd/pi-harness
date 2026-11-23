@@ -43,6 +43,12 @@ import { nth } from "./nth.ts";
 
 /** v3 stores compact deterministic gzip; expanded v1/v2 remain readable. */
 export const SNAPSHOT_VERSION = 3;
+/**
+ * A v3 manifest's shard whose rows carry lineage (a legacy row's origin, or a retired row) uses compact wire
+ * version 4. Older readers reject it as an invalid shard and keep their last-good snapshot; the manifest
+ * version, which the sync helper allowlists, stays 3.
+ */
+const LINEAGE_VERSION = 4;
 const VERSIONS: readonly number[] = [1, 2, 3];
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -69,6 +75,20 @@ export interface SnapshotEvent {
 	cacheWrite: number;
 	/** `null` when the harness records no cost. */
 	cost: number | null;
+	/**
+	 * Lineage shards (version 4) only, where it is always present: a legacy pi row's position among its
+	 * transcript's counted calls (`Call.origin`), or `null` (identified rows, and legacy rows whose position
+	 * was ambiguous in the scan).
+	 */
+	origin?: number | null;
+}
+/** Why a sealed row was retired. `revised`: a later scan holds a different row at its transcript origin. */
+export type RetiredReason = "revised";
+/** A sealed legacy row kept in its month but no longer counted: `successor` replaced it. */
+export interface RetiredEvent extends Omit<SnapshotEvent, "origin"> {
+	/** The event id that replaced it: a counted row, or another retired row whose successors end at one. */
+	successor: string;
+	reason: RetiredReason;
 }
 /** A quota reading as exported; same shape as the readers' observation. */
 export type SnapshotQuota = QuotaObservation;
@@ -86,8 +106,10 @@ export interface Shard {
 	sessions: SnapshotSession[];
 	/** v2 only; each reading lives in the UTC month of its `observedAt`. */
 	quota?: SnapshotQuota[];
+	/** Lineage shards (version 4) only: retired sealed rows, never counted, never deleted. */
+	retired?: RetiredEvent[];
 }
-type CompactShard = Shard & { version: 3; quota: SnapshotQuota[] };
+type CompactShard = Shard & { version: 3 | 4; quota: SnapshotQuota[] };
 
 export interface Manifest extends Identity {
 	version: number;
@@ -447,6 +469,12 @@ export function makeSnapshot(
 		return s;
 	};
 	const sessionId = (value: string): string => (HASH.test(value) ? value : opaqueId(`session:${value}`));
+	// Lineage needs a position that names one row: one shared by two scanned rows (two transcripts with one
+	// session id) is published as `null`, never guessed.
+	const originKey = (c: Call): string => JSON.stringify([sessionId(c.session), c.origin]);
+	const positions = new Map<string, number>();
+	for (const c of loaded.calls)
+		if (c.origin !== undefined) positions.set(originKey(c), (positions.get(originKey(c)) ?? 0) + 1);
 	for (const c of loaded.calls) {
 		const e = {
 			harness: c.harness,
@@ -461,7 +489,8 @@ export function makeSnapshot(
 			cacheWrite: c.cacheWrite,
 			cost: c.cost,
 		};
-		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e });
+		const origin = c.origin === undefined ? {} : { origin: positions.get(originKey(c)) === 1 ? c.origin : null };
+		shard(monthOf(c.ms)).events.push({ id: eventId(e), ...e, ...origin });
 	}
 	for (const q of mergeQuota(quota, now))
 		shard(monthOf(q.observedAt)).quota.push({
@@ -492,7 +521,24 @@ export function makeSnapshot(
 			lastGoodAt,
 			shards: [],
 		},
-		shards: [...shards.values()].sort((a, b) => a.month.localeCompare(b.month)),
+		shards: [...shards.values()].sort((a, b) => a.month.localeCompare(b.month)).map(withLineage),
+	};
+}
+
+/**
+ * The canonical form of a shard: lineage version 4, with an `origin` on every event and a `retired` list, when
+ * any row carries lineage (a legacy origin or a retired row); otherwise plain version 3, byte-identical to what
+ * kits without lineage publish.
+ */
+function withLineage(shard: CompactShard): CompactShard {
+	const { retired = [], ...rest } = shard;
+	const lineage = retired.length > 0 || shard.events.some((e) => typeof e.origin === "number");
+	if (!lineage) return { ...rest, version: 3, events: shard.events.map(({ origin: _, ...e }) => e) };
+	return {
+		...rest,
+		version: LINEAGE_VERSION,
+		events: shard.events.map((e) => ({ ...e, origin: e.origin ?? null })),
+		retired,
 	};
 }
 
@@ -511,13 +557,30 @@ const codeUnits = (a: string, b: string): number => Number(a > b) - Number(a < b
 
 /** Canonical compact JSON, independent of gzip implementation and compression level. */
 function compactJson(shard: Shard): string {
-	const ids = [...new Set([...shard.sessions.map((s) => s.id), ...shard.events.map((e) => e.sessionId)])].sort();
-	const pairs = [...new Set(shard.events.map((e) => JSON.stringify([e.provider, e.model])))].sort();
+	const retired = shard.retired ?? [];
+	const rows = [...shard.events, ...retired];
+	const ids = [...new Set([...shard.sessions.map((s) => s.id), ...rows.map((e) => e.sessionId)])].sort();
+	const pairs = [...new Set(rows.map((e) => JSON.stringify([e.provider, e.model])))].sort();
 	const sessions = new Map(ids.map((id, i) => [id, i]));
 	const models = new Map(pairs.map((pair, i) => [pair, i]));
 	const epoch = Date.parse(`${shard.month}-01T00:00:00Z`);
+	const lineage = shard.version === LINEAGE_VERSION;
+	const row = (e: Omit<SnapshotEvent, "origin">): unknown[] => [
+		sessions.get(e.sessionId),
+		HARNESSES.indexOf(e.harness as Harness),
+		e.entryId === null ? null : packedId(e.entryId),
+		e.ms - epoch,
+		models.get(JSON.stringify([e.provider, e.model])),
+		e.input,
+		e.output,
+		e.cacheRead,
+		e.cacheWrite,
+		e.cost,
+	];
+	const order = (a: { ms: number; id: string }, b: { ms: number; id: string }): number =>
+		a.ms - b.ms || codeUnits(a.id, b.id);
 	const compact = {
-		v: 3,
+		v: lineage ? LINEAGE_VERSION : 3,
 		m: shard.machineId,
 		t: shard.month,
 		s: ids.map(packedId),
@@ -525,21 +588,10 @@ function compactJson(shard: Shard): string {
 		d: [...shard.sessions]
 			.sort((a, b) => codeUnits(a.id, b.id))
 			.map((s) => [sessions.get(s.id), s.startMs - epoch, s.endMs - s.startMs, s.child ? 1 : 0]),
-		e: [...shard.events]
-			.sort((a, b) => a.ms - b.ms || codeUnits(a.id, b.id))
-			.map((e) => [
-				sessions.get(e.sessionId),
-				HARNESSES.indexOf(e.harness as Harness),
-				e.entryId === null ? null : packedId(e.entryId),
-				e.ms - epoch,
-				models.get(JSON.stringify([e.provider, e.model])),
-				e.input,
-				e.output,
-				e.cacheRead,
-				e.cacheWrite,
-				e.cost,
-			]),
+		e: [...shard.events].sort(order).map((e) => (lineage ? [...row(e), e.origin] : row(e))),
 		q: shard.quota,
+		// Retired rows: the event row, then the successor's packed id and the reason code (1: `revised`).
+		...(lineage ? { x: [...retired].sort(order).map((e) => [...row(e), packedId(e.successor), 1]) } : {}),
 	};
 	return JSON.stringify(compact);
 }
@@ -549,7 +601,7 @@ const gzipCanonical = (text: string): Buffer => gzipSync(text, { level: 9 });
 
 /** Canonical v3 wire encoding. Collision-checked 96-bit entry identities deduplicate across versions. */
 export function encodeShard(shard: Shard): Buffer {
-	if (shard.version !== 3) return Buffer.from(JSON.stringify(shard));
+	if (shard.version !== 3 && shard.version !== LINEAGE_VERSION) return Buffer.from(JSON.stringify(shard));
 	const text = compactJson(shard);
 	if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
 	return gzipCanonical(text);
@@ -602,9 +654,10 @@ function decodeWithinBudget(
 		return { shard, expandedBytes };
 	}
 	const value: unknown = JSON.parse(text);
-	exact(value, ["v", "m", "t", "s", "p", "d", "e", "q"]);
+	const lineage = record(value) && value.v === LINEAGE_VERSION;
+	exact(value, ["v", "m", "t", "s", "p", "d", "e", "q", ...(lineage ? ["x"] : [])]);
 	if (
-		value.v !== 3 ||
+		(value.v !== 3 && !lineage) ||
 		value.m !== manifest.machineId ||
 		value.t !== month ||
 		!Array.isArray(value.s) ||
@@ -632,8 +685,7 @@ function decodeWithinBudget(
 		if (!count(r[1]) || !count(r[2]) || (r[3] !== 0 && r[3] !== 1)) throw new Error("Invalid compact session");
 		return { id: index(ids, r[0]), startMs: epoch + r[1], endMs: epoch + r[1] + r[2], child: r[3] === 1 };
 	});
-	const events = value.e.map((data: unknown) => {
-		const r = row(data, 10);
+	const event = (r: unknown[]): SnapshotEvent => {
 		if (!count(r[3])) throw new Error("Invalid compact timestamp");
 		const [provider, model] = index(pairs, r[4]);
 		const e = {
@@ -649,10 +701,33 @@ function decodeWithinBudget(
 			cacheWrite: r[8],
 			cost: r[9],
 		};
-		return { id: eventId(e as Omit<SnapshotEvent, "id">), ...e };
+		return { id: eventId(e as Omit<SnapshotEvent, "id">), ...e } as SnapshotEvent;
+	};
+	const events = value.e.map((data: unknown) => {
+		if (!lineage) return event(row(data, 10));
+		const r = row(data, 11);
+		return { ...event(r), origin: r[10] };
 	});
+	if (lineage && !Array.isArray(value.x)) throw new Error("Invalid compact shard");
+	const lineageRows = lineage
+		? {
+				retired: (value.x as unknown[]).map((data): RetiredEvent => {
+					const r = row(data, 12);
+					if (r[11] !== 1) throw new Error("Invalid retired row");
+					return { ...event(r), successor: unpackedId(r[10]), reason: "revised" };
+				}),
+			}
+		: {};
 	const shard = validateShard(
-		{ version: 3, machineId: value.m, month: value.t, events, sessions, quota: value.q },
+		{
+			version: lineage ? LINEAGE_VERSION : 3,
+			machineId: value.m,
+			month: value.t,
+			events,
+			sessions,
+			quota: value.q,
+			...lineageRows,
+		},
 		manifest,
 		month,
 	);
@@ -747,38 +822,42 @@ function validateQuota(q: unknown, month: string): void {
 	)
 		throw new Error("Invalid snapshot quota");
 }
+/** A legacy pi row: the only kind a transcript origin or a retirement can name. */
+const legacyPi = (e: Record<string, unknown>): boolean => e.entryId === null && e.harness === "pi";
 export function validateShard(value: unknown, manifest: Manifest, month: string): Shard {
 	const v2 = manifest.version >= 2;
-	exact(value, v2 ? [...SHARD_KEYS, "quota"] : SHARD_KEYS);
+	// Lineage shards are compact wire version 4 inside a v3 manifest; nothing else may carry lineage.
+	const lineage = manifest.version === 3 && record(value) && value.version === LINEAGE_VERSION;
+	exact(value, [...SHARD_KEYS, ...(v2 ? ["quota"] : []), ...(lineage ? ["retired"] : [])]);
 	if (
-		value.version !== manifest.version ||
+		(value.version !== manifest.version && !lineage) ||
 		value.machineId !== manifest.machineId ||
 		value.month !== month ||
 		!Array.isArray(value.events) ||
 		!Array.isArray(value.sessions) ||
-		(v2 && !Array.isArray(value.quota))
+		(v2 && !Array.isArray(value.quota)) ||
+		(lineage && !Array.isArray(value.retired))
 	)
 		throw new Error("Invalid shard header");
-	const seenEvents = new Set<string>();
-	for (const e of value.events) {
-		exact(e, [
-			"id",
-			...(v2 ? ["harness"] : []),
-			"entryId",
-			"sessionId",
-			"ms",
-			"provider",
-			"model",
-			"input",
-			"output",
-			"cacheRead",
-			"cacheWrite",
-			"cost",
-		]);
+	const keys = [
+		"id",
+		...(v2 ? ["harness"] : []),
+		"entryId",
+		"sessionId",
+		"ms",
+		"provider",
+		"model",
+		"input",
+		"output",
+		"cacheRead",
+		"cacheWrite",
+		"cost",
+	];
+	const checkEvent = (e: unknown, extra: string[]): Record<string, unknown> => {
+		exact(e, [...keys, ...extra]);
 		if (
 			!hash(e.id) ||
 			(v2 && !HARNESSES.includes(e.harness as Harness)) ||
-			seenEvents.has(e.id) ||
 			!(
 				e.entryId === null ||
 				(manifest.version === 3 ? typeof e.entryId === "string" && /^[a-f0-9]{24}$/.test(e.entryId) : hash(e.entryId))
@@ -795,8 +874,32 @@ export function validateShard(value: unknown, manifest: Manifest, month: string)
 			eventId(e as unknown as SnapshotEvent, manifest.version) !== e.id
 		)
 			throw new Error("Invalid snapshot event");
-		seenEvents.add(e.id);
+		return e;
+	};
+	const seenEvents = new Set<string>();
+	let origins = 0;
+	for (const data of value.events) {
+		const e = checkEvent(data, lineage ? ["origin"] : []);
+		if (seenEvents.has(e.id as string)) throw new Error("Invalid snapshot event");
+		if (lineage && !(e.origin === null || (count(e.origin) && legacyPi(e)))) throw new Error("Invalid event origin");
+		if (typeof e.origin === "number") origins++;
+		seenEvents.add(e.id as string);
 	}
+	for (const data of lineage ? (value.retired as unknown[]) : []) {
+		const e = checkEvent(data, ["successor", "reason"]);
+		if (
+			seenEvents.has(e.id as string) ||
+			!legacyPi(e) ||
+			!hash(e.successor) ||
+			e.successor === e.id ||
+			e.reason !== "revised"
+		)
+			throw new Error("Invalid retired event");
+		seenEvents.add(e.id as string);
+	}
+	// Canonical: a producer writes version 4 only for a shard that holds lineage.
+	if (lineage && origins === 0 && (value.retired as unknown[]).length === 0)
+		throw new Error("Lineage shard without lineage");
 	const seenSessions = new Set<string>();
 	for (const s of value.sessions) {
 		exact(s, ["id", "startMs", "endMs", "child"]);
@@ -828,6 +931,7 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 	const metadata = new Map<string, SnapshotSession>();
 	const events = new Set<string>();
 	const quota = new Set<string>();
+	const retired = new Map<string, string>();
 	for (const s of snapshot.shards) {
 		for (const session of s.sessions) {
 			const prior = metadata.get(session.id);
@@ -842,6 +946,10 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 			if (events.has(e.id)) throw new Error("Duplicate event identity");
 			events.add(e.id);
 		}
+		for (const e of s.retired ?? []) {
+			if (retired.has(e.id)) throw new Error("Duplicate retired identity");
+			retired.set(e.id, e.successor);
+		}
 		for (const q of s.quota ?? []) {
 			if (snapshot.manifest.version < 3 && quota.has(quotaKey(q))) throw new Error("Duplicate quota window");
 			quota.add(quotaKey(q));
@@ -849,6 +957,9 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 	}
 	for (const s of snapshot.shards)
 		for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
+	// A retired row is never also counted, and its successor is published: counted, or retired in turn.
+	for (const [id, successor] of retired)
+		if (events.has(id) || !(events.has(successor) || retired.has(successor))) throw new Error("Invalid row lineage");
 }
 
 /** Which harnesses an export reads, and where. Default is pi only: other tools are opt-in. */
@@ -1093,6 +1204,67 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 }
 
 /**
+ * Sealed legacy pi rows a clean scan revises, each mapped to the event id that replaces it. Lineage is the
+ * persisted transcript origin (`SnapshotEvent.origin`): a sealed row with one is revised only when the scan no
+ * longer holds it and holds exactly one legacy row at that origin of its session (`makeSnapshot` publishes
+ * `null` for a shared one), in its month, under its provider and model, that is neither retired nor already
+ * published under another (or an unknown) origin. Anything less establishes no lineage and the row stays
+ * counted: never a guess from counts.
+ */
+function lineageRetirements(sealed: readonly CompactShard[], next: MachineSnapshot): Map<string, string> {
+	const scanned = new Set<string>();
+	const at = new Map<string, SnapshotEvent>();
+	const origin = (e: SnapshotEvent): string => JSON.stringify([e.sessionId, e.origin]);
+	for (const shard of next.shards)
+		for (const e of shard.events) {
+			scanned.add(e.id);
+			if (typeof e.origin === "number") at.set(origin(e), e);
+		}
+	const published = new Map<string, number | null | undefined>();
+	const retired = new Set<string>();
+	for (const shard of sealed) {
+		for (const e of shard.events) published.set(e.id, e.origin);
+		for (const e of shard.retired ?? []) retired.add(e.id);
+	}
+	const successors = new Map<string, string>();
+	for (const shard of sealed)
+		for (const e of shard.events) {
+			if (typeof e.origin !== "number" || scanned.has(e.id)) continue;
+			const next = at.get(origin(e));
+			if (
+				next === undefined ||
+				monthOf(next.ms) !== shard.month ||
+				next.provider !== e.provider ||
+				next.model !== e.model ||
+				retired.has(next.id) ||
+				(published.has(next.id) && published.get(next.id) !== e.origin)
+			)
+				continue;
+			successors.set(e.id, next.id);
+		}
+	return successors;
+}
+
+/** `shard` with the rows `successors` names moved, losslessly, to its retired rows; `undefined` if none. */
+function retireRows(shard: CompactShard, successors: ReadonlyMap<string, string>): CompactShard | undefined {
+	const moved = shard.events.filter((e) => successors.has(e.id));
+	if (moved.length === 0) return undefined;
+	return withLineage({
+		...shard,
+		events: shard.events.filter((e) => !successors.has(e.id)),
+		retired: [
+			// Only a lineage shard holds a row with an origin, and every lineage shard has a retired list.
+			...(shard.retired as RetiredEvent[]),
+			...moved.map(({ origin: _, ...e }) => ({
+				...e,
+				successor: successors.get(e.id) as string,
+				reason: "revised" as const,
+			})),
+		],
+	});
+}
+
+/**
  * The sealed ends of superseded sessions, under the scan's corrected start and child attribution, as carry
  * shards in the corrected start month: one per retired shard and month, so no shard repeats a session.
  * Carried: every distinct sealed end at or after the corrected start and before the active month. An end
@@ -1119,7 +1291,7 @@ function rebasedEnds(
 				const corrected = corrections.get(prior.id);
 				if (!corrected || prior.endMs < corrected.startMs || monthOf(prior.endMs) >= current) continue;
 				const month = monthOf(corrected.startMs);
-				const target = byMonth.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+				const target = byMonth.get(month) ?? blank(shard, month);
 				target.sessions.push({ ...corrected, endMs: prior.endMs });
 				byMonth.set(month, target);
 				carried.set(prior.id, Math.max(carried.get(prior.id) ?? 0, prior.endMs));
@@ -1153,7 +1325,7 @@ function rebasedEnds(
 		// A floor above the published ends lies after the corrected start, so before the active month too.
 		if (endMs <= Math.max(corrected.endMs, carried.get(id) ?? 0)) continue;
 		const month = monthOf(corrected.startMs);
-		const target = floored.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+		const target = floored.get(month) ?? blank(shard, month);
 		target.sessions.push({ ...corrected, endMs });
 		floored.set(month, target);
 	}
@@ -1206,8 +1378,8 @@ function regenerateMonth(
 
 /**
  * Pack `deltas` into `first` and as few further shards as validation allows without dropping a row: every
- * event joins `first`, and each session or quota row goes to the first shard not yet holding its session id
- * or quota window, counting the rows `first` already holds.
+ * event and every retired row joins `first`, and each session or quota row goes to the first shard not yet
+ * holding its session id or quota window, counting the rows `first` already holds.
  */
 function packLossless(first: CompactShard, deltas: readonly CompactShard[]): CompactShard[] {
 	const slots: CompactShard[] = [
@@ -1216,10 +1388,11 @@ function packLossless(first: CompactShard, deltas: readonly CompactShard[]): Com
 			events: [...first.events, ...deltas.flatMap((delta) => delta.events)],
 			sessions: [...first.sessions],
 			quota: [...first.quota],
+			retired: [...(first.retired ?? []), ...deltas.flatMap((delta) => delta.retired ?? [])],
 		},
 	];
 	const slot = (n: number): CompactShard => {
-		slots[n] ??= { ...first, events: [], sessions: [], quota: [] };
+		slots[n] ??= blank(first);
 		return slots[n];
 	};
 	const sessionRows = new Map(first.sessions.map((session) => [session.id, 1]));
@@ -1267,6 +1440,8 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 			events: deltas.flatMap((delta) => delta.events),
 			sessions: [...sessions.values()].filter((session) => session !== baseSessions.get(session.id)),
 			quota: [],
+			// The base keeps its own retired rows; the deltas' move here, never dropped.
+			retired: deltas.flatMap((delta) => delta.retired ?? []),
 		},
 	];
 	for (const rows of byKey.values()) {
@@ -1280,7 +1455,7 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 			latestReset = q.resetAt;
 			// The base can dominate deltas without occupying a delta slot itself.
 			if (baseRows.has(q)) continue;
-			const shard = compacted[slot] ?? { ...base, events: [], sessions: [], quota: [] };
+			const shard = compacted[slot] ?? blank(base);
 			shard.quota.push(q);
 			compacted[slot++] = shard;
 		}
@@ -1290,7 +1465,17 @@ function compactDeltas(base: CompactShard, deltas: readonly CompactShard[]): Com
 	return compacted.filter(nonempty);
 }
 
-const nonempty = (shard: CompactShard): boolean => shard.events.length + shard.sessions.length + shard.quota.length > 0;
+const nonempty = (shard: CompactShard): boolean =>
+	shard.events.length + shard.sessions.length + shard.quota.length + (shard.retired?.length ?? 0) > 0;
+/** An empty shard of `shard`'s machine for `month`: no rows, retired ones included, are copied. */
+const blank = (shard: CompactShard, month = shard.month): CompactShard => ({
+	version: SNAPSHOT_VERSION,
+	machineId: shard.machineId,
+	month,
+	events: [],
+	sessions: [],
+	quota: [],
+});
 
 /**
  * What `full` adds to `old`. A session row is new past the maximum end `old` holds, or, with `exactEnds`
@@ -1678,28 +1863,50 @@ async function publishStats(
 	const revisions: Revisions = sealed
 		? detectRevisions(sealed, snapshot)
 		: { months: new Set(), supersededEventIds: new Set(), supersededSessions: new Map() };
-	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
+	// Legacy rows a correction revised are retired in place first: every sealed row stays in its shard.
+	const sealedShards = (sealed?.shards ?? []) as CompactShard[];
+	const successors = lineageRetirements(
+		sealedShards.filter((shard) => shard.month < current),
+		snapshot,
+	);
+	const lineaged = sealedShards.map((shard) => retireRows(shard, successors));
+	const lineagedShards = sealedShards.map((shard, i) => lineaged[i] ?? shard);
+	const retiredIds = new Set(lineagedShards.flatMap((shard) => shard.retired?.map((e) => e.id) ?? []));
+	/** A sealed shard to keep: its published reference, or none when lineage rewrote it. */
+	type Kept =
+		| { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }
+		| { ref?: undefined; shard: CompactShard };
+	const prior = new Map<string, Kept[]>();
 	const retired = new Map<string, CompactShard[]>();
 	if (sealed)
-		for (const [i, shard] of sealed.shards.entries()) {
-			if (shard.month >= current) continue;
+		for (const [i, original] of sealedShards.entries()) {
+			if (original.month >= current) continue;
+			const rewritten = lineaged[i];
+			const shard = rewritten ?? original;
 			if (revisions.months.has(shard.month)) {
-				retired.set(shard.month, [...(retired.get(shard.month) ?? []), shard as CompactShard]);
+				retired.set(shard.month, [...(retired.get(shard.month) ?? []), shard]);
 				continue;
 			}
 			const refs = prior.get(shard.month) ?? [];
-			// loadPrevious authenticated and validated every shard against this v3 manifest.
-			refs.push({
-				ref: nth(sealed.manifest.shards, i),
-				shard: shard as CompactShard,
-				expandedBytes: nth(sealed.expandedSizes, i),
-			});
+			// loadPrevious authenticated and validated every shard against this v3 manifest; a rewritten one is new.
+			refs.push(
+				rewritten
+					? { shard }
+					: { ref: nth(sealed.manifest.shards, i), shard, expandedBytes: nth(sealed.expandedSizes, i) },
+			);
 			prior.set(shard.month, refs);
 		}
-	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
+	// A scanned row identical to a retired one stays retired: it is published, and counting it again would
+	// double count beside its successor.
+	const fresh = new Map(
+		snapshot.shards.map((shard) => [
+			shard.month,
+			{ ...shard, events: shard.events.filter((e) => !retiredIds.has(e.id)) },
+		]),
+	);
 	const rebased = rebasedEnds(
 		retired,
-		(sealed?.shards ?? []).filter((shard) => shard.month < current) as CompactShard[],
+		lineagedShards.filter((shard) => shard.month < current),
 		fresh,
 		revisions,
 		current,
@@ -1707,6 +1914,22 @@ async function publishStats(
 	const publishedShards: CompactShard[] = [];
 	const writes: { file: string; bytes: Buffer }[] = [];
 	let remaining = MAX_BYTES;
+	/** Encode a new shard of `month` in canonical form, charge it and queue its content-addressed write. */
+	const publish = (month: string, raw: CompactShard): void => {
+		const shard = withLineage(raw);
+		validateShard(shard, snapshot.manifest, month);
+		// Charge the canonical text first: one oversized shard is the same machine-budget failure.
+		const text = compactJson(shard);
+		const expandedBytes = chargeExpansion(Buffer.byteLength(text), remaining);
+		const bytes = gzipCanonical(text);
+		if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
+		remaining -= expandedBytes;
+		const sha256 = digest(bytes);
+		const file = `${month}-${sha256}.json.gz`;
+		writes.push({ file, bytes });
+		snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
+		publishedShards.push(shard);
+	};
 	for (const month of [...new Set([...prior.keys(), ...retired.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
@@ -1724,29 +1947,20 @@ async function publishStats(
 			const base = nth(old, 0);
 			const rest = [...old.slice(1).map(({ shard }) => shard), ...deltas];
 			// Keep every row (e.g. readings a regeneration preserved) whenever lossless packing fits beside the base.
-			const packed = packLossless({ ...base.shard, events: [], sessions: [], quota: [] }, rest).filter(nonempty);
+			const packed = packLossless(blank(base.shard), rest).filter(nonempty);
 			deltas = packed.length < MAX_SEALED_SHARDS ? packed : compactDeltas(base.shard, rest);
 			old = [base];
 		}
-		for (const { ref, shard, expandedBytes } of old) {
-			remaining -= chargeExpansion(expandedBytes, remaining);
-			snapshot.manifest.shards.push(ref);
-			publishedShards.push(shard);
+		for (const kept of old) {
+			if (kept.ref === undefined) {
+				publish(month, kept.shard);
+				continue;
+			}
+			remaining -= chargeExpansion(kept.expandedBytes, remaining);
+			snapshot.manifest.shards.push(kept.ref);
+			publishedShards.push(kept.shard);
 		}
-		for (const shard of deltas) {
-			validateShard(shard, snapshot.manifest, month);
-			// Charge the canonical text first: one oversized shard is the same machine-budget failure.
-			const text = compactJson(shard);
-			const expandedBytes = chargeExpansion(Buffer.byteLength(text), remaining);
-			const bytes = gzipCanonical(text);
-			if (bytes.length > MAX_BYTES) throw new Error("Shard exceeds 128 MiB");
-			remaining -= expandedBytes;
-			const sha256 = digest(bytes);
-			const file = `${month}-${sha256}.json.gz`;
-			writes.push({ file, bytes });
-			snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
-			publishedShards.push(shard);
-		}
+		for (const shard of deltas) publish(month, shard);
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	validateManifest(snapshot.manifest);
@@ -1827,12 +2041,15 @@ export interface CleanupResult {
 /** Whether the active snapshot already holds every row of `shard`, so a viewer would see nothing more. */
 function coveredBy(active: readonly CompactShard[]): (shard: CompactShard) => boolean {
 	const events = new Map(active.flatMap((s) => s.events.map((e) => [e.id, JSON.stringify(e)] as const)));
+	const retired = new Map(active.flatMap((s) => (s.retired ?? []).map((e) => [e.id, JSON.stringify(e)] as const)));
 	const sessions = mergeSessionMetadata(
 		active.flatMap((s) => s.sessions.map((x) => ({ path: x.id, startMs: x.startMs, endMs: x.endMs, child: x.child }))),
 	);
 	const quota = active.flatMap((s) => s.quota);
 	return (shard) =>
 		shard.events.every((e) => events.get(e.id) === JSON.stringify(e)) &&
+		// A retired row is kept like any other: only an identical retired row covers it.
+		(shard.retired ?? []).every((e) => retired.get(e.id) === JSON.stringify(e)) &&
 		shard.sessions.every((s) => {
 			const merged = sessions.get(s.id);
 			return (

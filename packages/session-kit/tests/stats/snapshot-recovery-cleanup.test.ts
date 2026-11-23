@@ -229,6 +229,24 @@ describe("cleanRecovery", () => {
 		expect(stateOf()).toMatchObject({ recoveryPending: !covered, recoveryFiles: covered ? [] : [file] });
 	});
 
+	it.each([
+		["the retired row the active snapshot keeps", 2, true],
+		["a retired row the active snapshot lacks", 3, false],
+	])("decides coverage of a frozen lineage shard with %s", async (_, input, covered) => {
+		const live = { ...event(1, { entryId: null }), origin: 0 };
+		const retiredRow = (n: number) => ({
+			...event(n, { entryId: null }),
+			successor: live.id,
+			reason: "revised" as const,
+		});
+		publish([{ ...shard({ events: [live], sessions: [session()] }), version: 4, retired: [retiredRow(2)] }]);
+		const { file } = write({ ...shard({}), version: 4, retired: [retiredRow(input)] });
+		bookkeeping([file]);
+		const result = await cleanRecovery(agent, out);
+		expect(result.removed).toEqual(covered ? [file] : []);
+		expect(result.kept).toEqual(covered ? [] : [{ file, reason: "not covered" }]);
+	});
+
 	it("keeps active, missing, legacy and unreadable frozen files with their reasons", async () => {
 		publish([activeShard()]);
 		const active = manifestOf().shards[0]?.file as string;
