@@ -19,6 +19,7 @@ import {
 } from "./bridge.ts";
 import { getComputerUseConfig, getLoadedComputerUseConfig, hostPlatform, loadComputerUseConfig } from "./config.ts";
 import { executeDesktopInput, executeDesktopScreenshot } from "./desktop.ts";
+import { macosHelper, STALE_HELPER_REPAIR } from "./platform/macos/helper.ts";
 
 const stateId = Type.String({ description: "Required state id owning every @e ref used by this operation" });
 const point = { x: Type.Number(), y: Type.Number() };
@@ -277,10 +278,7 @@ const COMPUTER_USE_TOOL_NAMES = new Set(COMPUTER_USE_TOOLS.map((tool) => tool.na
 function formatConfigStatus(): string {
 	const loaded = getLoadedComputerUseConfig();
 	const entries = `blocked_apps: ${loaded.config.blocked_apps.join(", ") || "(none)"}`;
-	const blocklistStatus =
-		hostPlatform() === "linux"
-			? [entries, "blocklist: configured entries are listed but INACTIVE on Linux until #1180 (identity)"]
-			: [`${entries} (system authentication agents are always blocked)`];
+	const blocklistStatus = [`${entries} (system authentication agents are always blocked)`];
 	return [
 		"pi-computer-use configuration",
 		`browser_use: ${loaded.config.browser_use ? "enabled" : "disabled"}`,
@@ -288,6 +286,13 @@ function formatConfigStatus(): string {
 		`headless: ${loaded.config.headless ? "enabled" : "disabled"}`,
 		`cursor_overlay: ${loaded.config.cursor_overlay ? "enabled" : "disabled"}`,
 		`activity_glow: ${loaded.config.activity_glow ? "enabled" : "disabled"}`,
+		...(hostPlatform() === "macos"
+			? [
+					macosHelper.staleBuild
+						? `helper build: stale (reported ${macosHelper.staleBuild.reported}, expected ${macosHelper.staleBuild.expected}): ${STALE_HELPER_REPAIR}`
+						: `helper build: ${macosHelper.helperBuild ?? "not checked"}`,
+				]
+			: []),
 		...blocklistStatus,
 		...loaded.blockedAppsErrors.map((error) => `blocked_apps error: ${error}`),
 		"",
@@ -356,6 +361,22 @@ const desktopInputTool = defineTool({
 /** Complete desktop definitions for host-independent docs; runtime registration remains darwin-only. */
 export const DESKTOP_TOOLS = [desktopScreenshotTool, desktopInputTool];
 
+/**
+ * Where a `session_shutdown` warning goes: a UI warning, and also `writeStderr` on `/quit` or without a UI.
+ * On `/quit` Pi stops the TUI before `session_shutdown`, so a UI notice alone would never be shown; a live
+ * session reset (`new`, `resume`, `fork`, `reload`) keeps the UI.
+ */
+export function shutdownWarner(
+	reason: string | undefined,
+	ctx: { hasUI?: boolean; ui: { notify(message: string, level: "warning"): void } },
+	writeStderr: (text: string) => void = (text) => process.stderr.write(text),
+): (message: string) => void {
+	return (message) => {
+		if (reason === "quit" || !ctx.hasUI) writeStderr(`pi-computer-use: ${message}\n`);
+		ctx.ui.notify(message, "warning");
+	};
+}
+
 export default function computerUseExtension(pi: ExtensionAPI): void {
 	let activityGlowActive = false;
 
@@ -404,11 +425,12 @@ export default function computerUseExtension(pi: ExtensionAPI): void {
 		} catch {}
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event, ctx) => {
 		activityGlowActive = false;
 		try {
 			await setComputerUseActivity(false);
 		} catch {}
-		await shutdownComputerUseSession();
+		// e.g. a Linux helper that exited with a key possibly held: the only place the user learns of it.
+		await shutdownComputerUseSession(shutdownWarner(event?.reason, ctx));
 	});
 }

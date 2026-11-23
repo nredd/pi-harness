@@ -415,12 +415,20 @@ test("act outcome contracts", async () => {
 	);
 	for (const headless of [false, true])
 		assert.equal(
-			canRetryInForeground(prep({ action: "paste", ref: "@e3", text: "x" }), "didnt", headless),
+			canRetryInForeground(
+				prep({ action: "paste", ref: "@e3", text: "x" }),
+				{ outcome: "didnt", evidence: { postedUnits: 0 } },
+				headless,
+			),
 			false,
 			"paste is never retried: a slow target may still paste, so a retry could insert twice",
 		);
 	assert.equal(
-		canRetryInForeground(prep({ action: "keypress", ref: "@e3", keys: ["a"] }), "didnt", false),
+		canRetryInForeground(
+			prep({ action: "keypress", ref: "@e3", keys: ["a"] }),
+			{ outcome: "didnt", evidence: { postedUnits: 0 } },
+			false,
+		),
 		true,
 		"typeText and keypress keep their foreground retry",
 	);
@@ -433,7 +441,11 @@ test("act outcome contracts", async () => {
 	}
 	assert.doesNotThrow(() => testing.assertBrowserTransactionAction({ action: "typeText" }));
 	assert.equal(
-		canRetryInForeground(prep({ action: "selectText", ref: "@e3", start: 0 }), "didnt", false),
+		canRetryInForeground(
+			prep({ action: "selectText", ref: "@e3", start: 0 }),
+			{ outcome: "didnt", evidence: { postedUnits: 0 } },
+			false,
+		),
 		false,
 		"AX-only actions never escalate",
 	);

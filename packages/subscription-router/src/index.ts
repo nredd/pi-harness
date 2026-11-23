@@ -19,11 +19,13 @@ import {
 import { Type } from "typebox";
 import { showCodexResets } from "./codex-reset-command.ts";
 import { CodexResets } from "./codex-resets.ts";
+import { collectedProviders, collectorFor } from "./collectors.ts";
 import {
 	type ChainEntry,
 	type ConfigResult,
 	loadConfig,
 	type Profile,
+	type ProviderConfig,
 	ROUTER_PROVIDER,
 	THINKING_LEVELS,
 } from "./config.ts";
@@ -35,7 +37,16 @@ import { ResetView, refreshSchedules } from "./reset-view.ts";
 import { formatResets } from "./resets.ts";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.ts";
 import { formatScore } from "./selection.ts";
-import { COLLECTED_PROVIDERS, type RegistryContext, UsageService } from "./usage.ts";
+import { collectorIdFor, type RegistryContext, UsageService } from "./usage.ts";
+
+export {
+	type Collector,
+	type CollectorHandle,
+	type CollectorReading,
+	collectedProviders,
+	collectorFor,
+	registerCollector,
+} from "./collectors.ts";
 
 const SHARED_KEY: unique symbol = Symbol.for("pi-subscription-router.shared");
 const DECISIONS_KEY: unique symbol = Symbol.for("pi-subscription-router.decisions");
@@ -92,7 +103,7 @@ const RECENT_DECISIONS = 5;
 
 /** The usage cache surface consumed by the extension, including routing decisions. */
 export type RouterUsage = Pick<UsageService, "get" | "peek" | "decisionFor" | "format" | "formatForPrompt"> &
-	Partial<Pick<UsageService, "invalidate">>;
+	Partial<Pick<UsageService, "invalidate" | "configureCollectors">>;
 
 /** Explicit dependencies isolate embedded sessions from process-global quota and credentials. */
 export interface SubscriptionRouterOptions {
@@ -161,11 +172,15 @@ function routeEnv(ctx: RegistryContext, usage: RouterUsage): RouteEnv {
 }
 
 /** Collected providers relevant to this session: chains, scoped models and the selection. */
-function sessionProviders(ctx: ExtensionContext, profiles: readonly Profile[]): string[] {
+function sessionProviders(
+	ctx: ExtensionContext,
+	profiles: readonly Profile[],
+	declarations: Readonly<Record<string, ProviderConfig>>,
+): string[] {
 	const providers = new Set<string>(profiles.flatMap((profile) => profile.chain.map((entry) => entry.provider)));
 	for (const { model } of ctx.scopedModels) providers.add(model.provider);
 	if (ctx.model) providers.add(ctx.model.provider);
-	return [...providers].filter((provider) => COLLECTED_PROVIDERS.includes(provider));
+	return [...providers].filter((provider) => collectorFor(collectorIdFor(provider, declarations)) !== undefined);
 }
 
 /** Name the usage tool only when this session can call it or discover it through tool search. */
@@ -250,6 +265,8 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		const recovery = new SettleRecovery(router);
 		const config = options?.config ?? (await loadConfig(getAgentDir()));
 		const profiles = config.ok ? config.profiles : [];
+		const declarations = (config.ok ? config.providers : undefined) ?? {};
+		usage.configureCollectors?.(declarations);
 		const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
 		/**
 		 * Child sessions share their parent's model runtime and each re-registers `router/*` into it,
@@ -296,14 +313,14 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			registrantState.persisted.clear();
 			sessionDecisions(ctx.sessionManager).persisted.clear();
 			if (!config.ok) ctx.ui.notify(`subscription-router: ignoring config. ${config.error}`, "error");
-			warm(ctx, usage, sessionProviders(ctx, profiles));
+			warm(ctx, usage, sessionProviders(ctx, profiles, declarations));
 		});
 
 		// Cached data only: a slow usage endpoint must not delay the turn. Coarse
 		// buckets keep the section stable so the prompt-cache prefix survives.
 		pi.on("before_agent_start", (event, ctx) => {
 			recovery.resetTurn();
-			const providers = sessionProviders(ctx, profiles);
+			const providers = sessionProviders(ctx, profiles, declarations);
 			warm(ctx, usage, providers);
 			if (providers.length === 0) return;
 			const lines = providers.map((provider) => `- ${provider}: ${usage.formatForPrompt(usage.peek(provider))}`);
@@ -347,7 +364,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 				refresh: Type.Optional(Type.Boolean({ description: "Request a live refresh. Limited to once per minute." })),
 			}),
 			async execute(_id, params, signal, _update, ctx) {
-				const providers = params.provider ? [params.provider] : sessionProviders(ctx, profiles);
+				const providers = params.provider ? [params.provider] : sessionProviders(ctx, profiles, declarations);
 				const snapshots = await Promise.all(
 					providers.map((provider) => usage.get(ctx, provider, { force: params.refresh, signal })),
 				);
@@ -398,7 +415,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 						ctx.ui.notify("subscription-router: expected resets [refresh|codex]", "error");
 						return;
 					}
-					const providers = sessionProviders(ctx, profiles);
+					const providers = sessionProviders(ctx, profiles, declarations);
 					let refresh = action === "resets refresh";
 					do {
 						const results = refresh ? await refreshSchedules(ctx, usage, providers) : [];
@@ -442,7 +459,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 					);
 					return;
 				}
-				const providers = sessionProviders(ctx, profiles);
+				const providers = sessionProviders(ctx, profiles, declarations);
 				const snapshots =
 					action === "refresh"
 						? await Promise.all(providers.map((provider) => usage.get(ctx, provider, { force: true })))
@@ -480,13 +497,14 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			return ctx ? router.admit(ref, profileById, routeEnv(ctx, usage)) : { ok: true };
 		});
 
+		const rpcProviders = () => [...new Set([...collectedProviders(), ...Object.keys(declarations)])];
 		handleRpc(pi, RPC_USAGE, async (params) => {
 			const ctx = registry;
 			if (params.refresh === true && ctx) {
-				await Promise.all(COLLECTED_PROVIDERS.map((provider) => usage.get(ctx, provider)));
+				await Promise.all(rpcProviders().map((provider) => usage.get(ctx, provider)));
 			}
 			return {
-				snapshots: COLLECTED_PROVIDERS.flatMap((provider) => {
+				snapshots: rpcProviders().flatMap((provider) => {
 					const snapshot = usage.peek(provider);
 					return snapshot ? [snapshot] : [];
 				}),

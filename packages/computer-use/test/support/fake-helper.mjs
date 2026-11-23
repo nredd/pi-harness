@@ -56,6 +56,8 @@ export function defaultDiagnostics(protocolVersion, overrides = {}) {
 		pid: process.pid,
 		accessibility: true,
 		screenRecording: true,
+		// The macOS helper's boot-relative clock, which keyboard deadlines are expressed in.
+		uptimeMs: 1_000_000,
 		...overrides,
 	};
 }
@@ -66,7 +68,7 @@ export function defaultDiagnostics(protocolVersion, overrides = {}) {
  */
 export function createHelperEngine({
 	profile = "flat",
-	protocolVersion = 7,
+	protocolVersion = 8,
 	handlers = {},
 	diagnostics = {},
 	platform = "Windows",

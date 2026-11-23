@@ -22,10 +22,14 @@ private final class ActFixture {
         }
     }
     let point = CGPoint(x: 110, y: 220)
+    var windowFrame = CGRect(x: 100, y: 200, width: 300, height: 200)
+    var postDrag: (([CGPoint], Int32, String) throws -> Void)?
     var hasImage = true
     var web = false
     var supported = true
     var value = "before"
+    /// Scripted `AXValue` reads, consumed first: `nil` is a failed read. Falls back to `value` once empty.
+    var valueReads: [String?] = []
     var hits: [AXUIElement] = []
     var statuses: [AXError] = []
     var refind = true
@@ -33,6 +37,9 @@ private final class ActFixture {
     var scrollPositions = ["before", "after"]
     var bar: ActWorld.ScrollBarWrite?
     var admissionOverride: FocusCheck?
+    /// Builds the admission from the deadline `act` resolved, e.g. a `KeyboardAdmission` on a simulated clock.
+    var clockedAdmission: ((TimeInterval) -> FocusCheck)?
+    var deadlines: [TimeInterval] = []
     var blocked = false
     var blockDuringSnapshot = false
     var blockDuringLayout = false
@@ -49,7 +56,7 @@ private final class ActFixture {
             lookRecord: { id in
                 self.lookups.append(id)
                 guard id == "look" else { return nil }
-                return LookRecord(lookId: id, windowId: 8, windowFrame: CGRect(x: 100, y: 200, width: 300, height: 200), imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
+                return LookRecord(lookId: id, windowId: 8, windowFrame: self.windowFrame, imageWidth: 300, imageHeight: 200, hasImage: self.hasImage)
             },
             cachedElement: { $0 == "ref" ? self.element : nil },
             refindElement: { ref, pid, window, _ in
@@ -62,7 +69,7 @@ private final class ActFixture {
                 case kAXRoleAttribute: return "AXButton"
                 case kAXValueAttribute:
                     self.onValueRead()
-                    return self.value
+                    return self.valueReads.isEmpty ? self.value : self.valueReads.removeFirst()
                 default: return nil
                 }
             },
@@ -100,13 +107,17 @@ private final class ActFixture {
                 self.trace.append("require:\(pid)")
                 if self.focusFails { throw BridgeFailure(message: "focus fixture", code: "focus_not_acquired") }
             },
-            keyboardAdmission: { blocked, _ in { force in
+            keyboardAdmission: { blocked, deadline in
+                self.deadlines.append(deadline)
+                if let clocked = self.clockedAdmission { return clocked(deadline) }
+                return { force in
                 if let override = self.admissionOverride { return try override(force) }
                 guard let blocked else { return }
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "keyboard refusal receives request and built-in blocks")
                 self.trace.append("keyboard")
                 try self.checkBlocked()
-            } },
+                }
+            },
             refuseBlockedPoints: { points, blocked in
                 expect(blocked.last == "com.example.Vault" && blocked.contains("com.apple.SecurityAgent"), "pointer refusal receives request and built-in blocks")
                 self.trace.append("pointer")
@@ -137,6 +148,7 @@ private final class ActFixture {
             postMouseMove: { _, pid, delivery in self.trace.append("move:\(pid):\(delivery)") },
             postScrollWheel: { _, x, y, pid, delivery in self.trace.append("wheel:\(pid):\(x):\(y):\(delivery)") },
             postMouseDrag: { points, pid, delivery in
+                if let post = self.postDrag { return try post(points, pid, delivery) }
                 expect(points == [self.point, CGPoint(x: 130, y: 240), CGPoint(x: 150, y: 260)], "ground every drag vertex")
                 self.trace.append("drag:\(pid):\(delivery)")
             },
@@ -199,7 +211,7 @@ private func actionFailure(_ code: String, message: String? = nil, postedUnits: 
         _ = try body()
         expect(false, "expected action failure \(code)")
     } catch let error as BridgeFailure {
-        expect(error.code == code, "expected \(code), got \(error.code)")
+        expect(error.code == code, "expected \(code), got \(error.code): \(error.message)")
         if let message { expect(error.message == message, "expected '\(message)', got '\(error.message)'") }
         if let postedUnits {
             let bytes = try JSONSerialization.data(withJSONObject: error.wireError)
@@ -217,11 +229,15 @@ func runActAssertions() throws {
     try runScrollAssertions()
     runAXScrollAssertions()
     try runBatchAssertions()
+    try runBatchDeadlineAssertions()
     try runRootPIDAssertions()
+    try runWindowIDAssertions()
     try runPIDAdmissionAssertions()
     expect(suppressionTapShouldReenable(.tapDisabledByTimeout) && suppressionTapShouldReenable(.tapDisabledByUserInput), "re-enable the tap on either disable notification")
     expect(!suppressionTapShouldReenable(.keyDown) && !suppressionTapShouldReenable(.mouseMoved), "ordinary user events stay suppressed")
     try runEventAssertions()
+    runKeyboardDeadlineAssertions()
+    try runProductionSinkAssertions()
     print("macos action dispatch assertions passed")
 }
 
@@ -231,6 +247,7 @@ private func runPointerAssertions() throws {
     let pressed = try press.act("press", policy: "background")
     expect(pressed["outcome"] as? String == "worked", "AX press sees value change")
     expect(press.trace == ["begin:1234", "ax:AXPress:cached", "refind:ref:1234:8", "ax:AXPress:refound", "cursor:8", "finish"], "AX press refinds once and never posts input")
+    try runIndeterminatePressAssertions()
 
     let fg = ActFixture()
     fg.web = true
@@ -264,7 +281,51 @@ private func runPointerAssertions() throws {
     try actionFailure("coordinate_unavailable_for_root") { try drag.act("click", coords: true) }
 }
 
+/// An AX press failure that does not establish non-delivery is reported unknown: never re-pressed, never clicked (#1240).
+private func runIndeterminatePressAssertions() throws {
+    for status in [AXError.cannotComplete, .failure] {
+        for policy in ["background", "foreground"] {
+            let press = ActFixture()
+            press.statuses = [status, .success]
+            let result = try press.act("press", policy: policy)
+            let error = result["error"] as? [String: String]
+            expect(result["outcome"] as? String == "unknown" && error?["code"] == "ax_delivery_unknown", "\(policy) AXError \(status.rawValue) press reports unknown delivery")
+            expect((result["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true, "\(policy) AXError \(status.rawValue) press is flagged deliveryUnknown")
+            expect(press.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "\(policy) AXError \(status.rawValue) press is delivered once: no refound press, no pointer click")
+        }
+    }
+    let refound = ActFixture()
+    refound.statuses = [.invalidUIElement, .cannotComplete]
+    let second = try refound.act("press", policy: "foreground")
+    expect(second["outcome"] as? String == "unknown" && !refound.trace.contains { $0.hasPrefix("click:") }, "an indeterminate refound press never falls back to a click")
+    let dead = ActFixture()
+    dead.statuses = [.actionUnsupported]
+    dead.refind = false
+    _ = try dead.act("press", policy: "background")
+    expect(dead.trace.filter { $0.hasPrefix("click:") } == ["click:1234:0:1:pid"], "a press the element refused falls back to one pointer click")
+    expect(!axPressNotDelivered(axError: AXError.cannotComplete.rawValue) && !axPressNotDelivered(axError: AXError.failure.rawValue), "cannotComplete and failure may have pressed")
+    expect(axPressNotDelivered(axError: AXError.invalidUIElement.rawValue) && axPressNotDelivered(axError: AXError.actionUnsupported.rawValue), "a dead element or unsupported action was not pressed")
+}
+
 private func runKeyboardActionAssertions() throws {
+    // A stale or failed readback after posted text is unknown, never didnt: didnt invites a resend (#1241).
+    let stale = ActFixture()
+    let unconfirmed = try stale.act("typeText", policy: "background", params: ["text": "before"])
+    expect(unconfirmed["outcome"] as? String == "unknown" && stale.trace.filter { $0.hasPrefix("type:") } == ["type:before:1234:pid"], "posted text with an unchanged readback is unknown and typed once")
+    expect((unconfirmed["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true, "an unconfirmed posted text is flagged deliveryUnknown")
+    // Only two successful, different reads confirm posted text; a failed read never fabricates a value (#1241).
+    for (reads, label) in [(["before", nil], "failed post-read"), ([nil, "hi"], "failed pre-read"), ([nil, nil], "two failed reads")] as [([String?], String)] {
+        let fixture = ActFixture()
+        fixture.valueReads = reads
+        let result = try fixture.act("typeText", policy: "background", params: ["text": "hi"])
+        let evidence = result["evidence"] as? [String: Any]
+        expect(result["outcome"] as? String == "unknown" && evidence?["deliveryUnknown"] as? Bool == true && evidence?["valueChanged"] as? Bool == false, "\(label) after posted text is unknown: \(result)")
+        expect((evidence?["value"] as? String) == reads[1], "\(label) reports only a value it actually read")
+    }
+    let typer = ActFixture()
+    let confirmed = try typer.act("typeText", policy: "background", params: ["text": "hi"])
+    let typedEvidence = confirmed["evidence"] as? [String: Any]
+    expect(confirmed["outcome"] as? String == "worked" && typedEvidence?["value"] as? String == "hi" && typedEvidence?["deliveryUnknown"] == nil, "two different successful reads confirm posted text")
     let keys = ActFixture()
     keys.blocked = true
     try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd", "a"]]) }
@@ -282,11 +343,35 @@ private func runKeyboardActionAssertions() throws {
     try actionFailure("invalid_args") { try keys.act("selectText", params: ["start": 0, "length": 3]) }
     let set = try keys.act("setText", policy: "ax_only", params: ["text": "replacement"])
     expect(set["outcome"] as? String == "worked" && keys.value == "replacement", "AX value write verifies readback")
+    // An accepted AXValue write with a stale or failed readback may have landed: unknown, written once (#1290).
+    for policy in ["ax_only", "background", "foreground"] {
+        for (stale, label) in [("before", "stale readback"), (nil, "failed readback")] as [(String?, String)] {
+            let write = ActFixture()
+            write.valueReads = ["before", stale]
+            let result = try write.act("setText", policy: policy, params: ["text": "new"])
+            let evidence = result["evidence"] as? [String: Any]
+            expect(result["outcome"] as? String == "unknown" && evidence?["deliveryUnknown"] as? Bool == true && result["error"] == nil, "\(policy) accepted write with a \(label) is unknown, not refused: \(result)")
+            expect((evidence?["value"] as? String) == stale, "\(policy) \(label) reports only a value it actually read")
+            expect(write.trace.filter { $0 == "set:AXValue" }.count == 1 && !write.trace.contains { $0.hasPrefix("click:") || $0.hasPrefix("type:") || $0.hasPrefix("atomic:") }, "\(policy) \(label) writes AXValue once and posts nothing")
+        }
+    }
     keys.web = true
     try actionFailure("foreground_required") { try keys.act("setText", policy: "ax_only") }
     keys.trace = []
     _ = try keys.act("setText", policy: "background", params: ["text": "new"])
     expect(keys.trace.contains("atomic:new:1234:pid"), "web replacement posts atomic text after selecting the original value")
+    // Posted replacement text whose readback is stale or failed may have landed: unknown, never `didnt`.
+    for (reads, label) in [(["before", "before", "before"], "stale readback"), (["before", "before", nil], "failed readback"), (["before", "before", "new"], "confirmed readback")] as [([String?], String)] {
+        let web = ActFixture()
+        web.web = true
+        web.valueReads = reads
+        let result = try web.act("setText", policy: "background", params: ["text": "new"])
+        let evidence = result["evidence"] as? [String: Any]
+        let confirmed = reads.last == "new"
+        expect(result["outcome"] as? String == (confirmed ? "worked" : "unknown") && (evidence?["deliveryUnknown"] as? Bool == true) == !confirmed && result["error"] == nil, "web \(label) after posting text: \(result)")
+        expect((evidence?["value"] as? String) == reads.last ?? nil, "web \(label) reports only a value it actually read")
+        expect(web.trace.filter { $0.hasPrefix("atomic:") }.count == 1, "web \(label) posts the replacement once")
+    }
     keys.trace = []
     _ = try keys.act("paste", coords: true, params: ["text": "temporary", "preserveFocus": true])
     expect(Array(keys.trace.prefix(9)) == ["begin:1234", "lock", "keyboard", "snapshot", "keyboard", "clipboard:temporary", "layout", "keyboard", "keyCode:9:1234:hid"], "paste checks focus before reading, before writing and after layout lookup")
@@ -408,10 +493,26 @@ private func runBatchAssertions() throws {
     let success = try fixture.bridge.actBatch(["actions": [press, fixture.request("setText", policy: "ax_only", params: ["text": "ok"])]], world: fixture.world, supportsAgentCursor: false)
     expect(success["outcome"] as? String == "worked" && fixture.trace == ["begin:1234", "ax:AXPress:cached", "set:AXValue", "finish"], "all-AX batch has one root delta and no physical lock")
     fixture.trace = []
-    let result = try fixture.bridge.actBatch(["actions": [fixture.request("moveMouse", policy: "background", coords: true), fixture.request("drag", coords: true), press]], world: fixture.world, supportsAgentCursor: false)
+    let move = fixture.request("moveMouse", policy: "background", coords: true)
+    try actionFailure("invalid_args") {
+        try fixture.bridge.actBatch(["actions": [move, fixture.request("drag", coords: true), press]], world: fixture.world, supportsAgentCursor: false)
+    }
+    expect(fixture.trace.isEmpty, "malformed batch drag must not acquire outer lock or execute an earlier action")
+    // In-range vertices, but the coordinate target grounds past the limit on a far-right window.
+    fixture.windowFrame.origin.x = 999_900
+    let farTarget = fixture.request("drag", params: ["path": [["x": 0, "y": 0], ["x": 50, "y": 0]]])
+        .merging(["target": ["x": 290, "y": 10]]) { _, new in new }
+    try actionFailure("invalid_args", message: "Drag coordinates must be finite and within +/-1000000") {
+        try fixture.bridge.actBatch(["actions": [move, farTarget, press]], world: fixture.world, supportsAgentCursor: false)
+    }
+    expect(fixture.trace.isEmpty, "out-of-range batch drag target must not lock, activate, preflight or execute an earlier step: \(fixture.trace)")
+    fixture.windowFrame.origin.x = 100
+    fixture.blocked = true
+    let drag = fixture.request("drag", coords: true, params: ["path": [["x": 10, "y": 20], ["x": 30, "y": 40]]])
+    let result = try fixture.bridge.actBatch(["actions": [move, drag, press]], world: fixture.world, supportsAgentCursor: false)
     let steps = result["steps"] as? [[String: Any]]
     expect(result["outcome"] as? String == "didnt" && result["stoppedAt"] as? Int == 1 && steps?.count == 2, "batch stops at the failed step")
-    expect(fixture.trace == ["begin:1234", "lock", "move:1234:pid", "lock", "activate", "raise", "sleep:20000", "unlock", "finish", "unlock"], "batch keeps the outer lock through finish and does not execute the trailing press")
+    expect(fixture.trace == ["begin:1234", "lock", "move:1234:pid", "lock", "activate", "raise", "sleep:20000", "pointer", "unlock", "finish", "unlock"], "batch keeps the outer lock through finish and does not execute the trailing press")
     fixture.trace = []
     let aliasedPid = 1234 + (1 << 32)
     for pid in [aliasedPid, Int(Int32.min) - 1, Int(Int32.max) + 1, Int.max] {
@@ -426,6 +527,21 @@ private func runBatchAssertions() throws {
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": [press, press.merging(["lookId": "unrelated"]) { _, new in new }]], world: fixture.world, supportsAgentCursor: false) }
     try actionFailure("invalid_args") { try fixture.bridge.actBatch(["actions": Array(repeating: press, count: 21)], world: fixture.world, supportsAgentCursor: false) }
     expect(fixture.trace.isEmpty, "invalid batches have no root or input side effects")
+    // An indeterminate press stops the batch: a later step must not run on, or hide, an unknown delivery (#1240).
+    let uncertain = ActFixture()
+    uncertain.statuses = [.cannotComplete]
+    let pair = uncertain.request("press", policy: "ax_only")
+    let stopped = try uncertain.bridge.actBatch(["actions": [pair, pair]], world: uncertain.world, supportsAgentCursor: false)
+    let stoppedSteps = stopped["steps"] as? [[String: Any]]
+    expect(stopped["outcome"] as? String == "unknown" && stopped["stoppedAt"] as? Int == 0 && stoppedSteps?.count == 1, "an indeterminate press stops the batch at its step: \(stopped)")
+    expect((stoppedSteps?.first?["error"] as? [String: String])?["code"] == "ax_delivery_unknown", "the stopped step keeps its ax_delivery_unknown error")
+    expect(uncertain.trace == ["begin:1234", "ax:AXPress:cached", "finish"], "the second press is never dispatched: \(uncertain.trace)")
+    let generic = ActFixture()
+    generic.scrollPositions = ["same", "same"]
+    generic.scrollResult = ["scrolled": true]
+    let scroll = generic.request("scroll", policy: "ax_only", params: ["scrollY": 1])
+    let continued = try generic.bridge.actBatch(["actions": [scroll, generic.request("press", policy: "ax_only")]], world: generic.world, supportsAgentCursor: false)
+    expect(continued["stoppedAt"] == nil && (continued["steps"] as? [[String: Any]])?.count == 2, "a generic unknown does not stop the batch: \(continued)")
 }
 
 private func runRootPIDAssertions() throws {
@@ -537,6 +653,57 @@ private func runPIDAdmissionAssertions() throws {
     expect(failures.isEmpty, failures.joined(separator: "\n"))
 }
 
+private func runWindowIDAssertions() throws {
+    let bridge = Bridge(activityGlow: nil, readSession: { nil })
+    let invalidIds: [Any] = [1.5, -1, 0, UInt64(UInt32.max) + 1, UInt64.max, Double.nan, true, "12"]
+    for command in ["setWindowFrame", "focusedElement", "focusWindow", "look", "axWaitFor"] {
+        for id in invalidIds {
+            // Use an impossible PID and suppress images so a parser regression cannot focus or capture a live window.
+            let request: [String: Any] = ["cmd": command, "pid": Int(Int32.max), "windowId": id, "includeImage": false, "role": "AXButton"]
+            do {
+                _ = try bridge.handleRequest(request, clientID: nil)
+                expect(false, "\(command) accepted invalid windowId \(id)")
+            } catch let failure as BridgeFailure {
+                expect(failure.code == "invalid_args" && failure.message == "windowId must be a positive 32-bit unsigned integer", "\(command) must reject invalid windowId \(id) before window lookup, got \(failure)")
+            }
+        }
+    }
+    // Every window-ID site validates the PID first, so a request with both malformed reports the PID error.
+    for command in ["setWindowFrame", "focusedElement", "focusWindow", "look", "axWaitFor"] {
+        let request: [String: Any] = ["cmd": command, "pid": 0, "windowId": 1.5, "includeImage": false, "role": "AXButton"]
+        do {
+            _ = try bridge.handleRequest(request, clientID: nil)
+            expect(false, "\(command) accepted an invalid pid and windowId")
+        } catch let failure as BridgeFailure {
+            expect(failure.code == "invalid_args" && failure.message == "pid must be a positive 32-bit integer", "\(command) must report the pid error first when pid and windowId are both invalid, got \(failure)")
+        }
+    }
+    let omitted = try checkedWindowId(nil)
+    let null = try checkedWindowId(NSNull())
+    let smallest = try checkedWindowId(NSNumber(value: 1))
+    let largest = try checkedWindowId(NSNumber(value: UInt32.max))
+    let decimal = try checkedWindowId(NSDecimalNumber(string: "4294967295"))
+    expect(omitted == nil && null == nil && smallest == 1 && largest == UInt32.max && decimal == UInt32.max, "missing and null IDs are absent; both positive UInt32 boundaries are accepted")
+
+    // Real NDJSON framing and JSONSerialization: these decode as NSDecimalNumber, whose Double view is integral.
+    var frames: [Data] = []
+    let framed = Bridge(activityGlow: nil, readSession: { nil }, writeOutput: { frames.append($0) })
+    for command in ["setWindowFrame", "focusedElement", "focusWindow", "look", "axWaitFor"] {
+        for id in ["4294967295.00000001", "4294967295.0000000001", "1.000000000000000001"] {
+            frames = []
+            framed.handleLine(#"{"id":"w","cmd":"\#(command)","pid":2147483647,"windowId":\#(id),"includeImage":false,"role":"AXButton"}"#)
+            let response = frames.count == 1 ? (try? JSONSerialization.jsonObject(with: frames[0])) as? [String: Any] : nil
+            expect(response?["ok"] as? Bool == false && (response?["error"] as? [String: String]) == ["message": "windowId must be a positive 32-bit unsigned integer", "code": "invalid_args"], "\(command) must reject fractional decimal windowId \(id): \(String(describing: response))")
+        }
+    }
+}
+
+private final class RecordingInputLock: NSLocking {
+    var acquisitions = 0
+    func lock() { acquisitions += 1 }
+    func unlock() {}
+}
+
 private func runEventAssertions() throws {
     struct Event: Equatable {
         let type: CGEventType
@@ -547,9 +714,20 @@ private func runEventAssertions() throws {
         var flags: CGEventFlags = []
         var text: String = ""
         var horizontal: Int64 = 0
+        /// `CGEvent.timestamp` at post, and the fake-clock stamp issued for this post (nil when none was).
+        var stamp: CGEventTimestamp = 0
+        var issued: CGEventTimestamp?
+
+        /// Shape only: stamps are clock values, asserted per post by `stampedAtPost`.
+        static func == (lhs: Event, rhs: Event) -> Bool {
+            lhs.type == rhs.type && lhs.pid == rhs.pid && lhs.delivery == rhs.delivery && lhs.point == rhs.point
+                && lhs.data == rhs.data && lhs.flags == rhs.flags && lhs.text == rhs.text && lhs.horizontal == rhs.horizontal
+        }
     }
     var events: [Event] = []
     var delays: [useconds_t] = []
+    var mouseAllocations: [CGEventType] = []
+    let inputLock = RecordingInputLock()
     var rejectDragAt: CGPoint?
     var cancelAfterFirstDrag = false
     var rejectNextMouseType: CGEventType?
@@ -561,8 +739,23 @@ private func runEventAssertions() throws {
     var onInputSleep: () -> Void = {}
     var onHIDPrepare: () -> Bool = { false }
     var onHIDPost: (CGEventType) -> Void = { _ in }
+    // Fake monotonic clock shared by allocation and post. Every tick is unique, so a creation stamp can never
+    // equal the stamp issued for a post: each pointer event must carry the stamp issued for its own post.
+    var clockTicks: CGEventTimestamp = 0
+    func tick() -> CGEventTimestamp { clockTicks += 1; return clockTicks }
+    var pendingStamp: CGEventTimestamp?
+    func issueStamp() -> CGEventTimestamp {
+        expect(pendingStamp == nil, "each post-time stamp is consumed by its own post before the next is issued")
+        let stamp = tick()
+        pendingStamp = stamp
+        return stamp
+    }
+    func stampedAtPost(_ events: [Event]) -> Bool {
+        !events.isEmpty && events.allSatisfy { $0.issued != nil && $0.stamp == $0.issued }
+    }
     func record(_ event: CGEvent, pid: Int32, delivery: String) {
-        var entry = Event(type: event.type, pid: pid, delivery: delivery)
+        var entry = Event(type: event.type, pid: pid, delivery: delivery, stamp: event.timestamp, issued: pendingStamp)
+        pendingStamp = nil
         switch event.type {
         case .keyDown, .keyUp:
             entry.data = event.getIntegerValueField(.keyboardEventKeycode)
@@ -583,15 +776,20 @@ private func runEventAssertions() throws {
     }
     let sink = NativeInputSink(
         mouseEvent: { type, point, button in
+            mouseAllocations.append(type)
             if type == rejectNextMouseType {
                 rejectNextMouseType = nil
                 return nil
             }
             guard type != .leftMouseDragged || point != rejectDragAt else { return nil }
-            return NativeInputSink.createMouseEvent(type, point, button)
+            let event = NativeInputSink.createMouseEvent(type, point, button)
+            event?.timestamp = tick()
+            return event
         },
         wheelEvent: { vertical, horizontal in
-            rejectWheel ? nil : NativeInputSink.createWheelEvent(vertical, horizontal)
+            let event = rejectWheel ? nil : NativeInputSink.createWheelEvent(vertical, horizontal)
+            event?.timestamp = tick()
+            return event
         },
         keyEvent: { code, down in
             keyAllocations += 1
@@ -607,9 +805,10 @@ private func runEventAssertions() throws {
         },
         checkCancellation: {
             if cancelAfterFirstDrag && events.last?.type == .leftMouseDragged { throw CancellationError() }
-        }
+        },
+        eventTimestamp: issueStamp
     )
-    let world = Bridge(activityGlow: nil, inputSink: sink).actionWorld()
+    let world = Bridge(activityGlow: nil, inputSink: sink, physicalInputLock: inputLock).actionWorld()
     let start = CGPoint(x: 100, y: 200)
     let midpoint = CGPoint(x: 112, y: 200)
     let end = CGPoint(x: 124, y: 200)
@@ -618,9 +817,73 @@ private func runEventAssertions() throws {
     }
     try world.postMouseClick(start, 1234, .right, 2, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.rightMouseDown, start, 1), mouse(.rightMouseUp, start, 1), mouse(.rightMouseDown, start, 2), mouse(.rightMouseUp, start, 2)] && delays == [12_000, 70_000, 12_000], "PID double click emits ordered pairs with click-state increments and delays")
+    expect(stampedAtPost(events), "every PID double-click event carries the stamp issued for its own post: \(events.map { ($0.stamp, $0.issued) })")
     events = []; delays = []
     try world.postMouseDrag([start, end], 1234, "pid")
     expect(events == [mouse(.mouseMoved, start), mouse(.leftMouseDown, start, 1), mouse(.leftMouseDragged, midpoint, 1), mouse(.leftMouseDragged, end, 1), mouse(.leftMouseUp, end, 1)] && delays == [30_000, 8_000, 8_000], "drag interpolates and releases at destination")
+    expect(stampedAtPost(events), "every drag event, including the preallocated release, carries the stamp issued for its own post: \(events.map { ($0.stamp, $0.issued) })")
+    events = []; delays = []
+    let dragFixture = ActFixture()
+    dragFixture.postDrag = world.postMouseDrag
+    let invalidDrag = "Drag coordinates must be finite and within +/-1000000"
+    mouseAllocations = []
+    for x: Double in [1e100, 1e39, 1.7e308, -1_000_000.0001, .nan, .infinity, -.infinity] {
+        try actionFailure("invalid_args", message: invalidDrag) {
+            try world.postMouseDrag([.zero, CGPoint(x: x, y: 0)], 1234, "hid")
+            return [:]
+        }
+        expect(inputLock.acquisitions == 0, "invalid native drag must not acquire HID lock")
+        expect(mouseAllocations.isEmpty, "invalid native drag must not reserve mouse-up or allocate any event")
+        expect(events.isEmpty && delays.isEmpty, "invalid native drag must not post or wait")
+
+        dragFixture.trace = []
+        try actionFailure("invalid_args", message: invalidDrag) {
+            try dragFixture.act("drag", coords: true, params: ["path": [["x": 0.0, "y": 0.0], ["x": x, "y": 0.0]]])
+        }
+        expect(dragFixture.trace == ["begin:1234"], "invalid act drag must not lock, activate, raise or preflight: \(dragFixture.trace)")
+        expect(mouseAllocations.isEmpty, "invalid act drag must not allocate input events")
+
+        // A ref target has an element, so preflight would hit-test; coordinate targets return before that.
+        dragFixture.trace = []
+        try actionFailure("invalid_args", message: invalidDrag) {
+            try dragFixture.act("drag", params: ["path": [["x": 0.0, "y": 0.0], ["x": x, "y": 0.0]]])
+        }
+        expect(dragFixture.trace == ["begin:1234"] && !dragFixture.trace.contains("hit"), "invalid ref drag must not lock, activate, raise or hit-test: \(dragFixture.trace)")
+        expect(mouseAllocations.isEmpty, "invalid ref drag must not allocate input events")
+    }
+    dragFixture.trace = []
+    dragFixture.windowFrame.origin.x = 999_900
+    try actionFailure("invalid_args", message: invalidDrag) {
+        try dragFixture.act("drag", coords: true, params: ["path": [["x": 0, "y": 0], ["x": 300, "y": 0]]])
+    }
+    expect(dragFixture.trace == ["begin:1234"] && mouseAllocations.isEmpty, "out-of-range grounded drag must not lock, activate, raise, preflight or allocate")
+    dragFixture.trace = []
+    try actionFailure("invalid_args", message: invalidDrag) {
+        try dragFixture.act("drag", params: ["path": [["x": 0, "y": 0], ["x": 300, "y": 0]]])
+    }
+    expect(dragFixture.trace == ["begin:1234"] && mouseAllocations.isEmpty, "out-of-range grounded ref drag must not lock, activate, raise, hit-test or allocate: \(dragFixture.trace)")
+
+    let signedZero = CGPoint(x: -0.0, y: 0)
+    let subnormal = CGPoint(x: Double.leastNonzeroMagnitude, y: -Double.leastNonzeroMagnitude)
+    try world.postMouseDrag([signedZero, subnormal], 1234, "pid")
+    expect(events.first?.point == signedZero && events.last?.point == subnormal && events.last?.type == .leftMouseUp, "signed zero and subnormal vertices are in range")
+    events = []; delays = []; mouseAllocations = []
+
+    let secondary = CGPoint(x: -240, y: -120)
+    let boundary = CGPoint(x: -1_000_000, y: 1_000_000)
+    try world.postMouseDrag([secondary, boundary], 1234, "hid")
+    expect(inputLock.acquisitions > 0 && mouseAllocations.first == .leftMouseUp, "valid drag acquires HID lock and reserves release first")
+    expect(events.first?.point == secondary && events.last?.point == boundary, "signed secondary-display coordinates and inclusive boundary are accepted")
+    expect(events.allSatisfy { abs($0.point.x) <= 1_000_000 && abs($0.point.y) <= 1_000_000 }, "all derived drag steps stay in range")
+    events = []; delays = []
+
+    // desktopInput drag through the real router and sink fixture. Far off-screen, so no window can match the refusal.
+    let desktop = Bridge(activityGlow: nil, readSession: { nil }, inputSink: sink, physicalInputLock: inputLock)
+    let far = [CGPoint(x: -999_000, y: -999_000), CGPoint(x: -998_976, y: -999_000)]
+    let desktopDrag = try desktop.handleRequest(["cmd": "desktopInput", "action": "drag", "path": far.map { ["x": $0.x, "y": $0.y] }], clientID: nil) as? [String: Any]
+    let readback = desktopDrag?["mouse"] as? [String: Any]
+    expect(desktopDrag.map { Set($0.keys) } == ["performed", "mouse"] && desktopDrag?["performed"] as? String == "drag" && readback?["x"] is NSNumber && readback?["y"] is NSNumber, "desktop drag keeps the common success shape with mouse readback: \(String(describing: desktopDrag))")
+    expect(events.first?.point == far[0] && events.last?.type == .leftMouseUp && events.last?.point == far[1] && events.allSatisfy { $0.delivery == "hid" }, "desktop drag posts through the HID sink")
     events = []; delays = []
     rejectDragAt = end
     try actionFailure("input_failed", message: "Failed to create mouse drag event") {
@@ -646,8 +909,23 @@ private func runEventAssertions() throws {
     }
     expect(rejectNextMouseType == nil && events.isEmpty && delays.isEmpty, "failed mouse-up reservation posts no mouse-down or other input")
     events = []; delays = []
+    rejectNextMouseType = .mouseMoved
+    try actionFailure("input_failed", message: "Failed to create mouse move event") {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        return [:]
+    }
+    expect(rejectNextMouseType == nil && events.isEmpty && delays.isEmpty, "failed initial move posts no release or other input: \(events)")
+    events = []; delays = []
+    rejectNextMouseType = .leftMouseDown
+    try actionFailure("input_failed", message: "Failed to create mouse down event") {
+        try world.postMouseDrag([start, end], 1234, "pid")
+        return [:]
+    }
+    expect(rejectNextMouseType == nil && events == [mouse(.mouseMoved, start)] && delays.isEmpty, "failed mouse-down posts only the initial move, no unmatched release: \(events)")
+    events = []; delays = []
     try world.postScrollWheel(start, 15, -25, 1234, "hid")
     expect(events == [mouse(.mouseMoved, start, delivery: "hid"), Event(type: .scrollWheel, pid: 1234, delivery: "hid", point: start, data: 25, horizontal: -15)] && delays.isEmpty, "HID wheel emits signed vertical and horizontal deltas at the point")
+    expect(stampedAtPost(events), "HID move and wheel events carry the stamp issued for their own post: \(events.map { ($0.stamp, $0.issued) })")
     events = []; delays = []
     try world.postKeyPress([" Cmd + Shift + a ", "tab"], 1234, "pid", { _, _ in })
     let flags: CGEventFlags = [.maskCommand, .maskShift]
@@ -768,11 +1046,51 @@ private func runEventAssertions() throws {
     onHIDPrepare = { preparations += 1; return false }
     keys.blocked = false
     onHIDPost = { if $0 == .keyDown { keys.blocked = true } }
-    try actionFailure("app_blocked") { try keys.act("keypress", coords: true, params: ["keys": ["cmd+a", "tab", "b"]]) }
+    try actionFailure("app_blocked", postedUnits: 1) { try keys.act("keypress", coords: true, params: ["keys": ["cmd+a", "tab", "b"]]) }
     expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [0, 0] && events.map(\.flags) == [.maskCommand, .maskCommand], "keypress releases the posted chord after focus moves and refuses the next key")
     expect(preparations == 2, "prepare each attempted key-down but never prepare its owed release")
     onHIDPrepare = { false }
     onHIDPost = { _ in }
+
+    // An unsupported key anywhere refuses the whole sequence before its first key-down, and names no key.
+    keys.blocked = false
+    for sequence in [["cmd+s", "not-a-key"], ["tab", "not-a-key"], ["cmd", "not-a-key"]] {
+        events = []; keyAllocations = 0
+        try actionFailure("invalid_args", message: "Unsupported key at keys[1]; no key was posted", postedUnits: 0) {
+            try keys.act("keypress", coords: true, params: ["keys": sequence])
+        }
+        expect(events.isEmpty && keyAllocations == 0, "an invalid sequence \(sequence) allocates and posts nothing")
+    }
+
+    // A failure after admission, here the second pair's event allocation, still reports the posted prefix.
+    events = []; keyAllocations = 0
+    rejectKeyAllocation = 3
+    try actionFailure("input_failed", message: "Failed to create key event", postedUnits: 1) {
+        try keys.act("keypress", coords: true, params: ["keys": ["cmd+s", "tab"]])
+    }
+    expect(events.map(\.type) == [.keyDown, .keyUp] && events.map(\.data) == [1, 1], "allocation failure after cmd+s posts only that pair")
+    events = []; keyAllocations = 0
+    try actionFailure("input_failed", message: "Failed to create unicode key event", postedUnits: 1) {
+        try keys.act("typeText", coords: true, params: ["text": "a🙂"])
+    }
+    expect(events.map(\.text) == ["a", "a"], "typing allocation failure after one pair reports it")
+    rejectKeyAllocation = nil
+
+    // act_ui's length-based deadline: 5,000 characters at 8 ms per pair run 40 s, past any 30 s bound.
+    let longTyping = ActFixture(inputSink: sink)
+    var typingClock = ProcessInfo.processInfo.systemUptime
+    longTyping.clockedAdmission = { deadline in
+        let gate = KeyboardAdmission(now: { typingClock }, deadline: deadline)
+        return { _ in try gate.checkDeadline() }
+    }
+    onInputSleep = { typingClock += 0.008 }
+    events = []
+    let text = String(repeating: "a", count: 5_000)
+    var longRequest = longTyping.request("typeText", coords: true, params: ["text": text])
+    longRequest["keyboardDeadlineUptimeMs"] = (typingClock + 129) * 1000
+    _ = try longTyping.bridge.act(longRequest, world: longTyping.world, supportsAgentCursor: false)
+    expect(events.count == 10_000, "a valid long act typeText is not cut mid-string: \(events.count / 2) of 5000 pairs")
+    onInputSleep = {}
 
     events = []
     try runWebReplacementRefusals(sink: sink) { events.map(\.type) }
@@ -819,4 +1137,92 @@ private func runWebReplacementRefusals(sink: NativeInputSink, posted: () -> [CGE
     }
     try actionFailure("app_blocked", postedUnits: 1) { try fallback.act("setText", params: params) }
     expect(posted() == [.keyDown, .keyUp], "focus moving during fallback wait stops replacement text after the Cmd+A pair: \(posted()), \(fallback.trace)")
+}
+
+private func runKeyboardDeadlineAssertions() {
+    let now = 1_000.0
+    for ceiling in [desktopInputKeyboardCeiling, nil] {
+        expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_012_500], now: now, ceiling: ceiling) == 1_012.5, "the uptime deadline is used as is, with no wall-clock conversion")
+        expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 999_000], now: now, ceiling: ceiling) == 999, "a deadline already past stays past")
+        expect(keyboardDeadline(["keyboardDeadlineUptimeMs": Double.nan], now: now, ceiling: ceiling) == 1_030, "a non-finite deadline falls back to 30 s")
+        expect(keyboardDeadline(["keyboardDeadlineMs": 1_012_500], now: now, ceiling: ceiling) == 1_030, "the retired wall-clock field grants nothing")
+        expect(keyboardDeadline([:], now: now, ceiling: ceiling) == 1_030, "a missing deadline falls back to 30 s")
+    }
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_031_000], now: now, ceiling: desktopInputKeyboardCeiling) == 1_030, "desktopInput bounds a deadline to its client's fixed 30 s")
+    // act_ui budgets 25 ms per character: 5,000 characters get about 129 s, which a 30 s bound would cut mid-string.
+    expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_129_000], now: now, ceiling: nil) == 1_129, "act keeps the client's length-based deadline")
+}
+
+/// The batch resolves its keyboard deadline once and every step inherits it.
+private func runBatchDeadlineAssertions() throws {
+    func keypressBatch(_ fixture: ActFixture, deadlineMs: Double?, count: Int = 1) throws -> [String: Any] {
+        var request: [String: Any] = ["actions": Array(repeating: fixture.request("keypress", coords: true, params: ["keys": ["tab"]]), count: count)]
+        if let deadlineMs { request["keyboardDeadlineUptimeMs"] = deadlineMs }
+        return try fixture.bridge.actBatch(request, world: fixture.world, supportsAgentCursor: false)
+    }
+    func realClock(_ fixture: ActFixture) {
+        fixture.clockedAdmission = { deadline in
+            let gate = KeyboardAdmission(now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
+            return { _ in try gate.checkDeadline() }
+        }
+    }
+
+    let expired = ActFixture()
+    realClock(expired)
+    let stopped = try keypressBatch(expired, deadlineMs: (ProcessInfo.processInfo.systemUptime - 1) * 1000)
+    let step = (stopped["steps"] as? [[String: Any]])?.first
+    expect(stopped["stoppedAt"] as? Int == 0 && (step?["error"] as? [String: String])?["code"] == "input_deadline_expired", "an expired batch deadline stops the first keyboard step: \(stopped)")
+    expect((step?["evidence"] as? [String: Int])?["postedUnits"] == 0 && !expired.trace.contains { $0.hasPrefix("key:") }, "an expired batch deadline posts no key-down: \(expired.trace)")
+
+    let live = ActFixture()
+    realClock(live)
+    let posted = try keypressBatch(live, deadlineMs: (ProcessInfo.processInfo.systemUptime + 60) * 1000)
+    expect(posted["stoppedAt"] == nil && live.trace.contains("key:tab:1234:hid"), "a future batch deadline posts the key: \(live.trace)")
+
+    // Real time passes between steps, so a per-step fallback would give each step a later deadline.
+    let missing = ActFixture()
+    missing.onSleep = { _ in Thread.sleep(forTimeInterval: 0.002) }
+    let before = ProcessInfo.processInfo.systemUptime
+    _ = try keypressBatch(missing, deadlineMs: nil, count: 2)
+    expect(missing.deadlines.count == 2 && missing.deadlines[0] == missing.deadlines[1], "a missing batch deadline falls back once, not per step: \(missing.deadlines)")
+    expect(missing.deadlines.allSatisfy { $0 >= before + 30 && $0 <= ProcessInfo.processInfo.systemUptime + 30 }, "the batch fallback is 30 s from batch entry")
+
+    let long = ActFixture()
+    _ = try keypressBatch(long, deadlineMs: 5_000_129_000, count: 2)
+    expect(long.deadlines == [5_000_129, 5_000_129], "a batch keeps the client's length-based deadline for every step: \(long.deadlines)")
+}
+
+/// The production sink with activation, its settle wait and the final OS post injected one at a time.
+private func runProductionSinkAssertions() throws {
+    expect(!NativeInputSink.activateIfInactive(-1), "no running app at the pid means no activation")
+    var effects: [String] = []
+    var activates = true
+    var onActivate: () -> Void = {}
+    let sink = NativeInputSink.production(
+        activate: { pid in
+            effects.append("activate:\(pid)")
+            onActivate()
+            return activates
+        },
+        sleep: { effects.append("sleep:\($0)") },
+        post: { effects.append("post:\($0.type == .keyDown ? "down" : "up"):\($0.getIntegerValueField(.keyboardEventKeycode))") }
+    )
+    let keys = ActFixture(inputSink: sink)
+    keys.admissionOverride = { _ in effects.append("admit") }
+    _ = try keys.act("keypress", coords: true, params: ["keys": ["tab"]])
+    // The first admission is the forced check before any activation.
+    expect(effects == ["admit", "activate:1234", "sleep:20000", "admit", "post:down:48", "post:up:48", "sleep:8000"],
+           "activation settles before admission and the final post adds no wait: \(effects)")
+
+    effects = []
+    activates = false
+    _ = try keys.act("keypress", coords: true, params: ["keys": ["tab"]])
+    expect(effects == ["admit", "activate:1234", "admit", "post:down:48", "post:up:48", "sleep:8000"], "an active target posts with no settle wait: \(effects)")
+
+    effects = []
+    activates = true
+    keys.admissionOverride = nil
+    onActivate = { keys.blocked = true }
+    try actionFailure("app_blocked", postedUnits: 0) { try keys.act("keypress", coords: true, params: ["keys": ["tab"]]) }
+    expect(effects == ["activate:1234", "sleep:20000"], "focus lost during the settle wait refuses before any post: \(effects)")
 }

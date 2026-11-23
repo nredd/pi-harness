@@ -256,18 +256,20 @@ def sample(
     parse_timings("", extension_labels=extension_labels)
     frame = re.compile(frame_pattern, re.MULTILINE)
     scratch = Path(tempfile.mkdtemp(prefix="pis-", dir=SOCKET_ROOT))
-    stderr_path = scratch / "stderr"
-    workdir = scratch / "work"
-    workdir.mkdir()
-    pane = TmuxPane(socket=scratch / "pane.sock", name="startup")
-    nonce = uuid.uuid4().hex
-    extension = scratch / "ready.mjs"
-    extension.write_text(READY_EXTENSION)
-    registered = scratch / "registered"
-    ack = scratch / "ack"
-    marks: dict[str, float] = {}
-    submitted = False
+    pane: TmuxPane | None = None
     try:
+        # Setup runs inside the protected region: a failure here must not strand `scratch`.
+        stderr_path = scratch / "stderr"
+        workdir = scratch / "work"
+        workdir.mkdir()
+        nonce = uuid.uuid4().hex
+        extension = scratch / "ready.mjs"
+        extension.write_text(READY_EXTENSION)
+        registered = scratch / "registered"
+        ack = scratch / "ack"
+        marks: dict[str, float] = {}
+        submitted = False
+        pane = TmuxPane(socket=scratch / "pane.sock", name="startup")
         started = time.monotonic()
         pane.start(
             ["/bin/sh", "-c", STDERR_WRAPPER, "sh", *argv, "-e", str(extension)],
@@ -302,7 +304,8 @@ def sample(
             stderr = stream.read(MAX_TIMING_BYTES + 1)
         return Sample(**marks, timings=parse_timings(stderr, extension_labels=extension_labels))
     finally:
-        pane.kill()
+        if pane is not None:
+            pane.kill()
         shutil.rmtree(scratch, ignore_errors=True)
 
 

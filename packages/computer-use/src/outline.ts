@@ -9,6 +9,11 @@ export interface OutlineText {
 	string: string;
 	confidence: number;
 	rect?: OutlineRect;
+	/**
+	 * `value` when the helper derived the box from the node's own AX value instead of pixels (the Linux helper, see
+	 * `ParseLookOptions.ownValueText`). Anything else, including a missing tag, is OCR.
+	 */
+	source?: "value";
 }
 
 export interface OutlineScrollExtent {
@@ -40,6 +45,11 @@ export interface OutlineNode {
 	truncated: boolean;
 	scrollExtent?: OutlineScrollExtent;
 	text: OutlineText[];
+	/**
+	 * Set when a later look could not confirm this node is still readable (a scoped graft that saw protection, or a
+	 * newer look of the same root). Its text is already redacted; keep only its ref, role and geometry.
+	 */
+	unconfirmed?: true;
 	children: OutlineNode[];
 	parent?: OutlineNode;
 }
@@ -118,9 +128,17 @@ export interface OutlineDiff {
 
 export type SerializedOutlineNode = Omit<OutlineNode, "parent" | "children"> & { children: SerializedOutlineNode[] };
 
+/**
+ * Stored outline format. Version 1 is the first writer that never invents a rect origin and filters OCR over
+ * unreadable nodes (#1263). An outline without it predates that writer: its rects may carry a made-up `x: 0`/`y: 0`.
+ */
+export const OUTLINE_FORMAT_VERSION = 1;
+
 export interface SerializedOutline {
 	lookId: string;
 	root: SerializedOutlineNode;
+	/** `OUTLINE_FORMAT_VERSION` of the writer; missing on outlines stored before it. */
+	formatVersion?: number;
 }
 
 export interface ControlsResult {
@@ -135,6 +153,175 @@ export interface ControlsResult {
 export const INCIDENTAL_ACTIONS = new Set(["AXShowMenu", "AXScrollToVisible"]);
 
 const DEFAULT_BUDGET = { maxDepth: 2, maxNodes: 150 };
+
+/** Name the Linux helper substitutes for a protected or unclassified node (`PROTECTED_LABEL` in `atspi.rs`). */
+export const PROTECTED_LABEL = "[protected]";
+
+/** Placeholder for text retained from an earlier look whose node is no longer confirmed readable. */
+export const REDACTED_LABEL = "[redacted]";
+
+/** macOS secure fields, the Linux helper's protected role names and the Windows missing-role default. */
+const PROTECTED_ROLES = new Set(["axsecuretextfield", "password text", "unknown", ""]);
+
+/**
+ * Whether `node`'s current classification forbids echoing text it carried earlier. Fails closed: a node with no
+ * role, or one the helper could not classify, counts as protected.
+ */
+export function isProtectedNode(node: Pick<OutlineNode, "role" | "subrole" | "title" | "description">): boolean {
+	// `restoreOutline` normalizes untrusted JSON, so both fields are always strings here.
+	return (
+		PROTECTED_ROLES.has(node.role.trim().toLowerCase()) ||
+		node.subrole.trim().toLowerCase() === "axsecuretextfield" ||
+		node.title === PROTECTED_LABEL ||
+		node.description === PROTECTED_LABEL
+	);
+}
+
+/**
+ * Allowlist a protected node's metadata: keep its classification (role, subrole), ref, geometry and capabilities,
+ * and replace every text field with the marker. AX titles, descriptions and identifiers can still hold the text an
+ * older or faulty helper sent, so nothing untrusted reaches indexing, search, diffs or serialization. Mutates `node`.
+ */
+function sanitizeProtected(node: OutlineNode): OutlineNode {
+	if (isProtectedNode(node)) {
+		node.title = PROTECTED_LABEL;
+		node.description = "";
+		node.identifier = "";
+		node.value = "";
+		node.text = [];
+	}
+	return node;
+}
+
+/**
+ * Replace every text field of `node` that an earlier, unconfirmed look supplied, identifier included (it can be the
+ * old displayed label), and mark it unconfirmed. Refs, role and geometry stay so the node is still addressable.
+ * Mutates `node`.
+ */
+function redactRetained(node: OutlineNode): void {
+	node.title = REDACTED_LABEL;
+	node.description = "";
+	node.identifier = "";
+	node.value = "";
+	node.text = [];
+	node.unconfirmed = true;
+}
+
+/** Whether a cached query may echo `node`'s text: it is readable and no scoped graft redacted it. */
+export function isConfirmedReadable(node: OutlineNode): boolean {
+	return !node.unconfirmed && !isProtectedNode(node);
+}
+
+/**
+ * Whether OCR may not be placed over `node`: it is protected or unconfirmed, or unread (`truncated`), so an unseen
+ * descendant such as a secure field can sit anywhere in its rect.
+ */
+function coversUnreadablePixels(node: OutlineNode): boolean {
+	return !isConfirmedReadable(node) || node.truncated;
+}
+
+/**
+ * Whether `rect` is a known region with positive area. Parse and restore keep only rects whose four fields are finite
+ * numbers, so anything else is already `undefined` here.
+ */
+function hasArea(rect: OutlineRect | undefined): rect is OutlineRect {
+	return rect !== undefined && rect.w > 0 && rect.h > 0;
+}
+
+function overlaps(a: OutlineRect, b: OutlineRect): boolean {
+	return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+function encloses(outer: OutlineRect, inner: OutlineRect): boolean {
+	return (
+		inner.x >= outer.x &&
+		inner.y >= outer.y &&
+		inner.x + inner.w <= outer.x + outer.w &&
+		inner.y + inner.h <= outer.y + outer.h
+	);
+}
+
+function isAncestor(candidate: OutlineNode, node: OutlineNode): boolean {
+	for (let current = node.parent; current; current = current.parent) if (current === candidate) return true;
+	return false;
+}
+
+function collectNodes(root: OutlineNode): OutlineNode[] {
+	const nodes = [root];
+	// The array iterator re-reads `length`, so pushed children are visited too.
+	for (const node of nodes) nodes.push(...node.children);
+	return nodes;
+}
+
+/** Replace a picture-only node's title (OCR text) with the marker; it then counts as protected. Mutates `node`. */
+function redactPicture(node: OutlineNode): void {
+	node.title = PROTECTED_LABEL;
+	sanitizeProtected(node);
+}
+
+/**
+ * Drop text that may show the pixels of a protected, unconfirmed or unread node (#1263): a `text` box on another
+ * node, or a picture-only node (whose title is OCR text), that overlaps such a node's rect. Fails closed: when any such
+ * node has no known area, every box and picture-only title goes, and while one exists a box with no known area goes
+ * too. The one exception is trusted provenance: a box the Linux helper derived from its readable node's own AX value
+ * (`source: "value"` and the same string), enclosed by that node's rect, under the protected ancestor. A redacted
+ * picture-only node is itself protected, so its region joins the worklist; a versioned restore therefore gives the same result.
+ * `legacy` (an outline stored before `OUTLINE_FORMAT_VERSION`, whose rects may have invented origins) treats every
+ * region as unknown, so any unreadable node drops all of it. Mutates the tree.
+ */
+function dropTextOverProtected(root: OutlineNode, legacy = false): void {
+	const nodes = collectNodes(root);
+	const regions: Array<{ node: OutlineNode; rect: OutlineRect }> = [];
+	let unknownRegion = false;
+	const addRegion = (node: OutlineNode): void => {
+		if (hasArea(node.rect)) regions.push({ node, rect: node.rect });
+		else unknownRegion = true;
+	};
+	for (const node of nodes) if (coversUnreadablePixels(node)) addRegion(node);
+	if (!regions.length && !unknownRegion) return;
+	if (legacy) unknownRegion = true;
+
+	const mustDropBox = (owner: OutlineNode, text: OutlineText): boolean => {
+		const box = text.rect;
+		return (
+			unknownRegion ||
+			!hasArea(box) ||
+			regions.some(({ node, rect }) => overlaps(rect, box) && !isOwnValueText(owner, text, box, node))
+		);
+	};
+
+	// Picture-only closure as a worklist: a redacted picture-only node is a new region, which may expose another. A
+	// truncated picture-only node is its own region and overlaps it, so its title goes too; a redacted one is no longer
+	// readable, so it is never checked against the region it added.
+	const pictures = nodes.filter((node) => node.pictureOnly && isConfirmedReadable(node));
+	for (let index = 0; index < regions.length && !unknownRegion; index += 1) {
+		const region = regions[index];
+		for (const picture of pictures) {
+			if (isConfirmedReadable(picture) && (!hasArea(picture.rect) || overlaps(region.rect, picture.rect))) {
+				redactPicture(picture);
+				addRegion(picture);
+			}
+		}
+	}
+	// Redacting twice is harmless, so pictures the closure already redacted need no check.
+	if (unknownRegion) for (const picture of pictures) redactPicture(picture);
+	for (const node of nodes)
+		if (isConfirmedReadable(node)) node.text = node.text.filter((text) => !mustDropBox(node, text));
+}
+
+/**
+ * Whether `text` is `owner`'s own AX value placed inside `owner`'s rect under the unreadable `region` ancestor. Only
+ * the Linux helper tags boxes `source: "value"`, and the string must still equal the node's value.
+ */
+function isOwnValueText(owner: OutlineNode, text: OutlineText, box: OutlineRect, region: OutlineNode): boolean {
+	return (
+		text.source === "value" &&
+		text.string === owner.value &&
+		hasArea(owner.rect) &&
+		isAncestor(region, owner) &&
+		encloses(owner.rect, box)
+	);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -167,23 +354,57 @@ function parseRect(raw: unknown): OutlineRect {
 	};
 }
 
-function parseText(raw: unknown): OutlineText[] {
-	if (!Array.isArray(raw)) return [];
-	return raw
-		.map((item): OutlineText | undefined => {
-			if (!isRecord(item)) return undefined;
-			const string = toString(item.string);
-			if (!string) return undefined;
-			return {
-				string,
-				confidence: Math.max(0, Math.min(1, toNumber(item.confidence))),
-				rect: parseRect(item.rect),
-			};
-		})
-		.filter((item): item is OutlineText => Boolean(item));
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
 }
 
-function parseNode(raw: unknown, parent?: OutlineNode): OutlineNode {
+/**
+ * Read an outline or text rect, or `undefined` when any of its four fields is missing or not a finite number.
+ * Never invent an origin: a placed-looking region at a made-up position would let OCR text over a protected node
+ * escape the overlap check (#1263). A negative size reads as zero, which has no area.
+ */
+function readRect(raw: unknown): OutlineRect | undefined {
+	if (!isRecord(raw) || ![raw.x, raw.y, raw.w, raw.h].every(isFiniteNumber)) return undefined;
+	const { x, y, w, h } = raw as Record<keyof OutlineRect, number>;
+	return { x, y, w: Math.max(0, w), h: Math.max(0, h) };
+}
+
+/**
+ * Read one text box. `ownValueOf` is the node's own AX value when its helper derives boxes from it (Linux); only a
+ * box with exactly that string is tagged `source: "value"`, every other box is OCR.
+ */
+function readText(item: unknown, ownValueOf?: string): OutlineText | undefined {
+	if (!isRecord(item)) return undefined;
+	const string = toString(item.string);
+	if (!string) return undefined;
+	const text: OutlineText = { string, confidence: Math.max(0, Math.min(1, toNumber(item.confidence))) };
+	const rect = readRect(item.rect);
+	if (rect) text.rect = rect;
+	if (ownValueOf === string) text.source = "value";
+	return text;
+}
+
+function parseText(raw: unknown, ownValueOf?: string): OutlineText[] {
+	if (!Array.isArray(raw)) return [];
+	return raw.map((item) => readText(item, ownValueOf)).filter((item): item is OutlineText => Boolean(item));
+}
+
+/** How a backend's look payload is read. */
+export interface ParseLookOptions {
+	/**
+	 * Read a node without a boolean `truncated` marker as unread. Set only for a backend whose helper
+	 * always emits the marker and can return partial trees (Linux AT-SPI2), so an omitted marker is
+	 * unknown completeness, not proof the node was fully read.
+	 */
+	unmarkedNodesUnread?: boolean;
+	/**
+	 * The helper's `text` boxes repeat the node's own AX value rather than OCR (Linux AT-SPI2). A box whose string
+	 * equals the node's value is tagged `source: "value"` and may sit inside a protected ancestor's rect.
+	 */
+	ownValueText?: boolean;
+}
+
+function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode): OutlineNode {
 	const record = isRecord(raw) ? raw : {};
 	const wireRef = toString(record.ref) || undefined;
 	const node: OutlineNode = {
@@ -205,31 +426,37 @@ function parseNode(raw: unknown, parent?: OutlineNode): OutlineNode {
 		canIncrement: toBoolean(record.canIncrement),
 		canDecrement: toBoolean(record.canDecrement),
 		isTextInput: toBoolean(record.isTextInput),
-		rect: parseRect(record.rect),
+		rect: readRect(record.rect),
 		focused: toBoolean(record.focused),
 		offscreen: toBoolean(record.offscreen),
 		pictureOnly: toBoolean(record.pictureOnly),
-		truncated: toBoolean(record.truncated),
+		truncated:
+			options.unmarkedNodesUnread && typeof record.truncated !== "boolean" ? true : toBoolean(record.truncated),
 		scrollExtent: isRecord(record.scrollExtent)
 			? {
 					seen: Math.max(0, Math.trunc(toNumber(record.scrollExtent.seen))),
 					total: Math.max(0, Math.trunc(toNumber(record.scrollExtent.total))),
 				}
 			: undefined,
-		text: parseText(record.text),
+		text: parseText(record.text, options.ownValueText ? toString(record.value) : undefined),
 		children: [],
 		parent,
 	};
-	node.children = (Array.isArray(record.children) ? record.children : []).map((child) => parseNode(child, node));
-	return node;
+	if (!node.rect) delete node.rect;
+	node.children = (Array.isArray(record.children) ? record.children : []).map((child) =>
+		parseNode(child, options, node),
+	);
+	return sanitizeProtected(node);
 }
 
-export function parseLookResponse(raw: unknown): LookResponse {
+export function parseLookResponse(raw: unknown, options: ParseLookOptions = {}): LookResponse {
 	const record = isRecord(raw) ? raw : {};
 	const image = isRecord(record.image) ? record.image : undefined;
 	const window = isRecord(record.window) ? record.window : {};
 	const metadata = isRecord(window.metadata) ? window.metadata : undefined;
-	const outline = buildOutline(toString(record.lookId), parseNode(record.outline));
+	const root = parseNode(record.outline, options);
+	dropTextOverProtected(root);
+	const outline = buildOutline(toString(record.lookId), root);
 	const readText = isRecord(record.readText) ? record.readText : undefined;
 	const requestedReadText =
 		readText?.requested === "auto" || readText?.requested === "always" || readText?.requested === "never"
@@ -666,7 +893,7 @@ export function countOutlineNodes(root: OutlineNode): number {
 }
 
 export function serializeOutline(outline: Outline): SerializedOutline {
-	return { lookId: outline.lookId, root: serializeOutlineNode(outline.root) };
+	return { lookId: outline.lookId, root: serializeOutlineNode(outline.root), formatVersion: OUTLINE_FORMAT_VERSION };
 }
 
 export function serializeOutlineNode(node: OutlineNode): SerializedOutlineNode {
@@ -684,7 +911,7 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 	const refToWireRef = new Map<string, string>();
 	const wireRefToRef = new Map<string, string>();
 	const restoreNode = (raw: SerializedOutlineNode, parent?: OutlineNode): OutlineNode => {
-		const node: OutlineNode = { ...raw, children: [], parent };
+		const node = sanitizeProtected(normalizeRestored(raw, parent));
 		nodes.push(node);
 		if (node.wireRef) {
 			refToWireRef.set(node.ref, node.wireRef);
@@ -694,7 +921,44 @@ export function restoreOutline(serialized: SerializedOutline): Outline {
 		return node;
 	};
 	const root = restoreNode(serialized.root);
+	dropTextOverProtected(root, serialized.formatVersion !== OUTLINE_FORMAT_VERSION);
 	return { lookId: serialized.lookId, root, nodes, refToWireRef, wireRefToRef };
+}
+
+/**
+ * A stored node is untrusted JSON: older writers or a damaged file may omit fields. Normalize every field a fold,
+ * search or diff reads, so a missing role restores as blank (unclassified, hence protected) instead of crashing.
+ */
+function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): OutlineNode {
+	const record = raw as Partial<SerializedOutlineNode>;
+	const node: OutlineNode = {
+		...raw,
+		ref: toString(record.ref),
+		role: toString(record.role),
+		subrole: toString(record.subrole),
+		identifier: toString(record.identifier),
+		title: toString(record.title),
+		description: toString(record.description),
+		value: toString(record.value),
+		actions: Array.isArray(record.actions)
+			? record.actions.filter((value): value is string => typeof value === "string")
+			: [],
+		rect: readRect(record.rect),
+		text: Array.isArray(record.text) ? record.text.map(restoreText).filter((item) => item !== undefined) : [],
+		children: [],
+		parent,
+	};
+	if (!node.rect) delete node.rect;
+	if (record.unconfirmed === true) redactRetained(node);
+	else delete node.unconfirmed;
+	return node;
+}
+
+/** Normalize a stored text box: only a finite rect and the literal `source: "value"` tag survive. */
+function restoreText(raw: unknown): OutlineText | undefined {
+	const text = readText(raw);
+	if (text && (raw as { source?: unknown }).source === "value") text.source = "value";
+	return text;
 }
 
 function outlineRefNumber(ref: string): number {
@@ -748,9 +1012,12 @@ function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRe
 	target.focused = source.focused;
 	target.offscreen = source.offscreen;
 	target.pictureOnly = source.pictureOnly;
-	target.truncated = false;
+	// A scoped look that still could not read the subtree leaves the node unread.
+	target.truncated = source.truncated;
 	target.scrollExtent = source.scrollExtent ? { ...source.scrollExtent } : undefined;
 	target.text = source.text.map((text) => ({ ...text, rect: text.rect ? { ...text.rect } : undefined }));
+	// The source is a fresh look, so its classification is current.
+	delete target.unconfirmed;
 }
 
 function preserveUnreused(node: OutlineNode, parent: OutlineNode, used: Set<OutlineNode>): OutlineNode | undefined {
@@ -770,7 +1037,6 @@ function cloneForGraft(
 	used: Set<OutlineNode>,
 ): OutlineNode {
 	const existing = source.wireRef ? reusableByWireRef.get(source.wireRef) : undefined;
-	if (existing) used.add(existing);
 	const oldChildren = existing?.children ?? [];
 	const node: OutlineNode = existing ?? {
 		...source,
@@ -782,6 +1048,7 @@ function cloneForGraft(
 		scrollExtent: undefined,
 	};
 	copyNodeFields(node, source, Boolean(existing));
+	used.add(node);
 	node.parent = parent;
 	const graftedChildren = source.children.map((child) => cloneForGraft(child, node, nextRef, reusableByWireRef, used));
 	const preservedChildren = oldChildren
@@ -789,6 +1056,11 @@ function cloneForGraft(
 		.filter((child): child is OutlineNode => Boolean(child));
 	node.children = [...graftedChildren, ...preservedChildren];
 	return node;
+}
+
+function redactUnconfirmed(node: OutlineNode, confirmed: Set<OutlineNode>): void {
+	if (!confirmed.has(node)) redactRetained(node);
+	for (const child of node.children) redactUnconfirmed(child, confirmed);
 }
 
 export function graftScopedOutline(outline: Outline, targetRef: string, scoped: Outline): OutlineNode {
@@ -807,7 +1079,11 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 	const used = new Set<OutlineNode>([target]);
 	copyNodeFields(target, scoped.root, true);
 	target.ref = targetRef;
-	target.rect = targetRect;
+	// The cached full-look rect stays as action geometry only while the fresh target is readable. A protected one's
+	// fresh bounds are authoritative for privacy, but they are in scoped space and cannot be mapped, so it is unplaced
+	// (fail closed, #1263). Its own boxes are in scoped space too: never compare them with full-look rects.
+	target.rect = isConfirmedReadable(target) ? targetRect : undefined;
+	for (const text of target.text) text.rect = undefined;
 	const graftedChildren = scoped.root.children.map((child) =>
 		cloneForGraft(child, target, nextRef, reusableByWireRef, used),
 	);
@@ -816,6 +1092,11 @@ export function graftScopedOutline(outline: Outline, targetRef: string, scoped: 
 		.filter((child): child is OutlineNode => Boolean(child));
 	target.children = [...graftedChildren, ...preservedChildren];
 	for (const child of target.children) clearScopedRects(child);
+	// A preserved node is absent from the scoped look, so its classification is unknown. Once that look shows
+	// any protected node, a preserved one may be the same element under a new wire ref: drop its old text.
+	if (scoped.nodes.some(isProtectedNode)) redactUnconfirmed(target, used);
+	// Grafted geometry is cleared, so once the outline holds a protected node its OCR boxes cannot be placed.
+	dropTextOverProtected(outline.root);
 	rebuildIndexes(outline);
 	return target;
 }

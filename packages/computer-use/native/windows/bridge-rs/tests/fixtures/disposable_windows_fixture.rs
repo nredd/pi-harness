@@ -72,7 +72,7 @@ mod native {
             writeln!(
                 self.stdin,
                 "{}",
-                json!({"protocolVersion":4,"id":id,"cmd":cmd,"args":args})
+                json!({"protocolVersion":6,"id":id,"cmd":cmd,"args":args})
             )
             .expect("write native request");
             self.stdin.flush().expect("flush native request");
@@ -81,7 +81,7 @@ mod native {
                 .recv_timeout(Duration::from_secs(5))
                 .expect("actual helper must return within the fixture deadline");
             assert_eq!(frame["id"], id);
-            assert_eq!(frame["protocolVersion"], 4);
+            assert_eq!(frame["protocolVersion"], 6);
             frame
         }
 
@@ -351,20 +351,36 @@ mod native {
             .map(|value| value.as_i64().expect("identity integer") as i32)
             .collect::<Vec<_>>();
         let automation_id = label["automationId"].as_str().unwrap_or("");
+        // Direct UIA calls resolve elements only within an admitted window instance.
+        let instance = windows_bridge::window::admit_window_instance(fixture.hwnd)
+            .expect("admit the disposable fixture window");
         assert!(matches!(
-            press(fixture.hwnd, &identity, automation_id).expect("probe patterns"),
+            press(fixture.hwnd, instance, &identity, automation_id).expect("probe patterns"),
             PressResult::NoPattern
         ));
         assert!(
-            windows_bridge::uia::focus_for_input(fixture.hwnd, &identity, automation_id, true)
-                .is_err(),
+            windows_bridge::uia::focus_for_input(
+                fixture.hwnd,
+                instance,
+                &identity,
+                automation_id,
+                true
+            )
+            .is_err(),
             "a noneditable label cannot receive text fallback"
         );
         assert!(
-            snapshot(fixture.hwnd, &identity, &format!("{automation_id}-changed")).is_err(),
+            snapshot(
+                fixture.hwnd,
+                instance,
+                &identity,
+                &format!("{automation_id}-changed")
+            )
+            .is_err(),
             "an observed AutomationId is an additional identity constraint, not a locator"
         );
-        let before = snapshot(fixture.hwnd, &identity, automation_id).expect("current rect");
+        let before =
+            snapshot(fixture.hwnd, instance, &identity, automation_id).expect("current rect");
         unsafe {
             SetWindowPos(
                 HWND(fixture.child as *mut _),
@@ -377,11 +393,11 @@ mod native {
             )
         }
         .expect("move only fixture label");
-        let after = snapshot(fixture.hwnd, &identity, automation_id)
+        let after = snapshot(fixture.hwnd, instance, &identity, automation_id)
             .expect("fresh rect after layout shift");
         assert_eq!(after.rect.1 - before.rect.1, 50.0);
         assert!(
-            snapshot(fixture.hwnd, &[i32::MAX], automation_id).is_err(),
+            snapshot(fixture.hwnd, instance, &[i32::MAX], automation_id).is_err(),
             "AutomationId must not revive a stale RuntimeId"
         );
 
@@ -395,13 +411,105 @@ mod native {
             diagnostics["capabilities"],
             json!(["fail-closed-live-target-v1"])
         );
-        helper.success("listRoots", json!({"pid":std::process::id()}));
+        let pid = std::process::id();
+        // The fixture already carries this test's tag, so discovery binds that instance.
+        let root_ref = |listed: &Value| {
+            listed["roots"]
+                .as_array()
+                .and_then(|roots| roots.iter().find(|root| root["windowId"] == fixture.hwnd))
+                .map(|root| root["rootRef"].clone())
+                .expect("discovery lists the fixture root")
+        };
+        let admitted_ref = root_ref(&helper.success("listRoots", json!({"pid":pid})));
         let look = helper.success(
             "look",
             json!({"windowId":fixture.hwnd,"includeImage":false}),
         );
         let actual_ref =
             label_ref(&look["outline"]).expect("actual helper discovers full owned label");
+        // Protocol 6 instance-bound read and waits while the admitted window holds. The
+        // label already exists, so the first poll decides each wait without timing luck.
+        let read_args = json!({"lookId":look["lookId"],"elementRef":actual_ref,"pid":pid,"windowId":fixture.hwnd});
+        let read = helper.success("uiaReadText", read_args.clone());
+        assert!(
+            read["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Unread message complete disposable label")),
+            "owner-bound read returns the owned label: {read}"
+        );
+        let mut foreign_read = read_args.clone();
+        foreign_read["pid"] = json!(pid.wrapping_add(1).max(1));
+        let foreign = helper.request("uiaReadText", foreign_read);
+        assert_eq!(foreign["ok"], false);
+        assert_eq!(foreign["error"]["code"], "stale_look");
+        let wait_args = json!({"pid":pid,"windowId":fixture.hwnd,"rootRef":admitted_ref,"text":"Unread message complete disposable label","timeoutMs":1000});
+        assert_eq!(
+            helper.success("uiaWaitFor", wait_args.clone())["found"],
+            true
+        );
+        let mut scoped_wait = wait_args.clone();
+        scoped_wait["lookId"] = look["lookId"].clone();
+        scoped_wait["scopeRef"] = json!(actual_ref);
+        scoped_wait["scopeExact"] = json!(true);
+        assert_eq!(
+            helper.success("uiaWaitFor", scoped_wait.clone())["found"],
+            true
+        );
+        // A replacement window reusing this exact HWND in this process carries no tag
+        // from the admitted instance. Swap the tag to stand in for it: every use of the
+        // admitted root ref and look must refuse it, rediscovery must bind it to a new
+        // ref, and the restored tag must admit the original look again.
+        let fixture_hwnd = HWND(fixture.hwnd as *mut _);
+        let instance_property = windows_bridge::window::INSTANCE_PROPERTY;
+        // SAFETY: the fixture HWND is owned by this thread and alive until `fixture`
+        // drops; the property value is an opaque tag, never dereferenced.
+        let admitted_tag = unsafe { GetPropW(fixture_hwnd, instance_property) };
+        assert!(
+            !admitted_tag.0.is_null(),
+            "discovery tags the admitted root"
+        );
+        let replacement_tag =
+            windows::Win32::Foundation::HANDLE((admitted_tag.0 as usize ^ 1) as *mut _);
+        // SAFETY: same live fixture HWND; the stand-in tag is an opaque value that no
+        // code dereferences.
+        unsafe { SetPropW(fixture_hwnd, instance_property, replacement_tag) }
+            .expect("tag the stand-in replacement");
+        let replacement_act = |action: &str, params: Value| json!({"lookId":look["lookId"],"action":action,"policy":"foreground","target":{"ref":actual_ref},"params":params});
+        let old_root = json!({"rootRef":admitted_ref,"windowId":fixture.hwnd,"includeImage":false});
+        for (cmd, args) in [
+            ("uiaReadText", read_args.clone()),
+            ("uiaWaitFor", wait_args.clone()),
+            ("uiaWaitFor", scoped_wait),
+            ("look", old_root.clone()),
+            ("focusWindow", json!({"rootRef":admitted_ref})),
+            ("act", replacement_act("click", json!({}))),
+            ("act", replacement_act("typeText", json!({"text":"x"}))),
+            (
+                "act",
+                replacement_act("drag", json!({"path":[{"x":0.55,"y":0.5}]})),
+            ),
+        ] {
+            let refused = helper.request(cmd, args);
+            assert_eq!(refused["ok"], false, "{cmd} on a replacement: {refused}");
+            assert_eq!(refused["error"]["code"], "root_stale", "{cmd}: {refused}");
+        }
+        assert_eq!(CLICKS.load(Ordering::SeqCst), 0, "replacement got no click");
+        let replacement_ref = root_ref(&helper.success("listRoots", json!({"pid":pid})));
+        assert_ne!(
+            replacement_ref, admitted_ref,
+            "a replacement gets a new root ref"
+        );
+        let refused = helper.request("look", old_root);
+        assert_eq!(refused["error"]["code"], "root_stale", "old ref: {refused}");
+        helper.success(
+            "look",
+            json!({"rootRef":replacement_ref,"windowId":fixture.hwnd,"includeImage":false}),
+        );
+        // SAFETY: same live fixture HWND; restores the opaque tag read above.
+        unsafe { SetPropW(fixture_hwnd, instance_property, admitted_tag) }
+            .expect("restore the admitted tag");
+        helper.success("listRoots", json!({"pid":pid}));
+        helper.success("uiaReadText", read_args.clone());
         let act_args = json!({"lookId":look["lookId"],"action":"click","policy":"foreground","target":{"ref":actual_ref},"params":{}});
         let click = helper.success("act", act_args.clone());
         assert_eq!(
@@ -490,7 +598,7 @@ mod native {
             .expect("repeat restore must not toggle minimized");
         assert!(!unsafe { IsIconic(HWND(fixture.hwnd as *mut _)) }.as_bool());
         let mut store = RefStore::new();
-        let reference = store.insert_window(NativeHandle::new(fixture.hwnd));
+        let reference = store.insert_window(NativeHandle::new(fixture.hwnd), 0);
         assert!(unsafe { ShowWindow(HWND(fixture.hwnd as *mut _), SW_MINIMIZE) }.as_bool());
         assert!(
             unsafe { IsIconic(HWND(fixture.hwnd as *mut _)) }.as_bool(),
@@ -526,8 +634,8 @@ mod native {
         let image = image::load_from_memory(&png)
             .expect("read back actual native window capture")
             .into_rgba8();
-        let live =
-            snapshot(fixture.hwnd, &identity, automation_id).expect("current painted label rect");
+        let live = snapshot(fixture.hwnd, instance, &identity, automation_id)
+            .expect("current painted label rect");
         let x = ((live.rect.0 - capture["capture"]["x"].as_f64().expect("capture x") + 90.0)
             * f64::from(image.width())
             / capture["capture"]["sourceWidth"]
@@ -563,7 +671,7 @@ mod native {
             "fixture control must actually be removed"
         );
         assert!(
-            snapshot(fixture.hwnd, &identity, automation_id).is_err(),
+            snapshot(fixture.hwnd, instance, &identity, automation_id).is_err(),
             "removed UIA identity cannot resolve inside the retained window"
         );
         // A stale ref must not even restore/foreground its surviving minimized owner.
@@ -600,9 +708,33 @@ mod native {
             2,
             "removed target cannot replay the earlier click or drag"
         );
+        // Destroy the disposable root, then prove reads and waits (including `gone`)
+        // report owner loss instead of text, absence or a desktop refusal.
+        unsafe { PostMessageW(HWND(fixture.hwnd as *mut _), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+            .expect("close only the owned fixture root");
+        let close_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while unsafe { IsWindow(HWND(fixture.hwnd as *mut _)) }.as_bool()
+            && std::time::Instant::now() < close_deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !unsafe { IsWindow(HWND(fixture.hwnd as *mut _)) }.as_bool(),
+            "fixture root must actually be destroyed"
+        );
+        let stale_read = helper.request("uiaReadText", read_args);
+        assert_eq!(stale_read["ok"], false);
+        assert_eq!(stale_read["error"]["code"], "root_stale");
+        let mut gone_wait = wait_args.clone();
+        gone_wait["gone"] = json!(true);
+        for args in [wait_args, gone_wait] {
+            let stale_wait = helper.request("uiaWaitFor", args);
+            assert_eq!(stale_wait["ok"], false, "closed root wait: {stale_wait}");
+            assert_eq!(stale_wait["error"]["code"], "root_stale");
+        }
         drop(helper);
 
-        println!("NATIVE_FIXTURE_PASS: scoped assistive-client labels, pattern probe, current layout bounds, actual click, restore, PNG read-back, PID refusals");
+        println!("NATIVE_FIXTURE_PASS: scoped assistive-client labels, pattern probe, current layout bounds, actual click, restore, PNG read-back, PID refusals, owner-bound reads and waits");
         0
     }
 }

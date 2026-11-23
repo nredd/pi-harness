@@ -4,9 +4,11 @@ import { createRecordingContext } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerSshTools } from "../../src/ssh/index.ts";
+import { sandboxSpillRoot } from "../fixtures/spill.ts";
 import { createToolHost } from "../fixtures/tool-host.ts";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "ssh");
+const spillRoot = sandboxSpillRoot();
 const mock = createToolHost();
 let work: string;
 
@@ -140,6 +142,7 @@ describe("ssh_exec", () => {
 	it("redacts the spill file too", async () => {
 		const r = await mock.call("ssh_exec", { host: "home", command: "seq 1 50000; echo Bearer abcdefghijklmnop" }, work);
 		const path = (r.details as { fullOutputPath: string }).fullOutputPath;
+		expect(path.startsWith(spillRoot())).toBe(true);
 		expect(readFileSync(path, "utf8")).not.toContain("abcdefghijklmnop");
 	});
 

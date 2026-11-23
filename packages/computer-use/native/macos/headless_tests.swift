@@ -26,12 +26,7 @@ func runPureAssertions() {
     check(resolveCaptureTarget(windowId: nil, wantsImage: true) == .notCapturable, "unpaired visual errors")
     check(resolveCaptureTarget(windowId: 0, wantsImage: true) == .notCapturable, "window 0 never captured")
 
-    // Window id normalization and fallback rule
-    check(normalizedWindowId(nil) == nil, "nil id")
-    check(normalizedWindowId(0) == nil, "0 is no window")
-    check(normalizedWindowId(-4) == nil, "negative is no window")
-    check(normalizedWindowId(5_000_000_000) == nil, "out of range")
-    check(normalizedWindowId(4259) == 4259, "valid id")
+    // Window fallback rule
     check(allowsFirstWindowFallback(windowId: nil, windowRef: nil), "unqualified may fall back")
     check(!allowsFirstWindowFallback(windowId: nil, windowRef: "ax:dlg"), "stale ref must not fall back to first window")
     check(!allowsFirstWindowFallback(windowId: 7, windowRef: nil), "id request must not fall back")
@@ -45,6 +40,7 @@ func runPureAssertions() {
     check(!isBlockedBundleId("com.apple.TextEdit", blocked: ["com.apple.Terminal"]), "unlisted app is allowed")
     check(!isBlockedBundleId(nil, blocked: ["com.apple.Terminal"]) && !isBlockedBundleId("", blocked: [""]), "no bundle id never matches")
     check(blockedBundleIdList([:]) == alwaysBlockedBundleIds, "system agents are blocked with no request list")
+    check(isBlockedBundleId("com.apple.LocalAuthenticationRemoteService", blocked: blockedBundleIdList(["blockedBundleIds": [] as [String]])), "LocalAuthentication prompt is refused even with an empty request list")
     check(isBlockedBundleId("com.apple.SecurityAgent", blocked: blockedBundleIdList(["blockedBundleIds": []])), "empty request list keeps system agents blocked")
     check(isBlockedBundleId("com.example.Vault", blocked: blockedBundleIdList(["blockedBundleIds": ["com.example.Vault", 7]])), "request list extends the blocklist")
     check(sessionIsLocked(["CGSSessionScreenIsLocked": true]), "screen-locked flag locks the session")
@@ -168,6 +164,10 @@ func runPureAssertions() {
     check(zip([CGPoint(x: 0, y: 0)] + pts, pts).allSatisfy { hypot($1.x - $0.x, $1.y - $0.y) <= 12.0001 }, "no step exceeds maxStep")
     check(interpolatedDragPoints(from: CGPoint(x: 5, y: 5), to: CGPoint(x: 5, y: 5), maxStep: 12) == [CGPoint(x: 5, y: 5)], "zero-length drag is the endpoint")
     check(interpolatedDragPoints(from: .zero, to: CGPoint(x: 100000, y: 0), maxStep: 12).count == 400, "steps capped")
+
+    let farEnd = CGPoint(x: 1e25, y: 0)
+    let farSteps = interpolatedDragPoints(from: .zero, to: farEnd, maxStep: 12)
+    check(farSteps.count == 400 && farSteps.last == farEnd, "a step estimate above Int.max is capped before conversion")
 
     // Ref store: element refs live as long as their look; unowned refs are FIFO-capped
     let store = AXRefStore(unownedCapacity: 3)
@@ -359,6 +359,12 @@ struct HeadlessTests {
         try runActAssertions()
         runKeyboardAssertions()
         runRequestFramingAssertions()
+        try runRequestAdmissionAssertions()
+        runRootPairingAssertions()
+        runAXElementAssertions()
+        runRootEventAssertions()
+        runImageEncodingAssertions()
+        try runLookAssertions()
         testMotionLifecycle()
         runCursorMotionAssertions()
         runCursorLifecycleAssertions()

@@ -12,6 +12,7 @@ const SYSTEM_AGENTS = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ];
 
 afterEach(() => {
@@ -350,7 +351,7 @@ test("Swift system-agent list mirrors the TypeScript list", async () => {
 		);
 		assert.ok(!coordinates.slice(refuseAt, postAt).includes("case "), `the pointer check must sit in the ${post} case`);
 	}
-	assert.match(coordinates, /try refuseBlockedBeforePost\(points\)/, "act drag must check every vertex");
+	assert.match(coordinates, /try refuseBlockedBeforePost\(dragPoints\)/, "act drag must check every vertex");
 	assert.match(
 		swift,
 		/guard actPointerRefusalApplies\(delivery: delivery\) else \{ return \}\n\t\t\ttry world\.refuseBlockedPoints\(/,
@@ -491,6 +492,8 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 			};
 		},
 	});
+	// The stub answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 	const ctx = {
 		cwd: makeTestTempDir("cu-policy-", onTestFinished),
 		hasUI: false,
@@ -716,6 +719,8 @@ async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 			return state;
 		},
 	});
+	// Drop the host backend's optional methods, e.g. Linux `listRootsOfPids`, that the pinned backend lacks.
+	for (const key of Object.keys(currentPlatformBackend)) if (!(key in backend)) delete currentPlatformBackend[key];
 	helper.command = async (name, args) => {
 		calls.push(name);
 		if (name === "look") {
@@ -1049,34 +1054,4 @@ test("Windows defaults and additive project entries match exact owner executable
 	assert.deepEqual(await blocked(), [105], "configuration entries are opaque strings");
 	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["powershell.exe"] }));
 	assert.deepEqual(await blocked(), [105, 106], "exact basename matching ignores case");
-});
-
-test("Linux maps the helper name but never treats it as a policy identity", async ({ onTestFinished }) => {
-	const { linuxHelper } = await import("../src/platform/linux/helper.ts");
-	const { linuxBackend } = await import("../src/platform/linux/backend.ts");
-	const { getComputerUseConfig } = await import("../src/config.ts");
-	const roots = [policyRoot(101, "Terminal label", "xterm"), policyRoot(102, "Vault label", "my-vault")];
-	const previousPort = process.env.PI_COMPUTER_USE_CDP_PORT;
-	process.env.PI_COMPUTER_USE_CDP_PORT = "9222";
-	const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected CDP discovery"));
-	const { find, userFile } = await useRootPolicyFixture("linux", linuxHelper, roots, (cleanup) => {
-		onTestFinished(() => {
-			cleanup();
-			fetch.mockRestore();
-			if (previousPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-			else process.env.PI_COMPUTER_USE_CDP_PORT = previousPort;
-		});
-	});
-	assert.equal((await linuxBackend.listRoots({}))[0].appId, "xterm");
-	assert.equal(
-		(await find()).some((root) => root.blocked),
-		false,
-	);
-	assert.equal(fetch.mock.calls.length, 0, "an inherited CDP port must not reach discovery");
-	assert.ok(getComputerUseConfig().blocked_apps.includes("xterm"));
-	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["my-vault"] }));
-	assert.equal(
-		(await find()).some((root) => root.blocked),
-		false,
-	);
 });

@@ -5,7 +5,7 @@ import type { ExtensionContext, SessionEntry, SessionStartEvent } from "@earendi
 import { deferred } from "@nredd/pi-test-lib/deferred";
 import { afterEach, expect, it, vi } from "vitest";
 import { EMPTY_REMINDER_MARKER } from "../../src/plan/hooks.ts";
-import { EMPTY_REMINDER_MESSAGE_TYPE } from "../../src/tool/types.ts";
+import { EMPTY_REMINDER_MESSAGE_TYPE, NUDGE_BUDGET_ENTRY_TYPE } from "../../src/tool/types.ts";
 import registerTodo from "../fixtures/home-fixtures.ts";
 import { TEST_HOME } from "../fixtures/setup.ts";
 import { createTodoCtx, createTodoPi } from "../fixtures/todo-host.ts";
@@ -52,10 +52,15 @@ async function setup({
 		return result;
 	};
 	await emit("session_start", { reason });
+	let nextCallId = 0;
 	return {
 		emit,
 		tool: (toolName = "read", isError = false, context = ctx) =>
-			emit("tool_execution_end", { toolName, isError }, context),
+			emit(
+				"message_end",
+				{ message: { role: "toolResult", toolCallId: `call-${nextCallId++}`, toolName, isError } },
+				context,
+			),
 		settle: (outcome = "completed", context = ctx) =>
 			emit("agent_before_settle", { outcome, entries: [], context: { contextMessages: [] } }, context),
 		input: (source = "interactive") => emit("input", { source }),
@@ -64,7 +69,8 @@ async function setup({
 	};
 }
 
-const reminder = { continue: true, entries: [{ type: "custom_message", ...marker, details: {} }] };
+const budget = { type: "custom", customType: NUDGE_BUDGET_ENTRY_TYPE, data: { persistenceVersion: 1, nudge: "empty" } };
+const reminder = { continue: true, entries: [budget, { type: "custom_message", ...marker, details: {} }] };
 
 it("counts work across settles, skips conversation, and expands the trailing marker only once", async () => {
 	const { tool, settle, emit, input } = await setup();
@@ -85,6 +91,15 @@ it("counts work across settles, skips conversation, and expands the trailing mar
 	expect(await emit("context", { messages: [message, { role: "assistant" }] })).toBeUndefined();
 });
 
+it("counts only tool-result messages, not other messages or raw tool completions", async () => {
+	const { tool, settle, emit } = await setup({ calls: 1 });
+	await emit("message_end", { message: { role: "assistant", content: [] } });
+	await emit("tool_execution_end", { toolCallId: "raw", toolName: "read", isError: false });
+	expect(await settle()).toBeUndefined();
+	await tool();
+	expect(await settle()).toEqual(reminder);
+});
+
 it("nudges for a successful Agent call, but not a failed one or an unfinished run", async () => {
 	const { tool, settle } = await setup({ calls: 5 });
 	await tool("Agent", true);
@@ -93,6 +108,39 @@ it("nudges for a successful Agent call, but not a failed one or an unfinished ru
 	expect(await settle("aborted")).toBeUndefined();
 	expect(await settle()).toBeUndefined();
 	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+/** A failed `Agent` completion for `toolCallId`, then a result message that reports success. */
+const failedAgentResult = (emit: Awaited<ReturnType<typeof setup>>["emit"]) => ({
+	end: (toolCallId: string, extra: Record<string, unknown> = {}) =>
+		emit("tool_execution_end", { toolCallId, toolName: "Agent", isError: true, ...extra }),
+	result: (toolCallId: string) =>
+		emit("message_end", { message: { role: "toolResult", toolCallId, toolName: "Agent", isError: false } }),
+});
+
+it("takes the name and outcome from the model-issued completion, not the result message", async () => {
+	const { settle, emit } = await setup({ calls: 5 });
+	const { end, result } = failedAgentResult(emit);
+	await end("a");
+	await result("a");
+	expect(await settle()).toBeUndefined();
+});
+
+it("falls back to the result message over a nested call's completion", async () => {
+	const { settle, emit } = await setup({ calls: 5 });
+	const { end, result } = failedAgentResult(emit);
+	await end("a", { parentToolCallId: "p" });
+	await result("a");
+	expect(await settle()).toEqual(reminder);
+});
+
+it("falls back to the result message over a completion from an earlier turn", async () => {
+	const { settle, emit } = await setup({ calls: 5 });
+	const { end, result } = failedAgentResult(emit);
+	await end("a");
+	await emit("turn_start", {});
+	await result("a");
 	expect(await settle()).toEqual(reminder);
 });
 
@@ -242,16 +290,21 @@ it("evicts the tracker on a same-session RPC rebind", async () => {
 	expect(await settle("completed", rpc)).toBeUndefined();
 });
 
-it("counts a read that completes while the todo overlay refresh is pending", async () => {
+// Hook isolation, not the core lifecycle: core awaits a batch's tool_execution_end handlers before
+// any of its tool-result message_end events, so a real batch cannot overlap the pending refresh.
+it("hook isolation: message_end counting does not wait on a pending todo overlay refresh", async () => {
 	const overlay = await import("../../src/todo-overlay.ts");
 	const releaseImport = deferred<typeof overlay>();
 	const importOverlay = vi.fn(() => releaseImport.promise);
-	const { tool, settle, callTodo } = await setup({ calls: 1, importOverlay });
+	const { tool, settle, callTodo, emit } = await setup({ calls: 1, importOverlay });
+	const todoEnd = () => emit("tool_execution_end", { toolName: "todo", isError: false });
 	await callTodo({ action: "create", subject: "Visible todo" });
 	const refreshed = vi.fn();
-	const firstRefresh = tool("todo").then(refreshed);
+	const firstRefresh = todoEnd().then(refreshed);
 	try {
+		await tool("todo");
 		await callTodo({ action: "clear" });
+		await todoEnd();
 		await tool("todo");
 		// Clear needs no new overlay, but the first completion still awaits the import.
 		expect(importOverlay).toHaveBeenCalledTimes(1);
@@ -264,12 +317,12 @@ it("counts a read that completes while the todo overlay refresh is pending", asy
 	expect(await settle()).toEqual(reminder);
 });
 
-it.each(["resume", "reload"] as const)("restores the prompt budget on %s after cooldown expires", async (reason) => {
+it.each(["resume", "reload"] as const)("restores the prompt budget on %s from bookkeeping", async (reason) => {
 	const { tool, settle, input, emit } = await setup({
 		calls: 1,
 		cooldown: 2,
 		reason,
-		branch: [{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" }],
+		branch: [{ ...budget, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
 	});
 	expect(await emit("context", { messages: [{ role: "custom", ...marker }] })).toBeUndefined();
 	for (let i = 0; i < 3; i++) {
@@ -278,6 +331,36 @@ it.each(["resume", "reload"] as const)("restores the prompt budget on %s after c
 		await emit("agent_settled", { aborted: false });
 	}
 	await input();
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+it("spends the empty budget on neither a restored marker nor stale-list bookkeeping", async () => {
+	const stale = { ...budget, data: { persistenceVersion: 1, nudge: "stale" } };
+	const { tool, settle } = await setup({
+		calls: 1,
+		reason: "resume",
+		branch: [
+			{ type: "custom_message", ...marker, id: "nudge", parentId: null, timestamp: "" },
+			{ ...stale, id: "stale", parentId: "nudge", timestamp: "" },
+		] as SessionEntry[],
+	});
+	await tool("Agent");
+	expect(await settle()).toEqual(reminder);
+});
+
+it.each([
+	["a missing version", { nudge: "empty" }],
+	["an unsupported version", { persistenceVersion: 2, nudge: "empty" }],
+	["an unknown kind", { persistenceVersion: 1, nudge: "held" }],
+	["a non-object payload", "empty"],
+	["null data", null],
+])("leaves the budget unspent for bookkeeping with %s", async (_case, data) => {
+	const { tool, settle } = await setup({
+		calls: 1,
+		reason: "resume",
+		branch: [{ ...budget, data, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
+	});
 	await tool("Agent");
 	expect(await settle()).toEqual(reminder);
 });

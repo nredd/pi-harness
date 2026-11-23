@@ -207,6 +207,18 @@ describe("CompletionOutbox", () => {
 		});
 	});
 
+	it("hold keeps accepting completions for takePending but never sends one", () => {
+		outbox.add(item("a"));
+		outbox.hold();
+		outbox.add(item("b"));
+		outbox.onTurnEnd("stop");
+		outbox.onAgentEnd();
+		expect(vi.getTimerCount(), "no hold timer while held").toBe(0);
+		vi.advanceTimersByTime(NOTIFICATION_HOLD_MS * 2);
+		expect(send).not.toHaveBeenCalled();
+		expect(outbox.takePending()!.content).toBe("2 background tasks finished.\n\n<done a>\n\n<done b>");
+	});
+
 	it("dispose drops pending completions and their timer", () => {
 		outbox.add(item("a"));
 		outbox.dispose();

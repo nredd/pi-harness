@@ -508,7 +508,16 @@ node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
   [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE]
   [--replace-harnesses]
 node ARTIFACT import --agent-dir DIR --input REPO
+node ARTIFACT clean-recovery --agent-dir DIR --output OUT
 ```
+
+`--replace-harnesses` publishes this scan as a replacement generation. It bypasses the
+narrower-set, unreadable-history, missing-manifest and later-month safeguards below and unfreezes recovery files,
+so it drops published history absent from the scan, sealed months included. It is timestamped after
+the readable published manifest like any export, so viewers holding the manifest it supersedes import
+it. Viewers holding a newer snapshot than the replacement (e.g. when the manifest is unreadable or
+missing, so there is no such bound) keep their copy until this machine exports a later `exportedAt`.
+The usage text says so too.
 
 `--harness` picks what an export reads; the default is `pi` only, so other tools are opt-in. Roots
 default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_DIR` or `~/.claude`,
@@ -516,7 +525,7 @@ default to each harness's own variable, then its standard path (`CLAUDE_CONFIG_D
 precedence. A scheduled run with a minimal environment must pass the flags. Without `pi` in the list
 no pi session is read. The export-only flags are rejected on `import`.
 
-The set an export published is recorded (see `export-state.json` below). A later export with a
+The set an export published is recorded per outbox (see `outboxes/` below). A later export with a
 *narrower* set than the last published one is refused before anything is read or written, because
 its snapshot would silently drop the missing harnesses' history (e.g. a scheduled `--harness pi`
 run after a manual `--harness pi,claude`). Widen the set, or pass `--replace-harnesses` to drop
@@ -538,7 +547,9 @@ then run `rmdir` on the reported lock directory and retry the export. No export 
 by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
 with the lock path. A failed publication still reports the original error; if releasing the lock
 also fails, it is an `AggregateError` whose message is the original error followed by the same lock
-warning, with `errors` `[original, unlock]` and the original as `cause`. A lock that vanishes before
+warning, with `errors` `[original, unlock]` and the original as `cause`. A refusal (below) is the
+exception: it stays a top-level `ExportRefusal` with the same `refusal` code and the refusal message
+followed by the lock warning, and its `cause` is that `AggregateError` of `[refusal, unlock]`. A lock that vanishes before
 its age is read is still contention; any other failure to inspect it is reported with its code.
 `pi-usage-sync`
 separately serializes whole sync runs.
@@ -556,11 +567,57 @@ records on local stderr. Lines are physical, one-based (including skipped empty/
 `0` means a filesystem operation or an unavailable cached record, not a known line. Reasons are
 `invalid-record`, `read-directory`, `read-file`, `write-cache`, or `cached-invalid-record`.
 Paths are JSON-quoted, capped at 1024 characters and have C1 and all Unicode `Bidi_Control` characters
-(including ALM, LRM and RLM) neutralized; JSON escaping preserves C0 safety. No raw
+(including ALM, LRM and RLM) neutralized; JSON escaping preserves C0 safety, and U+2028/U+2029 are
+escaped as `\u2028`/`\u2029` so each record stays one line for any reader. No raw
 records, parser/OS exception text, prompts, message IDs or credentials are reported. These local
 locations never enter usage shards or manifests. Bad cached files are re-read to recover locations;
 deleted/former-root bad records remain fail-closed with an unknown line. Wrappers must explicitly
 forward this bounded protocol; forwarding arbitrary exporter stderr is not safe.
+
+An export refused until the owner acts exits 1 and ends stderr with exactly one
+`pi-stats-refusal: {"code":...}` line after the message. Retrying it unchanged does not help until the owner acts (but see the
+clock-dependent note below). Codes:
+`history-unreadable`, `history-over-budget`, `manifest-missing`,
+`harness-set-narrowed`, `harness-set-unknown` (the safeguards above that only a repair or an explicit
+`--replace-harnesses` gets past), `watermark-ahead` (an implausible published `exportedAt`;
+`--replace-harnesses` does not bypass it) and `export-state-invalid` (export state or outbox bookkeeping that
+reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
+the file, which holds the salt, nor attaching its parse error). `clean-recovery` (below) uses the same
+protocol, and every refusal it makes is owner action: retrying the cleanup alone never helps, only the
+owner or a later export changing the outbox does. Its codes: `recovery-outbox-missing` (no outbox
+directory for this machine under `--output`), `recovery-snapshot-unverified` (the active manifest is missing or
+denied (`EACCES`/`EPERM`), or a shard it references is missing or corrupt: an ordinary export refuses
+those too and `--replace-harnesses` would drop the history, so restore the manifest, the referenced
+shards or read access, then retry; or the manifest is corrupt, not v3 or not this machine's: export first), `recovery-set-unrecorded`
+(the outbox has no bookkeeping of its own with a recorded recovery set) and `recovery-harness-lost`
+(a lost harness's history may live only in frozen files); its `export-state-invalid` is the same
+bookkeeping check as an export's. An uncoded cleanup failure (lock contention, `EIO` or any other
+filesystem error, including a transient one reading the active snapshot, or a cleanup that stopped on a
+concurrent change and exits 1 with only its warnings) is retryable once the outbox is quiet.
+Each code comes from one fixed
+refusal site, never from matching a message. Clock-dependent refusals may clear with time: an
+ordinary export refused because its next instant falls in a later month than its clock succeeds once
+the clock reaches that month, so it has no code and callers retry it. `watermark-ahead` is owner
+action for a corrupt or hostile watermark, but a lead merely over 366 days clears once it falls to
+366 days: on it a wrapper should recheck until a bounded deadline, not stop for good (only the year
+10000 ceiling never clears). `history-unreadable` means a published shard is
+missing (`ENOENT`) or fails its digest/parse/validation, or reading `manifest.json` is denied
+(`EACCES`/`EPERM`, persistent until the owner fixes its permissions). A denied manifest is reported as
+`Published usage manifest is not readable (<EACCES|EPERM> on manifest.json); restore read access to it
+and retry before considering --replace-harnesses, which drops published history absent from this
+scan`: restoring access keeps archived history, while `--replace-harnesses` publishes over it by
+rename, like a corrupt manifest. Any other filesystem error reading the manifest, a
+shard or the state (`EIO`, `EMFILE`, `EBUSY`, a denied shard or state read, ...) says nothing
+about the file, stays fatal under `--replace-harnesses` too, and is not a refusal. A malformed
+`machine.json` is reported as `Invalid installation identity in <path>: not valid JSON`, never
+quoting the file nor attaching its parse error; it has no code. A refusal whose lock release also fails keeps its code, with the unlock warning
+appended to the message. No line means the failure is unclassified (lock contention, I/O, an
+incomplete scan, usage, a month rollback): treat it as retryable. The diagnostic before the line is escaped to one
+line (line breaks and other control characters as `\n`, `\uXXXX`; the fixed usage text excepted),
+so a path cannot forge the line, but consumers must still accept only a complete
+`pi-stats-refusal: {"code":"<code>"}` whose code is in the list above, and only as the FINAL stderr
+line of an export or `clean-recovery` that exited 1. Wrappers may stop retrying on a code; they must never add
+`--replace-harnesses` on their own. Library callers get the same code as `ExportRefusal.refusal`.
 
 CLI results:
 
@@ -577,13 +634,15 @@ CLI results:
   last published for that harness (events, sessions, quota) is carried into the new snapshot
   unchanged, a diagnostic goes to stderr, and the export still succeeds, so one flaky harness
   cannot stop the pi export or replace good history with a partial scan. With nothing published
-  yet there is nothing to carry. If the previous snapshot itself is unreadable the harness is
+  yet there is nothing to carry. If the previous manifest itself is unreadable (or replacement
+  was requested over unreadable shards, see below) the harness is
   `failed: "lost"` (diagnostic `<harness>: last published contents unreadable`): it is missing
   from this snapshot, and stderr says so. While the harness is still missing, further unreadable
   manifests do not mark it fresh. A lost harness with no data to carry gets no `lastGoodAt` stamp,
   even if the previous manifest stamped it. A clean scan of a reappearing harness clears its loss
-  marker; recovery files still require explicit replacement. Pi itself still fails closed.
-  `consecutiveFailures` counts failed exports of a harness in a row (kept in `export-state.json`,
+  marker; recovery files stay frozen (the export warns `recovery files retained: run clean-recovery to
+  remove those the active snapshot covers`, see `clean-recovery` below). Pi itself still fails closed.
+  `consecutiveFailures` counts failed exports of a harness in a row (kept in the outbox's state file,
   reset by a clean one). It never changes the exit code (see below): a caller that wants to warn
   about a harness stuck on carried data reads `failed`, `consecutiveFailures` and, on import,
   `stale`.
@@ -593,14 +652,21 @@ CLI results:
   stdout. `stale` lists `{machineId, harness, lastGoodAt}` for every cached machine harness whose
   `lastGoodAt` is more than 2 days behind its manifest `exportedAt` (data carried through failures);
   each is also a stderr line, and none changes the exit code.
+- Clean-recovery: `{ "machineId", "snapshotDir", "removed": [..], "failed": [..], "kept": [{ "file", "reason" }] }`
+  on stdout, plus `warnings` when an unlink failed or cleanup stopped (see recovery cleanup below), each
+  escaped to one line. It exits 0 whatever it kept, except 1 (with no refusal line) when it stopped on a
+  `changed` file; a refusal removes nothing, exits 1 and ends stderr with its `pi-stats-refusal` line.
 - Exactly one JSON object is emitted. Diagnostics go to stderr.
   Exit contract: an export that published a snapshot exits 0, however many harnesses `failed`
   (kept or lost) and however many times in a row: those are fields of the JSON result, plus a
   stderr line each, for the caller to record as warnings. So is `warnings: ["export state not
-  recorded"]`, when the snapshot is out but `export-state.json` could not be written (the next
+  recorded"]`, when the snapshot is out but the outbox's state file could not be written (the next
   export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
-  state, or a refused narrower harness set. (A harness cache that cannot be written is a failed
+  state, a refused narrower harness set, a published `exportedAt` implausibly far ahead (more than
+  366 days, or past year 9999), an ordinary export whose next instant falls in a later month than its
+  clock, or a readable manifest whose history is not. A clock behind the last published export within
+  its month is not one: it publishes just after it and exits 0 with a `warnings` entry. (A harness cache that cannot be written is a failed
   harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits
   nonzero, retaining every failed machine's last-good snapshot; one that only finds stale harnesses
   exits 0 and lists them in `stale`.
@@ -619,19 +685,53 @@ Installation state, never synced:
   Failed stat/parse operations count as incomplete history; a failed reparse retains the last-good
   cached record. Invalid cached identities and raw provider/model pairs are discarded. Persisted
   child markers apply only to the matching session ID, surviving user-visible renames.
-- `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex) and the harness set
-  the last successful export published (`null` until one is recorded). `failures` holds consecutive failed exports per harness.
+- `DIR/pi-session-kit/export-state.json`: the installation's secret salt (32 hex). The salt keys the
+  quota account discriminators below and never appears in a snapshot; like `machine.json`, it is
+  created exclusively and atomically, a corrupt file fails rather than being replaced, and export
+  never rewrites it. Older kits kept the outbox bookkeeping below here, installation-wide; an outbox
+  without its own state file inherits those legacy fields, then records its own.
+- `DIR/pi-session-kit/outboxes/<sha256>.json`: one outbox's bookkeeping, keyed by the SHA-256 of
+  the resolved `<OUT>/machines/<UUID>` path and written only under that outbox's export lock (the
+  `outboxes/` directory is created 0700, the file is written 0600 through an atomic rename; on POSIX
+  an existing `outboxes/`, e.g. one an older kit created 0755, is tightened to 0700, and one that is
+  a symlink, not a directory or not owned by this user refuses the export before anything is
+  written), so
+  two outboxes of one agent dir cannot record stale state over each other's recovery set. The key is
+  the lowercase hex SHA-256 of that `realpath`, so aliases of one outbox share a file. The format is
+  exactly `{version, harnesses, failures, recoveryPending, recoveryFiles, lostHarnesses,
+  historyHarnesses}` with `version: 1` required (no `salt`, no other field): `harnesses` and
+  `historyHarnesses` are harness lists or `null`, `failures` maps a harness to a positive count,
+  `recoveryPending` is a boolean, `recoveryFiles` a list of shard filenames or `null`, and
+  `lostHarnesses` a harness list. Any other shape fails the export. `harnesses` is
+  the harness set the last successful export published (`null` until one is recorded), written only
+  after the manifest is published. `failures` holds consecutive failed exports per harness.
   `historyHarnesses` records which harnesses published events or quota, not merely enrolled empty tools.
   Recovery metadata is persisted before publishing over unreadable history: `recoveryFiles` freezes
   the filenames present at that failure, while `lostHarnesses` records only unavailable history.
   `recoveryPending` keeps the recovery warning visible; it does NOT disable normal pruning.
   Old boolean-only recovery state captures its protected files once on upgrade; unknown old data
   coverage does not invent lost harnesses. Explicit `--replace-harnesses` publication clears recovery
-  metadata. Failure to persist the protected set aborts before replacing the manifest.
-  The salt keys the quota
-  account discriminators below and never appears in a snapshot; like `machine.json`, it is created
-  exclusively and atomically, and a corrupt file fails rather than being replaced. The set is
-  written only after the manifest is published.
+  metadata. Failure to persist the protected set aborts before replacing the manifest. A corrupt
+  file fails the export. Moving the sync checkout changes the key, and deleting the file loses it:
+  the outbox then starts from the legacy fields and cannot tell its frozen recovery files from
+  superseded generations. So that export prunes nothing it cannot account for: every shard file that
+  neither the active manifest nor the inherited fields name is frozen as a recovery file, recovery
+  stays pending, and the result warns `no bookkeeping for this outbox: froze N unaccounted shard
+  files as recovery files; pass --replace-harnesses to drop them`. To rebind instead, first stop
+  and drain every scheduled sync and manual exporter: moving the checkout while an export holds
+  `.export.lock` moves the held lock with it, later exports then fail with `EEXIST`, and no export
+  ever reclaims a lock by age. Then move the checkout and `outboxes/<old key>.json` to the new key
+  before the next export. Never overwrite an existing `outboxes/<new key>.json` without reconciling
+  its `recoveryFiles` with the old one: the overwritten set is unprotected from pruning. To accept
+  the loss instead, pass `--replace-harnesses`.
+  A missing `manifest.json` is a first export only when the outbox has no own bookkeeping and no
+  shard files. Otherwise (e.g. the manifest alone was deleted) publishing the scan would replace the
+  sealed history and prune the shards holding it, so the export is refused before the salt, the scan
+  cache or any bookkeeping is written, keeping every shard: `Published usage manifest is missing
+  from "<dir>", but this outbox published before (its bookkeeping or shard files remain); restore
+  manifest.json from the sync checkout, or pass --replace-harnesses to publish without that
+  history`. A crash between the first export's shard writes and its manifest is refused the same
+  way; nothing was published, so `--replace-harnesses` loses nothing there.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -652,7 +752,9 @@ Manifest exact keys:
 - `version`: `3` (`1`/`2` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
-- `exportedAt`: positive UTC Unix milliseconds.
+- `exportedAt`: positive UTC Unix milliseconds. Monotonic per outbox: `max(now, published
+  exportedAt + 1)` against the readable published manifest (including one whose shards are
+  unreadable), so it can run ahead of a clock that is behind.
 - `lastGoodAt` (v2+): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
@@ -693,7 +795,15 @@ gzip files; its separate assembled 128 MiB bound and last-good replacement rule 
 Shards are published first, manifest last. After publication the serialized exporter removes
 unreferenced shard files from its own machine outbox. Readers racing pruning retain their last-good
 machine snapshot and retry next sync. Valid content-addressed files are never rewritten; corrupt
-bytes at an existing filename are repaired through an atomic rename. A read failure freezes the
+bytes at an existing filename are repaired through an atomic rename. A readable manifest whose
+shards are missing, corrupt or inconsistent with each other is kept: export fails before writing,
+naming every unreadable shard file (`Published usage history is unreadable (...)`), because
+publishing the scan alone would evict the intact archived months from the active snapshot. Restore
+the files from the sync checkout and export again, or pass `--replace-harnesses` to publish
+without that history. Authenticated shards that together exceed the 128 MiB expanded machine budget
+are not damage: that export fails with `Published usage history exceeds the 128 MiB expanded machine
+budget (from <file>)`, where restoring files will not help, and only `--replace-harnesses` publishes
+(damaged files are reported first). An unreadable manifest cannot name its history; that read failure freezes the
 then-present recovery filenames before publication. Only that set is protected: later superseded
 active-month generations still prune normally, even while recovery remains pending. A genuinely
 new read failure can extend the protected set; ordinary exports cannot. Recovery copies therefore
@@ -703,21 +813,115 @@ and fresh. Recover or back up the frozen files before accepting replacement with
 `--replace-harnesses`. Cleanup continues per file with safe errno counts; post-publication errors
 warn without skipping export-state bookkeeping.
 
+Frozen recovery files are never pruned by an export, so repeated read failures or bookkeeping losses
+can accumulate superseded generations. `clean-recovery` is the explicit, recovery-only way to drop
+the redundant ones; no export runs it, so a scheduled sync never does. It requires `--agent-dir`
+(it never falls back to the default installation). A missing outbox is refused
+(`recovery-outbox-missing`); one that cannot be inspected (e.g. `EACCES`) surfaces that error
+unchanged and uncoded. It takes the outbox's export
+lock (contention fails exactly like an export) and refuses, removing nothing, unless the active
+manifest is this machine's v3 manifest and every shard it references authenticates, the outbox has
+its own bookkeeping with a captured `recoveryFiles` set, and `lostHarnesses` is empty (a lost
+harness's history may live only in frozen files); those refusals are coded `recovery-snapshot-unverified`,
+`recovery-set-unrecorded` and `recovery-harness-lost` (see the refusal protocol above), while transient
+I/O reading the active snapshot surfaces uncoded. Then a frozen file is removed only when the active
+manifest does not reference it, it is a regular `.json.gz` file whose bytes match the SHA-256 in its
+name and decode as this machine's shard of its month, and the active snapshot already holds every
+row of it: each event byte-for-byte by identity (a corrected call is not covered), each session
+within the merged active session's span and child marker, and each quota reading by an at least as
+fresh reading of the same window that resets no earlier (the reading `mergeQuota` would pick
+anyway). Everything else stays frozen and is listed in `kept` with a reason: `active`, `missing`,
+`legacy` (a v1/v2 `.json` shard, never compared), `unreadable` (including a symlink, never
+followed) or `not covered`. Every candidate stays in `recoveryFiles` until its unlink succeeds (or
+finds it already absent); the set shrinks once, after the unlinks, and `recoveryPending` clears once
+it is empty. So a crash or a failed bookkeeping write (warned as `recovery set not updated: removed
+files stay listed as missing (harmless)`) leaves only stale names of absent files, which exports
+ignore and later cleanups keep as `missing` (so `recoveryPending` stays set), never an unprotected
+frozen file. `removed` lists files
+now gone (unlinked or already absent); `failed` lists files whose unlink failed (warned as
+`redundant recovery file removal failed (they stay protected): <errno counts>`), still on disk and
+still protected. Right before each unlink the active manifest is authenticated again, then reread
+after that shard pass, and the candidate is authenticated again (regular file, bytes matching its
+name); on any change cleanup stops, lists that file and the rest in `kept` as `changed` (still
+protected), warns `recovery cleanup stopped: the active manifest changed; N redundant files left in
+place` and exits 1 with no refusal code (any error during the recheck counts as a change). That recheck narrows the window, it does not eliminate it: checkout and restore
+writers do not take the export lock yet ([#1331](https://github.com/nredd/pi-harness/issues/1331)), so a writer that skips it (e.g. a
+manual restore into the outbox) must be quiescent while cleanup runs. Coverage is judged against
+the active snapshot as it is now: once removed, those rows are as protected as any other published
+history, no more. Shard files outside the frozen set are left to export pruning.
+
 The active UTC month replaces its previous generation. Past-month files stay immutable for
 append-only late events, session-end extensions and quota observations. A corrected identified
 call (same harness/session/entry identity, different timestamp/counters) or changed session start/child
 attribution retires the affected months' references and regenerates those months from the clean
 scan instead, so partial streaming rows cannot remain beside their final counters. Cross-month
-corrections regenerate both affected months. Entry identities shared by distinct sessions are not
+corrections regenerate both affected months. Only the superseded rows are dropped: every other event,
+every distinct session end and every quota reading the retired shards held that the scan does not reproduce
+exactly (calls and sessions archived only in published history, earlier and later session ends, quota
+readings) is carried into delta shards of the regenerated month. Each distinct sealed end of a session
+whose start or child attribution was corrected is carried under the corrected attribution, in the
+corrected start month, unless it is before the corrected start (the scan's own end dominates it) or in
+the active month (rebuilt from the scan, so a deleted call there takes its end with it). The corrected
+session is then floored at its latest sealed call still published under it, wherever its old metadata
+lived, so it never ends before its own archived call. A sealed call whose unchanged entry moved to another
+session and is republished under it in a regenerated month floors only that session. Past 32 shards the carries are packed
+losslessly into the fresh shard and as few more as validation allows (never compacted away); if the month
+still needs more than 32 shards (e.g. 33 readings of one quota window) the export is refused before anything
+is published, leaving the previous manifest and shards intact, and `--replace-harnesses` is the explicit
+way through. Entry identities shared by distinct sessions are not
 revisions of one another. Legacy events without an `entryId` retain tuple matching: corrected
 counters or timestamps cannot be identified and can append beside the old row in a sealed month.
 This remains a limitation, not a claimed repair. Old file bytes are not changed, only superseded.
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
+Every manifest seals exactly the months before its `exportedAt` month; that is the only record of what
+was sealed. The wall clock is read once, before the published manifest is read; the export publishes at
+`max(now, published exportedAt + 1)`, so viewers holding the published snapshot import it as newer. A
+clock behind the published export within the same UTC month (e.g. a small rollback) therefore still
+publishes and exits 0, strictly after it, and nothing sealed reopens. The export warns `clock is behind
+the last published export (<now> < <published>); published at <exportedAt> instead`; exporting twice
+within one millisecond advances by 1 ms without a warning. Until the clock passes it, `exportedAt` stays
+ahead of the wall clock and viewers flag the snapshot as a future clock. Quota expiry and harness reads
+still use the wall clock.
+
+An ordinary export whose next instant falls in a later month than its clock (the published export is
+in a later month, or ends the clock's month) is refused with no cache or publication writes (the
+refusal runs under the outbox's `.export.lock` directory, which is released afterwards on a best-effort
+basis): `Clock
+(<now>) is in an earlier month than the next export after the last published one (<published>);
+publishing would seal months this clock has not left. Fix the clock or wait until <YYYY-MM>, or pass
+--replace-harnesses to publish without published history absent from this scan` (no refusal code: it
+clears with time, so wrappers retry it). Publishing would seal
+the clock's own month (and any between) while it is still in it, so later deletions and corrections
+there could never apply, and the next export could not tell those months from ones a clock-ahead
+export sealed. Waiting keeps all history. `--replace-harnesses` publishes just after the published
+export (viewers import it) and drops sealed history absent from the scan; until the clock reaches that
+month, each export needs it again. The bound comes only from the readable manifest (including one whose
+shards are unreadable): with it unreadable, denied (`EACCES`/`EPERM`) or missing, the export uses the
+wall clock.
+
+A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000
+(where `YYYY-MM` months stop sorting after sealed ones), is refused first, before the damaged-history
+check and with no cache or publication writes (under the outbox lock, like the later-month refusal),
+replacement included: `Published usage manifest
+exportedAt (<published>) is more than 366 days ahead of this clock (<now>) or leaves no instant before
+year 10000 to publish after it ("<dir>/manifest.json"); there is no supported in-place repair
+(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one.
+--replace-harnesses does not bypass this` (refusal code `watermark-ahead`). Do not lower or remove `exportedAt` by hand: that can lose
+history, can invalidate the manifest (`lastGoodAt` must be at most `exportedAt`), and viewers holding
+the original timestamp reject the lower one (at the year ceiling, waiting cannot work either). The safe
+manual route is to copy `<OUT>/machines/<UUID>` somewhere safe, remove it from the outbox and export
+again with `--replace-harnesses` (the missing manifest needs it): history is re-derived from this
+machine's transcripts, so history that only lived in deleted transcripts is lost, and viewers holding
+the original timestamp keep their copy until that machine's last-good snapshot is reset by hand. A
+supported repair (shard references and sealing state preserved, `lastGoodAt` updated consistently,
+viewer watermark reset) is tracked in [#1327](https://github.com/nredd/pi-harness/issues/1327).
 
 New exports cap each sealed v3 month at 32 manifest references. When a late update would exceed
 that limit, or an older manifest already exceeds it, the exporter keeps the first shard byte-for-byte
-and compacts later shards and any new delta. It keeps archived calls and the maximum session end
-even after transcripts leave the scan. The viewer orders equal-time imported calls within a session
+and repacks later shards and any new delta losslessly when that fits within 32 shards. Only when it does
+not does it compact them: that keeps archived calls and the maximum session end even after transcripts
+leave the scan, but drops lower session ends and quota readings that can never win, including ones a
+regeneration preserved. The viewer orders equal-time imported calls within a session
 by event ID regardless of shard boundaries. Compaction keeps quota readings that can win as windows
 reset, using separate shards for readings of the same key. Base readings participate without
 occupying any delta slots. The combined reader orders quota by the serialized

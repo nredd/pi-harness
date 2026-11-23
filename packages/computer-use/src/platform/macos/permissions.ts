@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ensurePermissions, type PermissionKind, type PermissionStatus } from "../../permissions.ts";
+import { assertPlatformArchitecture } from "../architecture.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { PlatformReadyState } from "../types.ts";
 import { HELPER_APP_PATH, macosHelper } from "./helper.ts";
-import { assertPlatformArchitecture } from "../architecture.ts";
 
 const GRANT_INSTRUCTIONS =
 	"Grant Accessibility and Screen Recording to pi-computer-use.app in System Settings → Privacy & Security. " +
@@ -51,6 +51,10 @@ function permissionPrompt(status: PermissionStatus, helperPath: string, hint?: s
 
 function missingPermissionMessage(kinds: PermissionKind[]): string {
 	return `Still missing after restart: ${kinds.join(" and ")}. ${SIGNING_MIGRATION_WARNING} Then choose Recheck again.`;
+}
+
+function missingExternalPermissionMessage(kinds: PermissionKind[]): string {
+	return `Still missing: ${kinds.join(" and ")}. Grant them to the external helper, have its operator restart it if needed, then choose Recheck again.`;
 }
 
 async function checkPermissions(signal?: AbortSignal): Promise<PermissionStatus> {
@@ -119,6 +123,7 @@ export async function ensureMacosReady(
 			permissionStatus.source?.attribution === "caller"
 				? `Warning: the helper is not running as the installed pi-computer-use.app (executable: ${permissionStatus.source?.executablePath ?? "unknown"}). Grants made now would attach to the launching app instead. Restart Pi so the canonical helper is used.`
 				: undefined;
+		const external = macosHelper.isExternal();
 		permissionStatus = await ensurePermissions(
 			ctx,
 			{
@@ -130,7 +135,7 @@ export async function ensureMacosReady(
 					incompleteError: (helperPath) =>
 						`pi-computer-use setup is incomplete. ${GRANT_INSTRUCTIONS} Helper path: ${helperPath}`,
 					readyMessage: "pi-computer-use is ready.",
-					stillMissing: missingPermissionMessage,
+					stillMissing: external ? missingExternalPermissionMessage : missingPermissionMessage,
 				},
 				// `ensurePermissions` forwards the caller's own `signal` to each callback.
 				checkPermissions,
@@ -138,7 +143,8 @@ export async function ensureMacosReady(
 				openPermissionPane: async (kind, permissionSignal) => {
 					await macosHelper.command("openPermissionPane", { kind }, { signal: permissionSignal });
 				},
-				restartHelper: (permissionSignal) => macosHelper.restart(permissionSignal),
+				// `restart()` refuses an external helper; its operator restarts it.
+				restartHelper: external ? undefined : (permissionSignal) => macosHelper.restart(permissionSignal),
 				permissionHint: attributionHint,
 			},
 			HELPER_APP_PATH,

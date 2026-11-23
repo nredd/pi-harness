@@ -395,8 +395,17 @@ it("usage envelopes validate providers and omit missing snapshots", () => {
 		fixture.clock.now(),
 	);
 	expect(Object.keys(parsed ?? {})).toEqual(["anthropic", "openai-codex"]);
-	expect(parsed?.anthropic).toMatchObject({ fiveHourReported: true, fiveHour: 90, weekly: 80, stale: true });
-	expect(parsed?.["openai-codex"]).toMatchObject({ fiveHour: undefined, weekly: undefined, stale: true });
+	expect(parsed?.anthropic).toMatchObject({
+		stale: true,
+		cells: [
+			{ kind: "percent", remaining: 90 },
+			{ kind: "percent", remaining: 80 },
+		],
+	});
+	expect(parsed?.["openai-codex"]).toMatchObject({
+		stale: true,
+		cells: [{ kind: "percent", remaining: undefined, placeholder: true }],
+	});
 });
 
 const WEEKLY_ONLY = [{ name: "seven_day", scope: "provider", usedPercent: 40 }] as const;

@@ -649,7 +649,7 @@ mod unit_tests {
     #[cfg(windows)]
     fn null_window_capture_is_a_deterministic_refusal() {
         let mut store = RefStore::new();
-        let wref = store.insert_window(NativeHandle::new(0));
+        let wref = store.insert_window(NativeHandle::new(0), 0);
         for _ in 0..2 {
             let error = screenshot(&mut store, &wref, false, None, 0).unwrap_err();
             assert_eq!(error.code, ErrorCode::CaptureFailed);

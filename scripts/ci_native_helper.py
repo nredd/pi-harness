@@ -13,7 +13,8 @@ import shutil
 from pathlib import Path
 
 EXE_NAME = "windows-bridge.exe"
-PROTOCOL = 4
+# Must equal `PROTOCOL_VERSION` in the helper's `src/protocol.rs` (pinned by the staging test).
+PROTOCOL = 6
 CAPABILITY = "fail-closed-live-target-v1"
 FIXTURE_STATUS = Path("native-fixture-status.txt")
 EVIDENCE_FILES = (Path("native-fixture.log"), Path("native-compiler.log"), FIXTURE_STATUS)

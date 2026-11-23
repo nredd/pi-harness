@@ -25,15 +25,15 @@ Policy: Code Signing
 
 	const setupCopy = await fs.readFile(new URL("../scripts/setup-helper.mjs", import.meta.url), "utf8");
 	assert.doesNotMatch(setupCopy, /tccutil[\s\S]{0,80}reset|resetTcc/i);
-	// Both replacement paths must stop old code before overwriting it. No real helper is launched here.
+	// Both replacement paths must stop old code and recheck the destination before writing to it. No real helper is launched here.
 	assert.match(
 		setupCopy,
-		/await stopRunningHelper\(\);\s+await fs\.rm\(helperAppPath/,
+		/await stopRunningHelper\(\);\s+await assertReplaceableDestination\(\);\s+await fs\.rm\(helperAppPath/,
 		"sealed bundle replacement must stop the helper",
 	);
 	assert.match(
 		setupCopy,
-		/await stopRunningHelper\(\);\s+await fs\.copyFile\(sourcePath, helperAppExecutablePath\)/,
+		/await stopRunningHelper\(\);\s+await assertReplaceableDestination\(\);\s+await fs\.mkdir\(path\.dirname\(helperAppExecutablePath\)/,
 		"local bundle replacement must stop the helper",
 	);
 

@@ -21,12 +21,12 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 	runProcess: vi.fn(),
 }));
 vi.mock("../src/platform/linux/helper.ts", () => ({
-	LINUX_HELPER_PROTOCOL_VERSION: 4,
+	LINUX_HELPER_PROTOCOL_VERSION: 10,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
 }));
 vi.mock("../src/platform/windows/helper.ts", () => ({
-	WINDOWS_HELPER_PROTOCOL_VERSION: 4,
+	WINDOWS_HELPER_PROTOCOL_VERSION: 6,
 	windowsHelper: fakes.windows,
 }));
 
@@ -37,12 +37,14 @@ const { wslProbe } = await import("../src/platform/linux/wsl.ts");
 
 const signal = new AbortController().signal;
 const diagnostics = (over = {}) => ({
-	protocolVersion: 4,
+	protocolVersion: 6,
 	architectureVersion: 1,
 	invariants: [...REQUIRED_PLATFORM_INVARIANTS],
 	accessibility: true,
 	...over,
 });
+/** The Linux helper speaks its own protocol version (#1300). */
+const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 10, ...over });
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -107,8 +109,11 @@ describe("macOS backend", () => {
 					metadata: { k: 1 },
 				},
 			],
+			complete: true,
 		});
-		assert.deepEqual(await macosBackend.listRoots({}), [
+		const listed = await macosBackend.listRoots({});
+		assert.equal(listed.complete, undefined, "a complete listing carries no partial marker");
+		assert.deepEqual(listed, [
 			{
 				kind: "sheet",
 				rootRef: "r1",
@@ -125,8 +130,9 @@ describe("macOS backend", () => {
 				scaleFactor: 2,
 				zOrder: 3,
 				isMinimized: true,
-				isOnscreen: true,
-				isMain: true,
+				// Only a JSON boolean is a read flag: `"true"` and `1` are unknown, never coerced (#1314).
+				isOnscreen: undefined,
+				isMain: undefined,
 				isFocused: true,
 				isModal: true,
 				metadata: { k: 1 },
@@ -142,6 +148,7 @@ describe("macOS backend", () => {
 		]);
 		const roots = await macosBackend.listRoots({});
 		assert.equal(roots.length, 3);
+		assert.equal(roots.complete, false, "a reply without `complete: true` is partial");
 		assert.deepEqual(roots[0], {
 			kind: "window",
 			rootRef: "only-window",
@@ -157,10 +164,11 @@ describe("macOS backend", () => {
 			framePoints: { x: 0, y: 0, w: 1, h: 1 },
 			scaleFactor: 1,
 			zOrder: 0,
-			isMinimized: false,
-			isOnscreen: false,
-			isMain: false,
-			isFocused: false,
+			// Omitted state flags are unread, not `false` (#1314).
+			isMinimized: undefined,
+			isOnscreen: undefined,
+			isMain: undefined,
+			isFocused: undefined,
 			isModal: false,
 			metadata: {},
 		});
@@ -172,7 +180,7 @@ describe("macOS backend", () => {
 		assert.equal(roots[2].rootRef, undefined);
 		for (const bad of [undefined, {}, { roots: 1 }]) {
 			fakes.macos.command.mockResolvedValueOnce(bad);
-			assert.deepEqual(await macosBackend.listRoots({}), []);
+			assert.deepEqual(await macosBackend.listRoots({}), Object.assign([], { complete: false }));
 		}
 	});
 
@@ -187,6 +195,57 @@ describe("macOS backend", () => {
 		}
 		await macosBackend.listRoots({});
 		assert.deepEqual(lastCall(fakes.macos)[1], {});
+	});
+
+	test("an authoritative listRoots needs the helper's complete field; a partial listing still resolves roots", async () => {
+		// 129 windows: over the native cap, so the helper reports the listing incomplete (#1242).
+		const roots = Array.from({ length: 129 }, (_, index) => ({
+			kind: "window",
+			rootRef: `w${index}`,
+			title: `W${index}`,
+		}));
+		fakes.macos.command.mockResolvedValue({ roots, complete: false });
+		const positive = await macosBackend.listRoots({ pid: 42 });
+		assert.equal(positive.length, 129);
+		assert.equal(positive.complete, false, "the bridge resolves a saved root from it by identity only");
+		assert.ok(
+			positive.some((root) => root.rootRef === "w5"),
+			"an existing target still resolves",
+		);
+		for (const reply of [{ roots, complete: false }, { roots: [] }, [], { roots: [], complete: "true" }]) {
+			fakes.macos.command.mockResolvedValueOnce(reply);
+			await assert.rejects(macosBackend.listRoots({ pid: 42, authoritative: true }), (error) => {
+				assert.equal(error.code, "inventory_incomplete");
+				assert.match(error.message, /of pid 42 is not known to be complete; its missing roots are unknown, not closed/);
+				return true;
+			});
+		}
+		assert.deepEqual(lastCall(fakes.macos)[1], { pid: 42 }, "the flag never reaches the helper");
+		fakes.macos.command.mockResolvedValueOnce({ roots: [], complete: false });
+		await assert.rejects(
+			macosBackend.listRoots({ authoritative: true }),
+			/The Accessibility root inventory is not known to be complete/,
+		);
+		fakes.macos.command.mockResolvedValueOnce({ roots: [roots[0]], complete: true });
+		assert.equal((await macosBackend.listRoots({ pid: 42, authoritative: true })).length, 1);
+	});
+
+	test("a gone waitFor reply without the helper's complete field fails closed", async () => {
+		const gone = { pid: 1, rootRef: "r", text: "Go", gone: true, timeoutMs: 250 };
+		// An older external protocol-8 helper answers `gone` without `complete`, even from a truncated walk.
+		fakes.macos.command.mockResolvedValueOnce({ found: true, gone: true, nodeCount: 3 });
+		assert.deepEqual(await macosBackend.waitFor(gone), { found: false, incomplete: true, nodeCount: 3 });
+		fakes.macos.command.mockResolvedValueOnce({ found: true, gone: true, complete: "yes", nodeCount: 3 });
+		assert.equal((await macosBackend.waitFor(gone)).incomplete, true);
+		const complete = { found: true, gone: true, complete: true, nodeCount: 3 };
+		fakes.macos.command.mockResolvedValueOnce(complete);
+		assert.deepEqual(await macosBackend.waitFor(gone), complete);
+		const timedOut = { found: false, timedOut: true, nodeCount: 3 };
+		fakes.macos.command.mockResolvedValueOnce(timedOut);
+		assert.deepEqual(await macosBackend.waitFor(gone), timedOut, "a timed-out reply is unchanged");
+		const present = { found: true, nodeCount: 3 };
+		fakes.macos.command.mockResolvedValueOnce(present);
+		assert.deepEqual(await macosBackend.waitFor({ ...gone, gone: false }), present, "a presence wait needs no field");
 	});
 
 	test("listRoots rejects a finite fractional or out-of-range pid before the helper call", async () => {
@@ -440,17 +499,18 @@ describe("Windows backend", () => {
 	});
 
 	test("ensureReady validates protocol and architecture then stamps the state", async () => {
-		fakes.windows.command.mockResolvedValue(diagnostics());
+		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 6 }));
 		const state = await backend.ensureReady({}, { lastPermissionCheckAt: 0, keep: true }, signal);
 		assert.equal(state.keep, true);
 		assert.ok(state.lastPermissionCheckAt > 0);
-		assert.equal(state.helperDiagnostics.protocolVersion, 4);
+		assert.equal(state.helperDiagnostics.protocolVersion, 6);
 		assert.deepEqual(lastCall(fakes.windows), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
-		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 3 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 4, got 3/);
+		// A v5 helper keeps PID/HWND-only root checks, so a same-HWND replacement would pass it.
+		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 5 }));
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 6, got 5/);
 		fakes.windows.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
-		fakes.windows.command.mockResolvedValue(diagnostics({ architectureVersion: 0 }));
+		fakes.windows.command.mockResolvedValue(diagnostics({ protocolVersion: 6, architectureVersion: 0 }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Windows helper architecture mismatch/);
 	});
 
@@ -532,11 +592,13 @@ describe("Linux backend", () => {
 				{
 					kind: "sheet",
 					desktopId: "org.gnome.Gedit",
+					appId: "gedit",
 					processName: "gedit",
 					pid: 3,
 					title: "Notes",
 					bounds: { x: 1, y: 2, width: 3, height: 4 },
 					isFocused: true,
+					metadata: { x11Pairing: "paired" },
 				},
 				{ kind: "nope", ref: "r2", isOnscreen: false },
 				null,
@@ -604,20 +666,21 @@ describe("Linux backend", () => {
 	});
 
 	test("ensureReady validates protocol, architecture and accessibility", async () => {
-		fakes.linux.command.mockResolvedValue(diagnostics());
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics());
 		const state = await backend.ensureReady({}, { lastPermissionCheckAt: 0, keep: 1 }, signal);
 		assert.equal(state.keep, 1);
 		assert.ok(state.lastPermissionCheckAt > 0);
 		assert.deepEqual(lastCall(fakes.linux), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
-		fakes.linux.command.mockResolvedValue(diagnostics({ protocolVersion: 9 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 4, got 9/);
+		// A v4 helper neither records owed releases across restarts nor rechecks the drag start, so it must not pass readiness.
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ protocolVersion: 4 }));
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 10, got 4/);
 		fakes.linux.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
-		fakes.linux.command.mockResolvedValue(diagnostics({ invariants: [] }));
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ invariants: [] }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Linux helper does not satisfy/);
-		fakes.linux.command.mockResolvedValue(diagnostics({ accessibility: false }));
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: false }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /AT-SPI/);
-		fakes.linux.command.mockResolvedValue(diagnostics({ accessibility: undefined }));
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: undefined }));
 		await backend.ensureReady({}, { lastPermissionCheckAt: 0 });
 	});
 

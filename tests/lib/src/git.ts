@@ -1,8 +1,8 @@
 /** Disposable git repositories with a fixed identity and no signing, for real-git scenarios. */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTestTempDir } from "./temp-dir.ts";
 
 const GIT_IDENTITY = ["-c", "user.name=h", "-c", "user.email=h@h", "-c", "commit.gpgsign=false"];
 
@@ -14,9 +14,10 @@ export function git(cwd: string, ...args: string[]): string {
 /**
  * A clone of a bare remote holding one of every working-tree state: an unstaged edit (`a.txt`), a
  * staged add (`c.txt`), a staged rename (`old.txt` -> `renamed.txt`) and an untracked file with a space.
+ * Both live under one scratch root whose removal is registered with `onCleanup`, e.g. `onTestFinished`.
  */
-export function makeGitFixture(): { repo: string; remote: string } {
-	const root = mkdtempSync(join(tmpdir(), "pi-test-git-"));
+export function makeGitFixture(onCleanup: (cleanup: () => void) => void): { repo: string; remote: string } {
+	const root = makeTestTempDir("pi-test-git-", onCleanup);
 	const remote = join(root, "remote.git");
 	const repo = join(root, "repo");
 	execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);

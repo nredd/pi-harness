@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeMacosBuildStamp } from "../src/platform/macos/helper-build.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 export const sources = [
@@ -17,10 +18,16 @@ export const sources = [
 export const testSources = [
 	"native/macos/headless_tests.swift",
 	"native/macos/act_tests.swift",
+	"native/macos/ax_element_tests.swift",
 	"native/macos/cursor_motion_tests.swift",
+	"native/macos/image_encoding_tests.swift",
+	"native/macos/look_tests.swift",
 	"native/macos/overlay_tests.swift",
 	"native/macos/ref_look_tests.swift",
+	"native/macos/request_admission_tests.swift",
 	"native/macos/request_framing_tests.swift",
+	"native/macos/root_event_tests.swift",
+	"native/macos/root_pairing_tests.swift",
 	"native/macos/support_tests.swift",
 ];
 
@@ -184,6 +191,8 @@ export function main({
 		"-o",
 		binary,
 	];
+	// Append the generated declaration for compilation; it has no executable coverage counters.
+	args.push(writeMacosBuildStamp(packageRoot, directory));
 	invoke("swiftc", args);
 	run(binary, [], { stdio: "inherit", timeout: 30_000, env: { ...process.env, LLVM_PROFILE_FILE: profile } });
 	const profiles = readdirSync(directory).filter((name) => name.endsWith(".profraw"));
