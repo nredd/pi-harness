@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, onTestFinished, test, vi } fr
 import { executeFind, executeLaunchBrowser, shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { currentPlatformBackend } from "../src/platform/index.ts";
 import { ResourceScheduler } from "../src/runtime.ts";
-import { deferred, within } from "../tests/fixtures/check-async.mjs";
+import { deferred, within } from "./fixtures/check-async.mjs";
 
 const gate = vi.hoisted(() => ({
 	target: "",
@@ -63,7 +63,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const PACKAGE_DIR = fileURLToPath(new URL("..", import.meta.url));
-const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
+const FAKE_BROWSER = fileURLToPath(new URL("../test/fixtures/fake-browser.mjs", import.meta.url));
 const BRIDGE_URL = pathToFileURL(path.join(PACKAGE_DIR, "src/bridge.ts")).href;
 const CHILD_TIMEOUT_MS = 15_000;
 
@@ -163,9 +163,9 @@ async function waitUntil(check, message, timeoutMs) {
 }
 
 describe("temporary profile cleanup race", () => {
-	const executable = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
-	let scratch;
-	let shutdown;
+	const executable = fileURLToPath(new URL("../test/fixtures/fake-browser.mjs", import.meta.url));
+	let scratch: string;
+	let shutdown: Promise<void> | undefined;
 	afterEach(async () => {
 		gate.release?.();
 		try {
@@ -296,11 +296,11 @@ describe("temporary profile cleanup race", () => {
 
 describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 	const saved = {};
-	let scratch;
-	let tmp;
-	let log;
+	let scratch: string;
+	let tmp: string;
+	let log: string;
 
-	let dispose;
+	let dispose: () => void;
 	beforeAll(() => {
 		scratch = makeTestTempDir("pi-computer-use-cdp-profile-", (cleanup) => {
 			dispose = cleanup;
@@ -484,7 +484,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
 		process.env.FAKE_BROWSER_NO_CDP = "1";
 		const controller = new AbortController();
-		let launch;
+		let launch: ReturnType<typeof testing.performLaunchBrowser>;
 		try {
 			launch = testing.performLaunchBrowser({}, controller.signal);
 			await waitUntil(() => fs.existsSync(log), "fake browser never started", 5_000);
@@ -614,8 +614,8 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
 		const controller = new AbortController();
 		const stoppingController = new AbortController();
-		let stopping;
-		let queued;
+		let stopping: ReturnType<typeof testing.performLaunchBrowser>;
+		let queued: ReturnType<typeof testing.performLaunchBrowser>;
 		try {
 			await testing.performLaunchBrowser({});
 			delete process.env.FAKE_BROWSER_IGNORE_SIGTERM;
@@ -651,7 +651,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const read = ResourceScheduler.prototype.read;
 		const createServer = net.createServer.bind(net);
 		let portProbes = 0;
-		let shutdown;
+		let shutdown: Promise<void>;
 		vi.spyOn(currentPlatformBackend, "ensureReady").mockResolvedValue({ lastPermissionCheckAt: 0 });
 		vi.spyOn(currentPlatformBackend, "shutdown").mockResolvedValue();
 		vi.spyOn(net, "createServer").mockImplementation((...args) => {
@@ -703,7 +703,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		});
 		const ctx = { cwd: PACKAGE_DIR };
 		const first = executeFind("first", { app: "first" }, undefined, undefined, ctx);
-		let second;
+		let second: ReturnType<typeof executeFind>;
 		try {
 			await within(firstEntered.promise, "first tool entering backend");
 			second = executeFind("second", { app: "second" }, undefined, undefined, ctx);
@@ -723,7 +723,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		const controller = new AbortController();
 		const termLog = path.join(scratch, "relaunch-sigterm");
 		fs.rmSync(termLog, { force: true });
-		let relaunch;
+		let relaunch: ReturnType<typeof testing.performLaunchBrowser>;
 		try {
 			process.env.FAKE_BROWSER_SIGTERM_LOG = termLog;
 			process.env.FAKE_BROWSER_IGNORE_SIGTERM = "1";
@@ -764,7 +764,7 @@ describe.skipIf(process.platform === "win32")("managed browser profile", () => {
 		process.env.FAKE_BROWSER_LAUNCHES = launches;
 		const before = new Set(fs.readdirSync(tmp));
 		const controller = new AbortController();
-		let launch;
+		let launch: ReturnType<typeof testing.performLaunchBrowser>;
 		const createServer = net.createServer.bind(net);
 		let portProbes = 0;
 		vi.spyOn(net, "createServer").mockImplementation((...args) => {
