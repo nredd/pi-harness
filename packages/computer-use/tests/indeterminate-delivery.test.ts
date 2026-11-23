@@ -15,7 +15,7 @@ const AX_UNKNOWN = {
 	error: { code: "ax_delivery_unknown", message: "AXPress failed (AXError -25204) and may have been delivered" },
 };
 const PRESS_SENTENCE =
-	"Action 1 failed with an AX error after the press may have landed; whether it was delivered is unknown.";
+	"Action 1 failed with an AX error after the press may have landed (ax_delivery_unknown); whether it was delivered is unknown.";
 const TEXT_SENTENCE = "Action 1 posted input that its readback did not confirm; whether it was delivered is unknown.";
 const twoButtons = () => [wireButton("b1", "One"), wireButton("b2", "Two")];
 const pressBoth = [
@@ -104,7 +104,7 @@ test("a failed successor capture after an indeterminate press never claims deliv
 	assert.equal(result.details.execution.outcome, "unknown");
 	assert.match(
 		fake.text(result),
-		/^Action 1 failed with an AX error after the press may have landed; whether it was delivered is unknown\. Its source root App1 \u2014 Main could not be observed afterward: capture failed\nNo successor state was created\. Do not replay the transaction: call find_roots, then observe_ui to check whether action 1 took effect\.$/,
+		/^Action 1 failed with an AX error after the press may have landed \(ax_delivery_unknown\); whether it was delivered is unknown\.\nIts source root App1 \u2014 Main could not be observed afterward: capture failed\nNo successor state was created\. Do not replay the transaction: call find_roots, then observe_ui to check whether action 1 took effect\.$/,
 	);
 });
 
