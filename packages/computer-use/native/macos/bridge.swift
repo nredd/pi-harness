@@ -217,7 +217,7 @@ struct LookOutlineWorld<Element: AnyObject> {
 	/// root node was built (the root's own reads never spend the walk's budget) or `requestDeadline` on `now`'s clock,
 	/// whichever comes first: a slow root cannot push the walk past the client's timeout. Past the deadline no queued
 	/// node's children are read. A node whose children could not be read, or whose children the budget cut, is
-	/// `truncated`: its subtree is unread, never a leaf.
+	/// `truncated` and `childrenUnread`: its subtree is unread, never a leaf, while its own fields were read.
 	func build(root: Element, nodeLimit: Int, timeLimit: TimeInterval, requestDeadline: TimeInterval) -> LookNode {
 		let rootNode = self.rootNode(root)
 		let deadline = min(now() + timeLimit, requestDeadline)
@@ -230,22 +230,22 @@ struct LookOutlineWorld<Element: AnyObject> {
 			let (element, node) = queue[index]
 			index += 1
 			if expired() {
-				node.truncated = true
+				node.markChildrenUnread()
 				continue
 			}
 			guard let elements = children(element) else {
-				node.truncated = true
+				node.markChildrenUnread()
 				continue
 			}
 			if elements.isEmpty { continue }
 			if walked >= nodeLimit {
-				node.truncated = true
+				node.markChildrenUnread()
 				continue
 			}
 			let childNode = childNodes(element)
 			for child in elements {
 				if walked >= nodeLimit || expired() {
-					node.truncated = true
+					node.markChildrenUnread()
 					break
 				}
 				if !seen.insert(ObjectIdentifier(child)).inserted { continue }
@@ -1671,6 +1671,9 @@ final class LookNode {
 	var offscreen: Bool
 	var pictureOnly: Bool
 	var truncated: Bool
+	/// Set with `truncated` when only the descendants are unread: the node's own fields were read, so an exact
+	/// condition on this node does not depend on them.
+	var childrenUnread: Bool
 	var scrollExtent: [String: Int]?
 	var text: [[String: Any]]
 	var children: [LookNode]
@@ -1697,6 +1700,7 @@ final class LookNode {
 		self.offscreen = offscreen
 		self.pictureOnly = pictureOnly
 		self.truncated = false
+		self.childrenUnread = false
 		self.text = []
 		self.children = []
 	}
@@ -1725,11 +1729,17 @@ final class LookNode {
 		if offscreen { output["offscreen"] = true }
 		if pictureOnly { output["pictureOnly"] = true }
 		if truncated { output["truncated"] = true }
+		if truncated && childrenUnread { output["childrenUnread"] = true }
 		if let scrollExtent { output["scrollExtent"] = scrollExtent }
 		if !text.isEmpty { output["text"] = text }
 		return output
 	}
 
+	/// Mark the descendants unread (`truncated`) while the node's own fields stay read (`childrenUnread`).
+	func markChildrenUnread() {
+		truncated = true
+		childrenUnread = true
+	}
 }
 
 final class Box<T> {
@@ -5892,6 +5902,7 @@ An advertised AX action is a delivery capability, not proof of an application-le
 
 - An empty outline usually indicates missing Accessibility trust, an inaccessible target, or an app that exposes no useful AX hierarchy.
 - `truncated` means the bounded walk did not retrieve the complete descendant tree.
+- `childrenUnread` comes with `truncated` when the node's own fields were read and only its descendants are unread, so `wait_for` and `act_ui` `expect` can prove an exact `ref` absent on it.
 - `pictureOnly` means the element came from visual evidence and cannot be targeted by AX ref.
 - A supported action describes what the element reports, not whether the app will honor it.
 - AX frames and Core Graphics windows are paired heuristically; low-confidence pairing must not be treated as exact identity.

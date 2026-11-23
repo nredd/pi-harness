@@ -292,7 +292,8 @@ func runRefLookAssertions() {
 }
 
 /// The production look walk (`LookOutlineWorld.build`) over injected AX reads: a failed children read, the node
-/// budget and the deadline mark the node `truncated`; only an authoritative empty list is a leaf (#1287).
+/// budget and the deadline mark the node `truncated` and `childrenUnread`; only an authoritative empty list is a leaf
+/// (#1287, #1310).
 private func runLookOutlineAssertions() {
   final class Node {
     let name: String
@@ -365,6 +366,12 @@ private func runLookOutlineAssertions() {
   check(find("unread", in: outline).map { $0.truncated && $0.children.isEmpty } == true, "a failed children read marks the node truncated, never a leaf")
   check(find("unread", in: outline)?.payload()["truncated"] as? Bool == true, "the unread node's payload carries the marker")
   check(
+    find("unread", in: outline)?.payload()["childrenUnread"] as? Bool == true,
+    "a failed children read leaves the node's own fields read (childrenUnread, #1310)")
+  check(
+    find("leaf", in: outline)?.childrenUnread == false && find("leaf", in: outline)?.payload()["childrenUnread"] == nil,
+    "a complete leaf carries no childrenUnread")
+  check(
     !outline.truncated && find("leaf", in: outline)?.truncated == false && find("grandchild", in: outline)?.truncated == false,
     "a readable empty child list is a complete leaf")
   check(find("parent", in: outline)?.children.map(\.ref) == ["grandchild"], "the walk continues below a sibling of the unread node")
@@ -373,10 +380,22 @@ private func runLookOutlineAssertions() {
 
   let budget = build(root, children: tree, nodeLimit: 3)
   check(budget.truncated && budget.children.map(\.ref) == ["unread", "leaf"], "the node budget cuts the children and marks the parent")
+  check(budget.childrenUnread, "the node budget's cut leaves only the descendants unread")
   check(find("parent", in: build(root, children: tree, nodeLimit: 4))?.truncated == true, "a parent reached at the budget is truncated")
   check(build(root, children: tree, expiresAfter: 0).truncated, "an expired deadline marks the node it stops at")
   let late = build(root, children: tree, expiresAfter: 2)
   check(late.truncated && late.children.map(\.ref) == ["unread"], "a deadline during the children marks the parent")
+  check(
+    late.childrenUnread && build(root, children: tree, expiresAfter: 0).childrenUnread,
+    "the deadline leaves only the descendants unread")
+  let bare = node("bare")
+  bare.childrenUnread = true
+  check(bare.payload()["childrenUnread"] == nil, "childrenUnread is never sent without truncated")
+  bare.truncated = true
+  bare.childrenUnread = false
+  check(
+    bare.payload()["truncated"] as? Bool == true && bare.payload()["childrenUnread"] == nil,
+    "a bare truncated node does not claim its own fields read")
   let slowRoot = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 19, childCost: 2).outline
   check(
     !slowRoot.truncated && find("parent", in: slowRoot)?.truncated == false && find("grandchild", in: slowRoot) != nil,
