@@ -66,7 +66,21 @@ impl PhysicalPolicy {
             value => Err(invalid(format!("Unknown delivery policy '{value}'"))),
         }
     }
+    /// Refuse strict headless (`ax_only`) with `foreground_required` before any physical
+    /// target, geometry or session is resolved (#1298): the action needs foreground
+    /// delivery, whatever this session could otherwise offer.
+    pub fn refuse_strict_headless(self) -> Result<(), ProtocolError> {
+        if self == Self::AxOnly {
+            return Err(err(
+                "ax_only policy forbids synthesized input and window focus",
+                ErrorCode::ForegroundRequired,
+            ));
+        }
+        Ok(())
+    }
+    /// Admit physical input under this policy in `session`; strict headless refuses first.
     pub fn require_physical(self, session: SessionKind) -> Result<(), ProtocolError> {
+        self.refuse_strict_headless()?;
         if session == SessionKind::Headless {
             return Err(err(
                 "Physical input is unavailable in a headless Linux session",
@@ -79,17 +93,13 @@ impl PhysicalPolicy {
                 ErrorCode::CapabilityDeferred,
             ));
         }
-        match self {
-            Self::AxOnly => Err(err(
-                "ax_only policy forbids XTEST and window focus",
-                ErrorCode::CoordinateBlocked,
-            )),
-            Self::Background => Err(err(
+        if self == Self::Background {
+            return Err(err(
                 "Background policy forbids global XTEST input",
                 ErrorCode::ForegroundRequired,
-            )),
-            Self::Default | Self::Foreground => Ok(()),
+            ));
         }
+        Ok(())
     }
 }
 
@@ -114,6 +124,24 @@ pub struct Capture {
 }
 pub fn available() -> bool {
     SessionKind::detect() == SessionKind::X11 && connect().is_ok()
+}
+
+/// The X11 windows of this process's `DISPLAY`, via [`windows_on`].
+pub fn list_display_windows() -> Result<Option<Vec<WindowInfo>>, ProtocolError> {
+    windows_on(std::env::var_os("DISPLAY").as_deref(), list_windows)
+}
+
+/// The windows `list` reads from `display`. `Ok(None)` only when no X display is configured
+/// (no X11 session and no XWayland): confirmed absence of `WM_CLASS` evidence. A configured
+/// display whose listing fails is an error, never absence (#1300).
+pub fn windows_on(
+    display: Option<&std::ffi::OsStr>,
+    list: impl FnOnce() -> Result<Vec<WindowInfo>, ProtocolError>,
+) -> Result<Option<Vec<WindowInfo>>, ProtocolError> {
+    match display {
+        Some(display) if !display.is_empty() => list().map(Some),
+        _ => Ok(None),
+    }
 }
 
 pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
@@ -174,33 +202,84 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, ProtocolError> {
     Ok(out)
 }
 
-pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) {
+/// Pair each root with its best-ranked X11 window of the same PID, title first, then
+/// geometry; each window pairs once. Pairing is a heuristic, so `WM_CLASS` is copied only
+/// when no other window of that PID ranks equally (#1300): a tie is no class evidence,
+/// never proof that one sibling's class belongs to the root. Blocking is additive, so a tie
+/// reports every tied window's class in `class_candidates` and any blocked one refuses it.
+/// Returns each root's [`Pairing`]: a tie is `Ambiguous` even when no tied window has a class.
+pub fn enrich_roots(roots: &mut [RootSnapshot], windows: &[WindowInfo]) -> Vec<Pairing> {
     let mut used = Vec::new();
+    let mut pairings = Vec::with_capacity(roots.len());
     for root in roots {
-        let best = windows
-            .iter()
-            .filter(|w| w.pid != 0 && w.pid == root.pid && !used.contains(&w.id))
-            .min_by_key(|w| {
-                let title = if !root.name.is_empty()
-                    && (w.title.contains(&root.name) || root.name.contains(&w.title))
-                {
-                    0
-                } else {
-                    1_000_000
-                };
-                title + distance(root.frame.as_ref(), &w.frame)
-            });
+        let rank = |w: &WindowInfo| {
+            let title = if !root.name.is_empty()
+                && (w.title.contains(&root.name) || root.name.contains(&w.title))
+            {
+                0
+            } else {
+                1_000_000
+            };
+            title + distance(root.frame.as_ref(), &w.frame)
+        };
+        let owned = || windows.iter().filter(|w| w.pid != 0 && w.pid == root.pid);
+        let best = owned()
+            .filter(|w| !used.contains(&w.id))
+            .min_by_key(|w| rank(w));
         if let Some(w) = best {
+            // A window already paired elsewhere still ties: that pairing was a choice too.
+            let tied = owned()
+                .filter(|other| rank(other) == rank(w))
+                .collect::<Vec<_>>();
+            let ambiguous = tied.len() > 1;
+            root.class_candidates = if ambiguous {
+                tied.iter()
+                    .filter_map(|other| other.wm_class.clone())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             used.push(w.id);
             root.x11_window = Some(w.id);
             root.frame = Some(w.frame.clone());
             root.is_focused = w.focused;
             root.is_minimized = w.minimized;
             root.z_order = Some(w.z_order);
-            root.wm_class.clone_from(&w.wm_class);
+            root.wm_class = if ambiguous { None } else { w.wm_class.clone() };
             if root.name.is_empty() {
                 root.name.clone_from(&w.title);
             }
+            pairings.push(if ambiguous {
+                Pairing::Ambiguous
+            } else {
+                Pairing::Paired
+            });
+        } else {
+            pairings.push(Pairing::Unpaired);
+        }
+    }
+    pairings
+}
+
+/// How confidently [`enrich_roots`] paired a root with an X11 window, reported apart from
+/// its class aliases: a tie of classless windows has no aliases but is no clean pairing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pairing {
+    /// One window ranked best; its `WM_CLASS`, if any, is the root's.
+    Paired,
+    /// Several windows ranked equally; none of their classes is attributed.
+    Ambiguous,
+    /// No window of the root's PID.
+    Unpaired,
+}
+
+impl Pairing {
+    /// The `metadata.x11Pairing` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Paired => "paired",
+            Self::Ambiguous => "ambiguous",
+            Self::Unpaired => "unpaired",
         }
     }
 }
@@ -225,14 +304,20 @@ pub fn parse_wm_class(value: &[u8]) -> Option<(String, String)> {
     let (instance, class) = (parts.next()?, parts.next()?);
     (parts.next().is_none() && !class.is_empty()).then(|| (latin1(instance), latin1(class)))
 }
+/// The L1 distance between two frames, each edge widened to `i64` before it is subtracted:
+/// live AT-SPI extents are arbitrary `i32`s, and an `i32` difference could overflow and
+/// rank a farther window first.
 fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
     a.map(|a| {
-        i64::from(
-            (a.x - b.x).abs()
-                + (a.y - b.y).abs()
-                + (a.width - b.width).abs()
-                + (a.height - b.height).abs(),
-        )
+        [
+            (a.x, b.x),
+            (a.y, b.y),
+            (a.width, b.width),
+            (a.height, b.height),
+        ]
+        .into_iter()
+        .map(|(a, b)| (i64::from(a) - i64::from(b)).abs())
+        .fold(0, i64::saturating_add)
     })
     .unwrap_or(0)
 }
@@ -1711,13 +1796,35 @@ mod tests {
     }
     #[test]
     fn policy_guards() {
-        assert_eq!(
-            PhysicalPolicy::AxOnly
-                .require_physical(SessionKind::X11)
-                .unwrap_err()
-                .code,
-            ErrorCode::CoordinateBlocked
-        );
+        // Strict headless is `foreground_required` in every session kind (#1298).
+        for session in [
+            SessionKind::X11,
+            SessionKind::Wayland,
+            SessionKind::Headless,
+        ] {
+            let error = PhysicalPolicy::AxOnly
+                .require_physical(session)
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::ForegroundRequired, "{session:?}");
+            assert!(error.message.starts_with("ax_only"), "{}", error.message);
+        }
+        // Outside strict headless the session decides first.
+        for policy in [PhysicalPolicy::Default, PhysicalPolicy::Background] {
+            assert_eq!(
+                policy
+                    .require_physical(SessionKind::Wayland)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CapabilityDeferred
+            );
+            assert_eq!(
+                policy
+                    .require_physical(SessionKind::Headless)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::CoordinateBlocked
+            );
+        }
         assert_eq!(
             PhysicalPolicy::Background
                 .require_physical(SessionKind::X11)
@@ -1729,8 +1836,8 @@ mod tests {
             .require_physical(SessionKind::X11)
             .is_ok());
         assert!(PhysicalPolicy::Default
-            .require_physical(SessionKind::Headless)
-            .is_err());
+            .require_physical(SessionKind::X11)
+            .is_ok());
     }
     #[test]
     fn focus_does_not_send_after_shutdown() {

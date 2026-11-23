@@ -1024,13 +1024,11 @@ function normalizeWindowSelector(selector: RootSelector | undefined): string | u
 /**
  * A Windows root is bound to its original owner and window instance, not a matching title or HWND: the
  * helper issues a new native ref for a same-HWND replacement, so the saved ref must still be listed.
- * A Linux text read binds the same way to the exact AT-SPI root that owns the look (#1180).
  */
 async function resolveExactRoot(
 	saved: HelperApp & Pick<WindowRefRecord, "windowId" | "nativeWindowRef">,
 	signal?: AbortSignal,
 ): Promise<ResolvedTarget> {
-	const platform = currentPlatformBackend.name === "windows" ? "Windows" : "Linux";
 	const windows = await listWindows(saved.pid, signal);
 	const match = windows.find(
 		(window) =>
@@ -1042,7 +1040,7 @@ async function resolveExactRoot(
 	if (!match)
 		throw new ComputerUseError(
 			"root_stale",
-			`Saved ${platform} root is no longer available for its original owner and window instance. Rediscover it with find_roots.`,
+			"Saved Windows root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
 		);
 	if (match.instanceUnavailable)
 		throw new ComputerUseError(
@@ -1053,13 +1051,57 @@ async function resolveExactRoot(
 	if (match.appId!.toLowerCase() !== saved.appId!.toLowerCase()) {
 		throw new ComputerUseError(
 			"app_blocked",
-			`${platform} root owner identity changed. Rediscover it with find_roots and observe it again.`,
+			"Windows root owner identity changed. Rediscover it with find_roots and observe it again.",
 		);
 	}
 	const target = toResolvedTarget(saved, match);
 	setCurrentTarget(target);
 	return target;
 }
+
+/**
+ * A Linux text read binds to the AT-SPI root (bus name and object path) its look retains, not to the `@w`
+ * inventory handle a later PID-scoped listing reissues (#1300), and never to its X11 window: the read is
+ * AT-SPI only. The helper reads the registry and that root's own application only; a lookup that could not
+ * finish is `inventory_incomplete`, never absence. Live identity and policy are checked as for any root. X11
+ * `WM_CLASS` can only add a block, so a root without class aliases passes policy only when its `x11Pairing` proves
+ * the X11 check ran (`LINUX_X11_CHECKED`) or no X display exists (`absent`); a failed, timed-out or skipped listing
+ * (`unavailable`), or any other status, is `inventory_incomplete`.
+ */
+async function revalidateLookRoot(lookId: string, signal?: AbortSignal): Promise<CurrentTarget> {
+	const current = operationState().currentTarget!;
+	assertAppNotBlocked(current);
+	const live = await currentPlatformBackend.lookRoot!(lookId, { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(
+		(error: unknown) => {
+			if ((error as { code?: unknown } | undefined)?.code !== "timeout") throw error;
+			throw new ComputerUseError(
+				"inventory_incomplete",
+				`Saved Linux root could not be verified: ${(error as Error).message}. It may still be open; retry read_text, or observe_ui it again.`,
+			);
+		},
+	);
+	if (!live || live.pid !== current.pid)
+		throw new ComputerUseError(
+			"root_stale",
+			"Saved Linux root is no longer available for its original owner and window instance. Rediscover it with find_roots.",
+		);
+	assertAppNotBlocked({ appName: current.appName, appId: live.appId, blockAliases: live.blockAliases });
+	if (live.appId!.toLowerCase() !== current.appId!.toLowerCase())
+		throw new ComputerUseError(
+			"app_blocked",
+			"Linux root owner identity changed. Rediscover it with find_roots and observe it again.",
+		);
+	const x11Pairing = live.metadata?.x11Pairing;
+	if (!LINUX_X11_CHECKED.has(x11Pairing))
+		throw new ComputerUseError(
+			"inventory_incomplete",
+			`Saved Linux root's X11 class evidence could not be read (x11Pairing: ${String(x11Pairing)}), so blocked_apps cannot be checked. It may still be open; retry read_text, or observe_ui it again.`,
+		);
+	return current;
+}
+
+/** `atspiLookRoot` X11 statuses under which a root's class aliases are complete: see `revalidateLookRoot`. */
+const LINUX_X11_CHECKED = new Set<unknown>(["paired", "ambiguous", "unpaired", "absent"]);
 
 /** `observe_ui` admits only exact `@r` refs (see `performObserve`), so a selector is either the current root or a ref `find_roots` issued. */
 async function resolveTargetByWindowSelector(selector: string, signal?: AbortSignal): Promise<ResolvedTarget> {
@@ -1100,18 +1142,17 @@ async function resolveTargetByWindowSelector(selector: string, signal?: AbortSig
 /**
  * Re-resolve the current root. `preferModal` (observe) may move to a confirmed foreground modal; act
  * transactions pass `false` so actions and the successor capture stay on the root the state belongs to.
- * `exact` (Linux `read_text`) re-lists the root only by its native ref and live owner identity, like Windows;
  * `exactIdentity` (a claimed `wait_for` absence) drops the title and ranking fallbacks of the listing path.
  */
 async function resolveCurrentTarget(
 	signal?: AbortSignal,
-	options: { preferModal?: boolean; exact?: boolean; exactIdentity?: boolean } = {},
+	options: { preferModal?: boolean; exactIdentity?: boolean } = {},
 ): Promise<ResolvedTarget> {
 	// Selection checks/sets the target; desktop state consumers first require a capture.
 	// Saved desktop captures always hydrate with a target (see the #755 call-path proof).
 	const current = operationState().currentTarget!;
 	assertAppNotBlocked(current);
-	if (currentPlatformBackend.name === "windows" || options.exact) return await resolveExactRoot(current, signal);
+	if (currentPlatformBackend.name === "windows") return await resolveExactRoot(current, signal);
 	const windows = await listWindows(current.pid, signal);
 	const partial = windows.complete === false;
 	if (!windows.length && !partial) {
@@ -1942,7 +1983,12 @@ async function performReadText(
 	const raw = (
 		await resourceScheduler.readAt(state.resourceKey!, state.epoch!, async () => {
 			// Revalidate the exact root owning the look and its live identity before any live read.
-			const target = requiresLiveIdentity() ? await resolveCurrentTarget(signal, { exact: true }) : undefined;
+			const target =
+				currentPlatformBackend.name === "linux"
+					? await revalidateLookRoot(state.currentOutline!.lookId, signal)
+					: currentPlatformBackend.name === "windows"
+						? await resolveCurrentTarget(signal)
+						: undefined;
 			return await currentPlatformBackend.readText(
 				{
 					...(target ? { pid: target.pid, windowId: target.windowId } : {}),
