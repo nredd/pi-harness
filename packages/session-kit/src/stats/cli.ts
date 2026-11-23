@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
-import { ExportRefusal, exportStats, importStats } from "./snapshot.ts";
+import { ExportRefusal, exportStats, IncompleteScan, importStats } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
@@ -98,15 +98,24 @@ export async function main(): Promise<void> {
 		}
 	} else throw new Error(USAGE);
 }
+/** Escape line breaks and every other control character, so a diagnostic stays one line. */
+const oneLine = (text: string): string =>
+	text.replace(/[\p{Cc}\u2028\u2029]/gu, (c) => {
+		const named: Record<string, string> = { "\n": "\\n", "\r": "\\r", "\t": "\\t" };
+		return named[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+	});
 /**
  * Run `main`, converting failures to one diagnostic and a nonzero process exit code. An export refusal
  * ends with one fixed `pi-stats-refusal: {"code":...}` line; no such line means the cause is unclassified.
+ * Diagnostics can quote raw paths, so each is escaped to one line and a path holding a newline cannot
+ * forge the trailer. Only the fixed usage text and the JSON-quoted scan protocol keep their line breaks.
  */
 export async function run(): Promise<void> {
 	try {
 		await main();
 	} catch (error) {
-		console.error(error instanceof Error ? error.message : "Stats operation failed");
+		const message = error instanceof Error ? error.message : "Stats operation failed";
+		console.error(message === USAGE || error instanceof IncompleteScan ? message : oneLine(message));
 		if (error instanceof ExportRefusal) console.error(`pi-stats-refusal: ${JSON.stringify({ code: error.refusal })}`);
 		process.exitCode = 1;
 	}

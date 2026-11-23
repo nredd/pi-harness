@@ -72,6 +72,7 @@ export {
 	type HarnessReport,
 	type HarnessStatus,
 	type Identity,
+	IncompleteScan,
 	importStats,
 	loadCombined,
 	type MachineCoverage,

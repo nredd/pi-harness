@@ -201,6 +201,17 @@ export class ExportRefusal extends Error {
 	}
 }
 
+/**
+ * The local scan was incomplete. Its message is the fixed `pi-stats-scan:` protocol: a fixed first line,
+ * then one line per diagnostic holding only JSON-quoted values, so its line breaks are safe to print.
+ */
+export class IncompleteScan extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "IncompleteScan";
+	}
+}
+
 const record = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 function exact(v: unknown, keys: string[]): asserts v is Record<string, unknown> {
 	if (!record(v) || Object.keys(v).length !== keys.length || !Object.keys(v).every((key) => keys.includes(key)))
@@ -347,14 +358,13 @@ function validateBookkeeping(value: Record<string, unknown>): OutboxState {
 /**
  * A state file that was read but does not validate is never replaced, so it refuses until the owner
  * repairs it. Filesystem errors (with an errno `code`) pass through unchanged. JSON parse errors can
- * quote the file, which holds the salt, so only a fixed reason is reported.
+ * quote the file, which holds the salt, so only a fixed reason is reported and the parse error is not
+ * attached as a cause.
  */
 function invalidState(path: string, error: unknown): never {
 	if ((error as NodeJS.ErrnoException).code !== undefined) throw error;
 	const reason = error instanceof SyntaxError ? "not valid JSON" : (error as Error).message;
-	throw new ExportRefusal("export-state-invalid", `Invalid export state in ${JSON.stringify(path)}: ${reason}`, {
-		cause: error,
-	});
+	throw new ExportRefusal("export-state-invalid", `Invalid export state in ${JSON.stringify(path)}: ${reason}`);
 }
 /** Created on first use with a fresh salt and no recorded set. */
 async function exportState(dir: string): Promise<ExportState> {
@@ -880,11 +890,20 @@ interface Damaged {
 	overBudget?: string;
 }
 
+/**
+ * A filesystem call failed for a reason other than absence (EIO, EMFILE, EACCES...). Only Node's
+ * filesystem errors carry `syscall`; parse, digest, zlib and validation failures do not. Such a failure
+ * says nothing about the file, so it is neither damage nor a refusal: the caller sees it and retries.
+ */
+const readFailure = (error: unknown): boolean =>
+	typeof (error as NodeJS.ErrnoException).syscall === "string" && (error as NodeJS.ErrnoException).code !== "ENOENT";
+
 async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 	let manifest: Manifest;
 	try {
 		manifest = validateManifest(await jsonFile(join(snapshotDir, "manifest.json")));
 	} catch (error) {
+		if (readFailure(error)) throw error;
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
 	const shards: Shard[] = [];
@@ -900,6 +919,7 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 			expandedSizes.push(read.expandedBytes);
 			remaining -= read.expandedBytes;
 		} catch (error) {
+			if (readFailure(error)) throw error;
 			if (!(error instanceof OverBudget)) damaged.push(ref.file);
 			else overBudget ??= ref.file;
 		}
@@ -1167,6 +1187,11 @@ export async function exportStats(
 	} catch (unlockError) {
 		const warning = `could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`;
 		// Never turn an already-visible publish into a failure, nor hide the primary publication error.
+		// A refusal keeps its code: the unlock failure is a secondary diagnostic, never a retryable cause.
+		if (!outcome.ok && outcome.error instanceof ExportRefusal)
+			throw new ExportRefusal(outcome.error.refusal, `${outcome.error.message}\n${warning}`, {
+				cause: new AggregateError([outcome.error, unlockError]),
+			});
 		if (!outcome.ok)
 			throw new AggregateError([outcome.error, unlockError], `${String(outcome.error)}\n${warning}`, {
 				cause: outcome.error,
@@ -1259,7 +1284,7 @@ async function publishStats(
 						.replace(/[\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "\ufffd"),
 				})}`,
 		);
-		throw new Error(
+		throw new IncompleteScan(
 			[`Incomplete local scan: ${loaded.errors} errors, ${loaded.badLines} bad lines`, ...details].join("\n"),
 		);
 	}

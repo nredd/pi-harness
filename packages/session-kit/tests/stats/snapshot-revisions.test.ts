@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { inspect } from "node:util";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -581,6 +582,71 @@ it("passes a state read I/O error through unclassified, so callers keep retrying
 		vi.mocked(readFile).mockRestore();
 	}
 	await expect(exportStats(agent, out)).resolves.toHaveProperty("machineId");
+});
+
+it("keeps malformed state contents out of a refusal, its cause and stack included", async () => {
+	const first = await exportStats(agent, out);
+	for (const path of [join(agent, "pi-session-kit", "export-state.json"), outboxStatePath(agent, first.snapshotDir)]) {
+		const state = readFileSync(path);
+		writeFileSync(path, '{"salt":XCANARY}');
+		const error = await exportStats(agent, out).catch((cause: unknown) => cause);
+		expect(error).toMatchObject({
+			message: `Invalid export state in ${JSON.stringify(path)}: not valid JSON`,
+			refusal: "export-state-invalid",
+		});
+		expect(inspect(error, { depth: Number.POSITIVE_INFINITY, showHidden: true })).not.toContain("XCANARY");
+		writeFileSync(path, state);
+	}
+});
+
+it.each([
+	["manifest", "lstat"],
+	["manifest", "readFile"],
+	["shard", "lstat"],
+	["shard", "readFile"],
+])("passes a one-shot %s %s I/O error through unclassified, so the next export publishes", async (target, call) => {
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: at("2026-10-10"),
+		lines: [assistantLine({ ms: at("2026-10-10"), provider: "physical", model: "fixture", input: 1 })],
+	});
+	const first = await exportStats(agent, out);
+	const published = manifest(first.snapshotDir);
+	const ref = published.shards[0];
+	if (!ref) throw new Error("Missing shard");
+	const file = join(first.snapshotDir, target === "shard" ? ref.file : "manifest.json");
+	const before = readFileSync(join(first.snapshotDir, "manifest.json"));
+	const files = readdirSync(first.snapshotDir).sort();
+	// A failed read says nothing about the file: an intact shard must not be reported as damage.
+	const failure = Object.assign(new Error(`EIO: i/o error, ${call} '${file}'`), {
+		code: "EIO",
+		errno: -5,
+		syscall: call === "lstat" ? "lstat" : "read",
+		path: file,
+	});
+	let pending = true;
+	const fail = (path: unknown): void => {
+		if (!pending || path !== file) return;
+		pending = false;
+		throw failure;
+	};
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	if (call === "lstat")
+		vi.mocked(lstat).mockImplementation(async (path, options) => {
+			fail(path);
+			return actual.lstat(path, options);
+		});
+	else
+		vi.mocked(readFile).mockImplementation(async (path, options) => {
+			fail(path);
+			return actual.readFile(path, options);
+		});
+	const error = await exportStats(agent, out).catch((cause: unknown) => cause);
+	expect(error).toBe(failure);
+	expect(error).not.toHaveProperty("refusal");
+	expect(readFileSync(join(first.snapshotDir, "manifest.json"))).toEqual(before);
+	expect(readdirSync(first.snapshotDir).sort()).toEqual(files);
+	await expect(exportStats(agent, out)).resolves.toHaveProperty("machineId");
+	expect(manifest(first.snapshotDir).shards).toEqual(published.shards);
 });
 
 it("migrates a legacy boolean recovery marker to a frozen file set once", async () => {

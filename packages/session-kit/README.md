@@ -574,11 +574,18 @@ An export refused until the owner acts exits 1 and ends stderr with exactly one
 `harness-set-narrowed`, `harness-set-unknown` (the safeguards above that only a repair or an explicit
 `--replace-harnesses` gets past) and `export-state-invalid` (export state or outbox bookkeeping that
 reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
-the file, which holds the salt; I/O errors on it are not refusals). Each code comes from one fixed
-refusal site, never from matching a message. No line means the failure is unclassified (lock
-contention, I/O, an incomplete scan, usage, or a refusal whose lock release also failed): treat it
-as retryable. Wrappers may stop retrying on a code; they must never add `--replace-harnesses` on
-their own. Library callers get the same code as `ExportRefusal.refusal`.
+the file, which holds the salt, nor attaching its parse error). Each code comes from one fixed
+refusal site, never from matching a message. `history-unreadable` means a published shard is
+missing (`ENOENT`) or fails its digest/parse/validation; any other filesystem error reading the
+manifest, a shard or the state (`EIO`, `EMFILE`, `EACCES`, ...) says nothing about the file and is
+not a refusal. A refusal whose lock release also fails keeps its code, with the unlock warning
+appended to the message. No line means the failure is unclassified (lock contention, I/O, an
+incomplete scan, usage): treat it as retryable. The diagnostic before the line is escaped to one
+line (line breaks and other control characters as `\n`, `\uXXXX`; the fixed usage text excepted),
+so a path cannot forge the line, but consumers must still accept only a complete
+`pi-stats-refusal: {"code":"<code>"}` whose code is in the list above, and only as the FINAL stderr
+line of an export that exited 1. Wrappers may stop retrying on a code; they must never add
+`--replace-harnesses` on their own. Library callers get the same code as `ExportRefusal.refusal`.
 
 CLI results:
 
