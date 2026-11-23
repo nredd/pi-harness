@@ -127,8 +127,9 @@ and missing selected-OS floors fail closed, including when the global target is 
 overrides even stale signal caps for `goal: "100-percent"` PRIMARY signals. Independent Bun signals
 use their explicit per-OS caps, not that target override. Enforced Bun signals have zero uncovered
 lines/functions/branches/statements and measure their full owned inventory. `computer-use-vitest/bun`
-is enforced at zero since hosted main run `45009970545` (`39b7a5bb`): its macOS and Ubuntu Bun
-reports each listed all 36 primary files with zero misses (#645).
+is enforced at zero from this change on. Evidence: hosted main run `45009970545` (`39b7a5bb`), whose macOS and
+Ubuntu Bun reports each listed all 36 primary files with zero misses (#645). That run predates the
+enforcement, so the first hosted main run after the merge is the receipt for the enforced gate.
 Primary signals of eligible packages remain `enforced`; pending eligible inventory also fails.
 Owner-excluded/report-only goals do not acquire the primary target override. Report-only means
 counter excess is informational, not that reporting is optional: every selected signal still needs
@@ -533,8 +534,8 @@ instead of dropping out. It stays
 measured uncovered counts for lines, functions, branches and statements (darwin **0 / 0 / 0 / 0**;
 linux **0 / 0 / 0 / 0**). The earlier `1 / 0 / 1 / 1` receipt from run `43173083073` is historical.
 The full runtime suite also runs through `test:bun` with the same Istanbul inventory and separate
-`coverage/bun/` reports. Since hosted main run `45009970545` (`39b7a5bb`) accounting enforces the Bun
-signal's own zero budgets (darwin and linux **0 / 0 / 0 / 0**, the signal's default `platforms`) over
+`coverage/bun/` reports. From this change on, accounting enforces the Bun
+signal's own zero budgets (measured zero at hosted main run `45009970545`, `39b7a5bb`) (darwin and linux **0 / 0 / 0 / 0**, the signal's default `platforms`) over
 the complete inventory; the verification-only async suite retains its independent Node signal.
 This promotes Bun only: the goal stays `excluded` (T7 needs the owner's explicit reversal).
 Subprocess-run scripts count only what the suites import. On Node, files already at 0/0/0/0 on
