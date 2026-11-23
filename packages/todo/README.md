@@ -182,6 +182,21 @@ eligible request lists the newly replayed branch's todos.
 Limits: the stale-list and empty-list nudges stay parent-TUI-only (#1195), so headless parents
 (JSON, RPC, print) get neither. Only the compaction list reaches every session mode.
 
+A fresh session starts with an empty list, even when the session before it in the same cwd ended
+with open todos. So in a parent TUI session started by `/new` or at process startup, with an empty
+branch and no `parentSession`, the first model request outside Plan mode gets one hidden
+`rpiv-todo-carryover-list` message listing the previous session's `pending` and `in_progress`
+todos as it last recorded them, with their old ids and former owners. Nothing is imported: the new
+list, its ids and `nextId` stay untouched, and the message tells the model to recreate only the
+todos the new request still needs. It is never persisted and later requests do not carry it.
+`/resume`, `/fork`, `/reload`, `--continue` and child sessions never get it. The previous session
+is the one `/new` switched away from; at startup it is the most recently written `.jsonl` in the
+session directory whose header has this cwd and no `parentSession`. With parallel sessions in one
+cwd that is whichever wrote last, so the message names its session id and says it may still be
+running. A chosen session with nothing open, or one that cannot be read, shows nothing; the scan
+never falls back to an older session. Like the compaction list, the pending read lives in memory,
+so a session switch before the first request drops it.
+
 ### Session switches and survivors
 
 `/new`, `/resume`, `/fork` and `/reload` are not process restarts: pi-subagents detaches background
