@@ -492,6 +492,8 @@ test("act_ui, observe_ui and find_roots enforce blocked_apps at the platform bac
 			};
 		},
 	});
+	// The stub answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 	const ctx = {
 		cwd: makeTestTempDir("cu-policy-", onTestFinished),
 		hasUI: false,
@@ -717,6 +719,8 @@ async function useRootPolicyFixture(platform, helper, roots, onTestFinished) {
 			return state;
 		},
 	});
+	// Drop the host backend's optional methods, e.g. Linux `listRootsOfPids`, that the pinned backend lacks.
+	for (const key of Object.keys(currentPlatformBackend)) if (!(key in backend)) delete currentPlatformBackend[key];
 	helper.command = async (name, args) => {
 		calls.push(name);
 		if (name === "look") {
