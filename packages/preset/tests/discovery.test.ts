@@ -338,6 +338,23 @@ test("a global agent copy shadows the packaged agent until it is retired, then o
 		);
 	}));
 
+test("a trusted project agent copy also shadows the packaged agent, an untrusted one does not", () =>
+	withSandbox(async (box) => {
+		box.settingsManager.setPackages([
+			{ source: pkgRoot, extensions: ["src/index.ts"], skills: ["skills/**"], prompts: [], themes: [] },
+		]);
+		setPackageAgentsGate(["pi-preset"]);
+		const copy = join(box.cwd, ".pi/agents/critic.md");
+		mkdirSync(join(box.cwd, ".pi/agents"), { recursive: true });
+		writeFileSync(copy, "---\nname: critic\ndescription: Project copy.\n---\nProject.\n");
+		const origin = (projectTrusted: boolean) => {
+			const critic = loadCustomAgents(box.cwd, true, { homeDir: box.home, projectTrusted }).get("critic");
+			return [critic?.source, critic?.sourcePath];
+		};
+		assert.deepEqual(origin(true), ["project", copy]);
+		assert.deepEqual(origin(false), ["package", join(pkgRoot, "agents/critic.md")]);
+	}));
+
 test("declared subagent agents resolve inside the package and parse with Pi's frontmatter reader", () => {
 	const { pi } = manifest();
 	assert.deepEqual(pi.subagents, { agents: ["./agents"] });

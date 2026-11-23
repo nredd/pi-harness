@@ -69,12 +69,11 @@ Pi and `pi.subagents.agents: ["./agents"]` for pi-subagents. No copying is neede
 
 While local copies and the widened selection overlap, the copies stay in charge: a global skill of the same
 name wins and Pi reports the packaged one as a `collision` diagnostic, and a global agent file
-(`<agentDir>/agents/<name>.md`) silently replaces the packaged agent of that name. Once the copy
+(`<agentDir>/agents/<name>.md`, matched by its declared `name:`) silently replaces the packaged agent of that name. Once the copy
 is removed the packaged definition loads. Both rules are tested in `tests/discovery.test.ts`.
 So widening the selection before the copies go changes nothing those copies define, while
 retiring copies before the widened release is selected removes those agents and skills.
-After cutover, discovery is duplicate-free only when the skill diagnostics contain no `collision`
-and no global or project agent file shares a packaged agent's name.
+A project agent file (`.pi/agents/<name>.md`) shadows the packaged agent the same way, but only when the project is trusted. After cutover, discovery is duplicate-free only when the skill diagnostics contain no `collision` and no global or trusted-project agent file declares a packaged agent's name (the frontmatter `name:`; the filename only matters when `name:` is absent).
 
 Retire duplicate generic definitions through the deployment's configuration manager only
 when the selected release is published and available. Keep machine-local agents, skills,
