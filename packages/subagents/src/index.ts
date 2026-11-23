@@ -12,7 +12,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -86,7 +86,7 @@ import {
 	setFallbackSubagent,
 } from "./agent-types.ts";
 import { inChildSessionContext } from "./child-context.ts";
-import { type Clock, realClock } from "./clock.ts";
+import { type Clock, realClock, type TimerHandle } from "./clock.ts";
 import { CompletionOutbox } from "./completion-outbox.ts";
 import { createStopActions, isLiveWorkflow, registerControlTools } from "./control-tools.ts";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.ts";
@@ -182,7 +182,7 @@ import { answerPlanGateQueries, PLAN_PARK_REFUSAL, PLAN_SCHEDULE_REFUSAL, planni
 import { getBudgetPolicy, setBudgetPolicy } from "./process-budget.ts";
 import { checkAdmission, describeBlock, mayPark, modelRef, QUOTA_RESTART_GRACE_MS } from "./quota-admission.ts";
 import { savedAgentNote } from "./saved-agent-record.ts";
-import { checkSavedChild, sameSavedChild } from "./saved-child-session.ts";
+import { canonicalChildPath, canonicalPaths, checkSavedChild, sameSavedChild } from "./saved-child-session.ts";
 import { SubagentScheduler } from "./schedule.ts";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.ts";
 import {
@@ -198,6 +198,7 @@ import {
 } from "./settings.ts";
 import { hostStartupErrorClass } from "./startup-error.ts";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix, resumeHint } from "./status-note.ts";
+import { writerClaimHolder } from "./transcript-claim.ts";
 import type {
 	AgentConfig,
 	AgentInvocation,
@@ -508,6 +509,17 @@ export function formatToolsSuffix(cfg: AgentConfig | undefined): string {
 
 /** CLI flag that runs a workflow script at session start. */
 export const WORKFLOW_FILE_FLAG = "subagents-workflow-file";
+
+/** What a workflow launch gets once `session_shutdown` has begun: shutdown would neither stop nor join it. */
+export const WORKFLOW_SHUTDOWN_REFUSAL = "The session is shutting down: no new workflow can start.";
+
+/**
+ * How long `session_shutdown` waits for aborted workflows to settle. An abort
+ * settles once `worker.terminate()` resolves, normally within milliseconds; a
+ * stalled one must not hold quit or session replacement, which the host awaits
+ * with no timeout of its own. Same ceiling as a child session's shutdown handlers.
+ */
+export const WORKFLOW_SHUTDOWN_DEADLINE_MS = 3_000;
 
 /**
  * Re-exported from where they now live, because this is where they were
@@ -942,9 +954,42 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		};
 	}
 
+	/**
+	 * Each record's transcript resolved once: its spelling never changes, so
+	 * neither does its identity. An unresolvable one stays unjournaled, which
+	 * only leaves startup to bind the file it validates (and link by resolution).
+	 */
+	const canonicalSessionFiles = new WeakMap<AgentRecord, { sessionFile: string; canonical?: string }>();
+	function canonicalSessionFile(record: AgentRecord, sessionFile: string): string | undefined {
+		const known = canonicalSessionFiles.get(record);
+		if (known?.sessionFile === sessionFile) return known.canonical;
+		const canonical = canonicalChildPath(sessionFile);
+		canonicalSessionFiles.set(record, { sessionFile, canonical });
+		return canonical;
+	}
+
+	/**
+	 * Where a child session lives, for restart recovery. The directory is the one
+	 * it was created in (a worktree child uses the worktree's settings); a reopened
+	 * file outside its manager's directory journals none and inherits its
+	 * predecessor's at startup.
+	 */
+	function savedSessionFields(record: AgentRecord): Record<string, unknown> {
+		const sessionFile = record.sessionFile;
+		if (!sessionFile) return {};
+		// Optional calls: programmatic sessions may carry a partial session manager.
+		const sessionManager = record.session?.sessionManager;
+		const sessionDir = sessionManager?.getSessionDir?.();
+		return {
+			sessionFile,
+			sessionCwd: sessionManager?.getHeader?.()?.cwd,
+			...(sessionDir && dirname(sessionFile) === resolvePath(sessionDir) ? { sessionDir } : {}),
+			canonicalSessionFile: canonicalSessionFile(record, sessionFile),
+		};
+	}
+
 	/** The `subagents:record` history entry, shared by live runs and the detached spool. */
 	function historyRecord(record: AgentRecord): Record<string, unknown> {
-		const sessionCwd = record.session?.sessionManager?.getHeader?.()?.cwd;
 		return {
 			id: record.id,
 			type: record.type,
@@ -958,7 +1003,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			alias: record.alias,
 			previousId: record.previousId,
 			...(record.outputFile ? { outputFile: record.outputFile } : {}),
-			...(record.sessionFile ? { sessionFile: record.sessionFile, sessionCwd } : {}),
+			...savedSessionFields(record),
 			...(record.modelFallback ? { modelFallback: record.modelFallback } : {}),
 			...(record.modelTier ? { modelTier: record.modelTier } : {}),
 		};
@@ -1234,7 +1279,6 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			);
 		},
 		savePersistedRun,
-		savePersistedRun,
 	);
 
 	// A live survivor of an orphaned manager keeps its handle: reusing it would make a lifecycle listener
@@ -1273,7 +1317,17 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			return fleet;
 		},
 	});
-	const { liveAgentById, resolveAgentRef } = createAgentLookup(manager, () => currentCtx);
+	const { liveAgentById, resolveSessionRef } = createAgentLookup(
+		manager,
+		() => currentCtx,
+		() => workflowTasks,
+	);
+	/** Mark a settled result read: its completion notice is not sent, and its failure badge clears. */
+	function markRead(record: AgentRecord): void {
+		markConsumed(record, clock.now());
+		fleet.acknowledgeFailure(record.id);
+		outbox.cancel(record.id);
+	}
 
 	const registryEntry = {
 		waitForAll: () => manager.waitForAll(),
@@ -1324,13 +1378,25 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		}
 	}
 
-	function savedSessionChecker(ctx: ExtensionContext) {
+	/** A claim that cannot be read is no proof its writer stopped: refuse, carrying the error as it is. */
+	function readWriterClaim(canonicalFile: string): string | undefined {
+		try {
+			return writerClaimHolder(canonicalFile);
+		} catch (err) {
+			return `writer claim unreadable: ${errorMessage(err)}`;
+		}
+	}
+
+	/** `claimed`: the caller already holds the transcript's writer claim, so it is not a sign of another writer. */
+	function savedSessionChecker(ctx: ExtensionContext, claimed = false) {
 		const home = options.homeDir;
 		const agentDir = resolveAgentDir(home);
 		const settings = SettingsManager.create(ctx.cwd, agentDir, { projectTrusted: isProjectTrusted() });
 		const setting = process.env.PI_CODING_AGENT_SESSION_DIR ?? settings.getSessionDir?.();
 		const parentFile = ctx.sessionManager.getSessionFile();
 		const directories = new Map<string, string>();
+		// Every row shares the parent and a few directories: resolve each once.
+		const canonical = canonicalPaths();
 		return (note: EvictedNote, file: string) => {
 			const cwd = note.sessionCwd ?? ctx.cwd;
 			const key = JSON.stringify([note.type, cwd]);
@@ -1339,7 +1405,21 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				directory = childSessionDir(getAgentConfig(note.type)?.sessionDir, setting, cwd, agentDir, home);
 				directories.set(key, directory);
 			}
-			return checkSavedChild(file, directory, parentFile, note.status, clock.now(), note.sessionCwd);
+			return checkSavedChild({
+				file,
+				// The journaled creation directory survives settings that changed since
+				// (or differ in a worktree) when the row saved a cwd; legacy rows have
+				// only the recomputed one.
+				journaledDirectory: note.sessionDir,
+				directories: [directory],
+				parentFile,
+				status: note.status,
+				now: clock.now(),
+				savedCwd: note.sessionCwd,
+				boundFile: note.canonicalSessionFile,
+				canonical,
+				writerClaim: claimed ? undefined : readWriterClaim,
+			});
 		};
 	}
 
@@ -1416,9 +1496,16 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				// A successor first appears after its predecessor, on the same transcript.
 				// Never create an edge from an update to an already seen id (or a cycle).
 				const previous = saved.get(note.previousId ?? "");
-				if (previous && !saved.has(note.id) && sameSavedChild(previous.sessionFile, note.sessionFile)) {
+				if (previous && !saved.has(note.id) && sameSavedChild(previous, note)) {
 					manager.linkSuccessor(previous.id, note.id);
+					// Same transcript, so the same creation directory.
+					note.sessionDir ??= previous.sessionDir;
 				}
+				// An update row of a reopened run journals no directory either. Only one
+				// naming the same transcript (`sameSavedChild`) may carry it forward: a
+				// directory journaled for one file never vouches for another.
+				const earlier = saved.get(note.id);
+				if (earlier && sameSavedChild(earlier, note)) note.sessionDir ??= earlier.sessionDir;
 				saved.set(note.id, note);
 			}
 		}
@@ -1466,23 +1553,12 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 				manager: {
 					spawn: spawnTopLevel,
 					awaitStartup: (id) => manager.awaitStartup(id),
-					getRecord: (id) => manager.getRecord(id),
-					// Unguarded on purpose: the stop handler now runs the top-level check
-					// itself off `getRecord`, and reports the refusal instead of the
-					// "Agent not found" a false from here used to be read as.
+					resolve: (id) => resolveSessionRef(id, "none"),
+					hasRecord: (id) => manager.getRecord(id) !== undefined,
+					// Unguarded on purpose: the stop handler runs the ownership check itself
+					// off `resolve`, and reports the refusal instead of a bare false.
 					abort: (id) => manager.abort(id),
-					consumeResult: (id) => {
-						const record = resolveAgentRef(id);
-						// Same guard as get_subagent_result: a running agent has no result
-						// to consume, and its notification is still the caller's only
-						// signal that it finished.
-						if (!record || record.parentAgentId) return false;
-						if (record.status === "running" || record.status === "queued") return false;
-						markConsumed(record, clock.now());
-						fleet.acknowledgeFailure(record.id);
-						outbox.cancel(record.id);
-						return true;
-					},
+					markRead,
 					steer: (id, message) => manager.steer(id, message),
 				},
 			});
@@ -1712,7 +1788,13 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 	// agents are detached instead and hand their results back when the user returns
 	// to this session (see detached-results.ts). Only agents that cannot outlive the
 	// session are aborted.
-	pi.on("session_shutdown", async (event: { reason?: string }) => {
+	//
+	// Once per activation: a second event while the first waits (a quit signal during
+	// a pending /reload) gets the first one's teardown, reason and session file
+	// included, rather than tearing down again.
+	let shutdown: Promise<void> | undefined;
+	pi.on("session_shutdown", (event: { reason?: string }) => (shutdown ??= shutDown(event)));
+	async function shutDown(event: { reason?: string }): Promise<void> {
 		fleet.flushState(); // appendEntry must run before this activation loses its context
 		const sessionFile = currentCtx?.sessionManager?.getSessionFile?.();
 		unwatchDetached?.();
@@ -1732,10 +1814,20 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 			delete (globalThis as any)[MANAGER_KEY];
 		}
 		scheduler.stop();
+		// Before the abort pass below: a run launched after it would escape both it
+		// and the join, outliving teardown.
+		workflowsClosing = true;
+		// Before any run is aborted: a run that settles while another is still
+		// terminating must not send its notice into the closing session.
+		outbox.hold();
 		// Before abortAll, and not folded into it: a workflow owns a worker thread
 		// as well as its children, and only its own signal terminates that.
 		for (const task of workflowTasks.values()) task.abortController.abort();
 		workflowTasks.clear();
+		// Joined, completion callbacks included, while the outbox is still open: an
+		// aborted run settles once its worker is down, and its Stopped notice is then
+		// spooled below on a switch or dropped with the outbox on quit (#1257).
+		await joinWorkflowRuns();
 		const switching = event?.reason !== "quit" && sessionFile !== undefined;
 		if (switching) {
 			// A group may still be held, or not registered until the parent's turn
@@ -1811,7 +1903,7 @@ function activateSubagents(pi: ExtensionAPI, options: SubagentsExtensionOptions)
 		// point after which a synchronous final flush is complete. Synchronous:
 		// `emit` does not await listeners, and pi exits once this handler returns.
 		pi.events.emit("subagents:disposed", {});
-	});
+	}
 
 	// Live widget: show running agents above editor.
 	// widgetMode (default "background") selects what the widget shows: "all" =
@@ -2786,7 +2878,7 @@ Terse command-style prompts produce shallow, generic work.
 									: "no saved session is left to reopen.";
 						const why = note
 							? `Cannot resume agent "${latest}": ${gone}\n${describeEvicted(note)}`
-							: agentNotFound(manager, latest);
+							: agentNotFound(latest);
 						return errorResult(`${continued}${why}`);
 					}
 					// The reopen is a fresh detached spawn: nothing can block on it here.
@@ -3326,6 +3418,47 @@ Terse command-style prompts produce shallow, generic work.
 	const workflowTasks = new Map<string, WorkflowTask>();
 
 	/**
+	 * Detached runs still going, each through its completion callback; a run
+	 * leaves once that callback has run. `session_shutdown` aborts the runs and
+	 * joins these before disposing the outbox, widget and fleet: a callback that
+	 * ran afterwards armed its notice timer on the closed outbox (#1257).
+	 */
+	const pendingWorkflowRuns = new Map<Promise<void>, { fenced: boolean }>();
+
+	/** Set once `session_shutdown` begins: both launch paths then refuse. */
+	let workflowsClosing = false;
+
+	/** Run a task in the background, then `settled`, for `session_shutdown` to join. */
+	function detachWorkflowRun(ctx: ExtensionContext, task: WorkflowTask, settled: () => void): void {
+		const state = { fenced: false };
+		const run = runWorkflowTask(ctx, task)
+			.then(() => {
+				if (!state.fenced) settled();
+			})
+			.finally(() => pendingWorkflowRuns.delete(run));
+		pendingWorkflowRuns.set(run, state);
+	}
+
+	/**
+	 * Wait for the pending runs, for at most {@link WORKFLOW_SHUTDOWN_DEADLINE_MS}.
+	 * A run still going at the deadline is fenced: its callback, once it settles,
+	 * would act on the disposed outbox and a session that has gone, so it is skipped.
+	 */
+	async function joinWorkflowRuns(): Promise<void> {
+		if (pendingWorkflowRuns.size === 0) return;
+		let deadline: TimerHandle | undefined;
+		await Promise.race([
+			Promise.allSettled(pendingWorkflowRuns.keys()),
+			new Promise<void>((resolve) => {
+				deadline = clock.setTimeout(resolve, WORKFLOW_SHUTDOWN_DEADLINE_MS);
+				deadline.unref?.();
+			}),
+		]);
+		deadline!.cancel();
+		for (const state of pendingWorkflowRuns.values()) state.fenced = true;
+	}
+
+	/**
 	 * Workflow runs as the fleet list wants them.
 	 *
 	 * Mapped here rather than handing `WorkflowTask` over the seam: the list is
@@ -3511,6 +3644,7 @@ Terse command-style prompts produce shallow, generic work.
 		},
 
 		execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
+			if (workflowsClosing) return textResult(WORKFLOW_SHUTDOWN_REFUSAL);
 			const resumeFrom = resolveResumeTarget(params.resumeFromRunId, workflowTasks);
 			if (resumeFrom !== undefined && !resumeFrom.ok) return textResult(resumeFrom.message);
 
@@ -3579,7 +3713,7 @@ Terse command-style prompts produce shallow, generic work.
 
 			// Background, like Claude Code: the id comes back now and the run keeps
 			// going without the tool call.
-			void runWorkflowTask(ctx, task).then(() => notifyWorkflowFinished(task));
+			detachWorkflowRun(ctx, task, () => notifyWorkflowFinished(task));
 
 			return {
 				content: [
@@ -3692,6 +3826,11 @@ Terse command-style prompts produce shallow, generic work.
 			else console.warn(`[pi-subagents] ${message}`);
 		};
 
+		if (workflowsClosing) {
+			report(WORKFLOW_SHUTDOWN_REFUSAL, "warning");
+			return;
+		}
+
 		// The flag is the same machinery by another door, so the master switch has
 		// to close it too — silently ignoring a flag the user typed would be worse
 		// than saying why nothing ran.
@@ -3736,7 +3875,7 @@ Terse command-style prompts produce shallow, generic work.
 
 		// Detached: session_start is awaited by the host, and a workflow can run for
 		// minutes — blocking here would hold the whole session's startup.
-		void runWorkflowTask(ctx, task).then(() => {
+		detachWorkflowRun(ctx, task, () => {
 			// No tool call to attach a result card to, so the card becomes a session
 			// entry (same layout), and the outcome is handed to the model as context
 			// for its next turn rather than forcing one.
@@ -3756,13 +3895,9 @@ Terse command-style prompts produce shallow, generic work.
 
 	registerControlTools({
 		pi,
-		manager,
 		clock,
-		fleet,
-		outbox,
-		workflowTasks,
-		liveAgentById,
-		resolveAgentRef,
+		markRead,
+		resolveSessionRef,
 		isShowCostEnabled,
 		formatLifetimeTokens,
 		textResult,

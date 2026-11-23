@@ -7,12 +7,14 @@ import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { type AgentRunState, applyAgentEvent } from "../../src/agents.ts";
 import {
+	formatCompactionList,
 	formatHeldReminder,
 	formatInProgressNotice,
 	formatPlanReminder,
 	HELD_REMINDER_MARKER,
 	isPlanApprovedPayload,
 	PLAN_REMINDER_MARKER,
+	registerPlanHooks,
 	remindedSinceLastPrompt,
 	STALE_REMINDER_MARKER,
 } from "../../src/plan/hooks.ts";
@@ -20,11 +22,14 @@ import { replayFromBranch } from "../../src/state/replay.ts";
 import { getState } from "../../src/state/store.ts";
 import { __resetState } from "../../src/todo.ts";
 import {
+	COMPACTION_LIST_MESSAGE_TYPE,
 	HELD_REMINDER_MESSAGE_TYPE,
 	MONITOR_STARTED_EVENT,
 	MONITOR_STOPPED_EVENT,
+	NUDGE_BUDGET_ENTRY_TYPE,
 	PLAN_APPROVED_EVENT,
 	PLAN_REMINDER_MESSAGE_TYPE,
+	STALE_REMINDER_MESSAGE_TYPE,
 	STATE_ENTRY_TYPE,
 	SUBAGENT_ANNOUNCE_SURVIVORS_EVENT,
 	SUBAGENT_OTHER_SESSION_SURVIVOR_EVENT,
@@ -48,7 +53,11 @@ const PLAN = `# Add widgets
 
 type Handler = (...args: unknown[]) => unknown;
 
-function setup() {
+function setup(
+	importOverlay: () => Promise<typeof import("../../src/todo-overlay.ts")> = async () => {
+		throw new Error("overlay must not load in headless tests");
+	},
+) {
 	__resetState();
 	const bus = new Map<string, Handler[]>();
 	const appendEntry = vi.fn();
@@ -64,13 +73,7 @@ function setup() {
 			}),
 		},
 	} as never);
-	registerTodo(
-		pi,
-		async () => {
-			throw new Error("overlay must not load in headless tests");
-		},
-		{ homeDir: TEST_HOME },
-	);
+	registerTodo(pi, importOverlay, { homeDir: TEST_HOME });
 	const handler = (name: string) => {
 		const found = captured.handlers.get(name)?.[0];
 		if (!found) throw new Error(`${name} not registered`);
@@ -641,8 +644,135 @@ describe("settling with nothing armed to wake the parent", () => {
 		expect(await handler("context")({ messages: [user, marker] }, ctx)).toBeUndefined();
 	});
 
+	describe("open list after a compaction", () => {
+		const planning = { role: "custom", customType: "plan-mode-transition", details: { version: 1, mode: "plan" } };
+		const mixed = {
+			persistenceVersion: 1,
+			nextId: 6,
+			tasks: [
+				{ id: 1, subject: "done work", status: "completed" },
+				{ id: 2, subject: "ship \u001b[31mwidgets", status: "in_progress", owner: "worker" },
+				{ id: 3, subject: "verify", status: "pending", blockedBy: [1, 2, 5] },
+				{ id: 4, subject: "descoped", status: "deferred", reason: "later" },
+				{ id: 5, subject: "gone", status: "deleted" },
+			],
+		};
+		const LIST = [
+			"[rpiv-todo] The conversation was compacted, so here is the todo list it no longer shows. These todos are still open:",
+			"- #2 in_progress ship widgets (@worker)",
+			"- #3 pending verify (blocked by #2)",
+			"They already exist: update them by id with `todo`, do not recreate them. Complete only with evidence and defer with a reason.",
+		].join("\n");
+		const appended = { role: "custom", customType: COMPACTION_LIST_MESSAGE_TYPE, content: LIST, display: false };
+
+		it("appends the open list to the first request after a compaction only", async () => {
+			const { handler, ctx } = await start(mixed as never);
+			const context = handler("context");
+			expect(await context({ messages: [user] }, ctx)).toBeUndefined();
+			await handler("session_compact")({}, ctx);
+			expect(await context({ messages: [user] }, ctx)).toEqual({
+				messages: [user, { ...appended, timestamp: expect.any(Number) }],
+			});
+			expect(await context({ messages: [user, assistant] }, ctx)).toBeUndefined();
+		});
+
+		it("waits out Plan mode and expands a trailing reminder in the same request", async () => {
+			const { handler, ctx } = await start(tasks({ id: 1 }));
+			const context = handler("context");
+			await handler("session_compact")({}, ctx);
+			expect(await context({ messages: [planning, user] }, ctx)).toBeUndefined();
+			const result = (await context({ messages: [user, assistant, marker] }, ctx)) as {
+				messages: Array<{ customType?: string; content: string }>;
+			};
+			expect(result.messages).toHaveLength(4);
+			expect(result.messages[2]).toMatchObject({ customType: HELD_REMINDER_MESSAGE_TYPE });
+			expect(result.messages[2].content).toContain("Nothing is armed to wake you");
+			expect(result.messages[3]).toMatchObject({ customType: COMPACTION_LIST_MESSAGE_TYPE });
+			expect(result.messages[3].content).toContain("- #1 in_progress t1\n");
+			expect(await context({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it("spends the list on a request with nothing open", async () => {
+			const { handler, ctx, call } = await start({ persistenceVersion: 1, nextId: 1, tasks: [] } as never);
+			await handler("session_compact")({}, ctx);
+			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+			await call(ctx, { action: "create", subject: "later work" });
+			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it("drops a pending list on session_start", async () => {
+			const { handler, ctx } = await start(tasks({ id: 1 }));
+			await handler("session_compact")({}, ctx);
+			await handler("session_start")({ reason: "new" }, ctx);
+			expect(await handler("context")({ messages: [user] }, ctx)).toBeUndefined();
+		});
+
+		it("clears the pending flag at shutdown while the activation lives on", () => {
+			const hooks = registerPlanHooks(
+				createTodoPi().pi,
+				async () => {},
+				() => {},
+				{ homeDir: TEST_HOME },
+			);
+			hooks.sessionCompacted("s1");
+			hooks.sessionCompacted("s2");
+			expect(hooks.compactionListPending("s1")).toBe(true);
+			hooks.sessionEnded("s1");
+			expect(hooks.compactionListPending("s1")).toBe(false);
+			expect(hooks.compactionListPending("s2")).toBe(true);
+		});
+
+		it.each(["rejects", "is still loading"])("arms the list when the overlay refresh %s", async (outcome) => {
+			const Overlay = class {
+				setUICtx = vi.fn();
+				update = vi.fn();
+			};
+			let release = () => {};
+			const loaded = new Promise<typeof import("../../src/todo-overlay.ts")>((resolve, reject) => {
+				release = () => resolve({ TodoOverlay: Overlay } as never);
+				if (outcome === "rejects") reject(new Error("overlay load failed"));
+			});
+			const { handler } = setup(() => loaded);
+			// An empty foreground binds the UI without loading the overlay; the compaction replay
+			// brings visible tasks, so its refresh is the first load.
+			const ctx = createTodoCtx({ sessionId: "s1", hasUI: true });
+			await handler("session_start")({ reason: "new" }, ctx);
+			Object.assign(ctx.sessionManager, {
+				getBranch: () => [{ type: "custom", customType: STATE_ENTRY_TYPE, data: tasks({ id: 1 }) }],
+			});
+			const compacting = handler("session_compact")({}, ctx) as Promise<void>;
+			if (outcome === "rejects") await expect(compacting).rejects.toThrow("overlay load failed");
+			const result = (await handler("context")({ messages: [user] }, ctx)) as { messages: unknown[] };
+			expect(result.messages[1]).toMatchObject({ customType: COMPACTION_LIST_MESSAGE_TYPE });
+			release();
+			await compacting.catch(() => {});
+		});
+
+		it("skips a blocker missing from the list", () => {
+			const state = { nextId: 3, tasks: [{ id: 2, subject: "orphan", status: "pending", blockedBy: [1] }] };
+			expect(formatCompactionList(state as never)).toContain("\n- #2 pending orphan\n");
+		});
+
+		it("lists open todos in child and non-TUI sessions too", async () => {
+			const childContext = new AsyncLocalStorage<boolean>();
+			vi.stubGlobal(Symbol.for("pi-subagents:child-session-context"), childContext);
+			onTestFinished(() => {
+				vi.unstubAllGlobals();
+			});
+			const { handler, ctx } = await start(mixed as never, { mode: "rpc", childContext });
+			await handler("session_compact")({}, ctx);
+			expect(await handler("context")({ messages: [user] }, ctx)).toMatchObject({ messages: [user, appended] });
+		});
+	});
+
 	describe("stale open lists", () => {
-		const customType = "rpiv-todo-stale-reminder";
+		const customType = STALE_REMINDER_MESSAGE_TYPE;
+		const budget = {
+			type: "custom",
+			customType: NUDGE_BUDGET_ENTRY_TYPE,
+			data: { persistenceVersion: 1, nudge: "stale" },
+		};
+		const nudged = { continue: true, entries: [budget, { type: "custom_message", customType, display: false }] };
 		const expectQuiet = async (settle: () => unknown, count: number) => {
 			for (let i = 0; i < count; i++) expect(await settle()).toBeUndefined();
 		};
@@ -659,7 +789,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(path, JSON.stringify({ staleAfterSettles: 3 }));
 			try {
-				expect(await settle()).toMatchObject({ entries: [{ customType, display: false }] });
+				expect(await settle()).toMatchObject(nudged);
 			} finally {
 				rmSync(path, { force: true });
 			}
@@ -683,11 +813,11 @@ describe("settling with nothing armed to wake the parent", () => {
 			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant]), ctx), 11);
 		});
 
-		it.each(["resume", "reload"])("restores the stale prompt budget on %s", async (reason) => {
+		it.each(["resume", "reload"])("restores the stale prompt budget on %s from bookkeeping", async (reason) => {
 			const persisted = { customType, content: STALE_REMINDER_MARKER, display: false };
 			const { handler, ctx } = await start(tasks({ id: 1 }), {
 				reason,
-				entries: [{ type: "custom_message", ...persisted, id: "nudge", parentId: null, timestamp: "" }],
+				entries: [{ ...budget, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
 			});
 			armWorker();
 			const marker = { role: "custom", ...persisted };
@@ -698,7 +828,38 @@ describe("settling with nothing armed to wake the parent", () => {
 			await handler("input")({ source: "extension" }, ctx);
 			expect(await settle()).toBeUndefined();
 			await handler("input")({ source: "interactive" }, ctx);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
+		});
+
+		it("spends the stale budget on neither a restored marker nor empty-list bookkeeping", async () => {
+			const persisted = { customType, content: STALE_REMINDER_MARKER, display: false };
+			const empty = { ...budget, data: { persistenceVersion: 1, nudge: "empty" } };
+			const { handler, ctx } = await start(tasks({ id: 1 }), {
+				reason: "resume",
+				entries: [
+					{ type: "custom_message", ...persisted, id: "nudge", parentId: null, timestamp: "" },
+					{ ...empty, id: "empty", parentId: "nudge", timestamp: "" },
+				] as SessionEntry[],
+			});
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject(nudged);
+		});
+
+		it.each([
+			["a missing version", { nudge: "stale" }],
+			["an unsupported version", { persistenceVersion: 2, nudge: "stale" }],
+			["null data", null],
+		])("leaves the stale budget unspent for bookkeeping with %s", async (_case, data) => {
+			const { handler, ctx } = await start(tasks({ id: 1 }), {
+				reason: "resume",
+				entries: [{ ...budget, data, id: "budget", parentId: null, timestamp: "" }] as SessionEntry[],
+			});
+			armWorker();
+			const settle = () => handler("agent_before_settle")(settleEvent([user, assistant]), ctx);
+			await expectQuiet(settle, 9);
+			expect(await settle()).toMatchObject(nudged);
 		});
 
 		it("evicts stale eligibility on a same-session non-TUI rebind", async () => {
@@ -718,11 +879,8 @@ describe("settling with nothing armed to wake the parent", () => {
 				handler("agent_before_settle")(settleEvent(messages), ctx);
 			await expectQuiet(settle, 9);
 			const result = (await settle()) as { entries: Array<{ content: string }>; continue: boolean };
-			expect(result).toMatchObject({
-				continue: true,
-				entries: [{ type: "custom_message", customType, display: false }],
-			});
-			const marker = { role: "custom", customType, content: result.entries[0].content };
+			expect(result).toMatchObject(nudged);
+			const marker = { role: "custom", customType, content: result.entries[1].content };
 			const messages = [user, assistant, marker];
 			const expanded = await handler("context")({ messages }, ctx);
 			expect(expanded).toMatchObject({
@@ -735,7 +893,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			await handler("input")({ source: "extension" }, ctx);
 			expect(await settle([...messages, user, assistant])).toBeUndefined();
 			await handler("input")({ source: "interactive" }, ctx);
-			expect(await settle([...messages, user, assistant])).toMatchObject({ entries: [{ customType }] });
+			expect(await settle([...messages, user, assistant])).toMatchObject(nudged);
 			await call(ctx, { action: "clear" });
 			expect(await handler("context")({ messages }, ctx)).toBeUndefined();
 		});
@@ -749,14 +907,14 @@ describe("settling with nothing armed to wake the parent", () => {
 			await expectQuiet(settle, 9);
 			await call(ctx, { action: "list" });
 			expect(text(await call(ctx, { action: "update", id: 2, status: "completed" }))).toMatch(/^Error:/);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
 			await call(ctx, { action: "update", id: 1, status: "completed", evidence: "verified" });
 			await expectQuiet(settle, 10);
 			await handler("session_shutdown")({ reason: "quit" }, ctx);
 			await handler("session_start")({ reason: "new" }, ctx);
 			armWorker();
 			await expectQuiet(settle, 9);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
 		});
 
 		it("ignores closed lists and does not age in Plan mode or on an aborted settle", async () => {
@@ -775,7 +933,7 @@ describe("settling with nothing armed to wake the parent", () => {
 			await expectQuiet(() => handler("agent_before_settle")(settleEvent([planning, user, assistant]), ctx), 10);
 			await expectQuiet(() => handler("agent_before_settle")(settleEvent([user, assistant], "aborted"), ctx), 10);
 			await expectQuiet(settle, 9);
-			expect(await settle()).toMatchObject({ entries: [{ customType }] });
+			expect(await settle()).toMatchObject(nudged);
 		});
 	});
 

@@ -45,6 +45,7 @@ export const ALWAYS_BLOCKED_BUNDLE_IDS: readonly string[] = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ];
 
 const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string[]; always: readonly string[] }> = {
@@ -68,7 +69,38 @@ const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string
 		always: ["consent.exe", "LogonUI.exe", "LockApp.exe"],
 	},
 	linux: {
-		defaults: ["gnome-terminal-server", "konsole", "xterm", "alacritty", "kitty", "keepassxc", "bitwarden"],
+		// Executable basenames (`/proc/<pid>/exe`), plus WM_CLASS names for interpreter-hosted apps.
+		defaults: [
+			"gnome-terminal-server",
+			"kgx",
+			"ptyxis",
+			"konsole",
+			"xterm",
+			"uxterm",
+			"urxvt",
+			"alacritty",
+			"kitty",
+			"wezterm",
+			"wezterm-gui",
+			"foot",
+			"tilix",
+			"terminator",
+			"st",
+			"xfce4-terminal",
+			"mate-terminal",
+			"lxterminal",
+			"qterminal",
+			"terminology",
+			"ghostty",
+			"keepassxc",
+			"keepass2",
+			"bitwarden",
+			"1password",
+			"enpass",
+			"seahorse",
+			"qtpass",
+			"kwalletmanager5",
+		],
 		always: [
 			"pinentry",
 			"pinentry-gtk-2",
@@ -77,6 +109,9 @@ const BLOCKED_APPS_BY_PLATFORM: Record<PlatformName, { defaults: readonly string
 			"pinentry-curses",
 			"polkit-gnome-authentication-agent-1",
 			"polkit-kde-authentication-agent-1",
+			"gcr-prompter",
+			"ksshaskpass",
+			"ssh-askpass",
 		],
 	},
 };
@@ -274,15 +309,19 @@ export function effectiveBlockedBundleIds(): string[] {
 	return [...new Set([...ALWAYS_BLOCKED_BUNDLE_IDS, ...activeConfig.blocked_apps])];
 }
 
-/** Compare only the host's policy identity, never the presentation name. */
-export function blockedAppId(platform: PlatformName, app: Pick<PlatformApp, "appId" | "bundleId">): string | undefined {
-	// #1180: Linux processName is an app-supplied accessible Name, not an executable identity.
-	if (platform === "linux") return undefined;
+/**
+ * Compare only the host's policy identity, never the presentation name. Block-only aliases (Linux
+ * `WM_CLASS`, an ambiguous `exe` link name) can add a block but never stand in for a missing identity.
+ */
+export function blockedAppId(
+	platform: PlatformName,
+	app: Pick<PlatformApp, "appId" | "bundleId" | "blockAliases">,
+): string | undefined {
 	const id = app.appId ?? (platform === "macos" ? app.bundleId : undefined);
 	if (!id) return undefined;
-	const wanted = id.toLowerCase();
 	const { always } = BLOCKED_APPS_BY_PLATFORM[platform];
-	return [...always, ...activeConfig.blocked_apps].some((blocked) => blocked.toLowerCase() === wanted) ? id : undefined;
+	const blocked = new Set([...always, ...activeConfig.blocked_apps].map((entry) => entry.toLowerCase()));
+	return [id, ...(app.blockAliases ?? [])].find((candidate) => blocked.has(candidate.toLowerCase()));
 }
 
 /** macOS bundle-id policy alias. */
@@ -391,9 +430,9 @@ The activity glow appears in user screen recordings. Single-window `observe_ui` 
 
 ### `blocked_apps`
 
-Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename and X11 `WM_CLASS` once #1180 lands. Never use a display name, path, glob or regex. An unidentified root cannot match.
+Defaults and always-blocked entries are per OS. `blocked_apps` is one list of opaque strings, matched case-insensitively against the host identity: macOS bundle id, Windows executable basename (including `.exe`), or Linux executable basename (the `/proc/<pid>/exe` of the process owning the root's accessibility bus connection). Never use a display name, path, glob or regex. An unidentified Windows or Linux root is refused rather than matched. On Linux X11 a root whose `WM_CLASS` instance or class matches an entry is also blocked: `WM_CLASS` is app-settable, so it is a hint that can only block more, never admit, identify or unblock a root.
 
-Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux presets cover common terminals, password managers, pinentry executables and polkit agents, but **Linux blocklist matching is disabled** until #1180 supplies a trusted identity. The helper's current `processName` is an app-controlled AT-SPI accessible name.
+Windows defaults cover Windows Terminal, Command Prompt, Windows PowerShell, PowerShell, 1Password, Bitwarden, KeePass, KeePassXC and Credential UI Broker. Consent, Logon UI and LockApp are always blocked. Linux defaults cover common terminals (`gnome-terminal-server`, `kgx`, `ptyxis`, `konsole`, `xterm`, `uxterm`, `urxvt`, `alacritty`, `kitty`, `wezterm`, `wezterm-gui`, `foot`, `tilix`, `terminator`, `st`, `xfce4-terminal`, `mate-terminal`, `lxterminal`, `qterminal`, `terminology`, `ghostty`) and password managers (`keepassxc`, `keepass2`, `bitwarden`, `1password`, `enpass`, `seahorse`, `qtpass`, `kwalletmanager5`). pinentry executables, the GNOME and KDE polkit agents, `gcr-prompter` (the GNOME keyring prompt), `ksshaskpass` and `ssh-askpass` are always blocked. The AT-SPI accessible app name is app-controlled: it is never matched for `blocked_apps` (Linux `browser_use` still classifies browsers by it, #1295). A Linux root whose executable cannot be read (another user's or a non-dumpable process, an unknown PID, a window on another bus connection than its application entry, or a Flatpak app behind the shared `xdg-dbus-proxy` connection) is unidentified and refused. Interpreter and multicall basenames (`python3`, `node`, `java`, `electron`, `busybox`, Flatpak or Snap hosts) identify the HOST, not the hosted app: blocking `python3` blocks every Python app, and a hosted app is blocked by its own name only through a matching `WM_CLASS` (#1333). An `exe` link ending in ` (deleted)` reports the name without the suffix, and both names block.
 
 The macOS default list covers password managers (`com.apple.Passwords`, `com.1password.1password`, `com.1password.1password7`, `com.agilebits.onepassword7`, `com.agilebits.onepassword-osx-helper`, `com.bitwarden.desktop`, `com.lastpass.LastPass`, `com.dashlane.dashlanephonefinal`, `org.keepassxc.keepassxc`), Keychain Access (`com.apple.keychainaccess`) and terminals (`com.apple.Terminal`, `com.googlecode.iterm2`, `net.kovidgoyal.kitty`, `com.mitchellh.ghostty`, `dev.warp.Warp-Stable`, `co.zeit.hyper`, `org.alacritty`, `com.github.wez.wezterm`).
 

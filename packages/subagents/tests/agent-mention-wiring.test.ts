@@ -1278,24 +1278,35 @@ describe("resuming an evicted agent by name", () => {
 		expect(manager.getRecord(resumedId).description).toBe("find flaky tests");
 	});
 
-	it("does not let the tools steer or read an agent that is gone", async () => {
-		// A mention can resurrect it, but there is no live record to interrupt and
-		// no result to return — so the tools must say so rather than resolve to a
-		// tombstone and act on stale data.
+	it("lets the tools reach an agent that is gone by its name, as a mention does", async () => {
+		// One lookup for every handle: the name an evicted agent had answers as its
+		// saved conversation, so a steer reopens it like `@explore` and a read
+		// returns what became of it, never a live record's stale data.
 		const { tools } = boot();
 		finishedRun(fakeSession());
-		await evict(await spawnBackground(tools));
+		const id = await spawnBackground(tools);
+		await evict(id);
 		await flush();
 
+		const read = await tools
+			.get("get_subagent_result")
+			.execute("tc", { agent_id: "@explore" }, undefined, undefined, ctx());
+		expect(textOf(read)).toContain(`Agent "${id}"`);
+		expect(textOf(read)).toContain("evicted after");
+		expect(read.isError).not.toBe(true);
+
+		vi.mocked(runAgent).mockClear();
 		const steered = await tools
 			.get("steer_subagent")
 			.execute("tc", { agent_id: "explore", message: "hi" }, undefined, undefined, ctx());
-		const read = await tools
-			.get("get_subagent_result")
-			.execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
-
-		expect(textOf(steered)).toContain("Agent not found");
-		expect(textOf(read)).toContain("Agent not found");
+		await flush();
+		expect(textOf(steered)).toContain("Agent resumed in background");
+		expect(vi.mocked(runAgent)).toHaveBeenLastCalledWith(
+			expect.anything(),
+			"Explore",
+			"hi",
+			expect.objectContaining({ resumeSessionFile: sessionPath() }),
+		);
 	});
 
 	it("get_subagent_result still returns the text of an evicted agent's result (#372)", async () => {
@@ -1515,25 +1526,17 @@ describe("resuming an evicted agent by name", () => {
 // `@` is backed by the same SendMessage the LLM calls. These give ours the
 // same property: one name space, whoever is doing the addressing.
 describe("handles as tool arguments", () => {
-	it("steers by handle, not just by raw id", async () => {
-		const { tools, lifecycle: _l } = boot();
-		const session = fakeSession();
-		heldRun(session);
-		await spawnBackground(tools);
-		await flush();
-
-		const r = await tools
-			.get("steer_subagent")
-			.execute("tc", { agent_id: "explore", message: "look at the RPC path" }, undefined, undefined, ctx());
-
-		expect(session.steer).toHaveBeenCalledWith("look at the RPC path");
-		expect(textOf(r)).not.toContain("Agent not found");
-	});
-
-	it("steers by the name the model gave the agent", async () => {
+	it("steers by handle and by the name the model gave the agent, then reads its result by handle", async () => {
 		const { tools } = boot();
 		const session = fakeSession();
-		heldRun(session);
+		let finish!: (result: unknown) => void;
+		vi.mocked(runAgent).mockImplementation(
+			(_ctx: any, _type: any, _prompt: any, opts: any) =>
+				new Promise((resolve) => {
+					opts.onSessionCreated?.(session);
+					finish = resolve;
+				}) as any,
+		);
 		await tools
 			.get("Agent")
 			.execute(
@@ -1545,33 +1548,20 @@ describe("handles as tool arguments", () => {
 			);
 		await flush();
 
-		await tools
-			.get("steer_subagent")
-			.execute("tc", { agent_id: "auth-audit", message: "keep going" }, undefined, undefined, ctx());
+		for (const [agent_id, message] of [
+			["explore", "look at the RPC path"],
+			["auth-audit", "keep going"],
+		]) {
+			const r = await tools.get("steer_subagent").execute("tc", { agent_id, message }, undefined, undefined, ctx());
+			expect(session.steer).toHaveBeenCalledWith(message);
+			expect(textOf(r)).not.toContain("Agent not found");
+		}
 
-		expect(session.steer).toHaveBeenCalledWith("keep going");
-	});
-
-	it("reads a result by handle", async () => {
-		const { tools } = boot();
-		finishedRun(fakeSession());
-		await spawnBackground(tools);
+		finish({ responseText: "first answer", session, aborted: false, steered: false, failure: undefined });
 		await flush();
-
 		const r = await tools
 			.get("get_subagent_result")
 			.execute("tc", { agent_id: "explore" }, undefined, undefined, ctx());
-
 		expect(textOf(r)).toContain("first answer");
-	});
-
-	it("still reports an unknown reference as not found", async () => {
-		const { tools } = boot();
-
-		const r = await tools
-			.get("steer_subagent")
-			.execute("tc", { agent_id: "nosuchagent", message: "hi" }, undefined, undefined, ctx());
-
-		expect(textOf(r)).toContain("Agent not found");
 	});
 });

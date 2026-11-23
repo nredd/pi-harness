@@ -24,7 +24,7 @@ afterEach(() => {
 });
 
 async function clientFor(handlers) {
-	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 5, handlers, platform: "Windows" });
+	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 6, handlers, platform: "Windows" });
 	const children = [];
 	const spawn = createFakeSpawn({
 		"*": () => {
@@ -124,7 +124,7 @@ describe("Windows helper post-write cancellation (#750)", () => {
 		assert.equal(client.pending.size, 1);
 		assert.equal(getEventListeners(other.signal, "abort").length, 1);
 		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 5, id: engine.requests[1].id, ok: true, result: "B" })}\n`,
+			`${JSON.stringify({ protocolVersion: 6, id: engine.requests[1].id, ok: true, result: "B" })}\n`,
 		);
 		assert.equal(await pending, "B");
 		assert.equal(getEventListeners(other.signal, "abort").length, 0);
@@ -146,7 +146,7 @@ describe("Windows helper post-write cancellation (#750)", () => {
 		assert.equal((await outcome).message, "Operation aborted.");
 		const next = client.command("next", {}, { signal: new AbortController().signal });
 		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 5, id: engine.requests[0].id, ok: true, result: "late" })}\n`,
+			`${JSON.stringify({ protocolVersion: 6, id: engine.requests[0].id, ok: true, result: "late" })}\n`,
 		);
 		assert.equal(await next, "next");
 		assert.equal(client.pending.size, 0);

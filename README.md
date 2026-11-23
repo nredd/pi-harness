@@ -40,8 +40,9 @@ put the why in the commit.
     reads the checkout SHA from Git stdout, and refuses unknown job keys. Non-PR reports show
     `head: n/a` separately from the tested SHA. Swift
     and native Windows keep their independent diagnostic uploads without a presentation sidecar.
-    The fan-in stamps the summary only when all downloaded shards match its run,
-    attempt and checkout; a partial rerun that reuses older shards can retain reports without a stamp.
+    The fan-in stamps the summary only when the downloaded shards are exactly the planned set
+    (`OWNED_SHARDS` in `scripts/ci_paths.py`, which expands into the shard matrix) and all match its run,
+    attempt and checkout, so a shard whose artifact never arrived cannot pass by its absence; a partial rerun that reuses older shards can retain reports without a stamp.
     Missing, malformed or mismatched records render `unavailable`, never zero. Accounting and floors
     are unchanged. The local renderer takes trusted `--repository`, `--tested-sha`, `--run-id`, `--attempt`,
     `--event-name`, `--workflow-ref` and (on PRs only) `--head-sha`; measured-main comparison also
@@ -79,14 +80,57 @@ make help                    # every target
   `@nredd/pi-test-lib/temp-dir` for scratch paths that should live until a test finishes.
   It defaults to OS temp. For fixtures that must live under an existing directory, pass
   `makeTestTempDir(prefix, onTestFinished, { baseDir })` with a prefix relative to `baseDir`.
+  Helpers that own their own lifecycle (a `restore` or a `finally`, e.g. the test-lib sandboxes and
+  `createTestExtensionsResult`) use `makeOwnedTempDir(prefix, { baseDir })` and call its `remove`,
+  which targets the absolute path resolved at allocation. `makeGitFixture(onCleanup)` instead
+  allocates through `makeTestTempDir` and hands the root's removal to the caller's `onCleanup`.
   Plan Mode build fixtures use the real package root only for its builder output path checks or
   workspace module resolution. Standalone validation and self-contained builders use OS temp.
   A killed run can leave in-package fixtures behind: they are outside the launcher's temp sandbox.
   The dev-tools and computer-use suites remove per-test scratch at test completion and shared
-  scratch at suite teardown. Keep any fixture symlinks and config reset paths inside managed roots.
-  `scripts/test-tempdirs-baseline.json` may only shrink against the merge base of `HEAD` and `BASE`
+  scratch at suite teardown. Dev-tools files whose tools truncate output call
+  `sandboxSpillRoot()` (`tests/fixtures/spill.ts`): `bound` caches its spill directory per process.
+  Keep any fixture symlinks and config reset paths inside managed roots.
+  `scripts/test-tempdirs-baseline.json` is empty: no owned JS/TS test source outside the
+  `tests/lib/src/temp-dir.ts` helper references `mkdtemp`. That is all the scanner proves: Python
+  test helpers, `forks/pi`, and leaks through other APIs (runtime caches, child tools) are not
+  checked. The baseline may only shrink against the merge base of `HEAD` and `BASE`
   (unset or empty means `origin/main`), like the package layout allowlist. A missing baseline at
   the merge base is allowed for its initial introduction only.
+- `check-ts` also runs `scripts/check-test-matchers.ts`, which rejects a bare regex literal in a
+  `toMatchObject` expected value (#1299). Vitest's subset match treats an expected `RegExp` as an
+  object with no keys, so `expect({ message: "zzz" }).toMatchObject({ message: /x/ })` passes for any
+  present value. Write `expect.stringMatching(/x/)` or an exact value instead. `toEqual`,
+  `toStrictEqual`, `objectContaining`, `arrayContaining`, `toHaveProperty` and `node:assert`'s
+  `rejects`/`throws` validation objects are deliberately NOT banned: the first five compare a
+  `RegExp` by equality and fail on a matching string (never vacuous), the last two match the regex.
+  A name or shorthand property in the expected value is followed into its initializer when its nearest
+  binding in scope is a plain `const` directly in the file, a block or a `switch` case block (#1302,
+  #1315), e.g. `const re = /x/; expect(a).toMatchObject({ message: re })`, and a name reused per test
+  (`const expected = ...` in each) resolves per scope. Every binding other than a `let`/`const`/`using`
+  statement (`var`, parameters, `catch`, `for` headers, destructuring, function, class, import, enum and
+  namespace names) counts as visible throughout its enclosing function or the file, and any such binding
+  inside the chosen `const`'s scope that may be visible at the use blocks following, so shadowing can
+  only cause a miss. `let`/`var`/`using`, destructuring, namespace-block `const`, helper calls,
+  `new RegExp(...)`, imports and `arguments` (implicitly bound by every ordinary function) are not
+  followed. Bindings are classified once per file and indexed by scope and name, so many tests reusing
+  one name stay linear. A `const`
+  fixes the binding, not its contents, so a name that appears in a write target anywhere in the file
+  (`expected.m = ...`, `expected[0] += ...`, `++`/`--`, `delete`, the first argument of
+  `Object.assign`/`defineProperty`/`defineProperties`/`fromEntries`) is not followed under ANY of its
+  bindings, nor is a use anywhere inside a `with` statement nested in the chosen `const`'s scope: the
+  object may shadow the name in the body, and the object expression itself is skipped too although it
+  is evaluated first (conservative, only a miss). Syntactic, so the temporal dead zone is not modeled:
+  a `const` used in a different `switch` clause than its initializer may be uninitialized at runtime,
+  and the guard still reports it. Mutation through aliases or calls is not tracked: this can still produce a
+  finding for a value later overwritten; fix the test by naming the regex differently or asserting
+  directly. Each initializer is walked once per matcher call, so shared initializers stay linear.
+  The scan uses the `tsgo` parser on the same owned JS/TS test sources as the temp directory check,
+  recognizes `.toMatchObject(...)` and `["toMatchObject"](...)` calls, follows object and array
+  literals (spreads, parentheses, `as`, `satisfies`, conditional branches) inside the call, and
+  fails on a syntax error. A regex spread into an object (`{ ...(/x/) }`) adds no keys and is not
+  flagged. Limits: a regex held in anything but the followed `const` above, returned by a helper, or
+  built with `new RegExp(...)` is NOT detected (#1302, #1315). No baseline.
 - Scripts that use `node ../../scripts/run-vitest.ts` give Vitest and its subprocesses a private
   `TMPDIR`, `TMP` and `TEMP`. The launcher removes the sandbox after the child exits, even on test
   failure. Direct Vitest and Bun invocations bypass this cleanup. `SIGINT` or `SIGTERM` delivered
@@ -341,7 +385,13 @@ the original commit. No branch is moved forward merely to satisfy release freshn
 `pi_release.release_gate` requires a successful `workflow_dispatch` run of `ci.yml`, its exact
 candidate `head_sha`, the current attempt's complete matrix and core jobs, the successful actual
 execution steps (not just successful job labels), and all retained, nonempty coverage, packed
-contract, Node stack and standalone stack artifacts bound to that run and SHA.
+contract, Node stack and standalone stack artifacts bound to that run and SHA. The Windows x64
+coverage ratchet is part of that roster: the `computer-use Rust (windows-x64)` producer with its
+`Native Windows tests and LLVM reports (no desktop interaction)` and `Preserve Windows source-bound
+native reports` steps, its `computer-use-rust-windows-x64-<attempt>` upload (any positive attempt,
+bound to the producer's job window like every artifact), and the `owned (ubuntu-24.04)` fan-in's
+`Download Windows x64 coverage` and `Account for Windows x64 coverage separately` steps. A green
+dispatch that skipped any of them refuses.
 
 The required job set is the verifier's own `OWNED_SHARDS`, not the candidate's. Each caller runs
 the verifier that matches its candidate: `publish.yml` runs from the tag's commit, and
@@ -352,8 +402,10 @@ change (e.g. the #660 macOS split) therefore verifies under its own commit's gat
 The required steps follow the CI plan (`scripts/ci_paths.py`, [workflow policy](.github/workflows/ci.yml)): each `owned shard (<os>, <shard>)` job must have executed its planned `Owned gate <target>` steps (`OWNED_SHARDS`: native cells `check-ts` (on macOS split across the `subagents`, `computer-use` and `ts` shards, #660), `check-scripts`, `check-integration`), each `owned (<os>)` fan-in its `Require every planned shard to succeed` and coverage accounting steps, and the stack cells are exactly those the plan can run, never the `STACK_NOT_RUN` names. A dispatch is planned with `ci_paths.py --full`, so every such cell runs. Tests pin `pi_release.release_gate` to `OWNED_SHARDS`, `OWNED_GATES`, `STACK_NOT_RUN` and the step names in `ci.yml`.
 
 Artifacts are per run, with no attempt field, so each required artifact is bound to the job that
-uploads it (`coverage-<os>` to `owned (<os>)`, `contract-reports-<os>` to `contracts (<os>)`,
-`stack-*` and `standalone-*` to their `stack (<os>, <stack>)` cell). That job must be in the
+uploads it (`coverage-<os>` to `owned (<os>)`, `computer-use-rust-windows-x64-<attempt>` to
+`computer-use Rust (windows-x64)`, never the `owned (ubuntu-24.04)` fan-in that downloads it,
+`contract-reports-<os>` to `contracts (<os>)`, `stack-*` and `standalone-*` to their
+`stack (<os>, <stack>)` cell). That job must be in the
 current attempt's job list and successful, and exactly one upload of that name must have a
 `created_at` inside the job's `started_at`..`completed_at`, both bounds inclusive, compared as
 offset-aware instants. A naive timestamp refuses. Two uploads inside one window refuse, the newest

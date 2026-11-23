@@ -19,7 +19,7 @@ struct BridgeFailure: Error {
 	}
 }
 
-private struct CGWindowCandidate {
+struct CGWindowCandidate {
 	let windowId: UInt32
 	let title: String
 	let bounds: CGRect
@@ -28,7 +28,7 @@ private struct CGWindowCandidate {
 	let zOrder: Int
 }
 
-private struct CGWindowOwnerSummary {
+struct CGWindowOwnerSummary {
 	let pid: Int32
 	let name: String
 }
@@ -50,15 +50,99 @@ struct AXDescendant<Element> {
 	let axVisible: Bool
 }
 
+/// What an AX attribute read proved: a value, an authoritative absence, or nothing at all.
+enum AXReadEvidence: Equatable {
+	case present
+	case absent
+	case failed
+}
+
+/// Classify an AX read status. Only success and the statuses stating that the attribute or element does
+/// not exist are evidence; a timeout (`cannotComplete`) or any other failure proves nothing.
+func axReadEvidence(_ status: AXError) -> AXReadEvidence {
+	switch status {
+	case .success: return .present
+	case .noValue, .attributeUnsupported, .invalidUIElement: return .absent
+	default: return .failed
+	}
+}
+
+/// A string attribute read: its value, an authoritative absence, or a failed read.
+enum AXStringRead: Equatable {
+	case value(String)
+	case absent
+	case failed
+}
+
+/// The element fields a `waitFor` condition reads.
+enum AXWaitField {
+	case role
+	case title
+	case description
+	case value
+}
+
+/// Tri-state `waitFor` predicate over lowercased `text` and `value`: `nil` when a failed read leaves the
+/// match undecided, so the element can neither match nor prove the condition absent.
+func axWaitConditionMatch(role: String?, text: String?, value: String?, read: (AXWaitField) -> AXStringRead) -> Bool? {
+	var undecided = false
+	if let role, !role.isEmpty {
+		switch read(.role) {
+		case .value(let actual) where actual != role: return false
+		case .absent: return false
+		case .failed: undecided = true
+		default: break
+		}
+	}
+	if let text, !text.isEmpty {
+		var haystack: [String] = []
+		var unread = false
+		for field in [AXWaitField.title, .description, .value] {
+			switch read(field) {
+			case .value(let actual): haystack.append(actual)
+			case .absent: haystack.append("")
+			case .failed: haystack.append(""); unread = true
+			}
+		}
+		if !haystack.joined(separator: "\n").lowercased().contains(text) {
+			if !unread { return false }
+			undecided = true
+		}
+	}
+	if let value, !value.isEmpty {
+		switch read(.value) {
+		case .value(let actual) where actual.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != value: return false
+		case .absent: return false
+		case .failed: undecided = true
+		default: break
+		}
+	}
+	return undecided ? nil : true
+}
+
+/// A bounded walk's nodes, and whether they are the whole subtree.
+struct AXTraversal<Element> {
+	let nodes: [AXDescendant<Element>]
+	/// False when a child read failed, a node at the depth limit has or may have children, or the node
+	/// budget cut the walk: a node missing from `nodes` is then not proven absent.
+	let complete: Bool
+}
+
 /// The AX queries needed for a bounded, breadth-first descendant walk.
 struct AXTraversalWorld<Element: AnyObject> {
 	let role: (Element) -> String
-	let childLists: (Element) -> (all: [Element], visible: [Element]?)
+	/// `nil` when the children could not be read; an authoritative empty list is `[]`.
+	let childLists: (Element) -> (all: [Element], visible: [Element]?)?
 	let sameElement: (Element, Element) -> Bool
 	/// Must agree with `sameElement`: equal elements hash equally. Collisions only cost comparisons.
 	let hash: (Element) -> Int
 
 	func collect(startingAt root: Element, maxDepth: Int, maxNodes: Int) -> [AXDescendant<Element>] {
+		walk(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes, checkFrontier: false).nodes
+	}
+
+	/// `checkFrontier` reads the children of nodes at `maxDepth`, so a cut below them marks the walk incomplete.
+	func walk(startingAt root: Element, maxDepth: Int, maxNodes: Int, checkFrontier: Bool) -> AXTraversal<Element> {
 		let nodeLimit = max(1, maxNodes)
 		var queue: [(Element, Int, Bool, Bool)] = [(root, 0, false, true)]
 		// Visited elements bucketed by `hash`, so `sameElement` (CFEqual) only runs within a bucket.
@@ -66,6 +150,8 @@ struct AXTraversalWorld<Element: AnyObject> {
 		var seen: [Int: [Element]] = [:]
 		var index = 0
 		var output: [AXDescendant<Element>] = []
+		var complete = true
+		// The queue never outgrows `nodeLimit`, so the budget shows up as children left unqueued.
 		while index < queue.count && output.count < nodeLimit {
 			let (element, depth, parentInsideWebArea, inheritedVisible) = queue[index]
 			index += 1
@@ -77,22 +163,615 @@ struct AXTraversalWorld<Element: AnyObject> {
 			let elementRole = role(element)
 			let insideWebArea = parentInsideWebArea || elementRole == "AXWebArea"
 			output.append(AXDescendant(element: element, depth: depth, insideWebArea: insideWebArea, axVisible: inheritedVisible))
-			if depth >= maxDepth { continue }
-			let (childElements, visible) = childLists(element)
+			if depth >= maxDepth {
+				if checkFrontier && childLists(element)?.all.isEmpty != true { complete = false }
+				continue
+			}
+			guard let (childElements, visible) = childLists(element) else {
+				complete = false
+				continue
+			}
 			for child in childElements {
-				if queue.count >= nodeLimit { break }
+				if queue.count >= nodeLimit {
+					complete = false
+					break
+				}
 				let childVisible = inheritedVisible && (visible.map { set in set.contains { sameElement($0, child) } } ?? true)
 				queue.append((child, depth + 1, insideWebArea, childVisible))
 			}
 		}
-		return output
+		return AXTraversal(nodes: output, complete: complete)
+	}
+
+	/// One `waitFor` pass over `root`, bounded by `waitForMaxDepth` and `waitForMaxNodes`.
+	/// - Parameters:
+	///   - scopeExact: Test only `root`, so nothing below it can hide a match.
+	///   - matches: The tri-state predicate; `nil` when a failed read leaves the element undecided.
+	func waitPass(startingAt root: Element, scopeExact: Bool, matches: (Element) -> Bool?) -> AXWaitPass<Element> {
+		let traversal = walk(startingAt: root, maxDepth: scopeExact ? 0 : waitForMaxDepth, maxNodes: waitForMaxNodes, checkFrontier: !scopeExact)
+		// Absence needs the whole scope walked and every predicate read: an unread subtree or field may hold the match.
+		var undecided = !traversal.complete
+		for candidate in traversal.nodes {
+			guard let matched = matches(candidate.element) else {
+				undecided = true
+				continue
+			}
+			if matched { return AXWaitPass(nodes: traversal.nodes, verdict: .found(candidate)) }
+		}
+		return AXWaitPass(nodes: traversal.nodes, verdict: undecided ? .undecided : .absent)
 	}
 }
 
-private struct WindowPairing {
+/// The AX queries a look's outline walk needs, injectable so headless tests drive the production walk.
+struct LookOutlineWorld<Element: AnyObject> {
+	/// `nil` when the children could not be read; an authoritative empty list is `[]`.
+	let children: (Element) -> [Element]?
+	/// The root's node.
+	let rootNode: (Element) -> LookNode
+	/// The node builder for one parent's children, so per-parent reads (e.g. visible children) run once.
+	let childNodes: (Element) -> (Element) -> LookNode
+	/// The monotonic clock (seconds) the walk's time budget runs on.
+	let now: () -> TimeInterval
+
+	/// Build `root`'s node, then walk breadth-first below it until `nodeLimit` nodes, `timeLimit` seconds after the
+	/// root node was built (the root's own reads never spend the walk's budget) or `requestDeadline` on `now`'s clock,
+	/// whichever comes first: a slow root cannot push the walk past the client's timeout. Past the deadline no queued
+	/// node's children are read. A node whose children could not be read, or whose children the budget cut, is
+	/// `truncated`: its subtree is unread, never a leaf.
+	func build(root: Element, nodeLimit: Int, timeLimit: TimeInterval, requestDeadline: TimeInterval) -> LookNode {
+		let rootNode = self.rootNode(root)
+		let deadline = min(now() + timeLimit, requestDeadline)
+		let expired = { now() >= deadline }
+		var walked = 1
+		var seen = Set<ObjectIdentifier>([ObjectIdentifier(root)])
+		var queue: [(Element, LookNode)] = [(root, rootNode)]
+		var index = 0
+		while index < queue.count {
+			let (element, node) = queue[index]
+			index += 1
+			if expired() {
+				node.truncated = true
+				continue
+			}
+			guard let elements = children(element) else {
+				node.truncated = true
+				continue
+			}
+			if elements.isEmpty { continue }
+			if walked >= nodeLimit {
+				node.truncated = true
+				continue
+			}
+			let childNode = childNodes(element)
+			for child in elements {
+				if walked >= nodeLimit || expired() {
+					node.truncated = true
+					break
+				}
+				if !seen.insert(ObjectIdentifier(child)).inserted { continue }
+				let built = childNode(child)
+				node.children.append(built)
+				queue.append((child, built))
+				walked += 1
+			}
+		}
+		return rootNode
+	}
+}
+
+/// Seconds after a look starts by which its outline walk stops, whatever the root's own reads cost: the client
+/// aborts a look at 33 s (`LOOK_TIMEOUT_MS`), and the rest leaves room for OCR and the reply.
+let lookWalkDeadline: TimeInterval = 25
+
+/// The deepest level below its scope a `waitFor` pass walks.
+let waitForMaxDepth = 12
+/// The most nodes one `waitFor` pass walks.
+let waitForMaxNodes = 2000
+
+/// What one `waitFor` pass proved.
+enum AXWaitVerdict<Element> {
+	case found(AXDescendant<Element>)
+	/// The whole scope was walked and read, and nothing matched.
+	case absent
+	/// Nothing matched, but an unread subtree or field may hold a match.
+	case undecided
+}
+
+/// One `waitFor` pass: the nodes it walked and its verdict.
+struct AXWaitPass<Element> {
+	let nodes: [AXDescendant<Element>]
+	let verdict: AXWaitVerdict<Element>
+}
+
+/// The most AX windows one root inventory lists.
+let windowListCap = 128
+
+/// A root inventory lists a window only at least this large; smaller ones are helper panels and slivers.
+func inventoryFrameUsable(_ frame: CGRect) -> Bool {
+	frame.width >= 100 && frame.height >= 80
+}
+
+/// A window list is the whole inventory only when it was read and fits under `windowListCap`.
+func windowListComplete(_ count: Int?) -> Bool {
+	count.map { $0 <= windowListCap } ?? false
+}
+
+/// One AX size read: the value and its evidence decoded from the same reply.
+enum AXSizeRead: Equatable {
+	case size(CGSize)
+	case absent
+	case failed
+}
+
+/// The AX reads one pid's window inventory needs, injectable so headless tests drive production assembly.
+struct WindowInventoryWorld<Element: AnyObject> {
+	/// `AXWindows`; `nil` when the read failed.
+	let windows: () -> [Element]?
+	/// The main and focused windows, deduplicated: the fallback when `AXWindows` lists none.
+	let fallbackWindows: () -> [Element]
+	/// `nil` when the read failed; an absent or undecodable position is `.zero`.
+	let position: (Element) -> CGPoint?
+	let size: (Element) -> AXSizeRead
+	/// Not `complete` when a sheet source or a child's role could not be read.
+	let sheets: (Element) -> (sheets: [Element], complete: Bool)
+}
+
+/// The windows `AXWindows` (or its main/focused fallback) named, capped at `windowListCap`.
+struct WindowListing<Element> {
+	let windows: [Element]
+	/// The list was read and fit under the cap.
+	let complete: Bool
+}
+
+/// A window kept by the inventory, with the frames and sheets its root entry reports.
+struct InventoryWindow<Element> {
+	let element: Element
+	/// Its index in the listing, the z-order of an unpaired window.
+	let listIndex: Int
+	let axFrame: CGRect
+	/// Both `axFrame` reads answered (a value or an authoritative absence): a failed one reads as `.zero`.
+	let axFrameRead: Bool
+	let effectiveFrame: CGRect
+	let sheets: [Element]
+}
+
+/// One pid's kept windows. Every kept window is a validated positive match even when the inventory is not
+/// `complete`; only a `complete` inventory proves that a missing root closed.
+struct WindowInventorySelection<Element> {
+	let windows: [InventoryWindow<Element>]
+	let complete: Bool
+}
+
+extension WindowInventoryWorld {
+	/// Read `AXWindows` once. A failed or over-cap list still names its first `windowListCap` windows.
+	func listing() -> WindowListing<Element> {
+		let listed = windows()
+		let capped = Array((listed ?? []).prefix(windowListCap))
+		// The main/focused fallback recovers at most those two windows, never an unfocused one or its sheet.
+		return WindowListing(windows: capped.isEmpty ? fallbackWindows() : capped, complete: windowListComplete(listed?.count))
+	}
+
+	/// Keep the listed windows of a usable size with their sheets. A failed size read is retried once, only when
+	/// usable paired CG bounds do not already admit the window. A window skipped as too small only because its
+	/// size stayed unreadable, or a failed sheet read, leaves the inventory incomplete.
+	/// - Parameter pairedBounds: The paired CG window's bounds, `nil` for an unpaired window.
+	func select(_ listing: WindowListing<Element>, pairedBounds: (Element) -> CGRect?) -> WindowInventorySelection<Element> {
+		var complete = listing.complete
+		var kept: [InventoryWindow<Element>] = []
+		for (listIndex, window) in listing.windows.enumerated() {
+			let paired = pairedBounds(window)
+			// The filter and the evidence come from the same reply; a retry replaces both. Paired bounds that admit
+			// the window settle a failed read without a serial retry against the listing budget.
+			var read = size(window)
+			if read == .failed && !(paired.map(inventoryFrameUsable) ?? false) { read = size(window) }
+			var axSize = CGSize.zero
+			if case .size(let value) = read { axSize = value }
+			let origin = position(window)
+			let axFrame = CGRect(origin: origin ?? .zero, size: axSize)
+			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (paired ?? axFrame)
+			if !inventoryFrameUsable(effectiveFrame) {
+				// Skipped as too small only because its size was unreadable, a live window is unknown.
+				if paired == nil && read == .failed { complete = false }
+				continue
+			}
+			let sheetInventory = sheets(window)
+			if !sheetInventory.complete { complete = false }
+			kept.append(InventoryWindow(element: window, listIndex: listIndex, axFrame: axFrame, axFrameRead: origin != nil && read != .failed, effectiveFrame: effectiveFrame, sheets: sheetInventory.sheets))
+		}
+		return WindowInventorySelection(windows: kept, complete: complete)
+	}
+}
+
+/// One pid's roots keyed by identity, and whether the listing was the whole inventory.
+struct RootInventorySnapshot {
+	let roots: [String: [String: Any]]
+	let complete: Bool
+}
+
+extension RootInventorySnapshot {
+	/// Key `roots` by `identity`. A root in `unidentifiedRefs` (by `rootRef`: one whose pairing or identity reads failed,
+	/// see `rootIdentityComparable`) or whose key another root shares has no stable identity: it is left out and the
+	/// snapshot is incomplete, so it can neither appear, close nor gain focus, and a root missing next to it is not proven
+	/// closed. It is left out of this comparison only: discovery still lists it as a positive match.
+	init(roots: [[String: Any]], complete: Bool, unidentifiedRefs: Set<String>, identity: ([String: Any]) -> String) {
+		var keyed: [String: [String: Any]] = [:]
+		var ambiguous = Set<String>()
+		var whole = complete
+		for root in roots {
+			if let ref = root["rootRef"] as? String, unidentifiedRefs.contains(ref) {
+				whole = false
+				continue
+			}
+			let key = identity(root)
+			if ambiguous.contains(key) { continue }
+			if keyed.removeValue(forKey: key) != nil {
+				ambiguous.insert(key)
+				whole = false
+				continue
+			}
+			keyed[key] = root
+		}
+		self.init(roots: keyed, complete: whole)
+	}
+}
+
+/// Root changes between two listings. Absence from an incomplete listing proves nothing: a root missing
+/// from `after` closed only when `after` is complete, and one missing from `before` appeared (or newly
+/// gained focus) only when `before` is complete. Only a root's own focus read is compared (`rootOwnFocus`): a root present
+/// in both listings gained focus when it reads `true` after and `false` before, so a root whose focus read failed on
+/// either side (no `isFocused`, see `RootState`), a sheet whose own `AXFocused` was not read, or a menu (its focus is
+/// stamped, never read) never reports a focus change. A root new in `after` whose own focus reads `true` reports both
+/// `appeared` and `focused`.
+func rootInventoryChanges(before: RootInventorySnapshot, after: RootInventorySnapshot) -> [(change: String, root: [String: Any])] {
+	var changes: [(change: String, root: [String: Any])] = []
+	if before.complete {
+		for (key, root) in after.roots where before.roots[key] == nil { changes.append(("appeared", root)) }
+	}
+	if after.complete {
+		for (key, root) in before.roots where after.roots[key] == nil { changes.append(("closed", root)) }
+	}
+	for (key, root) in after.roots where rootOwnFocus(root) == true {
+		guard let previous = before.roots[key] else {
+			if before.complete { changes.append(("focused", root)) }
+			continue
+		}
+		if rootOwnFocus(previous) == false { changes.append(("focused", root)) }
+	}
+	return changes
+}
+
+/// A root entry's own focus read, `nil` when there is none. A window's `isFocused` is its own `AXFocused` read; a sheet's
+/// is its window's (see `rootEntries`), so a sheet answers with its own read `ownFocus`; a popup menu's `isFocused` is
+/// stamped `true` without any read, so a menu has none (#1303).
+func rootOwnFocus(_ root: [String: Any]) -> Bool? {
+	switch root["kind"] as? String {
+	case "sheet": return root["ownFocus"] as? Bool
+	case "menu": return nil
+	default: return root["isFocused"] as? Bool
+	}
+}
+
+struct WindowPairing {
 	let candidate: CGWindowCandidate?
 	let score: Double
 	let confidence: String
+	/// Its title or frame read failed, so the pairing (or its absence) rests on partial evidence.
+	var unread = false
+	/// Another root claims one of its candidates, or it claims more than one (see `contestedClaims`).
+	var contested = false
+}
+
+/// The title and frame one CG pairing scores, `nil` where the read failed.
+struct WindowPairingRead {
+	let title: String?
+	let frame: CGRect?
+
+	/// An absent title is `""`; a failed title read, or a failed position or size read, is `nil`.
+	init(title: AXStringRead, frame: CGRect, frameRead: Bool) {
+		switch title {
+		case .value(let value): self.title = value
+		case .absent: self.title = ""
+		case .failed: self.title = nil
+		}
+		self.frame = frameRead ? frame : nil
+	}
+
+	var unread: Bool { title == nil || frame == nil }
+}
+
+func windowPairScore(frame: CGRect, title: String, candidate: CGWindowCandidate) -> Double {
+	var score = 0.0
+	let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+	let candidateTitle = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+	if !normalizedTitle.isEmpty && !candidateTitle.isEmpty {
+		if normalizedTitle == candidateTitle {
+			score += 100
+		} else if normalizedTitle.contains(candidateTitle) || candidateTitle.contains(normalizedTitle) {
+			score += 50
+		}
+	}
+	if frame.width > 1 && frame.height > 1 {
+		let dx = abs(candidate.bounds.origin.x - frame.origin.x)
+		let dy = abs(candidate.bounds.origin.y - frame.origin.y)
+		let dw = abs(candidate.bounds.size.width - frame.size.width)
+		let dh = abs(candidate.bounds.size.height - frame.size.height)
+		score -= Double(dx + dy + dw + dh) / 20.0
+	}
+	if candidate.isOnscreen { score += 10 }
+	return score
+}
+
+func pairingConfidence(frame: CGRect, title: String, candidate: CGWindowCandidate, score: Double) -> String {
+	guard frame.width > 1 && frame.height > 1 else { return "low" }
+	let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+	let candidateTitle = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+	let titleEqual = !normalizedTitle.isEmpty && !candidateTitle.isEmpty && normalizedTitle == candidateTitle
+	let geometryExact = abs(frame.origin.x - candidate.bounds.origin.x) <= 2 && abs(frame.origin.y - candidate.bounds.origin.y) <= 2 && abs(frame.width - candidate.bounds.width) <= 2 && abs(frame.height - candidate.bounds.height) <= 2
+	if titleEqual && geometryExact { return "exact" }
+	if score >= 50 { return "high" }
+	return "low"
+}
+
+/// Pair each window with at most one CG candidate and each candidate with at most one window, best score first, from
+/// one `read` per window; a pairing scoring below 0 leaves the window unpaired. A failed title or frame read adds no
+/// score and no penalty (it scores as an empty title or a degenerate frame) and marks the pairing `unread`.
+func pairWindows<Element: AnyObject>(_ windows: [Element], candidates: [CGWindowCandidate], read: (Element) -> WindowPairingRead) -> [ObjectIdentifier: WindowPairing] {
+	pairWindows(windows, reads: windows.map(read), candidates: candidates)
+}
+
+/// `pairWindows` from reads already taken, `reads[i]` for `windows[i]`.
+func pairWindows<Element: AnyObject>(_ windows: [Element], reads: [WindowPairingRead], candidates: [CGWindowCandidate]) -> [ObjectIdentifier: WindowPairing] {
+	var pairs: [(index: Int, candidate: CGWindowCandidate, score: Double)] = []
+	for (index, evidence) in reads.enumerated() {
+		for candidate in candidates {
+			pairs.append((index, candidate, windowPairScore(frame: evidence.frame ?? .zero, title: evidence.title ?? "", candidate: candidate)))
+		}
+	}
+	pairs.sort { $0.score > $1.score }
+	var output: [ObjectIdentifier: WindowPairing] = [:]
+	var usedCandidateIds = Set<UInt32>()
+	for pair in pairs {
+		let key = ObjectIdentifier(windows[pair.index])
+		if output[key] != nil || usedCandidateIds.contains(pair.candidate.windowId) { continue }
+		usedCandidateIds.insert(pair.candidate.windowId)
+		let evidence = reads[pair.index]
+		let confidence = pairingConfidence(frame: evidence.frame ?? .zero, title: evidence.title ?? "", candidate: pair.candidate, score: pair.score)
+		output[key] = WindowPairing(candidate: pair.score >= 0 ? pair.candidate : nil, score: pair.score, confidence: confidence, unread: evidence.unread)
+	}
+	for (window, evidence) in zip(windows, reads) where output[ObjectIdentifier(window)] == nil {
+		output[ObjectIdentifier(window)] = WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low", unread: evidence.unread)
+	}
+	return output
+}
+
+/// Pair sheets (see `pairWindows`) with the CG windows no window took. A sheet has a CG window id only when it pairs
+/// with a CG window of its own: one without (its window's is the only candidate) is unpaired, never its window's twin.
+func pairSheets<Element: AnyObject>(
+	_ sheets: [Element], candidates: [CGWindowCandidate], windowPairings: [ObjectIdentifier: WindowPairing], read: (Element) -> WindowPairingRead
+) -> [ObjectIdentifier: WindowPairing] {
+	pairSheets(sheets, reads: sheets.map(read), candidates: candidates, windowPairings: windowPairings)
+}
+
+/// `pairSheets` from reads already taken, `reads[i]` for `sheets[i]`.
+func pairSheets<Element: AnyObject>(
+	_ sheets: [Element], reads: [WindowPairingRead], candidates: [CGWindowCandidate], windowPairings: [ObjectIdentifier: WindowPairing]
+) -> [ObjectIdentifier: WindowPairing] {
+	let taken = Set(windowPairings.values.compactMap { $0.candidate?.windowId })
+	return pairWindows(sheets, reads: reads, candidates: candidates.filter { !taken.contains($0.windowId) })
+}
+
+/// The one rule that keeps the pairing heuristic from deciding `rootDelta`: a root claims a CG candidate when it scores
+/// 0 or more for it, or when its own pairing read failed (an unread title or frame could score anything). A root's
+/// pairing is contested unless it claims no candidate, or exactly one that no other root claims: only then is the
+/// assignment the same whatever the listing order, the score ties or an unread competitor. `contestedClaims(reads)[i]`
+/// is `reads[i]`'s verdict; every root of one listing (windows and sheets) competes for every candidate.
+func contestedClaims(_ reads: [WindowPairingRead], candidates: [CGWindowCandidate]) -> [Bool] {
+	let claims = reads.map { read in
+		candidates.indices.filter { read.unread || windowPairScore(frame: read.frame ?? .zero, title: read.title ?? "", candidate: candidates[$0]) >= 0 }
+	}
+	var claimants = [Int](repeating: 0, count: candidates.count)
+	for claimed in claims {
+		for index in claimed { claimants[index] &+= 1 }
+	}
+	return claims.map { claimed in claimed.count > 1 || claimed.contains { claimants[$0] > 1 } }
+}
+
+func rootKind(role: String, subrole: String) -> String {
+	if role == "AXSheet" { return "sheet" }
+	if subrole.localizedCaseInsensitiveContains("popover") { return "popover" }
+	if subrole.localizedCaseInsensitiveContains("dialog") || role == "AXDialog" { return "dialog" }
+	return "window"
+}
+
+/// One identity field of a root: the value `rootIdentity` keys it by, and whether that value was read.
+struct RootIdentityField: Equatable {
+	let value: String
+	let read: Bool
+
+	init(value: String, read: Bool = true) {
+		self.value = value
+		self.read = read
+	}
+
+	/// A failed read keeps `fallback`'s value but is unread. An absent one takes `fallback` whole, so a fallback that was
+	/// itself unread stays unread only when it was used.
+	init(_ evidence: AXStringRead, fallback: RootIdentityField = RootIdentityField(value: "")) {
+		switch evidence {
+		case .value(let value): self.init(value: value)
+		case .absent: self = fallback
+		case .failed: self.init(value: fallback.value, read: false)
+		}
+	}
+}
+
+/// Whether `rootIdentity` keys a root the same way in every listing. A paired root is keyed by its CG window id and an
+/// unpaired one by kind, role, title and frame, so every read that decided the key must have answered: the pairing's own
+/// title and frame reads (a later successful read does not vouch for a failed pairing), and, unpaired, `fields` and the frame.
+/// A `contested` pairing (see `contestedClaims`) never keys a root, paired or not.
+func rootIdentityComparable(pairing: WindowPairing, fields: [RootIdentityField], frameRead: Bool) -> Bool {
+	if pairing.unread || pairing.contested { return false }
+	return pairing.candidate != nil || (frameRead && fields.allSatisfy(\.read))
+}
+
+/// The AX string attributes a root identity reads.
+enum RootIdentityAttribute {
+	case title
+	case role
+	case subrole
+}
+
+/// The AX boolean states a root reports.
+enum RootStateAttribute {
+	case focused
+	case main
+	case minimized
+}
+
+/// Decode one root-state AX reply (`AXFocused`, `AXMain`, `AXMinimized`): only a successful reply that IS a `CFBoolean`
+/// is evidence. No reply, or any other type, e.g. a numeric `0` or `2`, is unknown (`nil`), never `false` (#1303).
+func rootStateBoolean(_ value: AnyObject?) -> Bool? {
+	guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+	return value as? Bool
+}
+
+/// A root's `AXFocused`, `AXMain` and `AXMinimized`: `nil` unless the read returned a boolean (`rootStateBoolean`). A
+/// failed, absent or undecodable read is unknown, never `false`, and its key is left out of the root entry.
+struct RootState: Equatable {
+	let focused: Bool?
+	let main: Bool?
+	let minimized: Bool?
+}
+
+/// One classified root: what `rootIdentity` keys it by, its CG pairing, and whether that key is comparable.
+struct InventoryRoot<Element> {
+	let element: Element
+	let kind: String
+	let title: RootIdentityField
+	let role: RootIdentityField
+	let subrole: RootIdentityField
+	/// The frame it reports: a window's effective frame, a sheet's AX frame.
+	let frame: CGRect
+	let pairing: WindowPairing
+	let comparable: Bool
+	/// Its own state reads. A sheet reads only its own `AXFocused`, never its window's; it is never main or minimized.
+	let state: RootState
+}
+
+/// A kept window's root and its sheets' roots.
+struct ClassifiedWindow<Element> {
+	let window: InventoryWindow<Element>
+	let root: InventoryRoot<Element>
+	let sheets: [InventoryRoot<Element>]
+}
+
+/// The AX reads one pid's root inventory needs, injectable so headless tests drive pairing and classification into
+/// `rootDelta`.
+struct RootInventoryWorld<Element: AnyObject> {
+	let windows: WindowInventoryWorld<Element>
+	let string: (Element, RootIdentityAttribute) -> AXStringRead
+	/// A sheet's AX frame and whether its position and size reads answered.
+	let frame: (Element) -> (frame: CGRect, read: Bool)
+	/// The title and frame one CG pairing scores.
+	let pairingRead: (Element) -> WindowPairingRead
+	/// One boolean state read, `nil` unless it returned a boolean (see `RootState`).
+	let state: (Element, RootStateAttribute) -> Bool?
+}
+
+extension RootInventoryWorld {
+	/// List the windows, pair them with `candidates`, keep the usable ones (see `WindowInventoryWorld.select`) and
+	/// classify each with its sheets (paired by `pairSheets`). A sheet's absent title falls back to its window's. Every
+	/// listed window and kept sheet competes in `contestedClaims`, which marks the pairings no root can be keyed by.
+	func classify(candidates: [CGWindowCandidate]) -> (windows: [ClassifiedWindow<Element>], complete: Bool) {
+		let listing = windows.listing()
+		let windowReads = listing.windows.map(pairingRead)
+		var pairings = pairWindows(listing.windows, reads: windowReads, candidates: candidates)
+		let selection = windows.select(listing) { pairings[ObjectIdentifier($0)]?.candidate?.bounds }
+		let unpaired = WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
+		let keptSheets = selection.windows.flatMap(\.sheets)
+		let sheetReads = keptSheets.map(pairingRead)
+		var sheetPairings = pairSheets(keptSheets, reads: sheetReads, candidates: candidates, windowPairings: pairings)
+		for (index, contested) in contestedClaims(windowReads + sheetReads, candidates: candidates).enumerated() where contested {
+			if index < listing.windows.count {
+				pairings[ObjectIdentifier(listing.windows[index])]?.contested = true
+			} else {
+				sheetPairings[ObjectIdentifier(keptSheets[index &- listing.windows.count])]?.contested = true
+			}
+		}
+		let classified = selection.windows.map { kept -> ClassifiedWindow<Element> in
+			let window = kept.element
+			let pairing = pairings[ObjectIdentifier(window)] ?? unpaired
+			let axTitle = RootIdentityField(string(window, .title))
+			let role = RootIdentityField(string(window, .role))
+			let subrole = RootIdentityField(string(window, .subrole))
+			var title = axTitle
+			let axTitleUsable = kept.axFrame.width > 1 && kept.axFrame.height > 1 && !axTitle.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+			if !axTitleUsable, let cgTitle = pairing.candidate?.title, !cgTitle.isEmpty { title = RootIdentityField(value: cgTitle) }
+			let root = InventoryRoot(
+				element: window, kind: rootKind(role: role.value, subrole: subrole.value), title: title, role: role, subrole: subrole,
+				frame: kept.effectiveFrame, pairing: pairing,
+				comparable: rootIdentityComparable(pairing: pairing, fields: [title, role, subrole], frameRead: kept.axFrameRead),
+				state: RootState(focused: state(window, .focused), main: state(window, .main), minimized: state(window, .minimized)))
+			let sheets = kept.sheets.map { sheet -> InventoryRoot<Element> in
+				let sheetPairing = sheetPairings[ObjectIdentifier(sheet)] ?? unpaired
+				let sheetTitle = RootIdentityField(string(sheet, .title), fallback: title)
+				let sheetRole = RootIdentityField(string(sheet, .role), fallback: RootIdentityField(value: "AXSheet"))
+				let sheetSubrole = RootIdentityField(string(sheet, .subrole))
+				let (sheetFrame, sheetFrameRead) = frame(sheet)
+				return InventoryRoot(
+					element: sheet, kind: "sheet", title: sheetTitle, role: sheetRole, subrole: sheetSubrole, frame: sheetFrame, pairing: sheetPairing,
+					comparable: rootIdentityComparable(pairing: sheetPairing, fields: [sheetTitle, sheetRole, sheetSubrole], frameRead: sheetFrameRead),
+					state: RootState(focused: state(sheet, .focused), main: false, minimized: false))
+			}
+			return ClassifiedWindow(window: kept, root: root, sheets: sheets)
+		}
+		return (classified, selection.complete)
+	}
+}
+
+/// Root entries for `windows`, each window followed by its sheets: `extras` (given the window and, for a sheet, the
+/// sheet's root) under the identity fields `rootIdentity` reads and the state flags, and the `rootRef`s of the roots it
+/// cannot key. A flag that was not read (see `RootState`) is left out, whatever `extras` says. `isOnscreen` is the paired
+/// CG window's (a sheet without one takes its window's), else the negated `isMinimized` of its window, else left out.
+/// A sheet's `isFocused` is its window's read focus, as root selection, `find_roots` and ref records have always read
+/// it; its own `AXFocused` read, when it returned a boolean, is `ownFocus`, the only focus `rootInventoryChanges`
+/// compares for a sheet.
+func rootEntries<Element>(
+	_ windows: [ClassifiedWindow<Element>], ref: (Element) -> String,
+	extras: (ClassifiedWindow<Element>, InventoryRoot<Element>?) -> [String: Any]
+) -> (roots: [[String: Any]], unidentified: Set<String>) {
+	var roots: [[String: Any]] = []
+	var unidentified = Set<String>()
+	func append(_ root: InventoryRoot<Element>, onscreen: Bool?, windowFocus: Bool? = nil, extras: [String: Any]) {
+		let rootRef = ref(root.element)
+		var entry = extras
+		if root.kind == "sheet" {
+			entry["isFocused"] = windowFocus.map { $0 as Any }
+			entry["ownFocus"] = root.state.focused.map { $0 as Any }
+		} else {
+			entry["isFocused"] = root.state.focused.map { $0 as Any }
+		}
+		entry["isMain"] = root.state.main.map { $0 as Any }
+		entry["isMinimized"] = root.state.minimized.map { $0 as Any }
+		entry["isOnscreen"] = onscreen.map { $0 as Any }
+		entry["kind"] = root.kind
+		entry["rootRef"] = rootRef
+		entry["windowRef"] = rootRef
+		entry["title"] = root.title.value
+		entry["role"] = root.role.value
+		entry["subrole"] = root.subrole.value
+		entry["framePoints"] = ["x": root.frame.origin.x, "y": root.frame.origin.y, "w": root.frame.width, "h": root.frame.height]
+		if let candidate = root.pairing.candidate { entry["windowId"] = Int(candidate.windowId) }
+		if !root.comparable { unidentified.insert(rootRef) }
+		roots.append(entry)
+	}
+	for window in windows {
+		let onscreen = window.root.pairing.candidate?.isOnscreen ?? window.root.state.minimized.map { !$0 }
+		append(window.root, onscreen: onscreen, extras: extras(window, nil))
+		for sheet in window.sheets {
+			append(sheet, onscreen: sheet.pairing.candidate?.isOnscreen ?? onscreen, windowFocus: window.root.state.focused, extras: extras(window, sheet))
+		}
+	}
+	return (roots, unidentified)
 }
 
 struct CapturedWindowImage {
@@ -234,10 +913,26 @@ func resolveCaptureTarget(windowId: UInt32?, wantsImage: Bool) -> CaptureTarget 
 	if let windowId, windowId > 0 { return wantsImage ? .capture(windowId: windowId) : .semanticOnly }
 	return wantsImage ? .notCapturable : .semanticOnly
 }
-/// Wire `windowId` -> CG window id. 0, negative and out-of-range values mean "no window" (unpaired root).
-func normalizedWindowId(_ raw: Int?) -> UInt32? {
-	guard let raw, raw > 0, raw <= Int(UInt32.max) else { return nil }
-	return UInt32(raw)
+/// A missing or null wire ID is unpaired; a malformed ID must not trigger fallback.
+func checkedWindowId(_ raw: Any?) throws -> UInt32? {
+	guard let raw, !(raw is NSNull) else { return nil }
+	guard let value = raw as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), decimalIsIntegral(value),
+		let id = UInt32(exactly: value.doubleValue), id > 0
+	else {
+		throw BridgeFailure(message: "windowId must be a positive 32-bit unsigned integer", code: "invalid_args")
+	}
+	return id
+}
+
+/// JSONSerialization decodes long decimals (e.g. `4294967295.00000001`) as `NSDecimalNumber`, whose
+/// `doubleValue` rounds the fraction away. Check integrality on the decoded decimal digits instead.
+/// The decoder keeps 38 significant digits; a fraction beyond that never reaches the helper.
+private func decimalIsIntegral(_ value: NSNumber) -> Bool {
+	guard let decimal = value as? NSDecimalNumber else { return true }
+	var source = decimal.decimalValue
+	var integral = Decimal()
+	NSDecimalRound(&integral, &source, 0, .plain)
+	return !source.isNaN && integral == source
 }
 
 /// Only an unqualified request (no id, no ref) may take the app's first window. A ref that no longer
@@ -246,14 +941,67 @@ func allowsFirstWindowFallback(windowId: UInt32?, windowRef: String?) -> Bool {
 	windowId == nil && windowRef == nil
 }
 
-/// Points from `start` (exclusive) to `end` (inclusive), no more than `maxStep` apart, capped at 400 steps.
+/// Policy cap, not a representability boundary. Real macOS display arrangements span tens of thousands of
+/// points, so a vertex past +/-1e6 is a caller bug. At this size every vertex keeps sub-point precision in
+/// the Float AX hit test (24-bit mantissa), and 1024 vertices keep the summed path length far from overflow.
+private let dragCoordinateLimit = 1_000_000
+
+private func validateDragPoint(_ point: CGPoint) throws {
+	let limit = CGFloat(dragCoordinateLimit)
+	guard abs(point.x) <= limit, abs(point.y) <= limit else {
+		throw BridgeFailure(message: "Drag coordinates must be finite and within +/-\(dragCoordinateLimit)", code: "invalid_args")
+	}
+}
+
+/// The one drag geometry check behind `act`, `actBatch`, `desktopInput` and the native sink: at least two
+/// vertices, each within the coordinate limit, and a finite total length. Returns the interpolation step.
+private func admittedDragStep(_ points: [CGPoint]) throws -> CGFloat {
+	guard points.count >= 2 else {
+		throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
+	}
+	for point in points { try validateDragPoint(point) }
+	// Bounded vertices keep the distance and the capped interpolation count representable.
+	var total: CGFloat = 0
+	for (start, end) in zip(points, points.dropFirst()) {
+		total += hypot(end.x - start.x, end.y - start.y)
+	}
+	guard total.isFinite else {
+		throw BridgeFailure(message: "Drag path geometry must be finite", code: "invalid_args")
+	}
+	// Widen the usual 12pt step on long paths to keep the drag stream short.
+	return max(12, total / 1000)
+}
+
+/// Parse a wire drag path and admit its geometry as sent (image pixels for act, global points for desktop).
+private func dragRequestPoints(_ raw: Any?) throws -> [CGPoint] {
+	guard let path = raw as? [[String: Any]], path.count >= 2 else {
+		throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
+	}
+	let points = try path.map { entry in
+		guard let x = (entry["x"] as? NSNumber)?.doubleValue, let y = (entry["y"] as? NSNumber)?.doubleValue else {
+			throw BridgeFailure(message: "Drag path entries require x and y", code: "invalid_args")
+		}
+		return CGPoint(x: x, y: y)
+	}
+	_ = try admittedDragStep(points)
+	return points
+}
+
+/// Points along a validated segment, ending at `end`. Aim for `maxStep` spacing, capped at 400 steps.
 func interpolatedDragPoints(from start: CGPoint, to end: CGPoint, maxStep: CGFloat) -> [CGPoint] {
-	let distance = hypot(end.x - start.x, end.y - start.y)
+	let dx = end.x - start.x
+	let dy = end.y - start.y
+	let distance = hypot(dx, dy)
 	guard distance > 0, maxStep > 0 else { return [end] }
-	let steps = min(400, max(1, Int((distance / maxStep).rounded(.up))))
+	let steps = Int(max(1, min(400, (distance / maxStep).rounded(.up))))
 	return (1...steps).map { index in
 		let t = CGFloat(index) / CGFloat(steps)
-		return CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t)
+		if index == steps { return end }
+		// Keep each interpolated coordinate within the validated vertex bounds even after rounding.
+		return CGPoint(
+			x: min(max(start.x + dx * t, min(start.x, end.x)), max(start.x, end.x)),
+			y: min(max(start.y + dy * t, min(start.y, end.y)), max(start.y, end.y))
+		)
 	}
 }
 
@@ -350,6 +1098,7 @@ let alwaysBlockedBundleIds: [String] = [
 	"com.apple.loginwindow",
 	"com.apple.coreservices.uiagent",
 	"com.apple.ScreenSaver.Engine",
+	"com.apple.LocalAuthenticationRemoteService",
 ]
 
 /// The request's `blockedBundleIds` (sent by the TypeScript policy) plus the always-blocked agents.
@@ -528,6 +1277,19 @@ func secondaryActionRetryIsSafe(axError: Int32) -> Bool {
 	axError == AXError.invalidUIElement.rawValue
 }
 
+/// A failed `AXPress` establishes non-delivery only for a dead element or an action the element, API or app refused.
+/// `cannotComplete` (the app did not answer in time), `failure` and anything else may have pressed, so `press` never
+/// re-presses on a refreshed element or falls back to a pointer click after them: that could press twice (#1240).
+func axPressNotDelivered(axError: Int32) -> Bool {
+	[AXError.invalidUIElement, .actionUnsupported, .illegalArgument, .apiDisabled, .notImplemented].map(\.rawValue).contains(axError)
+}
+
+/// A step that may have delivered its input without proof (`evidence.deliveryUnknown`): a batch must stop there, so a
+/// later step neither runs on an unknown state nor hides it (#1240). A generic `unknown` does not stop the batch.
+func stepDeliveryUnknown(_ step: [String: Any]) -> Bool {
+	(step["evidence"] as? [String: Any])?["deliveryUnknown"] as? Bool == true
+}
+
 /// A failed `secondaryAction`: `cannotComplete` (the app did not answer in time) may have run it anyway.
 func secondaryActionFailureOutcome(axError: Int32) -> String {
 	axError == AXError.cannotComplete.rawValue ? "unknown" : "didnt"
@@ -632,18 +1394,58 @@ typealias FocusCheck = (Bool) throws -> Void
 // The second argument marks a real down, not an early check after a layout query.
 typealias BeforeKeyDown = (Bool, Bool) throws -> Void
 
-private func trackKeyboardPosts(_ check: @escaping FocusCheck) -> BeforeKeyDown {
-	var postedUnits = 0
-	return { force, posting in
-		do {
-			try check(force)
-		} catch var failure as BridgeFailure {
-			failure.evidence = ["postedUnits": postedUnits]
-			throw failure
-		}
-		// Posting the down and release cannot throw after admission succeeds.
-		if posting { postedUnits += 1 }
+/// Counts the key pairs one keyboard action posts, so every failure after a posted prefix reports it as
+/// `evidence.postedUnits`: admission refusals through `beforeKeyDown`, anything else through `deliver`.
+final class KeyboardPostCounter {
+	private(set) var postedUnits = 0
+	private let check: FocusCheck
+
+	init(_ check: @escaping FocusCheck) {
+		self.check = check
 	}
+
+	private func withPostedUnits(_ failure: BridgeFailure) -> BridgeFailure {
+		var failure = failure
+		var evidence = failure.evidence ?? [:]
+		evidence["postedUnits"] = postedUnits
+		failure.evidence = evidence
+		return failure
+	}
+
+	/// Admission before each key-down; the second argument marks a real down, which counts once admitted.
+	var beforeKeyDown: BeforeKeyDown {
+		return { force, posting in
+			do {
+				try self.check(force)
+			} catch let failure as BridgeFailure {
+				throw self.withPostedUnits(failure)
+			}
+			// Posting the down and release cannot throw after admission succeeds.
+			if posting { self.postedUnits += 1 }
+		}
+	}
+
+	/// Runs keyboard delivery; any `BridgeFailure` it throws, e.g. a failed event allocation, carries the count.
+	func deliver(_ body: () throws -> Void) throws {
+		do {
+			try body()
+		} catch let failure as BridgeFailure {
+			throw withPostedUnits(failure)
+		}
+	}
+}
+
+/// The longest keyboard delivery `desktopInput` allows: its client's own socket timeout is a fixed 30 s.
+let desktopInputKeyboardCeiling: TimeInterval = 30
+
+/// The absolute keyboard deadline in `systemUptime` seconds, the boot-relative clock `diagnostics` reports as
+/// `uptimeMs`. The client sends `keyboardDeadlineUptimeMs` in that clock, so no wall-clock step can move it.
+/// A missing or non-finite deadline falls back to 30 s from `now`. `ceiling` bounds a present one: `desktopInput`
+/// passes its client's fixed 30 s; `act` passes nil, because `act_ui` budgets its timeout by text length.
+func keyboardDeadline(_ request: [String: Any], now: TimeInterval, ceiling: TimeInterval?) -> TimeInterval {
+	guard let ms = (request["keyboardDeadlineUptimeMs"] as? NSNumber)?.doubleValue, ms.isFinite else { return now + 30 }
+	guard let ceiling else { return ms / 1000 }
+	return min(ms / 1000, now + ceiling)
 }
 
 final class KeyboardAdmission {
@@ -749,6 +1551,9 @@ struct NativeInputSink {
 	let sleep: (useconds_t) -> Void
 	let keyboardInputSource: () -> KeyboardInputSource
 	var checkCancellation: (() throws -> Void)?
+	/// Post-time stamp for pointer events, in `CGEventTimestamp` units (nanoseconds since startup, paused in sleep).
+	/// No default: every sink, including test fakes, names its clock.
+	let eventTimestamp: () -> CGEventTimestamp
 
 	func checkDragCancellation() throws {
 		try Task.checkCancellation()
@@ -767,54 +1572,78 @@ struct NativeInputSink {
 		CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
 	}
 
-	static let live = NativeInputSink(
-		mouseEvent: createMouseEvent,
-		wheelEvent: createWheelEvent,
-		keyEvent: createKeyEvent,
-		postToPid: { $0.postToPid($1) },
-		prepareHID: { pid in
-			// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
-			// target frontmost when posting at the HID event tap instead.
-			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
-				if #available(macOS 14.0, *) {
-					_ = app.activate()
-				} else {
-					_ = app.activate(options: [.activateIgnoringOtherApps])
-				}
-				usleep(20_000)
+	/// Activates `pid` when it is not already active; true when it asked for activation.
+	static func activateIfInactive(_ pid: Int32) -> Bool {
+		guard let app = NSRunningApplication(processIdentifier: pid), !app.isActive else { return false }
+		if #available(macOS 14.0, *) {
+			_ = app.activate()
+		} else {
+			_ = app.activate(options: [.activateIgnoringOtherApps])
+		}
+		return true
+	}
+
+	/// The production HID wiring over its three OS effects, injected one by one so tests run the real ordering:
+	/// an activation settles for 20 ms before admission, and the final post adds no wait of its own.
+	static func production(activate: @escaping (Int32) -> Bool, sleep: @escaping (useconds_t) -> Void, post: @escaping (CGEvent) -> Void) -> NativeInputSink {
+		NativeInputSink(
+			mouseEvent: createMouseEvent,
+			wheelEvent: createWheelEvent,
+			keyEvent: createKeyEvent,
+			postToPid: { $0.postToPid($1) },
+			prepareHID: { pid in
+				// AppKit mouseDown handlers can ignore pid-targeted CGEvents. Keep the
+				// target frontmost when posting at the HID event tap instead.
+				guard activate(pid) else { return false }
+				sleep(20_000)
 				return true
-			}
-			return false
-		},
-		postHID: { event, _ in event.post(tap: .cghidEventTap) },
-		sleep: { _ = usleep($0) },
-		keyboardInputSource: currentKeyboardInputSource
-	)
+			},
+			postHID: { event, _ in post(event) },
+			sleep: sleep,
+			keyboardInputSource: currentKeyboardInputSource,
+			eventTimestamp: { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
+		)
+	}
+
+	static let live = production(activate: activateIfInactive, sleep: { _ = usleep($0) }, post: { $0.post(tap: .cghidEventTap) })
 }
 
-private struct RootAXEvent {
+/// The clock and blocking calls behind `Bridge.waitForRootChange`, injectable so tests observe the bound
+/// without sleeping.
+struct RootChangeWaiter {
+	let now: () -> Date
+	let sleep: (TimeInterval) -> Void
+	/// Wait on a locked condition until a deadline.
+	let wait: (NSCondition, Date) -> Void
+
+	static let live = RootChangeWaiter(now: { Date() }, sleep: { Thread.sleep(forTimeInterval: $0) }, wait: { _ = $0.wait(until: $1) })
+}
+
+struct RootAXEvent {
 	let sequence: UInt64
 	let timestamp: TimeInterval
 	let notification: String
 	let element: AXUIElement?
 }
 
-private final class RootAXObserverState {
+/// One observed root's event log. Only the observer's identity is kept: `recordRootAXEvent` routes a
+/// callback to its log by `CFEqual` on it.
+final class RootAXObserverState {
 	let pid: Int32
-	let observer: AXObserver
+	let observer: CFTypeRef
 	let change = NSCondition()
 	var changeGeneration: UInt64 = 0
 	var events: [RootAXEvent] = []
 	var nextSequence: UInt64 = 1
 	var lastUsed: TimeInterval = Date().timeIntervalSince1970
 
-	init(pid: Int32, observer: AXObserver) {
+	init(pid: Int32, observer: CFTypeRef) {
 		self.pid = pid
 		self.observer = observer
 	}
 }
 
-private struct OCRBox {
+struct OCRBox {
 	let string: String
 	let confidence: Double
 	let rect: CGRect
@@ -1056,11 +1885,11 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 7
+	private let protocolVersion = 8
 	private let refStore: AXRefStore
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
-	private let physicalInputLock = NSRecursiveLock()
+	private let physicalInputLock: NSLocking
 	private let inputSink: NativeInputSink
 	private let supportsAgentCursor = CommandLine.arguments.contains("serve")
 	private let browserBundleIds: Set<String> = [
@@ -1082,11 +1911,13 @@ final class Bridge {
 		writeOutput: @escaping (Data) throws -> Void = { try FileHandle.standardOutput.write(contentsOf: $0) },
 		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) },
 		inputSink: NativeInputSink = .live,
+		physicalInputLock: NSLocking = NSRecursiveLock(),
 		refStore: AXRefStore = AXRefStore()
 	) {
 		self.refStore = refStore
 		self.activityGlow = activityGlow
 		self.inputSink = inputSink
+		self.physicalInputLock = physicalInputLock
 		self.dispatchRequest = dispatchRequest
 		self.readSession = readSession
 		self.writeOutput = writeOutput
@@ -1425,11 +2256,6 @@ final class Bridge {
 		return pid
 	}
 
-	/// `windowId` from the wire, treating invalid ids as absent (unpaired roots have no CG window).
-	func positiveWindowId(_ request: [String: Any]) -> UInt32? {
-		normalizedWindowId(optionalIntArg(request, "windowId"))
-	}
-
 	func optionalIntArg(_ request: [String: Any], _ key: String) -> Int? {
 		if let value = request[key] as? Int {
 			return value
@@ -1496,6 +2322,7 @@ final class Bridge {
 		let parentPath = processPath(pid: parentPid)
 		var output: [String: Any] = [
 			"protocolVersion": protocolVersion,
+			"buildIdentity": helperBuildIdentity,
 			"architectureVersion": 1,
 			"invariants": ["state-scoped-observations", "bounded-observation-history", "multi-root-forest", "progressive-disclosure", "atomic-physical-input", "concurrent-requests", "transactional-batching"],
 			"pid": Int32(getpid()),
@@ -1507,6 +2334,8 @@ final class Bridge {
 			"screenRecording": permissions["screenRecording"] ?? false,
 			"activityGlowActive": activityGlow?.isActive ?? false,
 			"recentCompletedRequestIds": completedRequestIds(),
+			// The boot-relative clock keyboard deadlines are expressed in (see `keyboardDeadline`).
+			"uptimeMs": ProcessInfo.processInfo.systemUptime * 1000,
 		]
 		if let parentPath {
 			output["parentPath"] = parentPath
@@ -1811,7 +2640,7 @@ final class Bridge {
 
 	private func setWindowFrame(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["ok": false, "reason": "window_not_found"]
@@ -1838,7 +2667,7 @@ final class Bridge {
 
 	private func focusWindow(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = positiveWindowId(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["focused": false, "reason": "window_not_found"]
@@ -1867,7 +2696,7 @@ final class Bridge {
 		return result
 	}
 
-	private func scoreWindow(_ window: [String: Any]) -> Int {
+	func scoreWindow(_ window: [String: Any]) -> Int {
 		var score = 0
 		if (window["isFocused"] as? Bool) == true { score += 100 }
 		if (window["isMain"] as? Bool) == true { score += 80 }
@@ -1877,18 +2706,11 @@ final class Bridge {
 		return score
 	}
 
-	private func rootKind(role: String, subrole: String) -> String {
-		if role == "AXSheet" { return "sheet" }
-		if subrole.localizedCaseInsensitiveContains("popover") { return "popover" }
-		if subrole.localizedCaseInsensitiveContains("dialog") || role == "AXDialog" { return "dialog" }
-		return "window"
-	}
-
 	private func isModalRoot(_ window: AXUIElement, role: String, subrole: String, sheetCount: Int) -> Bool {
 		classifyModal(axModal: boolAttribute(window, attribute: "AXModal" as CFString), sheetCount: sheetCount, role: role, subrole: subrole)
 	}
 
-	private func rootMetadata(pairing: WindowPairing, sheetCount: Int) -> [String: Any] {
+	func rootMetadata(pairing: WindowPairing, sheetCount: Int) -> [String: Any] {
 		["pairing": ["confidence": pairing.confidence, "score": pairing.score], "sheetCount": sheetCount]
 	}
 
@@ -1903,7 +2725,16 @@ final class Bridge {
 		}
 	}
 
+	/// Every listed root is a validated positive match. `complete` is true only when the inventory read every
+	/// live root, so a root missing from it closed; a partial listing (e.g. over `windowListCap`) still
+	/// resolves the roots it names.
 	private func listRoots(pid: Int32?, title: String? = nil) throws -> [String: Any] {
+		let inventory = rootInventory(pid: pid, title: title)
+		return ["roots": inventory.roots, "complete": inventory.complete]
+	}
+
+	/// `unidentified` names (by `rootRef`) the roots whose pairing or identity reads failed (see `windowInventory`).
+	private func rootInventory(pid: Int32?, title: String?) -> (roots: [[String: Any]], complete: Bool, unidentified: Set<String>) {
 		let requestedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
 		let entries = allCGWindowEntries()
 		let isBroadDiscovery = pid == nil && requestedTitle.isEmpty
@@ -1924,11 +2755,17 @@ final class Bridge {
 			apps = broadRootCandidateApps(entries: entries)
 		}
 		var roots: [[String: Any]] = []
+		var complete = true
+		var unidentified = Set<String>()
 		for app in apps {
 			guard let rawPid = app["pid"] as? Int, let appPid = Int32(exactly: rawPid) else { continue }
 			let appName = app["appName"] as? String ?? processName(pid: appPid) ?? "Unknown App"
 			let bundleId = app["bundleId"] as? String
-			for var root in (try? listWindows(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)) ?? [] {
+			let windows = windowInventory(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)
+			// An exited process has no roots, however its failed reads look.
+			if !windows.complete && !processIsGone(appPid) { complete = false }
+			unidentified.formUnion(windows.unidentified)
+			for var root in windows.roots {
 				root["pid"] = rawPid
 				root["appName"] = appName
 				if let bundleId { root["bundleId"] = bundleId }
@@ -1964,110 +2801,101 @@ final class Bridge {
 			}
 		}
 		roots.sort { (($0["zOrder"] as? Int) ?? Int.max) < (($1["zOrder"] as? Int) ?? Int.max) }
-		return ["roots": roots]
+		return (roots, complete, unidentified)
+	}
+
+	/// An exited process: `kill` reports no such process. Any other answer, including EPERM, may be live.
+	private func processIsGone(_ pid: pid_t) -> Bool {
+		pid > 0 && kill(pid, 0) != 0 && errno == ESRCH
 	}
 
 	private func listWindows(pid: Int32, cgEntries: [[String: Any]]? = nil, messagingTimeout: Float = 1.0) throws -> [[String: Any]] {
+		windowInventory(pid: pid, cgEntries: cgEntries, messagingTimeout: messagingTimeout).roots
+	}
+
+	/// The pid's windows and sheets (see `RootInventoryWorld.classify`). Not `complete` when the window list, a sheet
+	/// source or a skipped window's size could not be read, or the list exceeds `windowListCap`: an omitted root is then
+	/// unknown, while every listed root stays a valid positive match. `unidentified` names (by `rootRef`) each root whose
+	/// identity `rootIdentity` cannot key the same way in every listing (see `rootIdentityComparable`).
+	private func windowInventory(pid: Int32, cgEntries: [[String: Any]]?, messagingTimeout: Float) -> (roots: [[String: Any]], complete: Bool, unidentified: Set<String>) {
 		ensureEnhancedAccessibility(pid: pid)
 		let appElement = AXUIElementCreateApplication(pid)
 		AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-		var windows = Array(axElementArray(appElement, attribute: kAXWindowsAttribute as CFString).prefix(128))
-		if windows.isEmpty {
-			for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
-				guard let window = copyAttribute(appElement, attribute: attribute as CFString).flatMap(asAXElement), !windows.contains(where: { sameElement($0, window) }) else { continue }
-				windows.append(window)
-			}
-		}
-		let candidates = cgWindowCandidates(pid: pid, entries: cgEntries)
-		let pairings = windowPairings(windows: windows, candidates: candidates)
-
-		var output: [[String: Any]] = []
-		for (zIndex, window) in windows.enumerated() {
-			let axTitle = stringAttribute(window, attribute: kAXTitleAttribute as CFString) ?? ""
-			let axRole = stringAttribute(window, attribute: kAXRoleAttribute as CFString) ?? ""
-			let axSubrole = stringAttribute(window, attribute: kAXSubroleAttribute as CFString) ?? ""
-			let axFrame = frameForWindow(window)
-			let pairing = pairings[ObjectIdentifier(window)] ?? WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
+		let world = RootInventoryWorld<AXUIElement>(
+			windows: WindowInventoryWorld<AXUIElement>(
+				windows: { self.axElementArrayEvidence(appElement, attribute: kAXWindowsAttribute as CFString) },
+				fallbackWindows: {
+					var windows: [AXUIElement] = []
+					for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+						guard let window = self.copyAttribute(appElement, attribute: attribute as CFString).flatMap(self.asAXElement), !windows.contains(where: { self.sameElement($0, window) }) else { continue }
+						windows.append(window)
+					}
+					return windows
+				},
+				position: { self.positionRead($0) },
+				size: { self.sizeRead($0) },
+				sheets: { self.sheetInventory(of: $0) }
+			),
+			string: { self.stringRead($0, attribute: Bridge.identityAttribute($1)) },
+			frame: { self.frameRead($0) },
+			pairingRead: { self.pairingRead($0) },
+			state: { rootStateBoolean(self.copyAttribute($0, attribute: Bridge.stateAttribute($1))) }
+		)
+		let inventory = world.classify(candidates: cgWindowCandidates(pid: pid, entries: cgEntries))
+		let entries = rootEntries(inventory.windows, ref: { self.refStore.storeWindow($0) }) { classified, sheet in
+			let window = classified.window.element
+			let pairing = classified.root.pairing
 			let candidate = pairing.candidate
-
-			let effectiveFrame = axFrame.width > 1 && axFrame.height > 1 ? axFrame : (candidate?.bounds ?? axFrame)
-			if effectiveFrame.width < 100 || effectiveFrame.height < 80 { continue }
-			let hasUsableAXFrame = axFrame.width > 1 && axFrame.height > 1
-			let title = hasUsableAXFrame && !axTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? axTitle : (candidate?.title.isEmpty == false ? candidate!.title : axTitle)
-			let windowRef = refStore.storeWindow(window)
-			let isMinimized = boolAttribute(window, attribute: kAXMinimizedAttribute as CFString) ?? false
-			let isMain = boolAttribute(window, attribute: kAXMainAttribute as CFString) ?? false
-			let isFocused = boolAttribute(window, attribute: kAXFocusedAttribute as CFString) ?? false
-			let sheetCount = sheetElements(of: window).count
-			let isModal = isModalRoot(window, role: axRole, subrole: axSubrole, sheetCount: sheetCount)
-			let scale = displayScaleFactor(for: effectiveFrame)
-
-			var item: [String: Any] = [
-				"kind": rootKind(role: axRole, subrole: axSubrole),
-				"rootRef": windowRef,
-				"windowRef": windowRef,
-				"zOrder": candidate?.zOrder ?? zIndex,
-				"title": title,
-				"role": axRole,
-				"subrole": axSubrole,
-				"isModal": isModal,
-				"framePoints": [
-					"x": effectiveFrame.origin.x,
-					"y": effectiveFrame.origin.y,
-					"w": effectiveFrame.size.width,
-					"h": effectiveFrame.size.height,
-				],
-				"scaleFactor": scale,
-				"isMinimized": isMinimized,
-				"isOnscreen": candidate?.isOnscreen ?? !isMinimized,
-				"isMain": isMain,
-				"isFocused": isFocused,
-				"metadata": rootMetadata(pairing: pairing, sheetCount: sheetCount),
-			]
-			if let candidate {
-				item["windowId"] = Int(candidate.windowId)
-			}
-			output.append(item)
-
-			for sheet in sheetElements(of: window) {
-				let sheetRef = refStore.storeWindow(sheet)
-				let sheetFrame = frameForWindow(sheet)
-				let sheetCandidate = bestCandidate(for: sheet, candidates: candidates)
-				var sheetItem: [String: Any] = [
-					"kind": "sheet",
-					"rootRef": sheetRef,
-					"windowRef": sheetRef,
-					"zOrder": sheetCandidate?.zOrder ?? candidate?.zOrder ?? zIndex,
-					"title": stringAttribute(sheet, attribute: kAXTitleAttribute as CFString) ?? title,
-					"role": stringAttribute(sheet, attribute: kAXRoleAttribute as CFString) ?? "AXSheet",
-					"subrole": stringAttribute(sheet, attribute: kAXSubroleAttribute as CFString) ?? "",
-					"isModal": true,
-					"framePoints": ["x": sheetFrame.origin.x, "y": sheetFrame.origin.y, "w": sheetFrame.width, "h": sheetFrame.height],
-					"scaleFactor": displayScaleFactor(for: sheetFrame),
-					"isMinimized": false,
-					"isOnscreen": sheetCandidate?.isOnscreen ?? candidate?.isOnscreen ?? !isMinimized,
-					"isMain": false,
-					"isFocused": isFocused,
-					"metadata": ["pairing": ["confidence": sheetCandidate == nil ? pairing.confidence : "high", "score": sheetCandidate == nil ? pairing.score : 100], "sheetCount": 0],
+			let zIndex = classified.window.listIndex
+			guard let sheet else {
+				let sheetCount = classified.sheets.count
+				return [
+					"zOrder": candidate?.zOrder ?? zIndex,
+					"isModal": isModalRoot(window, role: classified.root.role.value, subrole: classified.root.subrole.value, sheetCount: sheetCount),
+					"scaleFactor": displayScaleFactor(for: classified.root.frame),
+					"metadata": rootMetadata(pairing: pairing, sheetCount: sheetCount),
 				]
-				if let sheetCandidate { sheetItem["windowId"] = Int(sheetCandidate.windowId) }
-				output.append(sheetItem)
 			}
+			let sheetCandidate = sheet.pairing.candidate
+			return [
+				"zOrder": sheetCandidate?.zOrder ?? candidate?.zOrder ?? zIndex,
+				"isModal": true,
+				"scaleFactor": displayScaleFactor(for: sheet.frame),
+				"metadata": ["pairing": ["confidence": sheetCandidate == nil ? pairing.confidence : sheet.pairing.confidence, "score": sheetCandidate == nil ? pairing.score : sheet.pairing.score], "sheetCount": 0],
+			]
 		}
-		return output
+		return (entries.roots, inventory.complete, entries.unidentified)
+	}
+
+	private static func stateAttribute(_ attribute: RootStateAttribute) -> CFString {
+		switch attribute {
+		case .focused: return kAXFocusedAttribute as CFString
+		case .main: return kAXMainAttribute as CFString
+		case .minimized: return kAXMinimizedAttribute as CFString
+		}
+	}
+
+	private static func identityAttribute(_ attribute: RootIdentityAttribute) -> CFString {
+		switch attribute {
+		case .title: return kAXTitleAttribute as CFString
+		case .role: return kAXRoleAttribute as CFString
+		case .subrole: return kAXSubroleAttribute as CFString
+		}
 	}
 
 	private func look(
 		_ request: [String: Any], windowOwner: (UInt32) -> Int32?,
 		captureWindow: (UInt32) throws -> CapturedWindowImage
 	) throws -> [String: Any] {
+		// PID first, then window ID: a request with both malformed reports the PID error.
 		let suppliedPid = try request["pid"] == nil || request["pid"] is NSNull ? nil : pidArg(request)
-		let windowId = positiveWindowId(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		let maxDimension = optionalIntArg(request, "maxDimension").map { max(1, $0) }
 		let readText = optionalStringArg(request, "readText") ?? "auto"
 		let baseLookId = optionalStringArg(request, "baseLookId")
 		let includeImage = boolArg(request, "includeImage") ?? true
+		let requestDeadline = ProcessInfo.processInfo.systemUptime + lookWalkDeadline
 		guard readText == "auto" || readText == "always" || readText == "never" else {
 			throw BridgeFailure(message: "readText must be auto, always, or never", code: "invalid_args")
 		}
@@ -2150,7 +2978,7 @@ final class Bridge {
 		var lookStored = false
 		defer { if !lookStored { refStore.dropElements(owner: lookId) } }
 		let describeStart = Date()
-		let outline = buildLookOutline(root: rootElement, owner: lookId, transform: transform)
+		let outline = buildLookOutline(root: rootElement, owner: lookId, transform: transform, requestDeadline: requestDeadline)
 		let describeMs = elapsedMs(describeStart)
 
 		var readTextMs = 0
@@ -2225,13 +3053,13 @@ final class Bridge {
 		return "look_\(nextLookId)"
 	}
 
-	private func lookRecord(for lookId: String) -> LookRecord? {
+	func lookRecord(for lookId: String) -> LookRecord? {
 		lookRecordLock.lock()
 		defer { lookRecordLock.unlock() }
 		return lookRecords[lookId]
 	}
 
-	private func rectTransform(windowFrame: CGRect, imageWidth: Int, imageHeight: Int) -> (CGRect) -> CGRect {
+	func rectTransform(windowFrame: CGRect, imageWidth: Int, imageHeight: Int) -> (CGRect) -> CGRect {
 		let sx = windowFrame.width > 0 ? Double(imageWidth) / windowFrame.width : 1.0
 		let sy = windowFrame.height > 0 ? Double(imageHeight) / windowFrame.height : 1.0
 		return { frame in
@@ -2243,7 +3071,7 @@ final class Bridge {
 		}
 	}
 
-	private func clampRect(_ rect: CGRect, width: Int, height: Int) -> CGRect {
+	func clampRect(_ rect: CGRect, width: Int, height: Int) -> CGRect {
 		let maxX = Double(width)
 		let maxY = Double(height)
 		let x1 = min(max(rect.minX, 0), maxX)
@@ -2253,44 +3081,26 @@ final class Bridge {
 		return CGRect(x: x1, y: y1, width: max(0, x2 - x1), height: max(0, y2 - y1))
 	}
 
-	private func buildLookOutline(root: AXUIElement, owner: String, transform: @escaping (CGRect) -> CGRect) -> LookNode {
-		let rootNode = lookNode(element: root, transform: transform, offscreen: false, owner: owner)
-		let nodeLimit = 2000
+	/// The look's outline (see `LookOutlineWorld.build`): a failed children read marks the node `truncated`.
+	/// - Parameter requestDeadline: The look's `lookWalkDeadline`, on the `systemUptime` clock.
+	private func buildLookOutline(root: AXUIElement, owner: String, transform: @escaping (CGRect) -> CGRect, requestDeadline: TimeInterval) -> LookNode {
+		let world = LookOutlineWorld<AXUIElement>(
+			children: { self.axElementArrayEvidence($0, attribute: kAXChildrenAttribute as CFString) },
+			rootNode: { self.lookNode(element: $0, transform: transform, offscreen: false, owner: owner) },
+			childNodes: { parent in
+				let visibleByKind = self.visibleChildrenByKind(parent)
+				return { child in
+					let role = self.stringAttribute(child, attribute: kAXRoleAttribute as CFString) ?? ""
+					let offscreen = self.childOffscreen(child, role: role, visibleByKind: visibleByKind)
+					return self.lookNode(element: child, transform: transform, offscreen: offscreen, owner: owner)
+				}
+			},
+			now: { ProcessInfo.processInfo.systemUptime }
+		)
 		// Apps with slow AX servers (e.g. Outlook) can take >30s to describe; the
 		// client aborts at 33s, so stop walking well before that and return a
 		// truncated outline instead.
-		let deadline = Date().addingTimeInterval(20.0)
-		var walked = 1
-		var seen = Set<ObjectIdentifier>([ObjectIdentifier(root)])
-		var queue: [(AXUIElement, LookNode)] = [(root, rootNode)]
-		var index = 0
-		while index < queue.count {
-			let (element, node) = queue[index]
-			index += 1
-			let children = axElementArray(element, attribute: kAXChildrenAttribute as CFString)
-			if children.isEmpty { continue }
-			if walked >= nodeLimit || Date() >= deadline {
-				node.truncated = true
-				continue
-			}
-			let visibleByKind = visibleChildrenByKind(element)
-			for child in children {
-				if walked >= nodeLimit || Date() >= deadline {
-					node.truncated = true
-					break
-				}
-				let identity = ObjectIdentifier(child)
-				if seen.contains(identity) { continue }
-				seen.insert(identity)
-				let role = stringAttribute(child, attribute: kAXRoleAttribute as CFString) ?? ""
-				let offscreen = childOffscreen(child, role: role, visibleByKind: visibleByKind)
-				let childNode = lookNode(element: child, transform: transform, offscreen: offscreen, owner: owner)
-				node.children.append(childNode)
-				queue.append((child, childNode))
-				walked += 1
-			}
-		}
-		return rootNode
+		return world.build(root: root, nodeLimit: 2000, timeLimit: 20.0, requestDeadline: requestDeadline)
 	}
 
 	/// `owner` is the look whose lifetime bounds the element ref; nil for one-off element queries.
@@ -2391,7 +3201,7 @@ final class Bridge {
 		return recognized.value
 	}
 
-	private func attachOCR(_ boxes: [OCRBox], to root: LookNode) {
+	func attachOCR(_ boxes: [OCRBox], to root: LookNode) {
 		var pictureOnlyIndex = 0
 		for box in boxes {
 			if ocrBoxDuplicatesAXLabel(box, in: root) { continue }
@@ -2445,6 +3255,22 @@ final class Bridge {
 		return CGPoint(x: record.windowFrame.origin.x + record.windowFrame.width * relX, y: record.windowFrame.origin.y + record.windowFrame.height * relY)
 	}
 
+	/// The grounded point of an x/y act target. A ref target wins over x/y and returns nil: act grounds it
+	/// on the live element only when it runs.
+	private func coordinateTargetPoint(_ target: [String: Any], record: LookRecord) -> CGPoint? {
+		guard target["ref"] as? String == nil, let x = target["x"] as? NSNumber, let y = target["y"] as? NSNumber else { return nil }
+		return lookPoint(record: record, x: x.doubleValue, y: y.doubleValue)
+	}
+
+	/// The drag geometry admission shared by `act` and `actBatch`: the action point and every grounded
+	/// vertex pass the same checks as the native sink, before any lock, focus, preflight or allocation.
+	private func admittedDragPoints(at point: CGPoint?, params: [String: Any], record: LookRecord) throws -> [CGPoint] {
+		if let point { try validateDragPoint(point) }
+		let points = try dragRequestPoints(params["path"]).map { lookPoint(record: record, x: $0.x, y: $0.y) }
+		_ = try admittedDragStep(points)
+		return points
+	}
+
 	private func payloadNode(element: AXUIElement) -> [String: Any] {
 		let node = lookNode(element: element, transform: { $0 }, offscreen: false)
 		var payload = node.payload()
@@ -2452,7 +3278,7 @@ final class Bridge {
 		return payload
 	}
 
-	private func normalizedLabel(_ value: String) -> String {
+	func normalizedLabel(_ value: String) -> String {
 		value.lowercased().components(separatedBy: CharacterSet.whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
 	}
 
@@ -2499,14 +3325,7 @@ final class Bridge {
 		}
 		guard registered else { return false }
 
-		rootObserverLock.lock()
-		if rootObservers.count >= maxRootObservers,
-			let evict = rootObservers.values.min(by: { $0.lastUsed < $1.lastUsed })?.pid
-		{
-			rootObservers.removeValue(forKey: evict)
-		}
-		rootObservers[pid] = state
-		rootObserverLock.unlock()
+		installRootObserver(state)
 
 		let source = AXObserverGetRunLoopSource(observer)
 		Thread.detachNewThread {
@@ -2518,7 +3337,19 @@ final class Bridge {
 		return true
 	}
 
-	private func recordRootAXEvent(observer: AXObserver, notification: String, element: AXUIElement) {
+	/// Register `state` under the observer lock, evicting the least recently used root at the cap.
+	func installRootObserver(_ state: RootAXObserverState) {
+		rootObserverLock.lock()
+		if rootObservers.count >= maxRootObservers,
+			let evict = rootObservers.values.min(by: { $0.lastUsed < $1.lastUsed })?.pid
+		{
+			rootObservers.removeValue(forKey: evict)
+		}
+		rootObservers[state.pid] = state
+		rootObserverLock.unlock()
+	}
+
+	func recordRootAXEvent(observer: CFTypeRef, notification: String, element: AXUIElement) {
 		rootObserverLock.lock()
 		let state = rootObservers.values.first { CFEqual($0.observer, observer) }
 		if let state {
@@ -2535,7 +3366,7 @@ final class Bridge {
 		}
 	}
 
-	private func rootChangeGeneration(pid: Int32) -> UInt64 {
+	func rootChangeGeneration(pid: Int32) -> UInt64 {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
@@ -2545,28 +3376,30 @@ final class Bridge {
 		return state.changeGeneration
 	}
 
-	private func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date) {
+	/// Block until `pid`'s change generation moves past `generation`, for at most 200 ms and never past
+	/// `deadline`. An unobserved pid sleeps the same bound instead.
+	func waitForRootChange(pid: Int32, since generation: UInt64, until deadline: Date, waiter: RootChangeWaiter = .live) {
 		rootObserverLock.lock()
 		let state = rootObservers[pid]
 		rootObserverLock.unlock()
 		guard let state else {
-			Thread.sleep(forTimeInterval: min(0.2, max(0, deadline.timeIntervalSinceNow)))
+			waiter.sleep(min(0.2, max(0, deadline.timeIntervalSince(waiter.now()))))
 			return
 		}
 		state.change.lock()
 		if state.changeGeneration == generation {
-			_ = state.change.wait(until: min(deadline, Date().addingTimeInterval(0.2)))
+			waiter.wait(state.change, min(deadline, waiter.now().addingTimeInterval(0.2)))
 		}
 		state.change.unlock()
 	}
 
-	private func rootEventCursor(pid: Int32) -> UInt64 {
+	func rootEventCursor(pid: Int32) -> UInt64 {
 		rootObserverLock.lock()
 		defer { rootObserverLock.unlock() }
 		return rootObservers[pid]?.nextSequence ?? 1
 	}
 
-	private func rootEvents(pid: Int32, since cursor: UInt64) -> [RootAXEvent] {
+	func rootEvents(pid: Int32, since cursor: UInt64) -> [RootAXEvent] {
 		rootObserverLock.lock()
 		defer { rootObserverLock.unlock() }
 		guard let events = rootObservers[pid]?.events else { return [] }
@@ -2680,7 +3513,7 @@ final class Bridge {
 
 	func act(_ request: [String: Any], world: ActWorld, supportsAgentCursor: Bool) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let deadline = keyboardDeadline(request)
+		let deadline = keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime, ceiling: nil)
 		let lookId = try stringArg(request, "lookId")
 		guard let record = world.lookRecord(lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
@@ -2738,11 +3571,11 @@ final class Bridge {
 			element = stored
 			beforeValue = world.stringAttribute(stored, kAXValueAttribute as CFString)
 			beforeSelected = world.stringAttribute(stored, kAXSelectedTextAttribute as CFString)
-		} else if let xNumber = target["x"] as? NSNumber, let yNumber = target["y"] as? NSNumber {
+		} else if let point = coordinateTargetPoint(target, record: record) {
 			guard record.hasImage else {
 				throw BridgeFailure(message: "Coordinate targeting is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
-			rawPoint = lookPoint(record: record, x: xNumber.doubleValue, y: yNumber.doubleValue)
+			rawPoint = point
 			beforeValue = nil
 			beforeSelected = nil
 		} else {
@@ -2797,7 +3630,8 @@ final class Bridge {
 			try world.refuseBlockedPoints(points, blockedBundleIdList(request))
 		}
 
-		let admitKeyboard = trackKeyboardPosts(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
+		let keyboard = KeyboardPostCounter(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
+		let admitKeyboard = keyboard.beforeKeyDown
 		func recheckBlockedKeyboard() throws {
 			try admitKeyboard(true, false)
 		}
@@ -2819,6 +3653,12 @@ final class Bridge {
 			}
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
+			let dragPoints: [CGPoint]
+			if action == "drag" {
+				dragPoints = try admittedDragPoints(at: point, params: params, record: record)
+			} else {
+				dragPoints = []
+			}
 			acquirePhysicalInputIfNeeded()
 			focusTargetForPhysicalInput()
 			if delivery == "hid" { try preflight(point) }
@@ -2836,18 +3676,9 @@ final class Bridge {
 				try refuseBlockedBeforePost([point])
 				try world.postScrollWheel(point, wheelDeltaOverride?.x ?? (params["scrollX"] as? NSNumber)?.intValue ?? 0, wheelDeltaOverride?.y ?? (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid, delivery)
 			case "drag":
-				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
-					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
-				}
-				let points = try rawPath.map { raw -> CGPoint in
-					guard let x = (raw["x"] as? NSNumber)?.doubleValue, let y = (raw["y"] as? NSNumber)?.doubleValue else {
-						throw BridgeFailure(message: "drag path entries require x and y", code: "invalid_args")
-					}
-					return lookPoint(record: record, x: x, y: y)
-				}
 				animateCursor(at: point)
-				try refuseBlockedBeforePost(points)
-				try world.postMouseDrag(points, pid, delivery)
+				try refuseBlockedBeforePost(dragPoints)
+				try world.postMouseDrag(dragPoints, pid, delivery)
 			default:
 				throw BridgeFailure(message: "Action \(action) cannot use coordinate grounding", code: "invalid_args")
 			}
@@ -2879,15 +3710,21 @@ final class Bridge {
 			} else if world.supportsAction(element, kAXPressAction as CFString) {
 				let cursorPoint = try? coordinatePoint()
 				var status = world.performAction(element, kAXPressAction as CFString)
-				if status != .success, let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
+				if status != .success, axPressNotDelivered(axError: status.rawValue), let refreshed = refreshElement(), world.supportsAction(refreshed, kAXPressAction as CFString) {
 					status = world.performAction(refreshed, kAXPressAction as CFString)
 				}
 				if status == .success {
 					performed["grounding"] = "description"
 					performed["delivery"] = "ax"
 					if let cursorPoint { animateCursor(at: cursorPoint) }
-				} else {
+				} else if axPressNotDelivered(axError: status.rawValue) {
 					try executeCoordinates(coordinatePoint())
+				} else {
+					// The press may have landed: report it unknown instead of pressing or clicking again.
+					performed["grounding"] = "description"
+					performed["delivery"] = "ax"
+					return finish(["outcome": "unknown", "performed": performed, "evidence": ["deliveryUnknown": true],
+						"error": ["code": "ax_delivery_unknown", "message": "AXPress failed (AXError \(status.rawValue)) and may have been delivered; it was not retried"]])
 				}
 			} else {
 				try executeCoordinates(coordinatePoint())
@@ -2909,18 +3746,23 @@ final class Bridge {
 				} ?? false
 				if !selected {
 					try recheckBlockedKeyboard()
-					try world.postKeyPress(["cmd", "a"], pid, delivery, admitKeyboard)
+					try keyboard.deliver { try world.postKeyPress(["cmd", "a"], pid, delivery, admitKeyboard) }
 					world.sleep(20_000)
 				}
 				try recheckBlockedKeyboard()
-				try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard)
+				try keyboard.deliver { try world.postAtomicUnicodeText(text, pid, delivery, admitKeyboard) }
 				world.sleep(40_000)
 				let verificationElement = refreshElement() ?? element
-				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString) ?? ""
+				let value = world.stringAttribute(verificationElement, kAXValueAttribute as CFString)
 				performed["grounding"] = "keyboard-events"
 				performed["delivery"] = delivery
 				performed["selectionGrounding"] = selected ? "ax" : "keyboard"
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The replacement text was posted, so a stale or failed readback may hide text that landed: unknown, never
+				// `didnt`, which would read as not delivered and invite a replay.
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			var targetElement = element
 			var status = world.setAttribute(targetElement, kAXValueAttribute as CFString, text as CFTypeRef)
@@ -2931,11 +3773,13 @@ final class Bridge {
 			if status == .success {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
-				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString) ?? ""
-				if value != text && policy != "foreground" {
-					throw BridgeFailure(message: "The background accessibility value write was accepted but did not take effect", code: "foreground_required")
-				}
-				return finish(["outcome": value == text ? "worked" : "didnt", "performed": performed, "evidence": ["value": value]])
+				let value = world.stringAttribute(targetElement, kAXValueAttribute as CFString)
+				if value == text { return finish(["outcome": "worked", "performed": performed, "evidence": ["value": text]]) }
+				// The write was accepted, so a stale or failed readback may hide a value that landed: unknown, never
+				// `didnt` or `foreground_required`, either of which invites a second write (#1290).
+				var evidence: [String: Any] = ["deliveryUnknown": true]
+				if let value { evidence["value"] = value }
+				return finish(["outcome": "unknown", "performed": performed, "evidence": evidence])
 			}
 			try executeCoordinates(coordinatePoint())
 		} else if action == "typeText" {
@@ -2949,13 +3793,18 @@ final class Bridge {
 			// HID keys reach the focused app, which a non-activating panel of a blocked app can be.
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
 			let text = params["text"] as? String ?? ""
-			try world.postUnicodeText(text, pid, delivery, admitKeyboard)
+			try keyboard.deliver { try world.postUnicodeText(text, pid, delivery, admitKeyboard) }
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
 				world.sleep(30_000)
-				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString) ?? ""
-				let changed = afterValue != (beforeValue ?? "")
-				return finish(["outcome": changed ? "worked" : "didnt", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
+				let afterValue = world.stringAttribute(element, kAXValueAttribute as CFString)
+				// Only two successful reads that differ confirm the posted text; a failed read never stands in for a value.
+				let changed = beforeValue != nil && afterValue != nil && afterValue != beforeValue
+				var evidence: [String: Any] = ["valueChanged": changed]
+				if let afterValue { evidence["value"] = afterValue }
+				// The text was posted: an unconfirmed readback is unknown, never didnt, which would invite a resend (#1241).
+				if !changed { evidence["deliveryUnknown"] = true }
+				return finish(["outcome": changed ? "worked" : "unknown", "performed": performed, "evidence": evidence])
 			}
 		} else if let element, action == "secondaryAction" {
 			// AX-only: runs one action the element itself advertises, checked live against its current action list.
@@ -3036,7 +3885,7 @@ final class Bridge {
 				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) })
+				try keyboard.deliver { try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) }) }
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
 					world.sleep(30_000)
@@ -3077,7 +3926,7 @@ final class Bridge {
 			}
 			acquirePhysicalInputIfNeeded()
 			try refuseBlockedKeyboardAfterFocus(preserveFocus: preserveFocus)
-			try world.postKeyPress(keys, pid, delivery, admitKeyboard)
+			try keyboard.deliver { try world.postKeyPress(keys, pid, delivery, admitKeyboard) }
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
 			let cursorPoint = try? coordinatePoint()
@@ -3207,6 +4056,18 @@ final class Bridge {
 		guard actions.allSatisfy({ ($0["lookId"] as? String) == lookId }) else {
 			throw BridgeFailure(message: "actBatch actions must belong to one look", code: "invalid_args")
 		}
+		// Reject a malformed drag before the transaction takes its outer HID lock. A ref target's point exists
+		// only once its step runs; act then rejects it before that step's own focus, preflight or allocation.
+		let drags = actions.filter { $0["action"] as? String == "drag" }
+		if !drags.isEmpty {
+			guard let record = world.lookRecord(lookId) else {
+				throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
+			}
+			for drag in drags {
+				let point = coordinateTargetPoint(drag["target"] as? [String: Any] ?? [:], record: record)
+				_ = try admittedDragPoints(at: point, params: drag["params"] as? [String: Any] ?? [:], record: record)
+			}
+		}
 		let finish = world.beginRootDelta(pid)
 		let mayUsePhysicalInput = actions.contains { action in
 			(optionalStringArg(action, "policy") ?? "default") != "ax_only"
@@ -3214,16 +4075,18 @@ final class Bridge {
 		if mayUsePhysicalInput { world.lockInput() }
 		defer { if mayUsePhysicalInput { world.unlockInput() } }
 
+		// Resolved once for the whole transaction, so a missing deadline cannot restart its 30 s fallback per step.
+		let deadlineMs = keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime, ceiling: nil) * 1000
 		var steps: [[String: Any]] = []
 		var stoppedAt: Int?
 		for (index, action) in actions.enumerated() {
 			var deferred = action
 			deferred["deferRootDelta"] = true
-			deferred["keyboardDeadlineMs"] = request["keyboardDeadlineMs"]
+			deferred["keyboardDeadlineUptimeMs"] = deadlineMs
 			do {
 				let step = try act(deferred, world: world, supportsAgentCursor: supportsAgentCursor)
 				steps.append(step)
-				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
+				if (step["outcome"] as? String) == "didnt" || stepDeliveryUnknown(step) { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {
 				var step: [String: Any] = ["outcome": "didnt", "error": ["code": failure.code, "message": failure.message]]
 				if let evidence = failure.evidence { step["evidence"] = evidence }
@@ -3239,7 +4102,7 @@ final class Bridge {
 		return finish(response)
 	}
 
-	private func rootIdentity(_ root: [String: Any]) -> String {
+	func rootIdentity(_ root: [String: Any]) -> String {
 		if let windowId = root["windowId"] as? Int, windowId > 0 { return "window:\(windowId)" }
 		// AXUIElement CFEqual/CFHash are not stable after re-enumeration for all
 		// transient roots; use the metadata tuple that comes from the cheap pass.
@@ -3247,32 +4110,24 @@ final class Bridge {
 		let title = root["title"] as? String ?? ""
 		let role = root["role"] as? String ?? ""
 		let frame = root["framePoints"] as? [String: Any] ?? [:]
-		let x = Int((frame["x"] as? NSNumber)?.doubleValue ?? 0)
-		let y = Int((frame["y"] as? NSNumber)?.doubleValue ?? 0)
-		let w = Int((frame["w"] as? NSNumber)?.doubleValue ?? 0)
-		let h = Int((frame["h"] as? NSNumber)?.doubleValue ?? 0)
-		return "meta:\(kind):\(role):\(title):\(x),\(y),\(w),\(h)"
+		let coordinates = ["x", "y", "w", "h"].map { identityCoordinate(frame[$0]) }
+		return "meta:\(kind):\(role):\(title):\(coordinates.map(String.init).joined(separator: ","))"
 	}
 
-	private func rootMetadataSnapshot(pid: Int32) -> [String: [String: Any]] {
-		let roots = ((try? listRoots(pid: pid)["roots"] as? [[String: Any]]) ?? [])
-		return Dictionary(uniqueKeysWithValues: roots.map { (rootIdentity($0), $0) })
+	/// Truncate a frame coordinate toward zero without trapping: a missing value, NaN, an infinity or a
+	/// value outside `Int` reads as 0.
+	private func identityCoordinate(_ value: Any?) -> Int {
+		guard let number = (value as? NSNumber)?.doubleValue else { return 0 }
+		return Int(exactly: number.rounded(.towardZero)) ?? 0
 	}
 
-	private func rootDelta(before: [String: [String: Any]], beforeFrontmostPid: pid_t?, pid: Int32) -> [[String: Any]] {
-		let after = rootMetadataSnapshot(pid: pid)
-		var delta: [[String: Any]] = []
-		for (key, root) in after where before[key] == nil {
-			delta.append(rootDeltaItem(change: "appeared", root: root, pid: pid))
-		}
-		for (key, root) in before where after[key] == nil {
-			delta.append(rootDeltaItem(change: "closed", root: root, pid: pid))
-		}
-		for (key, root) in after {
-			if (root["isFocused"] as? Bool) == true && (before[key]?["isFocused"] as? Bool) != true {
-				delta.append(rootDeltaItem(change: "focused", root: root, pid: pid))
-			}
-		}
+	private func rootMetadataSnapshot(pid: Int32) -> RootInventorySnapshot {
+		let inventory = rootInventory(pid: pid, title: nil)
+		return RootInventorySnapshot(roots: inventory.roots, complete: inventory.complete, unidentifiedRefs: inventory.unidentified, identity: rootIdentity)
+	}
+
+	private func rootDelta(before: RootInventorySnapshot, beforeFrontmostPid: pid_t?, pid: Int32) -> [[String: Any]] {
+		var delta = rootSnapshotDelta(before: before, after: rootMetadataSnapshot(pid: pid), pid: pid)
 		if let beforeFrontmostPid, beforeFrontmostPid != NSWorkspace.shared.frontmostApplication?.processIdentifier {
 			if let frontmost = NSWorkspace.shared.frontmostApplication {
 				delta.append(["change": "focused", "kind": "app", "title": frontmost.localizedName ?? processName(pid: frontmost.processIdentifier) ?? "Unknown App", "pid": Int(frontmost.processIdentifier)])
@@ -3281,7 +4136,13 @@ final class Bridge {
 		return delta
 	}
 
-	private func rootDeltaItem(change: String, root: [String: Any], pid: Int32) -> [String: Any] {
+	/// Compare two root listings keyed by `rootIdentity` (see `rootInventoryChanges`): appeared roots, then
+	/// closed roots, then roots that gained focus. Absence from an incomplete listing proves nothing.
+	func rootSnapshotDelta(before: RootInventorySnapshot, after: RootInventorySnapshot, pid: Int32) -> [[String: Any]] {
+		rootInventoryChanges(before: before, after: after).map { rootDeltaItem(change: $0.change, root: $0.root, pid: pid) }
+	}
+
+	func rootDeltaItem(change: String, root: [String: Any], pid: Int32) -> [String: Any] {
 		var item: [String: Any] = ["change": change, "kind": root["kind"] as? String ?? "window", "title": root["title"] as? String ?? "", "pid": root["pid"] as? Int ?? Int(pid)]
 		if let isModal = root["isModal"] as? Bool { item["isModal"] = isModal }
 		if let metadata = root["metadata"] as? [String: Any] { item["metadata"] = metadata }
@@ -3294,7 +4155,7 @@ final class Bridge {
 	// events can only accelerate the decision, never make it. A cheap
 	// CGWindowList id-set poll detects real-window appearance/closure early;
 	// the AX diff runs once at the first signal or at timeout.
-	private func attachRootDelta(to response: [String: Any], before: [String: [String: Any]], beforeFrontmostPid: pid_t?, pid: Int32, eventsLive: Bool, eventCursor: UInt64, beforeCgSignature: Set<UInt32>) -> [String: Any] {
+	private func attachRootDelta(to response: [String: Any], before: RootInventorySnapshot, beforeFrontmostPid: pid_t?, pid: Int32, eventsLive: Bool, eventCursor: UInt64, beforeCgSignature: Set<UInt32>) -> [String: Any] {
 		var output = response
 		var performed = output["performed"] as? [String: Any] ?? [:]
 
@@ -3325,7 +4186,7 @@ final class Bridge {
 		return output
 	}
 
-	private func focusedWindowSummary(pid: Int32) -> String {
+	func focusedWindowSummary(pid: Int32) -> String {
 		let app = AXUIElementCreateApplication(pid)
 		guard let element = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement) else { return "none" }
 		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
@@ -3333,15 +4194,15 @@ final class Bridge {
 		return "\(role):\(title)"
 	}
 
-	private func scrollPositionSignature(_ element: AXUIElement) -> String {
+	func scrollPositionSignature(_ element: AXUIElement) -> String {
 		let names: [CFString] = ["AXVerticalScrollBar" as CFString, "AXHorizontalScrollBar" as CFString, kAXValueAttribute as CFString]
 		return names.map { String(describing: copyAttribute(element, attribute: $0) ?? "" as CFTypeRef) }.joined(separator: "|")
 	}
 
 	private func axWaitFor(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
+		let windowId = try checkedWindowId(request["windowId"])
 		ensureEnhancedAccessibility(pid: pid)
-		let windowId = positiveWindowId(request)
 		let windowRef = optionalStringArg(request, "windowRef")
 		let role = optionalStringArg(request, "role")?.trimmingCharacters(in: .whitespacesAndNewlines)
 		let text = optionalStringArg(request, "text")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -3367,32 +4228,39 @@ final class Bridge {
 		}
 		_ = ensureRootObserver(pid: pid)
 
-		func matches(_ element: AXUIElement) -> Bool {
-			let candidateRole = self.stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
-			if let role, !role.isEmpty, candidateRole != role { return false }
-			if let text, !text.isEmpty {
-				let subrole = self.stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
-				let haystack = [
-					self.stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? "",
-					self.stringAttribute(element, attribute: kAXDescriptionAttribute as CFString) ?? "",
-					self.displayValue(element, role: candidateRole, subrole: subrole),
-				].joined(separator: "\n").lowercased()
-				if !haystack.contains(text) { return false }
+		func field(_ element: AXUIElement, _ field: AXWaitField) -> AXStringRead {
+			switch field {
+			case .role: return self.stringRead(element, attribute: kAXRoleAttribute as CFString)
+			case .title: return self.stringRead(element, attribute: kAXTitleAttribute as CFString)
+			case .description: return self.stringRead(element, attribute: kAXDescriptionAttribute as CFString)
+			case .value:
+				// A secure field never exposes its value; an unreadable role or subrole cannot rule one out.
+				let role = self.stringRead(element, attribute: kAXRoleAttribute as CFString)
+				let subrole = self.stringRead(element, attribute: kAXSubroleAttribute as CFString)
+				if role == .value("AXSecureTextField") || subrole == .value("AXSecureTextField") { return .value("") }
+				if role == .failed || subrole == .failed { return .failed }
+				return self.stringRead(element, attribute: kAXValueAttribute as CFString)
 			}
-			if let expectedValue, !expectedValue.isEmpty {
-				let subrole = self.stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
-				if self.displayValue(element, role: candidateRole, subrole: subrole).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != expectedValue { return false }
-			}
-			return true
 		}
 
 		var lastCount = 0
+		var lastUndecided = false
 		repeat {
 			let changeGeneration = rootChangeGeneration(pid: pid)
-			let collected = collectDescendantsWithContext(startingAt: rootElement, maxDepth: 12, maxNodes: 2000)
-			let descendants = scopeExact ? Array(collected.prefix(1)) : collected
+			let pass = descendantWorld().waitPass(startingAt: rootElement, scopeExact: scopeExact) { element in
+				axWaitConditionMatch(role: role, text: text, value: expectedValue) { field(element, $0) }
+			}
+			let descendants = pass.nodes
 			lastCount = descendants.count
-			if let match = descendants.first(where: { matches($0.element) }) {
+			var found: AXDescendant<AXUIElement>?
+			lastUndecided = false
+			switch pass.verdict {
+			case .found(let match): found = match
+			// Only a whole, fully read scope proves the condition gone.
+			case .absent: if waitForGone { return ["found": true, "gone": true, "complete": true, "nodeCount": lastCount] }
+			case .undecided: lastUndecided = true
+			}
+			if let match = found {
 				if waitForGone {
 					waitForRootChange(pid: pid, since: changeGeneration, until: deadline)
 					continue
@@ -3410,13 +4278,13 @@ final class Bridge {
 					"nodeCount": lastCount,
 				]
 			}
-			if waitForGone {
-				return ["found": true, "gone": true, "nodeCount": lastCount]
-			}
 			waitForRootChange(pid: pid, since: changeGeneration, until: deadline)
 		} while Date() < deadline
 
-		return ["found": false, "timedOut": true, "nodeCount": lastCount]
+		var result: [String: Any] = ["found": false, "timedOut": true, "nodeCount": lastCount]
+		// The last walk could neither find the condition nor prove it absent.
+		if waitForGone && lastUndecided { result["incomplete"] = true }
+		return result
 	}
 
 	/// The element at `point`. With `pid` the query goes to that app, so a covered window still hits its own
@@ -3443,7 +4311,7 @@ final class Bridge {
 		return actions
 	}
 
-	private func supportsAnyScrollAction(_ element: AXUIElement) -> Bool {
+	func supportsAnyScrollAction(_ element: AXUIElement) -> Bool {
 		let actions = Set(actionNames(element))
 		return actions.contains(axScrollDownAction as String) || actions.contains(axScrollUpAction as String) || actions.contains(axScrollLeftAction as String) || actions.contains(axScrollRightAction as String)
 	}
@@ -3557,29 +4425,6 @@ final class Bridge {
 		return (.moved, after)
 	}
 
-	private func performActionOrAncestor(startingAt element: AXUIElement, action: CFString, targetPid: Int32) -> [String: Any] {
-		var current: AXUIElement? = element
-		var depth = 0
-
-		while let candidate = current, depth < 10 {
-			if let pid = pidForElement(candidate), pid != targetPid {
-				return ["performed": false, "reason": "pid_mismatch", "ownerPid": Int(pid)]
-			}
-
-			if supportsAction(candidate, action: action) {
-				let actionStatus = AXUIElementPerformAction(candidate, action)
-				if actionStatus == .success {
-					return ["performed": true]
-				}
-			}
-
-			current = parentElement(candidate)
-			depth += 1
-		}
-
-		return ["performed": false, "reason": "no_matching_action"]
-	}
-
 	private func windowElement(pid: Int32, windowId: UInt32?, windowRef: String? = nil) -> AXUIElement? {
 		if let windowRef, let stored = refStore.window(for: windowRef) {
 			AXUIElementSetMessagingTimeout(stored, 1.0)
@@ -3599,21 +4444,10 @@ final class Bridge {
 		}
 		let candidates = cgWindowCandidates(pid: pid)
 		let pairings = windowPairings(windows: windows, candidates: candidates)
-		for window in windows {
-			if pairings[ObjectIdentifier(window)]?.candidate?.windowId == windowId {
-				return window
-			}
-			for sheet in sheetElements(of: window) {
-				if bestCandidate(for: sheet, candidates: candidates)?.windowId == windowId {
-					return sheet
-				}
-			}
-		}
-		return nil
-	}
-
-	private func findDescendant(startingAt root: AXUIElement, maxDepth: Int, predicate: (AXUIElement) -> Bool) -> AXUIElement? {
-		collectDescendants(startingAt: root, maxDepth: maxDepth).first(where: predicate)
+		if let window = windows.first(where: { pairings[ObjectIdentifier($0)]?.candidate?.windowId == windowId }) { return window }
+		let sheets = windows.flatMap { sheetElements(of: $0) }
+		let sheetPairings = pairSheets(sheets, candidates: candidates, windowPairings: pairings, read: pairingRead)
+		return sheets.first { sheetPairings[ObjectIdentifier($0)]?.candidate?.windowId == windowId }
 	}
 
 	private func ensureEnhancedAccessibility(pid: Int32) {
@@ -3640,21 +4474,25 @@ final class Bridge {
 		return ["chrome", "chromium", "brave", "edge", "vivaldi", "opera", "firefox", "helium"].contains { name.contains($0) }
 	}
 
-	private func collectDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXUIElement] {
+	func collectDescendants(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXUIElement] {
 		collectDescendantsWithContext(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes).map(\.element)
 	}
 
 	private func collectDescendantsWithContext(startingAt root: AXUIElement, maxDepth: Int, maxNodes: Int = 5000) -> [AXDescendant<AXUIElement>] {
-		let world = AXTraversalWorld<AXUIElement>(
+		descendantWorld().collect(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes)
+	}
+
+	private func descendantWorld() -> AXTraversalWorld<AXUIElement> {
+		AXTraversalWorld<AXUIElement>(
 			role: { self.stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "" },
 			childLists: descendantChildLists,
 			sameElement: sameElement, hash: axEquivalenceHash
 		)
-		return world.collect(startingAt: root, maxDepth: maxDepth, maxNodes: maxNodes)
 	}
 
-	private func descendantChildLists(_ element: AXUIElement) -> (all: [AXUIElement], visible: [AXUIElement]?) {
-		let children = axElementArray(element, attribute: kAXChildrenAttribute as CFString)
+	/// `nil` when the children could not be read; visibility reads only refine, so their failures are ignored.
+	private func descendantChildLists(_ element: AXUIElement) -> (all: [AXUIElement], visible: [AXUIElement]?)? {
+		guard let children = axElementArrayEvidence(element, attribute: kAXChildrenAttribute as CFString) else { return nil }
 		let attributes: [CFString] = [
 			kAXVisibleChildrenAttribute as CFString,
 			kAXVisibleRowsAttribute as CFString,
@@ -3665,29 +4503,20 @@ final class Bridge {
 		return (children, visible.isEmpty ? nil : visible)
 	}
 
-	private func insideWebAreaMap(_ descendants: [AXDescendant<AXUIElement>]) -> [ObjectIdentifier: Bool] {
-		var output: [ObjectIdentifier: Bool] = [:]
-		for descendant in descendants {
-			let key = ObjectIdentifier(descendant.element)
-			output[key] = (output[key] ?? false) || descendant.insideWebArea
-		}
-		return output
-	}
-
-	private func axSource(role: String, insideWebArea: Bool, isBrowser: Bool, containsWebArea: Bool) -> String {
+	func axSource(role: String, insideWebArea: Bool, isBrowser: Bool, containsWebArea: Bool) -> String {
 		if insideWebArea || role == "AXWebArea" { return "web_content_ax" }
 		if isBrowser || containsWebArea { return "browser_chrome_ax" }
 		return "desktop_ax"
 	}
 
-	private func frameForElement(_ element: AXUIElement) -> CGRect? {
+	func frameForElement(_ element: AXUIElement) -> CGRect? {
 		let origin = pointAttribute(element, attribute: kAXPositionAttribute as CFString)
 		let size = sizeAttribute(element, attribute: kAXSizeAttribute as CFString)
 		guard let origin, let size, size.width > 0, size.height > 0 else { return nil }
 		return CGRect(origin: origin, size: size)
 	}
 
-	private func elementPayload(element: AXUIElement, key: String, score: Double? = nil, source: String? = nil, axVisible: Bool = true) -> [String: Any] {
+	func elementPayload(element: AXUIElement, key: String, score: Double? = nil, source: String? = nil, axVisible: Bool = true) -> [String: Any] {
 		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
 		let subrole = stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
 		let title = stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? ""
@@ -3743,25 +4572,25 @@ final class Bridge {
 		return payload
 	}
 
-	private func pidForElement(_ element: AXUIElement) -> Int32? {
+	func pidForElement(_ element: AXUIElement) -> Int32? {
 		var pid: pid_t = 0
 		let status = AXUIElementGetPid(element, &pid)
 		guard status == .success else { return nil }
 		return Int32(pid)
 	}
 
-	private func parentElement(_ element: AXUIElement) -> AXUIElement? {
+	func parentElement(_ element: AXUIElement) -> AXUIElement? {
 		guard let value = copyAttribute(element, attribute: kAXParentAttribute as CFString) else {
 			return nil
 		}
 		return asAXElement(value)
 	}
 
-	private func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
+	func sameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool {
 		CFEqual(lhs as CFTypeRef, rhs as CFTypeRef)
 	}
 
-	private func isElement(_ element: AXUIElement, descendantOf ancestor: AXUIElement) -> Bool {
+	func isElement(_ element: AXUIElement, descendantOf ancestor: AXUIElement) -> Bool {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 20 {
@@ -3774,7 +4603,7 @@ final class Bridge {
 		return false
 	}
 
-	private func hasAncestorRole(_ element: AXUIElement, role: String) -> Bool {
+	func hasAncestorRole(_ element: AXUIElement, role: String) -> Bool {
 		var current: AXUIElement? = element
 		var depth = 0
 		while let candidate = current, depth < 30 {
@@ -3785,7 +4614,7 @@ final class Bridge {
 		return false
 	}
 
-	private func actionNames(_ element: AXUIElement) -> [String] {
+	func actionNames(_ element: AXUIElement) -> [String] {
 		var actionsValue: CFArray?
 		let status = AXUIElementCopyActionNames(element, &actionsValue)
 		guard status == .success else { return [] }
@@ -3793,13 +4622,13 @@ final class Bridge {
 		return actionsArray.compactMap { $0 as? String }
 	}
 
-	private func supportsAction(_ element: AXUIElement, action: CFString) -> Bool {
+	func supportsAction(_ element: AXUIElement, action: CFString) -> Bool {
 		actionNames(element).contains(action as String)
 	}
 
 	private func focusedElement(_ request: [String: Any]) throws -> [String: Any] {
 		let pid = try pidArg(request)
-		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
+		let windowId = try checkedWindowId(request["windowId"])
 		let windowRef = optionalStringArg(request, "windowRef")
 		let app = AXUIElementCreateApplication(pid)
 		guard let focusedValue = copyAttribute(app, attribute: kAXFocusedUIElementAttribute as CFString),
@@ -3894,11 +4723,6 @@ final class Bridge {
 		}
 	}
 
-	private func keyboardDeadline(_ request: [String: Any]) -> TimeInterval {
-		let now = ProcessInfo.processInfo.systemUptime
-		guard let wallMs = (request["keyboardDeadlineMs"] as? NSNumber)?.doubleValue, wallMs.isFinite else { return now + 30 }
-		return now + (wallMs / 1000 - Date().timeIntervalSince1970)
-	}
 
 	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
 	private func systemFocusedPid() -> Int32? {
@@ -4027,18 +4851,17 @@ final class Bridge {
 		func refuseBlockedWindow(at point: CGPoint) throws {
 			try refuseBlockedPointer(at: point, blocked: blocked)
 		}
-		let refuseBlockedKeyboard = trackKeyboardPosts(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request)))
+		let keyboard = KeyboardPostCounter(keyboardAdmission(blocked: blocked, deadline: keyboardDeadline(request, now: ProcessInfo.processInfo.systemUptime, ceiling: desktopInputKeyboardCeiling)))
+		let refuseBlockedKeyboard = keyboard.beforeKeyDown
+		var vertices: [CGPoint] = []
 		switch action {
 		case "type", "key":
 			try refuseBlockedKeyboard(true, false)
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
-			// Every vertex, not just the endpoints, so a path cannot route through a blocked window.
-			let vertices = (request["path"] as? [[String: Any]] ?? []).compactMap { raw -> CGPoint? in
-				guard let x = (raw["x"] as? NSNumber)?.doubleValue, let y = (raw["y"] as? NSNumber)?.doubleValue else { return nil }
-				return CGPoint(x: x, y: y)
-			}
+			vertices = try dragRequestPoints(request["path"])
+			// Every vertex, not just the endpoints, is subject to pointer refusal.
 			try refuseBlockedPoints(vertices, blocked: blocked)
 		default:
 			break
@@ -4073,23 +4896,15 @@ final class Bridge {
 		case "scroll":
 			try postScrollWheel(at: try point(), deltaX: optionalIntArg(request, "scrollX") ?? 0, deltaY: optionalIntArg(request, "scrollY") ?? 0, pid: 0)
 		case "drag":
-			guard let raw = request["path"] as? [[String: Any]], raw.count >= 2 else {
-				throw BridgeFailure(message: "drag requires a path of at least two points", code: "invalid_args")
-			}
-			let points = try raw.map { entry -> CGPoint in
-				guard let x = (entry["x"] as? NSNumber)?.doubleValue, let y = (entry["y"] as? NSNumber)?.doubleValue else {
-					throw BridgeFailure(message: "drag path entries require x and y", code: "invalid_args")
-				}
-				return CGPoint(x: x, y: y)
-			}
-			try postMouseDrag(points: points, pid: 0)
+			try postMouseDrag(points: vertices, pid: 0)
 		case "type":
-			try postUnicodeText(try stringArg(request, "text"), pid: 0, beforeKeyDown: refuseBlockedKeyboard)
+			let text = try stringArg(request, "text")
+			try keyboard.deliver { try postUnicodeText(text, pid: 0, beforeKeyDown: refuseBlockedKeyboard) }
 		case "key":
 			guard let keys = request["keys"] as? [String], !keys.isEmpty else {
 				throw BridgeFailure(message: "keypress requires keys", code: "invalid_args")
 			}
-			try postKeyPress(keys: keys, pid: 0, beforeKeyDown: refuseBlockedKeyboard)
+			try keyboard.deliver { try postKeyPress(keys: keys, pid: 0, beforeKeyDown: refuseBlockedKeyboard) }
 		default:
 			throw BridgeFailure(message: "Unknown desktop action '\(action)'", code: "invalid_args")
 		}
@@ -4192,7 +5007,7 @@ final class Bridge {
 		return value
 	}
 
-	private func boolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
+	func boolAttribute(_ element: AXUIElement, attribute: CFString) -> Bool? {
 		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
 		if let boolValue = value as? Bool {
 			return boolValue
@@ -4209,11 +5024,11 @@ final class Bridge {
 
 	// Secure fields can expose plaintext through AX value in non-native apps,
 	// and serialized values flow into the model conversation. Never emit them.
-	private func isSecureTextElement(role: String, subrole: String) -> Bool {
+	func isSecureTextElement(role: String, subrole: String) -> Bool {
 		role == "AXSecureTextField" || subrole == "AXSecureTextField"
 	}
 
-	private func displayValue(_ element: AXUIElement, role: String, subrole: String) -> String {
+	func displayValue(_ element: AXUIElement, role: String, subrole: String) -> String {
 		if isSecureTextElement(role: role, subrole: subrole) { return "" }
 		return stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
 	}
@@ -4221,16 +5036,61 @@ final class Bridge {
 	// kAXSheetsAttribute is unsupported (-25205) on recent macOS; sheets are
 	// exposed only as AXSheet-role children. Merge both sources so sheet
 	// discovery works across versions.
-	private func sheetElements(of window: AXUIElement) -> [AXUIElement] {
-		var sheets = axElementArray(window, attribute: "AXSheets" as CFString)
-		for child in axElementArray(window, attribute: kAXChildrenAttribute as CFString) {
-			guard (stringAttribute(child, attribute: kAXRoleAttribute as CFString) ?? "") == "AXSheet" else { continue }
-			if !sheets.contains(where: { CFEqual($0, child) }) { sheets.append(child) }
-		}
-		return sheets
+	func sheetElements(of window: AXUIElement) -> [AXUIElement] {
+		sheetInventory(of: window).sheets
 	}
 
-	private func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
+	/// Not `complete` when either sheet source or a child's role could not be read: a sheet may be missing.
+	func sheetInventory(of window: AXUIElement) -> (sheets: [AXUIElement], complete: Bool) {
+		let listed = axElementArrayEvidence(window, attribute: "AXSheets" as CFString)
+		let children = axElementArrayEvidence(window, attribute: kAXChildrenAttribute as CFString)
+		var complete = listed != nil && children != nil
+		var sheets = listed ?? []
+		for child in children ?? [] {
+			switch stringRead(child, attribute: kAXRoleAttribute as CFString) {
+			case .value("AXSheet"):
+				if !sheets.contains(where: { CFEqual($0, child) }) { sheets.append(child) }
+			case .failed:
+				complete = false
+			default:
+				continue
+			}
+		}
+		return (sheets, complete)
+	}
+
+	/// `kAXSizeAttribute` with its evidence, decoded from one reply.
+	func sizeRead(_ element: AXUIElement) -> AXSizeRead {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)) {
+		case .failed: return .failed
+		case .absent: return .absent
+		case .present: return decodeAXSize(value).map(AXSizeRead.size) ?? .absent
+		}
+	}
+
+	func stringRead(_ element: AXUIElement, attribute: CFString) -> AXStringRead {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
+		case .failed: return .failed
+		case .absent: return .absent
+		case .present: return (value as? String).map(AXStringRead.value) ?? .absent
+		}
+	}
+
+	/// `nil` for a failed read; an unsupported or valueless attribute is an authoritative `[]`.
+	func axElementArrayEvidence(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, attribute, &value)) {
+		case .failed: return nil
+		case .absent: return []
+		case .present:
+			if let array = value as? [AXUIElement] { return array }
+			return (value as? [AnyObject])?.compactMap(asAXElement) ?? []
+		}
+	}
+
+	func axElementArray(_ element: AXUIElement, attribute: CFString) -> [AXUIElement] {
 		guard let value = copyAttribute(element, attribute: attribute) else { return [] }
 		if let array = value as? [AXUIElement] {
 			return array
@@ -4241,7 +5101,7 @@ final class Bridge {
 		return []
 	}
 
-	private func axElementArrayIfPresent(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
+	func axElementArrayIfPresent(_ element: AXUIElement, attribute: CFString) -> [AXUIElement]? {
 		var value: CFTypeRef?
 		let status = AXUIElementCopyAttributeValue(element, attribute, &value)
 		guard status == .success, let value else { return nil }
@@ -4254,16 +5114,19 @@ final class Bridge {
 		return []
 	}
 
-	private func asAXElement(_ value: AnyObject) -> AXUIElement? {
+	func asAXElement(_ value: AnyObject) -> AXUIElement? {
 		let cfValue = value as CFTypeRef
 		guard CFGetTypeID(cfValue) == AXUIElementGetTypeID() else { return nil }
 		return unsafeBitCast(cfValue, to: AXUIElement.self)
 	}
 
-	private func pointAttribute(_ element: AXUIElement, attribute: CFString) -> CGPoint? {
-		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
-		let cfValue = value as CFTypeRef
-		guard CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
+	func pointAttribute(_ element: AXUIElement, attribute: CFString) -> CGPoint? {
+		decodeAXPoint(copyAttribute(element, attribute: attribute))
+	}
+
+	/// A `CGPoint` AX value, or `nil` for any other value.
+	func decodeAXPoint(_ value: CFTypeRef?) -> CGPoint? {
+		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgPoint else { return nil }
 		var point = CGPoint.zero
@@ -4271,10 +5134,32 @@ final class Bridge {
 		return point
 	}
 
-	private func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
-		guard let value = copyAttribute(element, attribute: attribute) else { return nil }
-		let cfValue = value as CFTypeRef
-		guard CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
+	/// `kAXPositionAttribute` decoded from one reply: `nil` for a failed read, `.zero` for an absent or undecodable one.
+	private func positionRead(_ element: AXUIElement) -> CGPoint? {
+		var value: CFTypeRef?
+		switch axReadEvidence(AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &value)) {
+		case .failed: return nil
+		case .absent: return .zero
+		case .present: return decodeAXPoint(value) ?? .zero
+		}
+	}
+
+	/// `frameForWindow` with evidence: `read` is false when the position or size read failed (read as `.zero`).
+	private func frameRead(_ window: AXUIElement) -> (frame: CGRect, read: Bool) {
+		let origin = positionRead(window)
+		var size = CGSize.zero
+		let sized = sizeRead(window)
+		if case .size(let value) = sized { size = value }
+		return (CGRect(origin: origin ?? .zero, size: size), origin != nil && sized != .failed)
+	}
+
+	func sizeAttribute(_ element: AXUIElement, attribute: CFString) -> CGSize? {
+		decodeAXSize(copyAttribute(element, attribute: attribute))
+	}
+
+	/// A `CGSize` AX value, or `nil` for any other value.
+	func decodeAXSize(_ value: CFTypeRef?) -> CGSize? {
+		guard let cfValue = value, CFGetTypeID(cfValue) == AXValueGetTypeID() else { return nil }
 		let axValue = unsafeBitCast(cfValue, to: AXValue.self)
 		guard AXValueGetType(axValue) == .cgSize else { return nil }
 		var size = CGSize.zero
@@ -4292,7 +5177,7 @@ final class Bridge {
 		(CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
 	}
 
-	private func cgWindowOwners(entries suppliedEntries: [[String: Any]]? = nil) -> [CGWindowOwnerSummary] {
+	func cgWindowOwners(entries suppliedEntries: [[String: Any]]? = nil) -> [CGWindowOwnerSummary] {
 		let entries = suppliedEntries ?? allCGWindowEntries()
 		var seen = Set<Int32>()
 		var owners: [CGWindowOwnerSummary] = []
@@ -4318,7 +5203,7 @@ final class Bridge {
 		windowInfo(windowId: windowId)?.pid
 	}
 
-	private func cgWindowCandidates(pid: Int32, entries suppliedEntries: [[String: Any]]? = nil) -> [CGWindowCandidate] {
+	func cgWindowCandidates(pid: Int32, entries suppliedEntries: [[String: Any]]? = nil) -> [CGWindowCandidate] {
 		let entries = suppliedEntries ?? allCGWindowEntries()
 		var candidates: [CGWindowCandidate] = []
 		for (zOrder, entry) in entries.enumerated() {
@@ -4356,7 +5241,7 @@ final class Bridge {
 		return candidates
 	}
 
-	private func cgBroadRootOwners(entries: [[String: Any]]) -> [CGWindowOwnerSummary] {
+	func cgBroadRootOwners(entries: [[String: Any]]) -> [CGWindowOwnerSummary] {
 		let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
 		var seen = Set<Int32>()
 		return entries.compactMap { entry -> CGWindowOwnerSummary? in
@@ -4379,7 +5264,7 @@ final class Bridge {
 		}
 	}
 
-	private func cgPopupMenuCandidates(pid: Int32?, entries: [[String: Any]]) -> [CGWindowCandidate] {
+	func cgPopupMenuCandidates(pid: Int32?, entries: [[String: Any]]) -> [CGWindowCandidate] {
 		let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
 		var candidates: [CGWindowCandidate] = []
 		for (zOrder, entry) in entries.enumerated() {
@@ -4420,80 +5305,19 @@ final class Bridge {
 		return menus
 	}
 
-	private func bestCandidate(for element: AXUIElement, candidates: [CGWindowCandidate]) -> CGWindowCandidate? {
-		let title = stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? ""
-		let frame = frameForWindow(element)
-		return candidates.max { left, right in
-			windowPairScore(frame: frame, title: title, candidate: left) < windowPairScore(frame: frame, title: title, candidate: right)
-		}
-	}
-
 	private func pairingForWindow(_ window: AXUIElement, pid: Int32) -> WindowPairing {
 		windowPairings(windows: [window], candidates: cgWindowCandidates(pid: pid))[ObjectIdentifier(window)] ?? WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
 	}
 
-	private func windowPairings(windows: [AXUIElement], candidates: [CGWindowCandidate]) -> [ObjectIdentifier: WindowPairing] {
-		var pairs: [(window: AXUIElement, candidate: CGWindowCandidate, score: Double)] = []
-		for window in windows {
-			let title = stringAttribute(window, attribute: kAXTitleAttribute as CFString) ?? ""
-			let frame = frameForWindow(window)
-			for candidate in candidates {
-				pairs.append((window, candidate, windowPairScore(frame: frame, title: title, candidate: candidate)))
-			}
-		}
-		pairs.sort { $0.score > $1.score }
-		var output: [ObjectIdentifier: WindowPairing] = [:]
-		var usedWindows = Set<ObjectIdentifier>()
-		var usedCandidateIds = Set<UInt32>()
-		for pair in pairs {
-			let key = ObjectIdentifier(pair.window)
-			if usedWindows.contains(key) || usedCandidateIds.contains(pair.candidate.windowId) { continue }
-			usedWindows.insert(key)
-			usedCandidateIds.insert(pair.candidate.windowId)
-			let frame = frameForWindow(pair.window)
-			let title = stringAttribute(pair.window, attribute: kAXTitleAttribute as CFString) ?? ""
-			output[key] = WindowPairing(candidate: pair.score >= 0 ? pair.candidate : nil, score: pair.score, confidence: pairingConfidence(frame: frame, title: title, candidate: pair.candidate, score: pair.score))
-		}
-		for window in windows {
-			let key = ObjectIdentifier(window)
-			if output[key] == nil {
-				output[key] = WindowPairing(candidate: nil, score: -Double.greatestFiniteMagnitude, confidence: "low")
-			}
-		}
-		return output
+	/// `pairWindows` over live AX reads.
+	func windowPairings(windows: [AXUIElement], candidates: [CGWindowCandidate]) -> [ObjectIdentifier: WindowPairing] {
+		pairWindows(windows, candidates: candidates, read: pairingRead)
 	}
 
-	private func windowPairScore(frame: CGRect, title: String, candidate: CGWindowCandidate) -> Double {
-		var score = 0.0
-		let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-		let candidateTitle = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-		if !normalizedTitle.isEmpty && !candidateTitle.isEmpty {
-			if normalizedTitle == candidateTitle {
-				score += 100
-			} else if normalizedTitle.contains(candidateTitle) || candidateTitle.contains(normalizedTitle) {
-				score += 50
-			}
-		}
-		if frame.width > 1 && frame.height > 1 {
-			let dx = abs(candidate.bounds.origin.x - frame.origin.x)
-			let dy = abs(candidate.bounds.origin.y - frame.origin.y)
-			let dw = abs(candidate.bounds.size.width - frame.size.width)
-			let dh = abs(candidate.bounds.size.height - frame.size.height)
-			score -= Double(dx + dy + dw + dh) / 20.0
-		}
-		if candidate.isOnscreen { score += 10 }
-		return score
-	}
-
-	private func pairingConfidence(frame: CGRect, title: String, candidate: CGWindowCandidate, score: Double) -> String {
-		guard frame.width > 1 && frame.height > 1 else { return "low" }
-		let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-		let candidateTitle = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-		let titleEqual = !normalizedTitle.isEmpty && !candidateTitle.isEmpty && normalizedTitle == candidateTitle
-		let geometryExact = abs(frame.origin.x - candidate.bounds.origin.x) <= 2 && abs(frame.origin.y - candidate.bounds.origin.y) <= 2 && abs(frame.width - candidate.bounds.width) <= 2 && abs(frame.height - candidate.bounds.height) <= 2
-		if titleEqual && geometryExact { return "exact" }
-		if score >= 50 { return "high" }
-		return "low"
+	/// The title and frame one CG pairing scores, each from one read.
+	private func pairingRead(_ window: AXUIElement) -> WindowPairingRead {
+		let (frame, read) = frameRead(window)
+		return WindowPairingRead(title: stringRead(window, attribute: kAXTitleAttribute as CFString), frame: frame, frameRead: read)
 	}
 
 	private func displayScaleFactor(for frame: CGRect) -> Double {
@@ -4595,7 +5419,7 @@ final class Bridge {
 		throw BridgeFailure(message: "Capture failed", code: "capture_failed")
 	}
 
-	private func jpegData(image: CGImage, quality: Double) -> Data? {
+	func jpegData(image: CGImage, quality: Double) -> Data? {
 		let data = NSMutableData()
 		guard let destination = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
 		CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
@@ -4603,7 +5427,7 @@ final class Bridge {
 		return data as Data
 	}
 
-	private func downscaledImage(_ image: CGImage, maxDimension: Int?) -> CGImage? {
+	func downscaledImage(_ image: CGImage, maxDimension: Int?) -> CGImage? {
 		guard let maxDimension, max(image.width, image.height) > maxDimension else { return nil }
 		let scale = Double(maxDimension) / Double(max(image.width, image.height))
 		let width = max(1, Int(Double(image.width) * scale))
@@ -4711,12 +5535,11 @@ final class Bridge {
 		return output.value
 	}
 
-	private func eventDelivery(_ request: [String: Any]) -> String {
-		optionalStringArg(request, "delivery") == "pid" ? "pid" : "hid"
-	}
-
+	/// Stamps at post time from a monotonic clock: a drag's release is allocated before its mouse-down, so its
+	/// creation time would precede the down and the drag steps.
 	private func postPointerEvent(_ event: CGEvent, pid: Int32, delivery: String) {
 		if delivery == "hid" { _ = inputSink.prepareHID(pid) }
+		event.timestamp = inputSink.eventTimestamp()
 		postEvent(event, pid: pid, delivery: delivery)
 	}
 
@@ -4803,11 +5626,12 @@ final class Bridge {
 	}
 
 	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard points.count >= 2, let first = points.first, let last = points.last else {
+		let maxStep = try admittedDragStep(points)
+		guard let first = points.first, let last = points.last else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
+		if delivery == "hid" { physicalInputLock.lock() }
+		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		try inputSink.checkDragCancellation()
 		// Reserve the matching release before sending any input. Unwinding must not allocate it.
 		guard let up = inputSink.mouseEvent(.leftMouseUp, first, .left) else {
@@ -4827,11 +5651,6 @@ final class Bridge {
 		}
 		inputSink.sleep(30_000)
 
-		// Real drags are a stream of positions; apps ignore a single long jump. Step each segment (~12pt),
-		// widening the step so the whole drag stays under ~1000 events (about 8s).
-		var total: CGFloat = 0
-		for pair in zip(points, points.dropFirst()) { total += hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y) }
-		let maxStep = max(12, total / 1000)
 		var previous = first
 		for point in points.dropFirst() {
 			for step in interpolatedDragPoints(from: previous, to: point, maxStep: maxStep) {
@@ -4910,38 +5729,43 @@ final class Bridge {
 		return (flags, keys.last ?? "")
 	}
 
-	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		if let chord = keyChord(keys) {
-			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-			return
-		}
+	/// One stroke of a keypress: a key code with its modifiers, or a single character typed as text.
+	private enum KeyStroke {
+		case code(CGKeyCode, CGEventFlags)
+		case character(String)
+	}
 
-		for key in keys {
+	/// Resolves every stroke of `keys` before any is posted, so an unsupported key refuses the whole sequence with
+	/// nothing posted. The message names the key's position, never the key.
+	private func keyStrokes(_ keys: [String]) throws -> [KeyStroke] {
+		func stroke(_ key: String, flags: CGEventFlags, index: Int) throws -> KeyStroke {
+			if let code = keyCode(key) { return .code(code, flags) }
+			if key.count == 1 { return .character(key) }
+			throw BridgeFailure(message: "Unsupported key at keys[\(index)]; no key was posted", code: "invalid_args")
+		}
+		if let chord = keyChord(keys) { return [try stroke(chord.key, flags: chord.flags, index: keys.count - 1)] }
+		return try keys.enumerated().map { index, key in
 			let parts = key
 				.split(separator: "+")
 				.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
 				.filter { !$0.isEmpty }
-			if let chord = keyChord(parts) {
-				try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-			} else {
-				try postKey(key, flags: [], pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-			}
+			if let chord = keyChord(parts) { return try stroke(chord.key, flags: chord.flags, index: index) }
+			return try stroke(key, flags: [], index: index)
 		}
 	}
 
-	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
+	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid", beforeKeyDown: BeforeKeyDown) throws {
+		let strokes = try keyStrokes(keys)
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
-		guard let code = keyCode(key) else {
-			if key.count == 1 {
-				try postUnicodeText(key, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
-				return
+		for stroke in strokes {
+			switch stroke {
+			case let .code(code, flags):
+				try postKeyCode(code, flags: flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
+			case let .character(character):
+				try postUnicodeText(character, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 			}
-			throw BridgeFailure(message: "Unsupported key '\(key)'", code: "invalid_args")
 		}
-		try postKeyCode(code, flags: flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 	}
 
 	private func postKeyCode(_ code: CGKeyCode, flags: CGEventFlags, pid: Int32, delivery: String, beforeKeyDown: BeforeKeyDown) throws {
@@ -4964,7 +5788,7 @@ final class Bridge {
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
-				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
+				try postKeyCode(stroke.code, flags: stroke.flags, pid: pid, delivery: delivery, beforeKeyDown: beforeKeyDown)
 				continue
 			}
 			guard let down = inputSink.keyEvent(0, true), let up = inputSink.keyEvent(0, false)
@@ -5003,11 +5827,11 @@ final class Bridge {
 	/// path as a user keystroke. Unicode synthesis remains the fallback for text
 	/// that has no direct key representation, and for any character the active
 	/// layout or input method would not type from that US key.
-	private func physicalKeyStroke(for character: String, inputSource: KeyboardInputSource) -> (key: String, flags: CGEventFlags)? {
+	private func physicalKeyStroke(for character: String, inputSource: KeyboardInputSource) -> (code: CGKeyCode, flags: CGEventFlags)? {
 		guard let stroke = usLayoutKeyStroke(for: character), let code = keyCode(stroke.key) else { return nil }
 		let produced = inputSource.layoutData.flatMap { keyboardLayoutCharacter(layoutData: $0, keyCode: code, shift: stroke.shift) }
 		guard physicalKeyStrokeTypes(character, isKeyboardLayout: inputSource.isKeyboardLayout, layoutProduces: produced) else { return nil }
-		return (stroke.key, stroke.shift ? [.maskShift] : [])
+		return (code, stroke.shift ? [.maskShift] : [])
 	}
 
 	private func setUnicodeString(event: CGEvent, text: String) {
@@ -5045,7 +5869,7 @@ Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use t
 
 ## Tree extraction
 
-An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors are marked `truncated` rather than presented as complete.
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first; incomplete ancestors, and nodes whose children could not be read, are marked `truncated` rather than presented as complete.
 
 The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
 
@@ -5054,7 +5878,7 @@ The resulting outline preserves native semantics where they are available. It do
 The helper prefers AX operations before synthesized input:
 
 - press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
-- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back;
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field);
 - semantic scrolling walks the target and its ancestors for supported AX scroll actions;
 - foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
 
@@ -5198,7 +6022,7 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 - A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
 - `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
-- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- Only a missing or null `windowId` is absent. Other values must be positive unsigned 32-bit integers or the helper returns `invalid_args`. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
 - Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
 
 ## Capture
@@ -5214,11 +6038,12 @@ These are the target, capture, modality, and post-action contracts the macOS pat
 
 ## Post-action outcomes
 
-Terminal `act_ui` results always say the action was delivered, and:
+Terminal `act_ui` results say the action was delivered, or say its delivery is unknown when the settled outcome is `unknown` without a stop (and not to replay it). A stopped transaction (`stoppedAt`, a keyboard stop or a timed-out or otherwise indeterminate action) is never called delivered, in a terminal or a successor result: its first line names the stopped action and its literal refusal or error code, the root observation follows on its own line, and the replay decision comes once. Only a first action refused with a code or `0` posted units says nothing was posted and a retry is safe; every other stop says not to replay the transaction (#1281). The result is also:
 
 - `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
 - `target_closed`, `cause: closed`: source root gone, nothing replaced it.
 - `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
+- `listRoots` reports `complete`. A listing whose AX window or sheet inventory could not be read completely, or that exceeds 128 windows, still lists the roots it read but is not complete (unless the process exited), so it never proves closure; `rootDelta` reports `closed` only against a complete listing, and a `gone` wait reply carries `complete: true`. `rootDelta` also treats its own snapshot as incomplete when it excludes a root it cannot key the same way in every listing (see Root discovery), so a root beside it is never proven closed. The helper payload carries a window's `isFocused`, `isMain` and `isMinimized` only when the AX reply is a `CFBoolean`: a failed, absent or non-boolean (e.g. numeric) reply leaves the field out instead of reading `false` (an unpaired window then omits `isOnscreen` too). A sheet's `isMain` and `isMinimized` are constant `false` and its `isFocused` is its window's focus, as before, so how the native helper derives a sheet's flags is unchanged (the TS client shows a sheet whose window's focus was unread as unknown, not `false`); its own `AXFocused` read is kept apart as `ownFocus` for `rootDelta` only. For a root in both listings, `rootDelta` reports `focused` only when its own focus read `false` before and `true` after: a window's `isFocused`, a sheet's `ownFocus`, never a menu's stamped focus. So unread focus never reports a focus change, though it can hide one; a root new since a complete listing whose own focus reads `true` reports both `appeared` and `focused`, while a new menu reports only `appeared`. The TS client keeps an omitted flag unknown, never `false`, through discovery, ranking and restore (#1314).
 
 ## Ref lifecycle
 
@@ -5266,13 +6091,13 @@ Discovery combines three sources:
 
 Single-window lookups call `CGWindowListCreateDescriptionFromArray(_:)` for the requested window ID first and fall back to an all-window `CGWindowListCopyWindowInfo` query when that returns no match ([Apple: `CGWindowListCreateDescriptionFromArray`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcreatedescriptionfromarray%28_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3317)).
 
-Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed.
+Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed. A failed title or frame read adds nothing to a pairing score, so it can neither pair a window nor cost it its match. A sheet carries a `windowId` only when it pairs with a CG window no window took, never its window's; and since one helper process never gives two roots one native ref, the client re-identifies a saved root by `windowId` only when the listed root's native ref is from another helper process, never in place of a different ref from the same one, and only as the same kind of root: a saved sheet never re-identifies as a window, nor a saved window as a sheet (a target restored from a session file carries no kind and keeps the `windowId` alone). `rootDelta` keys a paired root by its `windowId` and an unpaired one by kind, role, title and frame; a root whose pairing or identity reads failed, whose key another root shares, or whose CG window claim is not exclusive (it scores 0 or more for, or failed to read for, more than one CG window, or another root claims one of them), is excluded from that comparison and makes the listing incomplete, but it is not removed from discovery: it still resolves as a positive match.
 
 Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are identified by the Accessibility `AXMenu` role and Core Graphics popup-menu window level; a menu with no matching Accessibility element remains an outline-only, `pictureOnly` root ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1232), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3004)).
 
 ## Observation and capture
 
-A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes, 20 seconds after the root node was built, or 25 seconds after the look started (the client gives up at 33), whichever comes first, and marks incomplete ancestors, and nodes whose `AXChildren` read failed, as `truncated` ([`LookOutlineWorld.build` in bridge.swift](https://github.com/nredd/pi-harness/blob/main/packages/computer-use/native/macos/bridge.swift)).
 
 When an image is requested, the helper:
 

@@ -17,6 +17,7 @@ vi.mock("../src/agent-runner.ts", async () => {
 	return { ...actual, runAgent: vi.fn() };
 });
 
+import { AgentManager } from "../src/agent-manager.ts";
 import { runAgent } from "../src/agent-runner.ts";
 import { bootPi } from "./fixtures/boot-extension.ts";
 import subagentsExtension from "./fixtures/home-extension.ts";
@@ -138,8 +139,8 @@ describe("evicted agents", () => {
 	] as const)(
 		"keeps an evicted %s child unreachable from get_subagent_result and steer_subagent",
 		async (_kind, owner) => {
-			// Live, an owned child answers "Agent not found" to the top-level tools;
-			// eviction must not turn its description and transcript into an answer.
+			// Live, an owned child answers "Agent not found" to the top-level tools (and
+			// to an `Agent` resume); eviction must not turn its description and transcript into an answer.
 			const tools = load();
 			const id = await spawnCompletedBackgroundAgent(tools);
 			const record = (globalThis as any)[Symbol.for("pi-subagents:manager")].getRecord(id);
@@ -150,6 +151,25 @@ describe("evicted agents", () => {
 			// sweep this test waits for (#481).
 			await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
 			Object.assign(record, owner);
+			const notFound = `Agent not found: "${id}". It may have been cleaned up.`;
+			const resume = { prompt: "again", description: "again", subagent_type: "general-purpose", resume: id };
+			for (const [name, params] of [
+				["get_subagent_result", { agent_id: id }],
+				["steer_subagent", { agent_id: id, message: "hello" }],
+				["Agent", resume],
+			] as const) {
+				const out = textOf(await tools.get(name).execute("tc", params, undefined, undefined, ctx()));
+				expect(out).toBe(notFound);
+			}
+			// The refusal names what was asked, never the hidden successor it led to.
+			const latestId = AgentManager.prototype.latestId;
+			vi.spyOn(AgentManager.prototype, "latestId").mockImplementation(function (this: AgentManager, asked) {
+				return asked === `was-${id}` ? id : latestId.call(this, asked);
+			});
+			const read = await tools
+				.get("get_subagent_result")
+				.execute("tc", { agent_id: `was-${id}` }, undefined, undefined, ctx());
+			expect(textOf(read)).toBe(`Agent not found: "was-${id}". It may have been cleaned up.`);
 
 			expect(record.session).toBeDefined();
 			await vi.advanceTimersByTimeAsync(11 * 60_000 + 60_000);
@@ -161,7 +181,7 @@ describe("evicted agents", () => {
 				["steer_subagent", { agent_id: id, message: "hello" }],
 			] as const) {
 				const out = textOf(await tools.get(name).execute("tc", params, undefined, undefined, ctx()));
-				expect(out).toBe(`Agent not found: "${id}". It may have been cleaned up.`);
+				expect(out).toBe(notFound);
 			}
 		},
 	);

@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { macosHelperBuild } from "../src/platform/macos/helper-build.mjs";
 import { resolveMacosHelperAppPath } from "../src/platform/macos/helper-path.mjs";
 import {
 	createFakeChild,
@@ -26,6 +28,7 @@ import {
 // Cases that wait out the client's own fixed timers (30 x 100 ms probe loop, 400 ms restart pause, 2 s glow
 // timeout). Longest alone: ~5.9 s; budget is ~7x that (#312).
 const SLOW_MS = 45_000;
+const matchingBuild = macosHelperBuild(fileURLToPath(new URL("../", import.meta.url)));
 
 const cleanups = [];
 let tmp;
@@ -43,6 +46,7 @@ afterEach(async () => {
 	vi.unstubAllEnvs();
 	vi.doUnmock("node:child_process");
 	vi.doUnmock("node:net");
+	vi.doUnmock("node:os");
 	vi.resetModules();
 	while (cleanups.length) await cleanups.pop()();
 });
@@ -66,6 +70,12 @@ async function load({ external, fake, spawn }) {
 	if (spawn) {
 		vi.doMock("node:child_process", async (original) => ({ ...(await original()), spawn }));
 	}
+	// Always: the default socket path must never be the host's real one, even for an external override.
+	vi.doMock("node:os", async (original) => {
+		const actual = await original();
+		const patched = { ...actual, homedir: () => tmp };
+		return { ...patched, default: patched };
+	});
 	if (!external) {
 		vi.doMock("node:net", async (original) => {
 			const actual = await original();
@@ -79,9 +89,14 @@ async function load({ external, fake, spawn }) {
 	return await import("../src/platform/macos/helper.ts");
 }
 
-async function fakeOn({ protocol = 7, ...options } = {}) {
+async function fakeOn({ protocol = 8, ...options } = {}) {
 	const socketPath = shortSocketPath();
-	const fake = await startFakeHelper({ socketPath, protocolVersion: protocol, ...options });
+	const fake = await startFakeHelper({
+		socketPath,
+		protocolVersion: protocol,
+		...options,
+		diagnostics: { buildIdentity: matchingBuild, ...options.diagnostics },
+	});
 	cleanups.push(async () => {
 		await fake.stop();
 	});
@@ -100,7 +115,7 @@ describe("daemon commands over the socket", () => {
 		assert.equal(fake.requests[0].cmd, "diagnostics", "command() probes the daemon first");
 	});
 
-	test("keyboard stops carry a deadline and the posted prefix without retry", async () => {
+	test("keyboard stops carry the posted prefix without retry", async () => {
 		const fake = await fakeOn({
 			handlers: {
 				desktopInput: {
@@ -110,15 +125,12 @@ describe("daemon commands over the socket", () => {
 			},
 		});
 		const { MacosHelperClient } = await load({ external: true, fake });
-		const start = Date.now();
 		await assert.rejects(new MacosHelperClient().command("desktopInput", { action: "key" }, { timeoutMs: 30_000 }), {
 			code: "app_blocked",
 			evidence: { postedUnits: 1 },
 		});
-		const requests = fake.requests.filter(({ cmd }) => cmd === "desktopInput");
-		assert.equal(requests.length, 1);
-		assert.ok(requests[0].args.keyboardDeadlineMs >= start + 29_750);
-		assert.ok(requests[0].args.keyboardDeadlineMs <= Date.now() + 29_750);
+		// Sent once, never retried; the deadline's value is `tests/keyboard-deadline-clock.test.ts`'s job.
+		assert.equal(fake.requests.filter(({ cmd }) => cmd === "desktopInput").length, 1);
 	});
 
 	test("error replies become HelperCommandError with the helper's code and message", async () => {
@@ -147,12 +159,13 @@ describe("daemon commands over the socket", () => {
 		await assert.doesNotReject(client.command("diagnostics"), "the daemon stays usable after command errors");
 	});
 
-	test("a malformed reply rejects with the parse error and marks the daemon unavailable", async () => {
+	test("a malformed or non-object reply is a transport error and marks the daemon unavailable", async () => {
 		const fake = await fakeOn({ handlers: { look: malformed(), nul: raw("null\n") } });
 		const { MacosHelperClient } = await load({ external: true, fake });
 		const client = new MacosHelperClient();
-		await assert.rejects(client.command("look"), SyntaxError);
-		await assert.rejects(client.command("nul"), TypeError);
+		const malformedReply = { name: "HelperTransportError", code: "helper_malformed" };
+		await assert.rejects(client.command("look"), malformedReply);
+		await assert.rejects(client.command("nul"), malformedReply);
 		assert.equal(client.daemonAvailable, false);
 	});
 
@@ -203,7 +216,7 @@ describe("daemon commands over the socket", () => {
 			(error) => error.code === "helper_disconnected",
 		);
 		assert.equal(client.daemonAvailable, false);
-		assert.equal((await client.command("diagnostics")).protocolVersion, 7);
+		assert.equal((await client.command("diagnostics")).protocolVersion, 8);
 	});
 
 	test("a reply that is followed at once by a disconnect resolves, not helper_disconnected (#725)", async () => {
@@ -310,15 +323,15 @@ describe("daemon availability", () => {
 		"restart shuts the daemon down, waits and reconnects; failure to come back throws",
 		async () => {
 			const fake = await fakeOn();
-			const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: true, fake });
+			const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: false, fake, spawn: createFakeSpawn({}) });
 			const client = new MacosHelperClient();
 			fake.relaunchAfterExit();
 			await client.restart();
 			assert.deepEqual(
 				fake.requests.map((request) => request.cmd),
-				["diagnostics", "shutdown", "diagnostics"],
+				["diagnostics", "diagnostics", "shutdown", "diagnostics"],
 			);
-			assert.equal(fake.requests[1].raw.id.startsWith("req_"), true);
+			assert.equal(fake.requests[2].raw.id.startsWith("req_"), true);
 
 			// The default shutdown exits the fake; with no relaunch it stays down.
 			fake.relaunchAfterExit(false);
@@ -337,11 +350,11 @@ describe("daemon availability", () => {
 		"restart ignores a failing shutdown and reconnects to the surviving daemon",
 		async () => {
 			const fake = await fakeOn({ handlers: { shutdown: fail("cannot stop", "internal_error") } });
-			const { MacosHelperClient } = await load({ external: true, fake });
+			const { MacosHelperClient } = await load({ external: false, fake });
 			await new MacosHelperClient().restart();
 			assert.deepEqual(
 				fake.requests.map((request) => request.cmd),
-				["diagnostics", "shutdown", "diagnostics"],
+				["diagnostics", "diagnostics", "shutdown", "diagnostics"],
 			);
 		},
 		SLOW_MS,
@@ -366,7 +379,7 @@ describe("diagnostics", () => {
 	test("normalises the helper's diagnostics and caches them", async () => {
 		const fake = await fakeOn({
 			diagnostics: {
-				protocolVersion: 7.9,
+				protocolVersion: 8.9,
 				architectureVersion: "3",
 				invariants: ["a", 1, "b"],
 				pid: 42.5,
@@ -386,7 +399,7 @@ describe("diagnostics", () => {
 		assert.equal(client.diagnostics, undefined);
 		const diagnostics = await client.diagnosticsCommand();
 		assert.deepEqual(diagnostics, {
-			protocolVersion: 7,
+			protocolVersion: 8,
 			architectureVersion: 3,
 			invariants: ["a", "b"],
 			pid: 42,
@@ -403,42 +416,85 @@ describe("diagnostics", () => {
 		assert.equal(client.diagnostics, diagnostics);
 	});
 
-	test("tolerates an empty result with zero and false defaults", async () => {
-		const fake = await fakeOn({ handlers: { diagnostics: { kind: "reply", body: { ok: true } } } });
+	test("tolerates a sparse result with zero and false defaults, but an external helper needs its protocol", async () => {
+		const fake = await fakeOn({
+			handlers: { diagnostics: [{ kind: "reply", body: { ok: true } }, ok({ protocolVersion: 8 })] },
+		});
 		const { MacosHelperClient } = await load({ external: true, fake });
-		const diagnostics = await new MacosHelperClient().diagnosticsCommand();
-		assert.equal(diagnostics.protocolVersion, 0);
+		const client = new MacosHelperClient();
+		await assert.rejects(client.diagnosticsCommand(), { code: "helper_protocol", message: /reports protocol 0;/ });
+		const diagnostics = await client.diagnosticsCommand();
+		assert.equal(diagnostics.architectureVersion, 0);
 		assert.deepEqual(diagnostics.invariants, []);
 		assert.equal(diagnostics.parentPid, undefined);
 		assert.equal(diagnostics.accessibility, false);
 	});
 });
 
-describe("ensureProtocol", () => {
-	const psFor = (etime) => ({ ps: { stdout: `${etime}\n`, exitCode: 0 } });
+test.each([8, 6])("external daemon from another executable with protocol %s is never restarted", async (protocol) => {
+	const fake = await fakeOn({ protocol, diagnostics: { executablePath: path.join(tmp, "other", "bridge") } });
+	const spawn = createFakeSpawn({});
+	const { MacosHelperClient } = await load({ external: true, fake, spawn });
+	const client = new MacosHelperClient();
+	if (protocol === 8) assert.equal((await client.ensureProtocol()).protocolVersion, 8);
+	else await assert.rejects(client.ensureProtocol(), /reports protocol 6; expected 8.*operator/);
+	await assert.rejects(client.restart(), /restarted by its operator/);
+	assert.deepEqual(
+		fake.requests.map(({ cmd }) => cmd),
+		protocol === 8 ? ["diagnostics", "diagnostics"] : ["diagnostics"],
+	);
+	assert.deepEqual(spawn.calls, []);
+});
 
-	async function protocolRig({ diagnostics = {}, etime = "00:00", ps, afterRestart, install = true } = {}) {
+describe("ensureProtocol", () => {
+	async function protocolRig({ diagnostics = {}, install = true } = {}) {
 		if (install) installExecutable();
 		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...diagnostics } });
-		const spawn = createFakeSpawn(ps ?? psFor(etime));
-		const mod = await load({ external: true, fake, spawn });
-		fake.relaunchAfterExit({ diagnostics: afterRestart });
+		const spawn = createFakeSpawn({});
+		const mod = await load({ external: false, fake, spawn });
 		return { fake, spawn, ...mod, client: new mod.MacosHelperClient() };
 	}
 
-	test("accepts a current daemon without restarting", async () => {
+	/**
+	 * A matching-build daemon that is not the installed helper is refused with `helper_mismatch`: never shut down,
+	 * relaunched or stopped, and the client drops its cached availability so the next command probes again.
+	 */
+	async function assertRefused(rig, reason) {
+		// `reason` is literal text: paths can hold regex metacharacters.
+		const { client, fake, spawn, HelperCommandError, HELPER_SOCKET_PATH, RESIDENT_MISMATCH_REPAIR } = rig;
+		await client.ensureDaemon();
+		await assert.rejects(client.ensureProtocol(), (error) => {
+			assert.ok(error instanceof HelperCommandError);
+			assert.equal(error.code, "helper_mismatch");
+			assert.ok(error.message.includes(reason), error.message);
+			assert.equal(
+				error.message.startsWith(`pi-computer-use helper at ${HELPER_SOCKET_PATH} has this package's build but `),
+				true,
+			);
+			assert.equal(error.message.endsWith(`; it was not restarted or stopped. ${RESIDENT_MISMATCH_REPAIR}`), true);
+			return true;
+		});
+		assert.equal(client.daemonAvailable, false);
+		assert.deepEqual(
+			fake.requests.map(({ cmd }) => cmd),
+			["diagnostics", "diagnostics"],
+			"only read-only probes: no shutdown",
+		);
+		assert.equal(
+			spawn.calls.some(({ command }) => command === "open"),
+			false,
+			"nothing is relaunched",
+		);
+	}
+
+	test("accepts a current daemon without restarting or reading its start time", async () => {
 		const { client, fake, spawn } = await protocolRig({ diagnostics: { pid: 77 } });
-		assert.equal((await client.ensureProtocol()).protocolVersion, 7);
+		assert.equal((await client.ensureProtocol()).protocolVersion, 8);
 		assert.equal(
 			fake.requests.some((request) => request.cmd === "shutdown"),
 			false,
 		);
-		assert.deepEqual(spawn.calls[0].args, ["-o", "etime=", "-p", "77"]);
-	});
-
-	test("accepts a daemon with no reported executable path", async () => {
-		const { client } = await protocolRig({ diagnostics: { executablePath: undefined } });
-		await assert.doesNotReject(client.ensureProtocol());
+		assert.deepEqual(spawn.calls, [], "no `ps`: start time is not compared");
 	});
 
 	test("accepts a daemon whose executable is a symlink to the installed one", async () => {
@@ -449,118 +505,19 @@ describe("ensureProtocol", () => {
 		await assert.doesNotReject(client.ensureProtocol());
 	});
 
-	test(
-		"restarts a stale-protocol daemon and accepts the relaunched one",
-		async () => {
-			const { client, fake } = await protocolRig({
-				diagnostics: { protocolVersion: 6 },
-				afterRestart: { protocolVersion: 7 },
-			});
-			assert.equal((await client.ensureProtocol()).protocolVersion, 7);
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
-
-	test(
-		"restarts a daemon launched from another executable (unresolvable paths compare resolved)",
-		async () => {
-			const { client, fake } = await protocolRig({
-				install: false,
-				diagnostics: { executablePath: path.join(tmp, "elsewhere", "bridge") },
-				afterRestart: { executablePath: executable },
-			});
-			await client.ensureProtocol();
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
-
-	test(
-		"restarts when the daemon process predates the installed binary",
-		async () => {
-			const { client, fake } = await protocolRig({ etime: "00:01" });
-			// 100 s before the binary's ctime: started + 1 s < ctime.
-			const now = Date.now();
-			vi.spyOn(Date, "now").mockReturnValue(now - 100_000);
-			await client.ensureProtocol();
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
-
-	test(
-		"throws and drops the daemon when the relaunched helper still mismatches",
-		async () => {
-			const { client, HELPER_APP_EXECUTABLE_PATH, HELPER_APP_PATH } = await protocolRig({
-				diagnostics: { protocolVersion: 5, executablePath: undefined },
-			});
-			await assert.rejects(client.ensureProtocol(), (error) => {
-				assert.equal(
-					error.message,
-					`pi-computer-use helper mismatch after relaunch: expected protocol 7 and executable ${HELPER_APP_EXECUTABLE_PATH}; got protocol 5 and executable unknown. Reinstall or rebuild the helper app at ${HELPER_APP_PATH}.`,
-				);
-				return true;
-			});
-			assert.equal(client.daemonAvailable, false);
-		},
-		SLOW_MS,
-	);
-
-	test(
-		"throws when the relaunched helper reports the wrong executable",
-		async () => {
-			const { client } = await protocolRig({
-				diagnostics: { protocolVersion: 5 },
-				afterRestart: { protocolVersion: 7, executablePath: path.join(tmp, "other") },
-			});
-			await assert.rejects(client.ensureProtocol(), /got protocol 7 and executable .*other/);
-		},
-		SLOW_MS,
-	);
-
-	test.each([
-		["no pid", { pid: 0 }, undefined],
-		["negative pid", { pid: -3 }, undefined],
-		["non-numeric elapsed time", { pid: 5 }, "garbage"],
-	])("does not call a daemon stale for %s", async (_name, diagnostics, etime) => {
-		const { client, fake } = await protocolRig({ diagnostics, etime: etime ?? "00:00" });
-		await client.ensureProtocol();
-		assert.equal(
-			fake.requests.some((request) => request.cmd === "shutdown"),
-			false,
-		);
+	test("refuses a matching-build daemon that reports another protocol", async () => {
+		await assertRefused(await protocolRig({ diagnostics: { protocolVersion: 6 } }), " reports protocol 6 (expected 8)");
 	});
 
-	test.each([
-		["ps fails to spawn", { ps: { spawnError: new Error("ENOENT") } }],
-		["the helper binary is missing", { install: false, diagnostics: { executablePath: undefined } }],
-	])("does not call a daemon stale when %s", async (_name, options) => {
-		const { client, fake } = await protocolRig(options);
-		await client.ensureProtocol();
-		assert.equal(
-			fake.requests.some((request) => request.cmd === "shutdown"),
-			false,
-		);
+	test("refuses a daemon that reports no executable path", async () => {
+		const rig = await protocolRig({ diagnostics: { executablePath: undefined } });
+		await assertRefused(rig, `reports no executable path (expected ${rig.HELPER_APP_EXECUTABLE_PATH})`);
 	});
 
-	test(
-		"reads day-prefixed elapsed times: a daemon running for days predates the binary",
-		async () => {
-			const { client, fake, spawn } = await protocolRig({ etime: "2-00:00:01" });
-			await client.ensureProtocol();
-			assert.equal(spawn.calls.length >= 1, true);
-			assert.equal(fake.requests.filter((request) => request.cmd === "shutdown").length, 1);
-		},
-		SLOW_MS,
-	);
-
-	test("helperPredatesBinary allows a 1 s grace and rejects non-finite times", async () => {
-		const { helperPredatesBinary } = await load({ external: true, fake: await fakeOn() });
-		assert.equal(helperPredatesBinary(0, 1_001), true);
-		assert.equal(helperPredatesBinary(0, 1_000), false);
-		assert.equal(helperPredatesBinary(Number.NaN, 5_000), false);
-		assert.equal(helperPredatesBinary(0, Number.POSITIVE_INFINITY), false);
+	test("refuses a daemon launched from another executable (unresolvable paths compare resolved)", async () => {
+		const elsewhere = path.join(tmp, "elsewhere", "bridge");
+		const rig = await protocolRig({ install: false, diagnostics: { executablePath: elsewhere } });
+		await assertRefused(rig, `runs ${elsewhere} (expected ${rig.HELPER_APP_EXECUTABLE_PATH})`);
 	});
 });
 
@@ -576,6 +533,7 @@ describe("install, launch and runProcess", () => {
 
 	test("runs the setup script in runtime mode when missing, then verifies the install", async () => {
 		const fake = await fakeOn();
+		await fake.stop();
 		const spawn = createFakeSpawn({
 			[path.basename(process.execPath)]: () => {
 				installExecutable();
@@ -594,6 +552,7 @@ describe("install, launch and runProcess", () => {
 
 	test("fails when setup succeeds but installs nothing, or exits non-zero", async () => {
 		const fake = await fakeOn();
+		await fake.stop();
 		let route = { exitCode: 0 };
 		const spawn = createFakeSpawn({ [path.basename(process.execPath)]: () => route });
 		const { MacosHelperClient, HELPER_APP_PATH } = await load({ external: false, fake, spawn });
@@ -707,9 +666,10 @@ describe("activity glow connection", () => {
 			glow.map((request) => request.args.active),
 			[true, false, true],
 		);
+		// `activity_1` is the connection's own diagnostics check.
 		assert.deepEqual(
 			glow.map((request) => request.id),
-			["activity_1", "activity_2", "activity_3"],
+			["activity_2", "activity_3", "activity_4"],
 		);
 		// one probe connection from ensureDaemon, one persistent glow connection
 		assert.equal(fake.connections, 2);
@@ -743,9 +703,9 @@ describe("activity glow connection", () => {
 		);
 	});
 
-	test("a malformed reply rejects with the parse error", async () => {
+	test("a malformed reply is a transport error", async () => {
 		const { macosActivityGlow } = await glowRig({ handlers: { setActivityGlow: malformed() } });
-		await assert.rejects(macosActivityGlow.setActive(true), SyntaxError);
+		await assert.rejects(macosActivityGlow.setActive(true), { code: "helper_malformed" });
 	});
 
 	test(

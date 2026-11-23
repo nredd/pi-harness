@@ -157,6 +157,7 @@ test("Swift producer refuses absent, empty, duplicate profiles and tool failure"
 	for (const mode of ["missing", "empty", "duplicate", "tool", "export", "wrong-binary", "success", "inventory"]) {
 		const packageRoot = makeTestTempDir("cu-swift-producer-", onTestFinished);
 		mkdirSync(path.join(packageRoot, "native/macos"), { recursive: true });
+		writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "1.2.3" }));
 		for (const source of sources) writeFileSync(path.join(packageRoot, source), "fixture\n");
 		for (const source of testSources) writeFileSync(path.join(packageRoot, source), "fixture");
 		writeFileSync(path.join(packageRoot, "native/macos/README.md"), "fixture");

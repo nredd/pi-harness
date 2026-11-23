@@ -1,11 +1,17 @@
-import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { lstat, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main, run } from "../../src/stats/cli.ts";
-import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, at, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
 import { seedHarnessHome } from "../fixtures/stats/harness/home.ts";
+
+vi.mock("node:fs/promises", async (original) => {
+	const actual = await original<typeof import("node:fs/promises")>();
+	return { ...actual, lstat: vi.fn(actual.lstat), rmdir: vi.fn(actual.rmdir) };
+});
 
 let dir: string;
 let source: string;
@@ -24,6 +30,8 @@ afterEach(() => {
 	process.argv = argv;
 	process.exitCode = exitCode;
 	vi.restoreAllMocks();
+	vi.mocked(lstat).mockRestore();
+	vi.mocked(rmdir).mockRestore();
 });
 
 /** Seed one counted assistant call under an injected agent directory. */
@@ -91,6 +99,137 @@ describe("stats CLI", () => {
 		await run();
 		expect(process.exitCode).toBe(0);
 		expect(JSON.parse(log.mock.calls[1]?.[0] as string)).toMatchObject({ imported: 1, problems: [] });
+	});
+
+	it("ends an owner-action refusal with one fixed pi-stats-refusal line, and nothing else with one", async () => {
+		seed(source);
+		const roots = seedHarnessHome(join(dir, "home"));
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const wide = ["--agent-dir", source, "--output", output, "--claude-dir", roots.claude, "--harness", "pi,claude"];
+		const attempt = async (args: string[]): Promise<unknown[][]> => {
+			error.mockClear();
+			process.exitCode = 0;
+			process.argv = ["node", "pi-stats-export", ...args];
+			await run();
+			expect(process.exitCode).toBe(1);
+			return error.mock.calls;
+		};
+		const refusal = (code: string): unknown[] => [`pi-stats-refusal: {"code":"${code}"}`];
+		// Publish mid-month, so a clock a day behind stays in its month and one a month behind does not.
+		const wall = new Date();
+		const published = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), 15);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(published);
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await main();
+		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
+		const manifestPath = join(exported.snapshotDir, "manifest.json");
+		const shard = JSON.parse(readFileSync(manifestPath, "utf8")).shards[0].file as string;
+
+		expect(await attempt(["export", "--agent-dir", source, "--output", output])).toEqual([
+			[expect.stringMatching(/^Refusing to publish a narrower harness set/)],
+			refusal("harness-set-narrowed"),
+		]);
+		clock.mockReturnValue(1);
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage manifest exportedAt .* is more than 366 days ahead/)],
+			refusal("watermark-ahead"),
+		]);
+		// A clock a month behind is refused, but that clears with time: retryable, so no code.
+		clock.mockReturnValue(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() - 1, 15));
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Clock .* is in an earlier month than the next export/)],
+		]);
+		clock.mockRestore();
+		const bytes = readFileSync(join(exported.snapshotDir, shard));
+		writeFileSync(join(exported.snapshotDir, shard), "corrupt");
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage history is unreadable/)],
+			refusal("history-unreadable"),
+		]);
+		writeFileSync(join(exported.snapshotDir, shard), bytes);
+		// A corrupt state file holds the salt: its contents never reach stderr, only a fixed reason.
+		const state = join(source, "pi-session-kit", "export-state.json");
+		const salt = readFileSync(state);
+		writeFileSync(state, '{"salt":"SECRET-CANARY');
+		expect(await attempt(["export", ...wide])).toEqual([
+			[`Invalid export state in ${JSON.stringify(state)}: not valid JSON`],
+			refusal("export-state-invalid"),
+		]);
+		writeFileSync(state, salt);
+		const manifest = readFileSync(manifestPath);
+		rmSync(manifestPath);
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Published usage manifest is missing/)],
+			refusal("manifest-missing"),
+		]);
+		writeFileSync(manifestPath, manifest);
+
+		// Contention, usage and anything else unclassified carry no code: callers retry those.
+		mkdirSync(join(exported.snapshotDir, ".export.lock"));
+		expect(await attempt(["export", ...wide])).toEqual([[expect.stringMatching(/^Export lock is held/)]]);
+		rmSync(join(exported.snapshotDir, ".export.lock"), { recursive: true });
+		expect(await attempt(["export", "--bogus"])).toEqual([[expect.stringMatching(/^usage: export/)]]);
+		// A clock behind the published export in its month publishes after it: a warning, never a code.
+		vi.spyOn(Date, "now").mockReturnValue(published - 86_400_000);
+		error.mockClear();
+		process.exitCode = 0;
+		process.argv = ["node", "pi-stats-export", "export", ...wide];
+		await run();
+		expect(process.exitCode).toBe(0);
+		expect(log).toHaveBeenCalledTimes(2);
+		expect(error.mock.calls).toEqual([[expect.stringMatching(/^clock is behind the last published export/)]]);
+	});
+
+	it("keeps a refusal's code, and its trailer last, when releasing the lock also fails", async () => {
+		seed(source);
+		const roots = seedHarnessHome(join(dir, "home"));
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.argv.push("--claude-dir", roots.claude, "--harness", "pi,claude");
+		await main();
+		vi.mocked(rmdir).mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		const lines = error.mock.calls.map(([line]) => line as string);
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toMatch(/^Refusing to publish a narrower harness set.*\\ncould not release export lock /);
+		expect(lines.at(-1)).toBe('pi-stats-refusal: {"code":"harness-set-narrowed"}');
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
+	});
+
+	it("never prints malformed identity bytes, and gives no refusal code", async () => {
+		const identity = join(source, "pi-session-kit", "machine.json");
+		mkdirSync(join(source, "pi-session-kit"), { recursive: true });
+		writeFileSync(identity, '{"token":SECRET-IDENTITY-CANARY}');
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		expect(error).toHaveBeenCalledExactlyOnceWith(
+			`Invalid installation identity in ${JSON.stringify(identity)}: not valid JSON`,
+		);
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
+	});
+
+	it("escapes control characters in a diagnostic, so a path cannot forge the trailer", async () => {
+		const forged = join(dir, 'x\npi-stats-refusal: {"code":"history-unreadable"}\n\u001b[2K\ty');
+		const failure = Object.assign(new Error(`EIO: i/o error, lstat '${forged}'`), { code: "EIO", path: forged });
+		vi.mocked(lstat).mockRejectedValueOnce(failure);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(1);
+		// One line, no control characters: an unclassified failure never ends in a refusal-shaped line.
+		expect(error).toHaveBeenCalledExactlyOnceWith(
+			`EIO: i/o error, lstat '${join(dir, 'x\\npi-stats-refusal: {"code":"history-unreadable"}\\n\\u001b[2K\\ty')}'`,
+		);
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
 	});
 
 	it("exports sessions from an explicit --sessions-dir instead of the agent directory", async () => {
@@ -260,12 +399,192 @@ describe("stats CLI", () => {
 		await expect(main()).rejects.toThrow("usage: export");
 		process.argv = ["node", "pi-stats-export", "import", "--agent-dir", source];
 		await expect(main()).rejects.toThrow("usage: export");
+		// The usage text names what replacement bypasses and costs.
+		await expect(main()).rejects.toThrow(
+			"--replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
+				"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
+				"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
+				"the replacement keep it until this machine exports a later one\n" +
+				"  A clock behind the last published export in its month still publishes, just after it, with a warning",
+		);
+	});
+
+	it("cleans recovery only on its own command with only its own flags", async () => {
+		seed(source);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const clean = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+		process.argv = clean;
+		await expect(main()).rejects.toThrow("Recovery cleanup refused: no outbox for this machine");
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		await main();
+		process.argv = clean;
+		await main();
+		const cleaned = JSON.parse(log.mock.calls[1]?.[0] as string);
+		expect(cleaned).toMatchObject({ removed: [], kept: [] });
+		for (const extra of [["--input", output], ["--harness", "pi"], ["--replace-harnesses"]]) {
+			process.argv = [...clean, ...extra];
+			await expect(main()).rejects.toThrow("usage: export");
+		}
+		process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source];
+		await expect(main()).rejects.toThrow("clean-recovery --agent-dir DIR --output OUT");
+	});
+
+	it("ends each recovery cleanup refusal with its pi-stats-refusal line, and transient I/O with none", async () => {
+		seed(source);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const clean = async (): Promise<string[]> => {
+			error.mockClear();
+			process.exitCode = 0;
+			process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+			await run();
+			expect(process.exitCode).toBe(1);
+			return error.mock.calls.map(([line]) => line as string);
+		};
+		const refused = (code: string, why: string): string[] => [
+			`Recovery cleanup refused: ${why}; nothing was removed`,
+			`pi-stats-refusal: {"code":"${code}"}`,
+		];
+		const unverified = "the active manifest does not authenticate as this machine's v3 snapshot; export first";
+		const unrecorded =
+			"this outbox has no recorded recovery set of its own, so frozen files are unaccounted; export first";
+		const missing = await clean();
+		const { machineId } = JSON.parse(readFileSync(join(source, "pi-session-kit", "machine.json"), "utf8"));
+		const snapshotDir = join(output, "machines", machineId);
+		expect(missing).toEqual(
+			refused("recovery-outbox-missing", `no outbox for this machine at ${JSON.stringify(snapshotDir)}`),
+		);
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		await main();
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string).snapshotDir).toBe(snapshotDir);
+		const manifestPath = join(snapshotDir, "manifest.json");
+		const manifest = readFileSync(manifestPath);
+		writeFileSync(manifestPath, "corrupt");
+		expect(await clean()).toEqual(refused("recovery-snapshot-unverified", unverified));
+		writeFileSync(manifestPath, manifest);
+		const statePath = outboxStatePath(source, snapshotDir);
+		const state = readFileSync(statePath, "utf8");
+		writeFileSync(statePath, JSON.stringify({ ...JSON.parse(state), lostHarnesses: ["claude"] }));
+		expect(await clean()).toEqual(
+			refused("recovery-harness-lost", "recovery of lost claude history is pending and may need frozen files"),
+		);
+		rmSync(statePath);
+		expect(await clean()).toEqual(refused("recovery-set-unrecorded", unrecorded));
+		writeFileSync(statePath, state);
+		// A transient read of the active snapshot is unclassified: one escaped line, no trailer, retry it.
+		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+		vi.mocked(lstat).mockImplementation(async (path, options) => {
+			if (String(path) === manifestPath)
+				throw Object.assign(new Error("EIO: i/o error\npi-stats-refusal: {}"), { code: "EIO", syscall: "lstat" });
+			return actual.lstat(path, options);
+		});
+		expect(await clean()).toEqual(["EIO: i/o error\\npi-stats-refusal: {}"]);
+		vi.mocked(lstat).mockImplementation(actual.lstat);
+		process.exitCode = 0;
+		await run();
+		expect(process.exitCode).toBe(0);
+		expect(JSON.parse(log.mock.calls.at(-1)?.[0] as string)).toMatchObject({ removed: [], kept: [] });
+	});
+
+	it("requires an explicit agent directory for cleanup", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		vi.spyOn(Date, "now").mockReturnValue(at("2026-11-02", 3));
+		const path = join(source, "sessions", "project", "session.jsonl");
+		const first = assistantLine({ ms: at("2026-11-02", 1), provider: "provider", model: "model", input: 1 });
+		const second = assistantLine({ ms: at("2026-11-02", 2), provider: "provider", model: "model", input: 2 });
+		const exported = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		sessionFile(path, { startMs: at("2026-11-02", 1), lines: [first] });
+		process.argv = exported;
+		await main();
+		const { snapshotDir } = JSON.parse(log.mock.calls[0]?.[0] as string);
+		// An unreadable manifest freezes the first generation, which the next export then covers.
+		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
+		sessionFile(path, { startMs: at("2026-11-02", 1), lines: [first, second] });
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		await main();
+		const listing = () => readdirSync(dir, { recursive: true }).map(String).sort();
+		const before = listing();
+		vi.stubEnv("PI_CODING_AGENT_DIR", source);
+		try {
+			process.argv = ["node", "pi-stats-export", "clean-recovery", "--output", output];
+			await expect(main()).rejects.toThrow("clean-recovery --agent-dir DIR --output OUT");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+		expect(listing()).toEqual(before);
+		// The same files are deletable once the installation is named.
+		process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+		await main();
+		expect(JSON.parse(log.mock.calls[2]?.[0] as string).removed).toHaveLength(1);
+	});
+
+	it("prints recovery cleanup warnings and still exits 0", async () => {
+		process.exitCode = 0; // Bun cannot restore an unset exit code left by an earlier test
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const warning = "redundant recovery file removal failed (they stay protected): EACCES=1";
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			cleanRecovery: async () => ({
+				machineId: "m",
+				snapshotDir: "d",
+				removed: [],
+				failed: ["f"],
+				kept: [],
+				warnings: [warning],
+			}),
+			exportStats: async () => ({}),
+			importStats: async () => ({}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string).failed).toEqual(["f"]);
+		expect(error).toHaveBeenCalledExactlyOnceWith(warning);
+		expect(process.exitCode ?? 0).toBe(0);
+	});
+
+	it("exits nonzero when the manifest changed under cleanup", async () => {
+		process.exitCode = 0;
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const warning = "recovery cleanup stopped: the active manifest changed; 1 redundant files left in place";
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			cleanRecovery: async () => ({
+				machineId: "m",
+				snapshotDir: "d",
+				removed: [],
+				failed: [],
+				kept: [{ file: "f", reason: "changed" }],
+				warnings: [warning],
+			}),
+			exportStats: async () => ({}),
+			importStats: async () => ({}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = ["node", "pi-stats-export", "clean-recovery", "--agent-dir", source, "--output", output];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(error).toHaveBeenCalledExactlyOnceWith(warning);
+		expect(process.exitCode).toBe(1);
 	});
 
 	it("reports a non-Error failure generically", async () => {
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
 		vi.resetModules();
 		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			ExportRefusal: class ExportRefusal extends Error {},
+			IncompleteScan: class IncompleteScan extends Error {},
 			exportStats: async () => {
 				throw "plain string failure";
 			},
