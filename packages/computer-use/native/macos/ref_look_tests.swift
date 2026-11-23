@@ -309,7 +309,16 @@ private func runLookOutlineAssertions() {
     LookNode(
       element: nil, ref: name, role: "AXGroup", subrole: "", identifier: "", title: name, description: "", value: "",
       actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false,
-      canDecrement: false, isTextInput: false, rect: .zero)
+      canDecrement: false, isTextInput: false, rect: .zero, ownFieldsRead: true)
+  }
+  /// A node built like `lookNode` from `LookOwnFields` over `reads` (attribute -> result; unlisted is absent).
+  func fieldNode(_ name: String, reads: [String: AXStringRead]) -> LookNode {
+    let fields = LookOwnFields(read: { reads[$0 as String] ?? .absent }, secure: { $0 == "AXSecureTextField" || $1 == "AXSecureTextField" })
+    return LookNode(
+      element: nil, ref: name, role: fields.role, subrole: fields.subrole, identifier: fields.identifier, title: fields.title,
+      description: fields.description, value: fields.value, actions: [], canPress: false, canFocus: false,
+      canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: .zero,
+      ownFieldsRead: fields.complete)
   }
   /// The clock reads 0 when the walk sets its deadline and one second more at each later reading, so the walk
   /// expires at its `expiresAfter + 1`-th budget check.
@@ -382,12 +391,43 @@ private func runLookOutlineAssertions() {
   check(budget.truncated && budget.children.map(\.ref) == ["unread", "leaf"], "the node budget cuts the children and marks the parent")
   check(budget.childrenUnread, "the node budget's cut leaves only the descendants unread")
   check(find("parent", in: build(root, children: tree, nodeLimit: 4))?.truncated == true, "a parent reached at the budget is truncated")
+  check(
+    find("parent", in: build(root, children: tree, nodeLimit: 4))?.payload()["childrenUnread"] as? Bool == true,
+    "a parent reached at the budget leaves only its descendants unread")
   check(build(root, children: tree, expiresAfter: 0).truncated, "an expired deadline marks the node it stops at")
   let late = build(root, children: tree, expiresAfter: 2)
   check(late.truncated && late.children.map(\.ref) == ["unread"], "a deadline during the children marks the parent")
   check(
     late.childrenUnread && build(root, children: tree, expiresAfter: 0).childrenUnread,
     "the deadline leaves only the descendants unread")
+  // A failed own-field read beside the failed children read: the node keeps only the bare marker (#1310).
+  func walkedFieldNode(_ reads: [String: AXStringRead]) -> LookNode {
+    LookOutlineWorld<Node>(
+      children: { _ in nil }, rootNode: { _ in fieldNode("own", reads: reads) }, childNodes: { _ in { node($0.name) } },
+      now: { 0 }
+    ).build(root: root, nodeLimit: 2000, timeLimit: 20, requestDeadline: .infinity)
+  }
+  let readable: [String: AXStringRead] = [
+    kAXRoleAttribute: .value("AXButton"), kAXTitleAttribute: .value("Go"), kAXValueAttribute: .value("Stop"),
+  ]
+  let readOwn = walkedFieldNode(readable)
+  check(
+    readOwn.payload()["truncated"] as? Bool == true && readOwn.payload()["childrenUnread"] as? Bool == true
+      && readOwn.value == "Stop",
+    "failed children with every own field read carry childrenUnread")
+  for attribute in [kAXRoleAttribute, kAXSubroleAttribute, "AXIdentifier", kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
+    var reads = readable
+    reads[attribute] = .failed
+    let failed = walkedFieldNode(reads).payload()
+    check(
+      failed["truncated"] as? Bool == true && failed["childrenUnread"] == nil,
+      "a failed \(attribute) read with failed children sends only the bare truncated")
+  }
+  var secureReads = readable
+  secureReads[kAXRoleAttribute] = .value("AXSecureTextField")
+  secureReads[kAXValueAttribute] = .failed
+  let secure = walkedFieldNode(secureReads)
+  check(secure.value.isEmpty && secure.childrenUnread, "a secure field's value is never read, so it cannot fail")
   let bare = node("bare")
   bare.childrenUnread = true
   check(bare.payload()["childrenUnread"] == nil, "childrenUnread is never sent without truncated")

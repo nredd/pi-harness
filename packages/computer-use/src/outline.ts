@@ -44,9 +44,10 @@ export interface OutlineNode {
 	pictureOnly: boolean;
 	truncated: boolean;
 	/**
-	 * Set only on a `truncated` node whose helper read its own fields and left only its descendants unread (the macOS
-	 * walk's failed children read or budget cut). A bare `truncated` (Linux unread fields, Windows, older helpers)
-	 * may also mean the node's own fields are unread.
+	 * Set only on a `truncated` node whose helper read every own matchable field and left only its descendants unread
+	 * (the macOS walk's failed children read or budget cut). A bare `truncated` (Linux unread fields, Windows, older
+	 * helpers, a failed macOS own-field read) may also mean the node's own fields are unread. Evidence only: absence
+	 * corroboration still blocks on it, since a structurally carried ref may name a lookalike (#1338).
 	 */
 	childrenUnread?: true;
 	scrollExtent?: OutlineScrollExtent;
