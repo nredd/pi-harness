@@ -4324,6 +4324,67 @@ def check_helper_sources_packed(tarball: Path) -> list[str]:
     return sorted(sources)
 
 
+# `MACOS_HELPER_BUILD_PATTERN` in `helper-build.mjs`, as one NUL-delimited Swift string literal.
+MACOS_HELPER_BUILD_LITERAL = re.compile(rb"(?<=\0)\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\+[0-9a-f]{64}(?=\0)")
+
+
+def macos_helper_build(tarball: Path) -> str:
+    """Compute the build identity a client installed from this tarball expects from its helper.
+
+    Mirrors `macosHelperBuild` in the packed `helper-build.mjs`: the manifest version, `+`, and the
+    SHA-256 over `<basename>:<byte length>:<LF-normalized source>` for each declared Swift source in
+    declaration order. Drift between the two fails closed as a mismatch.
+
+    Parameters:
+        tarball (Path): Packed tarball.
+
+    Returns:
+        str: Expected `<version>+<sha256>` identity.
+
+    Raises:
+        ContractError: If the version, the source list or a source is missing or unreadable.
+    """
+    version = json.loads(read_member(tarball, "package.json")).get("version")
+    require(isinstance(version, str) and bool(version), f"'{tarball.name}' package.json has no version")
+    script = "src/platform/macos/helper-build.mjs"
+    digest = hashlib.sha256()
+    for name in parse_helper_source_list(script, read_member(tarball, script).decode()):
+        try:
+            text = read_member(tarball, f"native/macos/{name}").decode()
+        except UnicodeDecodeError as e:
+            raise ContractError(f"'{tarball.name}:native/macos/{name}' is not UTF-8") from e
+        contents = text.replace("\r\n", "\n").encode()
+        digest.update(f"{PurePosixPath(name).name}:{len(contents)}:".encode())
+        digest.update(contents)
+    return f"{version}+{digest.hexdigest()}"
+
+
+def check_macos_helper_build(tarball: Path, arch: MACHO_ARCH, expected: str) -> str:
+    """Require a packed helper's compiled build identity to equal the packed sources' identity.
+
+    The identity is a string literal compiled into the binary and returned by its `diagnostics`
+    reply, so it is read from the bytes without running, installing or contacting any helper.
+
+    Parameters:
+        tarball (Path): Packed tarball.
+        arch (MACHO_ARCH): `arm64` or `x64`.
+        expected (str): `macos_helper_build(tarball)`.
+
+    Returns:
+        str: Human-readable summary recorded as evidence.
+
+    Raises:
+        ContractError: If the binary holds no identity, several, or another one.
+    """
+    name = f"prebuilt/macos/{arch}/bridge"
+    found = sorted(
+        {match.decode() for match in MACOS_HELPER_BUILD_LITERAL.findall(read_member(tarball, name))}
+    )
+    require(len(found) == 1, f"{name} has {len(found)} build identities, expected exactly 1: {found}")
+    require(found[0] == expected, f"{name} reports build '{found[0]}', expected '{expected}'")
+    return f"{arch} build {found[0]}"
+
+
 def scenario_computer_use(ctx: Context) -> ComputerUseEvidence:
     """Load packed computer-use, prove its platform's exact tool set and audit the shipped helpers.
 
