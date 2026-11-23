@@ -1093,12 +1093,13 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
  * Carried: every distinct sealed end at or after the corrected start and before the active month. An end
  * before the corrected start is dominated by the scan's own end; one in the active month is not carried,
  * because that month is rebuilt from the scan (a deleted call there takes its end with it). Then each
- * corrected session is floored at its latest retained sealed call (any sealed shard, wherever its old
- * metadata was), in one more carry shard per month, so it never ends before a call that survives.
+ * corrected session is floored at its latest sealed call that is published under it (any sealed shard,
+ * wherever its old metadata was), in one more carry shard per month, so it never ends before its own call.
  */
 function rebasedEnds(
 	retired: ReadonlyMap<string, readonly CompactShard[]>,
 	sealed: readonly CompactShard[],
+	fresh: ReadonlyMap<string, CompactShard>,
 	revisions: Revisions,
 	current: string,
 ): CompactShard[] {
@@ -1120,12 +1121,25 @@ function rebasedEnds(
 			}
 			out.push(...byMonth.values());
 		}
-	// Sealed shards hold only calls before the active month, and every unsuperseded one is retained.
+	// Sealed shards hold only calls before the active month. An unrevised month keeps its shards verbatim;
+	// `regenerateMonth` publishes the scan first, then each unsuperseded sealed event whose id is not yet
+	// published, so a sealed row a fresh row (maybe under another session) replaces floors nothing.
+	const published = new Map<string, Set<string>>();
 	const floors = new Map<string, { corrected: SnapshotSession; endMs: number; shard: CompactShard }>();
 	for (const shard of sealed)
 		for (const event of shard.events) {
+			if (revisions.supersededEventIds.has(event.id)) continue;
+			if (retired.has(shard.month)) {
+				let ids = published.get(shard.month);
+				if (!ids) {
+					ids = new Set(fresh.get(shard.month)?.events.map((e) => e.id));
+					published.set(shard.month, ids);
+				}
+				if (ids.has(event.id)) continue;
+				ids.add(event.id);
+			}
 			const corrected = corrections.get(event.sessionId);
-			if (!corrected || revisions.supersededEventIds.has(event.id)) continue;
+			if (!corrected) continue;
 			const endMs = Math.max(floors.get(event.sessionId)?.endMs ?? 0, event.ms);
 			floors.set(event.sessionId, { corrected, endMs, shard });
 		}
@@ -1647,6 +1661,7 @@ async function publishStats(
 	const rebased = rebasedEnds(
 		retired,
 		(sealed?.shards ?? []).filter((shard) => shard.month < current) as CompactShard[],
+		fresh,
 		revisions,
 		current,
 	);

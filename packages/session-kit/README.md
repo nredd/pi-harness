@@ -807,8 +807,9 @@ readings) is carried into delta shards of the regenerated month. Each distinct s
 whose start or child attribution was corrected is carried under the corrected attribution, in the
 corrected start month, unless it is before the corrected start (the scan's own end dominates it) or in
 the active month (rebuilt from the scan, so a deleted call there takes its end with it). The corrected
-session is then floored at its latest retained sealed call, wherever its old metadata lived, so it never
-ends before an archived call that survives. Past 32 shards the carries are packed
+session is then floored at its latest sealed call still published under it, wherever its old metadata
+lived, so it never ends before its own archived call. A sealed call whose unchanged entry moved to another
+session and is republished under it in a regenerated month floors only that session. Past 32 shards the carries are packed
 losslessly into the fresh shard and as few more as validation allows (never compacted away); if the month
 still needs more than 32 shards (e.g. 33 readings of one quota window) the export is refused before anything
 is published, leaving the previous manifest and shards intact, and `--replace-harnesses` is the explicit
