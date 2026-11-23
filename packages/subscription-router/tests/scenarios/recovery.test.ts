@@ -98,8 +98,9 @@ describe("router recovery through a real session", () => {
 		expect(effects).toBe(1);
 		expect(a.state.callCount).toBe(2);
 		expect(b.state.callCount).toBe(0);
-		expect(usage.reads).toHaveLength(errorMessage === RETRY ? 1 : 0);
-		expect(scenario.tracker.active()).toHaveLength(errorMessage === RETRY ? 1 : 0);
+		// C10: both paths confirm and mark the exhausted scope, then refuse replay.
+		expect(usage.reads).toHaveLength(1);
+		expect(scenario.tracker.active()).toHaveLength(1);
 	});
 
 	it.each(["overloaded", "length", "overflow", "unconfirmed quota"] as const)(

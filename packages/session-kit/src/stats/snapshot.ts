@@ -906,12 +906,12 @@ type Previous = (MachineSnapshot & { expandedSizes: number[] }) | null | "unread
  * A readable manifest whose history is not: the unreadable shard files (empty when only their union is
  * invalid), the first authenticated shard the expansion budget could not hold, and the manifest's own
  * `exportedAt`, which still bounds the next publication instant. A manifest the owner may not read
- * (`damaged` is `manifest.json`, `denied` its errno code) has no `exportedAt`: like an unreadable one, it
- * bounds nothing.
+ * (`damaged` is `manifest.json`, `manifestDenied` its errno code) has no `exportedAt`: like an unreadable
+ * one, it bounds nothing. A denied shard is never damage: `loadPrevious` throws it as retryable I/O.
  */
 interface Damaged {
 	damaged: string[];
-	denied?: string;
+	manifestDenied?: string;
 	exportedAt?: number;
 	overBudget?: string;
 }
@@ -935,7 +935,7 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 		// Ambiguous I/O (EIO, EMFILE, EBUSY...) stays fatal and unclassified: it may clear on retry.
 		const code = (error as NodeJS.ErrnoException).code;
 		if (readFailure(error) && (code === "EACCES" || code === "EPERM"))
-			return { damaged: ["manifest.json"], denied: code };
+			return { damaged: ["manifest.json"], manifestDenied: code };
 		if (readFailure(error)) throw error;
 		return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable";
 	}
@@ -967,6 +967,19 @@ async function loadPrevious(snapshotDir: string): Promise<Previous | Damaged> {
 }
 
 /**
+ * Why `previous` cannot bound the next publication instant although this outbox published before: its
+ * manifest is corrupt, denied (only its errno code is named) or, per `publishedBefore`, missing. A missing
+ * manifest with no sign of an earlier export is a first export, which has nothing to follow.
+ */
+function unboundedBy(previous: Previous | Damaged, publishedBefore: boolean): string | undefined {
+	if (previous === "unreadable") return "manifest.json unreadable";
+	if (previous === null) return publishedBefore ? "manifest.json missing" : undefined;
+	return "damaged" in previous && previous.manifestDenied !== undefined
+		? `${previous.manifestDenied} on manifest.json`
+		: undefined;
+}
+
+/**
  * Publishing over a readable manifest with unreadable shards would evict its intact history from the
  * active snapshot. Keep it, naming what to restore, unless the owner explicitly asks for replacement.
  */
@@ -974,10 +987,10 @@ function intactPrevious(previous: Previous | Damaged, replace: boolean): Previou
 	if (previous === null || previous === "unreadable" || !("damaged" in previous)) return previous;
 	if (replace) return "unreadable";
 	// Restoring read access keeps the archived history a replacement would drop; only the errno code is named.
-	if (previous.denied !== undefined)
+	if (previous.manifestDenied !== undefined)
 		throw new ExportRefusal(
 			"history-unreadable",
-			`Published usage manifest is not readable (${previous.denied} on manifest.json); restore read access to it ` +
+			`Published usage manifest is not readable (${previous.manifestDenied} on manifest.json); restore read access to it ` +
 				"and retry before considering --replace-harnesses, which drops published history absent from this scan",
 		);
 	// Restoring files fixes damage, never a spent budget: report damage first, then the budget.
@@ -1516,18 +1529,30 @@ async function publishStats(
 	const own = await ownOutbox(statePath);
 	// A missing manifest is a first export only if nothing says this outbox published before. Otherwise
 	// publishing the scan would replace its sealed history and prune the shards that hold it.
-	if (loadedPrevious === null && !options.replaceHarnesses) {
-		const shards = (await readdir(snapshotDir, { withFileTypes: true })).some(
-			(entry) => entry.isFile() && SHARD_FILE.test(entry.name),
+	const publishedBefore =
+		loadedPrevious === null &&
+		(own !== null ||
+			(await readdir(snapshotDir, { withFileTypes: true })).some(
+				(entry) => entry.isFile() && SHARD_FILE.test(entry.name),
+			));
+	if (publishedBefore && !options.replaceHarnesses)
+		throw new ExportRefusal(
+			"manifest-missing",
+			`Published usage manifest is missing from ${JSON.stringify(snapshotDir)}, but this outbox published ` +
+				"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
+				"or pass --replace-harnesses to publish without that history",
 		);
-		if (own !== null || shards)
-			throw new ExportRefusal(
-				"manifest-missing",
-				`Published usage manifest is missing from ${JSON.stringify(snapshotDir)}, but this outbox published ` +
-					"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
-					"or pass --replace-harnesses to publish without that history",
-			);
-	}
+	// Nothing records the last published instant but the manifest, so without it there is no watermark to
+	// follow: publish by the wall clock rather than guess one, and say so.
+	const unbounded = unboundedBy(loadedPrevious, publishedBefore);
+	const unboundedWarning =
+		unbounded === undefined
+			? []
+			: [
+					`no readable published manifest bounds this export (${unbounded}); published at ` +
+						`${new Date(exportedAt).toISOString()} by this clock, so viewers holding a later snapshot of this ` +
+						"machine keep it until this clock passes it",
+				];
 	const installation = await exportState(dir);
 	const { salt: _, ...inherited } = installation;
 	const bookkeeping = { state: own ?? inherited, own: own !== null };
@@ -1764,7 +1789,7 @@ async function publishStats(
 	// Serialized outbox writers only. Readers racing collection retain last-good. Keep recovery
 	// copies if this export could not read the previous history; never turn post-publication cleanup
 	// failure into a failed export or skip recording the now-published harness set.
-	const warnings = [...clockWarning];
+	const warnings = [...clockWarning, ...unboundedWarning];
 	if (recoveryPending)
 		warnings.push("recovery files retained: run clean-recovery to remove those the active snapshot covers");
 	if (unaccounted.length > 0)

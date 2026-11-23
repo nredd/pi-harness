@@ -211,6 +211,25 @@ describe("SettleRecovery", () => {
 		expect((await recovery.handle(settle(quotaError(SONNET)), PROFILE, env, undefined)).kind).toBe("continue");
 	});
 
+	it("C10: marks a terminal quota failure with partial output without editing or continuing it", async () => {
+		const { recovery, env, tracker } = harness({ anthropic: blocked });
+		const partial = (chain: ChainEntry, text = "insufficient_quota") =>
+			entry("a1", { ...quotaError(chain, text).messages[0], content: [{ type: "text", text: "visible" }] });
+		// Not partial, not quota, not a chain model, or not resolvable: nothing to mark here.
+		expect(await recovery.markPartial(settle(quotaError(SONNET)), PROFILE, env, undefined)).toBe(false);
+		expect(await recovery.markPartial(settle(partial(SONNET, "overloaded")), PROFILE, env, undefined)).toBe(false);
+		const stranger = { provider: "anthropic", id: "elsewhere" };
+		expect(await recovery.markPartial(settle(partial(stranger)), PROFILE, env, undefined)).toBe(false);
+		const unresolved = { ...env, resolve: () => undefined };
+		expect(await recovery.markPartial(settle(partial(SONNET)), PROFILE, unresolved, undefined)).toBe(false);
+		expect(tracker.active()).toEqual([]);
+		const event = settle(partial(SONNET));
+		expect(await recovery.markPartial(event, PROFILE, env, undefined)).toBe(true);
+		expect(tracker.active()).toMatchObject([{ provider: "anthropic", window: "five_hour" }]);
+		// The settle itself still refuses to omit or continue visible output.
+		expect(await recovery.handle(event, PROFILE, env, undefined)).toEqual({ kind: "none" });
+	});
+
 	it("reports exhaustion with the earliest reset when the last chain model runs out", async () => {
 		const { recovery, env } = harness({ anthropic: blocked, "openai-codex": { ...blocked, resetAt: T0 + 30_000 } });
 		expect((await recovery.handle(settle(quotaError(SONNET)), PROFILE, env, undefined)).kind).toBe("continue");
