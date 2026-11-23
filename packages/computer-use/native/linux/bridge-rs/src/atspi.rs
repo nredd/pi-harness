@@ -324,16 +324,56 @@ impl AtspiClient {
         accessible: &AccessibleRef,
     ) -> Result<(), ProtocolError> {
         let mut current = accessible.clone();
+        if current == *root {
+            return Ok(());
+        }
         for _ in 0..MAX_ANCESTRY_DEPTH {
-            if current == *root {
-                return Ok(());
-            }
             current = self.parent(&current).await?;
             if current.destination != root.destination || !self.readable_node(&current).await? {
                 return Err(protected_ancestry());
             }
+            if current == *root {
+                return Ok(());
+            }
         }
         Err(protected_ancestry())
+    }
+
+    /// Refuse a scope unless `start` itself and every live ancestor up to `root` is readable,
+    /// with the same rule and error codes as `confirm_readable_ancestry`; a scope equal to the
+    /// root still checks the root.
+    async fn confirm_readable_scope(
+        &self,
+        root: &AccessibleRef,
+        start: &AccessibleRef,
+    ) -> Result<(), ProtocolError> {
+        if !self.readable_node(start).await? {
+            return Err(protected_ancestry());
+        }
+        self.confirm_readable_ancestry(root, start).await
+    }
+
+    /// Whether the edge from `parent` to `child` may still be followed: `parent` keeps the
+    /// readable role it was read with, and `child`'s live `Parent`, when the provider reports
+    /// one, is `parent` (#1233). A provider whose `Parent` read fails keeps the `GetChildren`
+    /// edge.
+    async fn edge_confirmed(
+        &self,
+        parent: &AccessibleRef,
+        recorded: u32,
+        child: &AccessibleRef,
+    ) -> bool {
+        self.role_access(parent).await == RoleAccess::Readable(recorded)
+            && self
+                .parent(child)
+                .await
+                .map_or(true, |live| live == *parent)
+    }
+
+    /// Whether a container still has both live role fields it was read with.
+    async fn still_readable(&self, accessible: &AccessibleRef, role: u32, role_name: &str) -> bool {
+        self.role_access(accessible).await == RoleAccess::Readable(role)
+            && self.role_name(accessible).await.ok().as_deref() == Some(role_name)
     }
 
     /// Whether a node's live numeric role is readable and its role name confirms it; a role or
@@ -631,9 +671,11 @@ impl AtspiClient {
             .await
     }
 
-    /// Snapshot from `start` inside `root` only when every live ancestor of `start` up to `root`
-    /// is readable, and discard the result unless it still is afterwards: a scope never escapes
-    /// the protection of a container above it (#1233).
+    /// Snapshot from `start` inside `root` only when `start` and every live ancestor of it up to
+    /// `root` is readable, and discard the result unless they still are afterwards: a scope
+    /// never escapes its own protection or that of a container above it (#1233). A protected
+    /// scope refuses rather than returning a redacted node; an unscoped look uses
+    /// `snapshot_from`, which redacts.
     pub async fn snapshot_within(
         &self,
         root: &AccessibleRef,
@@ -641,15 +683,18 @@ impl AtspiClient {
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<Snapshot, ProtocolError> {
-        self.confirm_readable_ancestry(root, start).await?;
+        self.confirm_readable_scope(root, start).await?;
         let snapshot = self.snapshot_from(start, max_nodes, max_depth).await?;
-        self.confirm_readable_ancestry(root, start).await?;
+        self.confirm_readable_scope(root, start).await?;
         Ok(snapshot)
     }
 
     /// Preserve partial observations without mistaking unread nodes for absent nodes. A
-    /// protected node protects its subtree: its children are never read, and the node is
-    /// `unread` when it has any (#1233).
+    /// protected node, or one without a confirmed role name, protects its subtree: its children
+    /// are never read, and the node is `unread` when it has any (#1233). Each child is read only
+    /// while the node it was listed by keeps its readable role and, when the provider reports a
+    /// live `Parent`, is that parent; and before returning, every container is re-read once, so
+    /// one that turned protected meanwhile is redacted and its subtree dropped.
     pub async fn snapshot_from(
         &self,
         start: &AccessibleRef,
@@ -661,16 +706,29 @@ impl AtspiClient {
         let mut root_fields_incomplete = false;
         let mut seen = HashSet::new();
         let mut unread_parents = HashSet::new();
-        let mut queue = VecDeque::from([(start.clone(), None, 0usize)]);
+        // Readable nodes whose children were queued, with the role fields they were read with.
+        let mut containers: HashMap<AccessibleRef, (u32, String)> = HashMap::new();
+        let mut queue = VecDeque::from([(start.clone(), None::<AccessibleRef>, 0usize)]);
         while let Some((accessible, parent, depth)) = queue.pop_front() {
-            if !seen.insert(accessible.clone()) {
+            if seen.contains(&accessible) {
                 continue;
             }
             if result.len() >= max_nodes || depth > max_depth {
+                seen.insert(accessible);
                 incomplete = true;
                 unread_parents.extend(parent);
                 continue;
             }
+            if let Some(parent) = &parent {
+                let recorded = containers[parent].0;
+                // An inconsistent edge is unread, not seen: a consistent one may still reach it.
+                if !self.edge_confirmed(parent, recorded, &accessible).await {
+                    incomplete = true;
+                    unread_parents.insert(parent.clone());
+                    continue;
+                }
+            }
+            seen.insert(accessible.clone());
             let mut unread = false;
             let interfaces = field_or_default(self.interfaces(&accessible).await, &mut unread);
             let access = self.role_access(&accessible).await;
@@ -731,13 +789,18 @@ impl AtspiClient {
                 .into_iter()
                 .partition(|child| child.destination == start.destination);
             unread |= !foreign.is_empty();
-            let protected = fields.readable.is_none();
-            if protected {
-                unread |= !children.is_empty();
-            } else {
-                for child in children {
-                    queue.push_back((child, Some(accessible.clone()), depth + 1));
+            // A blank or failed role name does not confirm the role, so it cannot authorize
+            // reading below the node either.
+            match fields.readable {
+                Some(id) if !fields.role.trim().is_empty() => {
+                    if !children.is_empty() {
+                        containers.insert(accessible.clone(), (id, fields.role.clone()));
+                    }
+                    for child in children {
+                        queue.push_back((child, Some(accessible.clone()), depth + 1));
+                    }
                 }
+                _ => unread |= !children.is_empty(),
             }
             incomplete |= unread;
             result.push(NodeSnapshot {
@@ -757,6 +820,38 @@ impl AtspiClient {
         }
         for node in &mut result {
             node.unread |= unread_parents.contains(&node.accessible);
+        }
+        let mut turned = HashSet::new();
+        for (container, (role, role_name)) in &containers {
+            if !self.still_readable(container, *role, role_name).await {
+                turned.insert(container.clone());
+            }
+        }
+        if !turned.is_empty() {
+            incomplete = true;
+            root_fields_incomplete |= turned.contains(start);
+            // Breadth-first order lists every parent before its children.
+            let mut dropped = HashSet::new();
+            result.retain_mut(|node| {
+                if node
+                    .parent
+                    .as_ref()
+                    .is_some_and(|parent| turned.contains(parent) || dropped.contains(parent))
+                {
+                    dropped.insert(node.accessible.clone());
+                    return false;
+                }
+                if turned.contains(&node.accessible) {
+                    let fields = NodeFields::protected(RoleAccess::Unclassified);
+                    node.name = fields.name;
+                    node.role = fields.role;
+                    node.description = fields.description;
+                    node.value.clear();
+                    node.is_secure = true;
+                    node.unread = true;
+                }
+                true
+            });
         }
         Ok(Snapshot {
             nodes: result,
