@@ -741,6 +741,36 @@ def check_attributes(attrs: bytes) -> None:
         raise KeepError("built-in conversion attributes on tracked paths")
 
 
+def check_upstream(path: Path, branch: str) -> str:
+    """Compare HEAD with the already-fetched upstream ref; never contact the remote.
+
+    Only local config and refs are read, so no transport, `core.sshCommand`,
+    credential helper or askpass can run. The fetched ref may be stale.
+
+    Parameters:
+        path: Path, Candidate checkout.
+        branch: str, Checked-out branch name.
+    Returns:
+        str: Description of the fetched upstream evidence
+    Raises:
+        KeepError: No fetched upstream exists or HEAD has commits outside it.
+    """
+    remote = config(path, f"branch.{branch}.remote")
+    merge = config(path, f"branch.{branch}.merge")
+    if not remote or remote == "." or not merge.startswith("refs/heads/"):
+        raise KeepError("no configured remote upstream")
+    upstream = (
+        git(path, "rev-parse", "--symbolic-full-name", "@{upstream}")
+        .decode()
+        .rstrip("\n")
+    )
+    if not upstream.startswith("refs/remotes/"):
+        raise KeepError(f"upstream is not a remote-tracking ref: {upstream!r}")
+    if git(path, "rev-list", "--end-of-options", f"{upstream}..HEAD"):
+        raise KeepError(f"HEAD has commits outside fetched `{upstream}`")
+    return f"fetched `{upstream}` contains HEAD"
+
+
 def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
     """Require exact merged PR identity without probing the upstream transport.
 
@@ -782,7 +812,11 @@ def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
     if any(pr["state"] == "OPEN" for pr in prs):
         raise KeepError("open PR")
     if not prs:
-        raise KeepError("no PR; upstream not checked")
+        try:
+            fetched = check_upstream(path, branch)
+        except KeepError as exc:
+            fetched = str(exc)
+        raise KeepError(f"no PR; upstream not checked; {fetched}")
     merged = [pr["number"] for pr in prs if pr["state"] == "MERGED"]
     if len(merged) != 1:
         raise KeepError("no unique merged PR")
