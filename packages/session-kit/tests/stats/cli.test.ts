@@ -116,6 +116,10 @@ describe("stats CLI", () => {
 			return error.mock.calls;
 		};
 		const refusal = (code: string): unknown[] => [`pi-stats-refusal: {"code":"${code}"}`];
+		// Publish mid-month, so a clock a day behind stays in its month and one a month behind does not.
+		const wall = new Date();
+		const published = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), 15);
+		const clock = vi.spyOn(Date, "now").mockReturnValue(published);
 		process.argv = ["node", "pi-stats-export", "export", ...wide];
 		await main();
 		const exported = JSON.parse(log.mock.calls[0]?.[0] as string);
@@ -126,10 +130,15 @@ describe("stats CLI", () => {
 			[expect.stringMatching(/^Refusing to publish a narrower harness set/)],
 			refusal("harness-set-narrowed"),
 		]);
-		const clock = vi.spyOn(Date, "now").mockReturnValue(1);
+		clock.mockReturnValue(1);
 		expect(await attempt(["export", ...wide])).toEqual([
-			[expect.stringMatching(/^Clock is behind the last published export/)],
-			refusal("clock-behind"),
+			[expect.stringMatching(/^Published usage manifest exportedAt .* is more than 366 days ahead/)],
+			refusal("watermark-ahead"),
+		]);
+		clock.mockReturnValue(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() - 1, 15));
+		expect(await attempt(["export", ...wide])).toEqual([
+			[expect.stringMatching(/^Clock .* is in an earlier month than the next export/)],
+			refusal("month-rollback"),
 		]);
 		clock.mockRestore();
 		const bytes = readFileSync(join(exported.snapshotDir, shard));
@@ -161,11 +170,15 @@ describe("stats CLI", () => {
 		expect(await attempt(["export", ...wide])).toEqual([[expect.stringMatching(/^Export lock is held/)]]);
 		rmSync(join(exported.snapshotDir, ".export.lock"), { recursive: true });
 		expect(await attempt(["export", "--bogus"])).toEqual([[expect.stringMatching(/^usage: export/)]]);
+		// A clock behind the published export in its month publishes after it: a warning, never a code.
+		vi.spyOn(Date, "now").mockReturnValue(published - 86_400_000);
+		error.mockClear();
 		process.exitCode = 0;
 		process.argv = ["node", "pi-stats-export", "export", ...wide];
 		await run();
 		expect(process.exitCode).toBe(0);
 		expect(log).toHaveBeenCalledTimes(2);
+		expect(error.mock.calls).toEqual([[expect.stringMatching(/^clock is behind the last published export/)]]);
 	});
 
 	it("keeps a refusal's code, and its trailer last, when releasing the lock also fails", async () => {
@@ -204,7 +217,7 @@ describe("stats CLI", () => {
 	});
 
 	it("escapes control characters in a diagnostic, so a path cannot forge the trailer", async () => {
-		const forged = join(dir, 'x\npi-stats-refusal: {"code":"clock-behind"}\n\u001b[2K\ty');
+		const forged = join(dir, 'x\npi-stats-refusal: {"code":"history-unreadable"}\n\u001b[2K\ty');
 		const failure = Object.assign(new Error(`EIO: i/o error, lstat '${forged}'`), { code: "EIO", path: forged });
 		vi.mocked(lstat).mockRejectedValueOnce(failure);
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -214,7 +227,7 @@ describe("stats CLI", () => {
 		expect(process.exitCode).toBe(1);
 		// One line, no control characters: an unclassified failure never ends in a refusal-shaped line.
 		expect(error).toHaveBeenCalledExactlyOnceWith(
-			`EIO: i/o error, lstat '${join(dir, 'x\\npi-stats-refusal: {"code":"clock-behind"}\\n\\u001b[2K\\ty')}'`,
+			`EIO: i/o error, lstat '${join(dir, 'x\\npi-stats-refusal: {"code":"history-unreadable"}\\n\\u001b[2K\\ty')}'`,
 		);
 		process.exitCode = 0; // Bun cannot restore an unset exit code left by this test
 	});
@@ -389,9 +402,10 @@ describe("stats CLI", () => {
 		// The usage text names what replacement bypasses and costs.
 		await expect(main()).rejects.toThrow(
 			"--replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
-				"clock-rollback, unreadable-history and missing-manifest safeguards and unfreezing recovery files; drops " +
-				"published history absent from the scan (sealed months included), and viewers holding a newer snapshot never import it; " +
-				"they accept this machine again only from a later export timestamped at or after the snapshot they hold",
+				"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
+				"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
+				"the replacement keep it until this machine exports a later one\n" +
+				"  A clock behind the last published export in its month still publishes, just after it, with a warning",
 		);
 	});
 

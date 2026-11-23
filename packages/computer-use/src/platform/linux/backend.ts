@@ -114,6 +114,24 @@ function parseRoots(result: unknown): PlatformRoot[] {
 	);
 }
 
+/**
+ * `x11Pairing` values (`listRoots` and `atspiLookRoot`) under which a root's X11 class aliases are complete: the
+ * listing ran (`paired`, `ambiguous`, `unpaired`) or no X display exists (`absent`). Anything else, e.g. `unavailable`
+ * for a failed, timed-out or still-stuck listing, is missing evidence, never a clean check.
+ */
+export const LINUX_X11_CHECKED: ReadonlySet<unknown> = new Set(["paired", "ambiguous", "unpaired", "absent"]);
+
+/**
+ * A root inventory for discovery and target resolution. `WM_CLASS` can only add a block, so a root whose class
+ * evidence is missing has an incomplete policy identity: it is listed without `appId`, i.e. unidentified and refused
+ * like an unreadable executable, never admitted on its executable alone while the X server stalls (#1311).
+ */
+async function listedRoots(args: Record<string, unknown>, signal?: AbortSignal): Promise<PlatformRoot[]> {
+	return parseRoots(await linuxHelper.command("listRoots", args, { signal })).map((root) =>
+		LINUX_X11_CHECKED.has(root.metadata?.x11Pairing) ? root : { ...root, appId: undefined },
+	);
+}
+
 function appsFromRoots(roots: PlatformRoot[]): PlatformApp[] {
 	const seen = new Set<number>();
 	return roots.flatMap((root) => {
@@ -163,20 +181,20 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 	},
 	ensureReady,
 	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
-		return appsFromRoots(parseRoots(await linuxHelper.command("listRoots", {}, { signal })));
+		return appsFromRoots(await listedRoots({}, signal));
 	},
 	async listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]> {
-		const roots = parseRoots(
-			await linuxHelper.command("listRoots", Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, {
-				signal,
-			}),
-		);
+		const roots = await listedRoots(Number.isFinite(query.pid) ? { pid: Math.trunc(query.pid!) } : {}, signal);
 		const title = query.title?.trim().toLowerCase();
 		return title ? roots.filter((root) => root.title.trim().toLowerCase().includes(title)) : roots;
 	},
+	async listRootsOfPids(pids: readonly number[], signal?: AbortSignal): Promise<PlatformRoot[]> {
+		// One request and one X11 listing for every app a filtered `find_roots` matched (#1311).
+		return pids.length === 0 ? [] : await listedRoots({ pids: pids.map(Math.trunc) }, signal);
+	},
 	emptyRootsHint: () => wslNoWindowsHint(),
 	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
-		const roots = parseRoots(await linuxHelper.command("listRoots", {}, { signal }));
+		const roots = await listedRoots({}, signal);
 		const focused = roots.find((root) => root.isFocused) ?? roots[0];
 		// The WSL hint is only for an empty guest: roots without a pid are a Linux-side problem.
 		if (!focused?.pid)

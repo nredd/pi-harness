@@ -133,7 +133,7 @@ fn transport_refuses_bad_envelopes_versions_and_commands_then_drains_eof() {
         (
             "version",
             "invalid_request",
-            "Unsupported Linux helper protocol 0; expected 7.",
+            "Unsupported Linux helper protocol 0; expected 8.",
         ),
         (
             "command",

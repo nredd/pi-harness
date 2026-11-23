@@ -69,6 +69,7 @@ const BACKEND_KEYS = [
 	"ensureReady",
 	"listApps",
 	"listRoots",
+	"listRootsOfPids",
 	"getFrontmost",
 	"observe",
 	"act",
@@ -267,6 +268,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			return await fake.waitFor(request, options);
 		},
 	});
+	// The fake answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.
+	delete currentPlatformBackend.listRootsOfPids;
 
 	const ctx = { cwd, hasUI: false, ui: { notify() {} }, sessionManager: { getBranch: () => [] } };
 	fake.ctx = ctx;

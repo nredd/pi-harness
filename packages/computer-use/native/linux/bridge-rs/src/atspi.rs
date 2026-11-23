@@ -358,9 +358,12 @@ impl AtspiClient {
         ))
     }
 
+    /// Every application's roots, or only those of the processes `filter_pids` names: a
+    /// PID-scoped inventory (`Some`, even of several PIDs) fails rather than skip an app it
+    /// timed out reading, since it would prove absence.
     pub async fn list_roots(
         &self,
-        filter_pid: Option<u64>,
+        filter_pids: Option<&[u64]>,
     ) -> Result<Vec<RootSnapshot>, ProtocolError> {
         let registry = AccessibleRef {
             destination: REGISTRY_DESTINATION.to_owned(),
@@ -371,8 +374,8 @@ impl AtspiClient {
         for app in applications {
             // A PID-scoped inventory proves absence, so an app it could not read must fail it.
             let (pid, executable) =
-                scoped_inventory(filter_pid, self.bus_owner(&app).await, (0, None))?;
-            if filter_pid.is_some_and(|wanted| wanted != pid) {
+                scoped_inventory(filter_pids, self.bus_owner(&app).await, (0, None))?;
+            if filter_pids.is_some_and(|wanted| !wanted.contains(&pid)) {
                 continue;
             }
             let app_name = self
@@ -381,7 +384,7 @@ impl AtspiClient {
                 })
                 .await
                 .unwrap_or_else(|_| PROTECTED_LABEL.to_owned());
-            let windows = scoped_inventory(filter_pid, self.children(&app).await, Vec::new())?;
+            let windows = scoped_inventory(filter_pids, self.children(&app).await, Vec::new())?;
             for window in windows {
                 // A window on another connection belongs to a process this entry's owner does
                 // not vouch for: it never inherits that identity, so it is unidentified.
@@ -925,12 +928,12 @@ async fn accessibility_bus_address(
 
 /// Keep a best-effort unscoped inventory, but fail a PID-scoped one that timed out: it would prove absence.
 fn scoped_inventory<T>(
-    filter_pid: Option<u64>,
+    filter_pids: Option<&[u64]>,
     result: Result<T, ProtocolError>,
     fallback: T,
 ) -> Result<T, ProtocolError> {
     match result {
-        Err(error) if filter_pid.is_some() && error.code == ErrorCode::Timeout => Err(error),
+        Err(error) if filter_pids.is_some() && error.code == ErrorCode::Timeout => Err(error),
         result => Ok(result.unwrap_or(fallback)),
     }
 }
@@ -1361,7 +1364,7 @@ mod tests {
                 assert_eq!(*dialog_coordinate_requests.lock().unwrap(), [0]);
                 assert_eq!(dialog.frame, None);
 
-                let matching = client.list_roots(Some(25361)).await.unwrap();
+                let matching = client.list_roots(Some(&[25361])).await.unwrap();
                 assert_eq!(
                     matching
                         .iter()
@@ -1369,7 +1372,16 @@ mod tests {
                         .collect::<Vec<_>>(),
                     [WINDOW, DIALOG]
                 );
-                assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+                assert!(client.list_roots(Some(&[25362])).await.unwrap().is_empty());
+                // One inventory of several processes lists the roots of any of them.
+                let several = client.list_roots(Some(&[25362, 25361])).await.unwrap();
+                assert_eq!(
+                    several
+                        .iter()
+                        .map(|root| root.accessible.path.as_str())
+                        .collect::<Vec<_>>(),
+                    [WINDOW, DIALOG]
+                );
 
                 let unattributed = ProcFixture::new(&[]);
                 let client = client.with_proc_root(&unattributed.0);
@@ -1624,7 +1636,7 @@ mod tests {
                     assert!(client.list_roots(None).await.unwrap().is_empty());
                     assert_eq!(requests.try_recv(), Ok(()));
                     // A PID-scoped probe must not read a stalled inventory as an empty one.
-                    let error = client.list_roots(Some(25361)).await.unwrap_err();
+                    let error = client.list_roots(Some(&[25361])).await.unwrap_err();
                     assert_eq!(requests.try_recv(), Ok(()));
                     assert_eq!(error.code, ErrorCode::Timeout);
                     let member = if stalled_pid {
@@ -1635,7 +1647,7 @@ mod tests {
                     assert_eq!(error.message, format!("AT-SPI2 {member} timed out"));
                     if !stalled_pid {
                         // Another app's PID is read in full, so its absence is still provable.
-                        assert!(client.list_roots(Some(25362)).await.unwrap().is_empty());
+                        assert!(client.list_roots(Some(&[25362])).await.unwrap().is_empty());
                     }
                 },
             )
