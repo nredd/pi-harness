@@ -153,14 +153,23 @@ it.each([
 		);
 		// Every sealed end moves to the corrected start month; none stays under the superseded start.
 		const published = manifest(first.snapshotDir);
-		const sessions = published.shards.flatMap((ref) =>
-			decodeShard(readFileSync(join(first.snapshotDir, ref.file)), published, ref.month).sessions.map((session) => ({
+		const shards = published.shards
+			.map((ref) => ({
 				month: ref.month,
-				endMs: session.endMs,
-			})),
+				ends: decodeShard(readFileSync(join(first.snapshotDir, ref.file)), published, ref.month)
+					.sessions.map((session) => session.endMs)
+					.sort((a, b) => a - b),
+			}))
+			.filter((shard) => shard.ends.length > 0);
+		expect(new Set(shards.map((s) => s.month))).toEqual(new Set([month]));
+		// The scan's ends share the fresh shard and both carried late ends share ONE carry shard.
+		expect(shards.map((s) => s.ends)).toEqual(
+			expect.arrayContaining([
+				[at("2026-10-16"), at("2026-10-18")],
+				[at("2026-10-17"), at("2026-10-19")],
+			]),
 		);
-		expect(new Set(sessions.map((s) => s.month))).toEqual(new Set([month]));
-		expect(sessions.map((s) => s.endMs).sort((a, b) => a - b)).toEqual(
+		expect(shards.flatMap((s) => s.ends).sort((a, b) => a - b)).toEqual(
 			["2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"].map((day) => at(day)),
 		);
 	},
@@ -178,6 +187,86 @@ it("does not repeat a sealed end the corrected scan reproduces", async () => {
 	const [ref] = published.shards as [Manifest["shards"][number]];
 	expect(decodeShard(readFileSync(join(first.snapshotDir, ref.file)), published, ref.month).sessions).toEqual([
 		expect.objectContaining({ endMs: at("2026-10-16"), child: true }),
+	]);
+});
+
+/** Each published shard's month and session rows, decoded from the outbox. */
+const publishedSessions = (snapshotDir: string) => {
+	const published = manifest(snapshotDir);
+	return published.shards.flatMap((ref) =>
+		decodeShard(readFileSync(join(snapshotDir, ref.file)), published, ref.month).sessions.map((session) => ({
+			month: ref.month,
+			startMs: session.startMs,
+			endMs: session.endMs,
+			child: session.child,
+		})),
+	);
+};
+
+it("keeps a distinct earlier sealed end beside the corrected scan end", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	const line = (day: string, input: number) =>
+		assistantLine({ ms: at(day), provider: "physical", model: "fixture", input });
+	const early = line("2026-10-16", 7);
+	sessionFile(path, { startMs: at("2026-10-15"), lines: [early, line("2026-10-17", 9)] });
+	const first = await exportStats(agent, out);
+	// The late call is replaced by a later one: the sealed Oct 17 end is distinct from, and earlier than, the scan's.
+	sessionFile(path, {
+		startMs: at("2026-10-15"),
+		parentSession: "fixture-parent",
+		name: "Explore#1234abcd",
+		lines: [early, line("2026-10-18", 8)],
+	});
+	await exportStats(agent, out);
+	expect(publishedSessions(first.snapshotDir).sort((a, b) => a.endMs - b.endMs)).toEqual(
+		["2026-10-17", "2026-10-18"].map((end) => ({
+			month: "2026-10",
+			startMs: at("2026-10-15"),
+			endMs: at(end),
+			child: true,
+		})),
+	);
+});
+
+it("drops an active-month end after a child correction", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	const line = (ms: number, input: number) => assistantLine({ ms, provider: "physical", model: "fixture", input });
+	const early = line(at("2026-10-16"), 7);
+	sessionFile(path, { startMs: at("2026-10-15"), lines: [early, line(at("2026-11-01"), 9)] });
+	const first = await exportStats(agent, out);
+	// October is sealed with this session ending at its November call. The start stays in October, but the
+	// deleted November call is the active month's to drop: its end is not carried into the sealed month.
+	sessionFile(path, {
+		startMs: at("2026-10-15"),
+		parentSession: "fixture-parent",
+		name: "Explore#1234abcd",
+		lines: [early],
+	});
+	await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const combined = await loadCombined(viewer);
+	expect(combined.calls.map((c) => c.input)).toEqual([7]);
+	expect(combined.sessionMetadata).toEqual([
+		expect.objectContaining({ startMs: at("2026-10-15"), endMs: at("2026-10-16"), child: true }),
+	]);
+	expect(publishedSessions(first.snapshotDir).map((s) => s.endMs)).toEqual([at("2026-10-16")]);
+});
+
+it("covers archived calls when the start moves out of the active month", async () => {
+	const path = join(agent, "sessions", "fixture.jsonl");
+	const line = (day: string, input: number) =>
+		assistantLine({ ms: at(day), provider: "physical", model: "fixture", input });
+	// The header is in November, the active month, so its metadata is not sealed; the Oct 20 call is.
+	sessionFile(path, { startMs: at("2026-11-01"), lines: [line("2026-10-20", 7)] });
+	await exportStats(agent, out);
+	sessionFile(path, { startMs: at("2026-10-01"), lines: [line("2026-10-10", 5)] });
+	await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+	const combined = await loadCombined(viewer);
+	// The archived Oct 20 call survives, so its session still ends at it rather than at the truncated Oct 10.
+	expect(combined.calls.map((c) => c.input).sort((a, b) => a - b)).toEqual([5, 7]);
+	expect(combined.sessionMetadata).toEqual([
+		expect.objectContaining({ startMs: at("2026-10-01"), endMs: at("2026-10-20") }),
 	]);
 });
 

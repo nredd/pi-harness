@@ -1045,15 +1045,15 @@ interface Revisions {
 	months: Set<string>;
 	/** Ids of sealed events a corrected call replaces. */
 	supersededEventIds: Set<string>;
-	/** Ids of sealed sessions whose start or child attribution changed. */
-	supersededSessionIds: Set<string>;
+	/** The scan's corrected row for each sealed session id whose start or child attribution changed. */
+	supersededSessions: Map<string, SnapshotSession>;
 }
 
 /** Retire sealed generations only when a physical call or session identity was corrected. */
 function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revisions {
 	const revised = new Set<string>();
 	const supersededEventIds = new Set<string>();
-	const supersededSessionIds = new Set<string>();
+	const supersededSessions = new Map<string, SnapshotSession>();
 	const entries = new Map<string, { id: string; month: string }[]>();
 	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.entryId]);
 	for (const shard of previous.shards)
@@ -1079,43 +1079,66 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 		for (const prior of shard.sessions) {
 			const current = sessions.get(prior.id);
 			if (current && (current.startMs !== prior.startMs || current.child !== prior.child)) {
-				supersededSessionIds.add(prior.id);
+				supersededSessions.set(prior.id, current);
 				revised.add(shard.month);
 				revised.add(monthOf(current.startMs));
 			}
 		}
-	return { months: revised, supersededEventIds, supersededSessionIds };
+	return { months: revised, supersededEventIds, supersededSessions };
 }
 
 /**
  * The sealed ends of superseded sessions, under the scan's corrected start and child attribution, as carry
- * shards in the corrected start month: one per retired shard and month, so no shard repeats a session. An
- * end before the corrected start is dominated by the scan's own end and is not carried. A start corrected
- * into the active month carries nothing: any end at or after it lies in that month, which mirrors the scan.
+ * shards in the corrected start month: one per retired shard and month, so no shard repeats a session.
+ * Carried: every distinct sealed end at or after the corrected start and before the active month. An end
+ * before the corrected start is dominated by the scan's own end; one in the active month is not carried,
+ * because that month is rebuilt from the scan (a deleted call there takes its end with it). Then each
+ * corrected session is floored at its latest retained sealed call (any sealed shard, wherever its old
+ * metadata was), in one more carry shard per month, so it never ends before a call that survives.
  */
 function rebasedEnds(
 	retired: ReadonlyMap<string, readonly CompactShard[]>,
-	scan: readonly CompactShard[],
+	sealed: readonly CompactShard[],
 	revisions: Revisions,
 	current: string,
 ): CompactShard[] {
-	const sessions = new Map(scan.flatMap((s) => s.sessions.map((session) => [session.id, session] as const)));
+	const corrections = revisions.supersededSessions;
+	if (corrections.size === 0) return [];
 	const out: CompactShard[] = [];
+	const carried = new Map<string, number>();
 	for (const shards of retired.values())
 		for (const shard of shards) {
 			const byMonth = new Map<string, CompactShard>();
 			for (const prior of shard.sessions) {
-				if (!revisions.supersededSessionIds.has(prior.id)) continue;
-				// detectRevisions supersedes a session only when the scan holds it.
-				const corrected = sessions.get(prior.id) as SnapshotSession;
+				const corrected = corrections.get(prior.id);
+				if (!corrected || prior.endMs < corrected.startMs || monthOf(prior.endMs) >= current) continue;
 				const month = monthOf(corrected.startMs);
-				if (prior.endMs < corrected.startMs || month >= current) continue;
 				const target = byMonth.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
 				target.sessions.push({ ...corrected, endMs: prior.endMs });
 				byMonth.set(month, target);
+				carried.set(prior.id, Math.max(carried.get(prior.id) ?? 0, prior.endMs));
 			}
 			out.push(...byMonth.values());
 		}
+	// Sealed shards hold only calls before the active month, and every unsuperseded one is retained.
+	const floors = new Map<string, { corrected: SnapshotSession; endMs: number; shard: CompactShard }>();
+	for (const shard of sealed)
+		for (const event of shard.events) {
+			const corrected = corrections.get(event.sessionId);
+			if (!corrected || revisions.supersededEventIds.has(event.id)) continue;
+			const endMs = Math.max(floors.get(event.sessionId)?.endMs ?? 0, event.ms);
+			floors.set(event.sessionId, { corrected, endMs, shard });
+		}
+	const floored = new Map<string, CompactShard>();
+	for (const [id, { corrected, endMs, shard }] of floors) {
+		// A floor above the published ends lies after the corrected start, so before the active month too.
+		if (endMs <= Math.max(corrected.endMs, carried.get(id) ?? 0)) continue;
+		const month = monthOf(corrected.startMs);
+		const target = floored.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+		target.sessions.push({ ...corrected, endMs });
+		floored.set(month, target);
+	}
+	out.push(...floored.values());
 	return out;
 }
 
@@ -1140,7 +1163,7 @@ function regenerateMonth(
 			{
 				...shard,
 				events: shard.events.filter((event) => !revisions.supersededEventIds.has(event.id)),
-				sessions: shard.sessions.filter((session) => !revisions.supersededSessionIds.has(session.id)),
+				sessions: shard.sessions.filter((session) => !revisions.supersededSessions.has(session.id)),
 			},
 			shards,
 			true,
@@ -1398,7 +1421,8 @@ async function publishStats(
 	const exportedAt = Math.max(now, publishedAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
 	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
-	// cache or publication writes (`exportStats` has already taken the outbox lock and releases it). Within
+	// cache or publication writes. This runs under the outbox lock `exportStats` holds; its release after
+	// the refusal is best effort and can fail. Within
 	// years 0000-9999 a later instant never seals an earlier month.
 	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
 		throw new ExportRefusal(
@@ -1412,7 +1436,7 @@ async function publishStats(
 	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
 	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
 	// later export could not tell them from months a clock-ahead export sealed: refuse (no cache or
-	// publication writes; only the outbox lock was taken).
+	// publication writes; this also runs under the outbox lock).
 	// A replacement seals nothing from the previous generation, so it may publish there. No refusal code:
 	// this clears by itself once the clock reaches that month, so callers keep retrying it.
 	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
@@ -1600,7 +1624,7 @@ async function publishStats(
 	const current = monthOf(exportedAt);
 	const revisions: Revisions = sealed
 		? detectRevisions(sealed, snapshot)
-		: { months: new Set(), supersededEventIds: new Set(), supersededSessionIds: new Set() };
+		: { months: new Set(), supersededEventIds: new Set(), supersededSessions: new Map() };
 	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
 	const retired = new Map<string, CompactShard[]>();
 	if (sealed)
@@ -1620,7 +1644,12 @@ async function publishStats(
 			prior.set(shard.month, refs);
 		}
 	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
-	const rebased = rebasedEnds(retired, snapshot.shards, revisions, current);
+	const rebased = rebasedEnds(
+		retired,
+		(sealed?.shards ?? []).filter((shard) => shard.month < current) as CompactShard[],
+		revisions,
+		current,
+	);
 	const publishedShards: CompactShard[] = [];
 	const writes: { file: string; bytes: Buffer }[] = [];
 	let remaining = MAX_BYTES;
