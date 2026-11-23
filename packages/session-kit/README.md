@@ -858,7 +858,13 @@ scan instead, so partial streaming rows cannot remain beside their final counter
 corrections regenerate both affected months. Only the superseded rows are dropped: every other event,
 every distinct session end and every quota reading the retired shards held that the scan does not reproduce
 exactly (calls and sessions archived only in published history, earlier and later session ends, quota
-readings) is carried into delta shards of the regenerated month. Past 32 shards the carries are packed
+readings) is carried into delta shards of the regenerated month. Each distinct sealed end of a session
+whose start or child attribution was corrected is carried under the corrected attribution, in the
+corrected start month, unless it is before the corrected start (the scan's own end dominates it) or in
+the active month (rebuilt from the scan, so a deleted call there takes its end with it). The corrected
+session is then floored at its latest sealed call still published under it, wherever its old metadata
+lived, so it never ends before its own archived call. A sealed call whose unchanged entry moved to another
+session and is republished under it in a regenerated month floors only that session. Past 32 shards the carries are packed
 losslessly into the fresh shard and as few more as validation allows (never compacted away); if the month
 still needs more than 32 shards (e.g. 33 readings of one quota window) the export is refused before anything
 is published, leaving the previous manifest and shards intact, and `--replace-harnesses` is the explicit
@@ -878,7 +884,9 @@ ahead of the wall clock and viewers flag the snapshot as a future clock. Quota e
 still use the wall clock.
 
 An ordinary export whose next instant falls in a later month than its clock (the published export is
-in a later month, or ends the clock's month) is refused with no cache or publication writes: `Clock
+in a later month, or ends the clock's month) is refused with no cache or publication writes (the
+refusal runs under the outbox's `.export.lock` directory, which is released afterwards on a best-effort
+basis): `Clock
 (<now>) is in an earlier month than the next export after the last published one (<published>);
 publishing would seal months this clock has not left. Fix the clock or wait until <YYYY-MM>, or pass
 --replace-harnesses to publish without published history absent from this scan` (no refusal code: it
@@ -893,7 +901,8 @@ wall clock.
 
 A watermark more than 366 days ahead of the wall clock, or one leaving no instant before year 10000
 (where `YYYY-MM` months stop sorting after sealed ones), is refused first, before the damaged-history
-check and with no cache or publication writes, replacement included: `Published usage manifest
+check and with no cache or publication writes (under the outbox lock, like the later-month refusal),
+replacement included: `Published usage manifest
 exportedAt (<published>) is more than 366 days ahead of this clock (<now>) or leaves no instant before
 year 10000 to publish after it ("<dir>/manifest.json"); there is no supported in-place repair
 (https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one.

@@ -1050,15 +1050,15 @@ interface Revisions {
 	months: Set<string>;
 	/** Ids of sealed events a corrected call replaces. */
 	supersededEventIds: Set<string>;
-	/** Ids of sealed sessions whose start or child attribution changed. */
-	supersededSessionIds: Set<string>;
+	/** The scan's corrected row for each sealed session id whose start or child attribution changed. */
+	supersededSessions: Map<string, SnapshotSession>;
 }
 
 /** Retire sealed generations only when a physical call or session identity was corrected. */
 function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revisions {
 	const revised = new Set<string>();
 	const supersededEventIds = new Set<string>();
-	const supersededSessionIds = new Set<string>();
+	const supersededSessions = new Map<string, SnapshotSession>();
 	const entries = new Map<string, { id: string; month: string }[]>();
 	const entryKey = (e: SnapshotEvent): string => JSON.stringify([e.harness, e.sessionId, e.entryId]);
 	for (const shard of previous.shards)
@@ -1084,26 +1084,97 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 		for (const prior of shard.sessions) {
 			const current = sessions.get(prior.id);
 			if (current && (current.startMs !== prior.startMs || current.child !== prior.child)) {
-				supersededSessionIds.add(prior.id);
+				supersededSessions.set(prior.id, current);
 				revised.add(shard.month);
 				revised.add(monthOf(current.startMs));
 			}
 		}
-	return { months: revised, supersededEventIds, supersededSessionIds };
+	return { months: revised, supersededEventIds, supersededSessions };
+}
+
+/**
+ * The sealed ends of superseded sessions, under the scan's corrected start and child attribution, as carry
+ * shards in the corrected start month: one per retired shard and month, so no shard repeats a session.
+ * Carried: every distinct sealed end at or after the corrected start and before the active month. An end
+ * before the corrected start is dominated by the scan's own end; one in the active month is not carried,
+ * because that month is rebuilt from the scan (a deleted call there takes its end with it). Then each
+ * corrected session is floored at its latest sealed call that is published under it (any sealed shard,
+ * wherever its old metadata was), in one more carry shard per month, so it never ends before its own call.
+ */
+function rebasedEnds(
+	retired: ReadonlyMap<string, readonly CompactShard[]>,
+	sealed: readonly CompactShard[],
+	fresh: ReadonlyMap<string, CompactShard>,
+	revisions: Revisions,
+	current: string,
+): CompactShard[] {
+	const corrections = revisions.supersededSessions;
+	if (corrections.size === 0) return [];
+	const out: CompactShard[] = [];
+	const carried = new Map<string, number>();
+	for (const shards of retired.values())
+		for (const shard of shards) {
+			const byMonth = new Map<string, CompactShard>();
+			for (const prior of shard.sessions) {
+				const corrected = corrections.get(prior.id);
+				if (!corrected || prior.endMs < corrected.startMs || monthOf(prior.endMs) >= current) continue;
+				const month = monthOf(corrected.startMs);
+				const target = byMonth.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+				target.sessions.push({ ...corrected, endMs: prior.endMs });
+				byMonth.set(month, target);
+				carried.set(prior.id, Math.max(carried.get(prior.id) ?? 0, prior.endMs));
+			}
+			out.push(...byMonth.values());
+		}
+	// Sealed shards hold only calls before the active month. An unrevised month keeps its shards verbatim;
+	// `regenerateMonth` publishes the scan first, then each unsuperseded sealed event whose id is not yet
+	// published, so a sealed row a fresh row (maybe under another session) replaces floors nothing.
+	const published = new Map<string, Set<string>>();
+	const floors = new Map<string, { corrected: SnapshotSession; endMs: number; shard: CompactShard }>();
+	for (const shard of sealed)
+		for (const event of shard.events) {
+			if (revisions.supersededEventIds.has(event.id)) continue;
+			if (retired.has(shard.month)) {
+				let ids = published.get(shard.month);
+				if (!ids) {
+					ids = new Set(fresh.get(shard.month)?.events.map((e) => e.id));
+					published.set(shard.month, ids);
+				}
+				if (ids.has(event.id)) continue;
+				ids.add(event.id);
+			}
+			const corrected = corrections.get(event.sessionId);
+			if (!corrected) continue;
+			const endMs = Math.max(floors.get(event.sessionId)?.endMs ?? 0, event.ms);
+			floors.set(event.sessionId, { corrected, endMs, shard });
+		}
+	const floored = new Map<string, CompactShard>();
+	for (const [id, { corrected, endMs, shard }] of floors) {
+		// A floor above the published ends lies after the corrected start, so before the active month too.
+		if (endMs <= Math.max(corrected.endMs, carried.get(id) ?? 0)) continue;
+		const month = monthOf(corrected.startMs);
+		const target = floored.get(month) ?? { ...shard, month, events: [], sessions: [], quota: [] };
+		target.sessions.push({ ...corrected, endMs });
+		floored.set(month, target);
+	}
+	out.push(...floored.values());
+	return out;
 }
 
 /**
  * Regenerate a revised sealed month from the clean scan, then carry what its retired shards held that the
  * scan no longer reproduces (archived calls and sessions, every distinct session end, quota readings) in
- * delta shards. Only the superseded rows themselves are dropped. Past the shard limit the carries are packed
- * losslessly into the fresh shard and as few more as validation allows; if even that does not fit,
- * publication is refused rather than dropping a sealed row.
+ * delta shards, plus the `rebased` sealed ends of sessions whose corrected start falls in this month. Only
+ * the superseded rows themselves are dropped. Past the shard limit the carries are packed losslessly into
+ * the fresh shard and as few more as validation allows; if even that does not fit, publication is refused
+ * rather than dropping a sealed row.
  */
 function regenerateMonth(
 	month: string,
 	full: CompactShard | undefined,
 	retired: readonly CompactShard[],
 	revisions: Revisions,
+	rebased: readonly CompactShard[],
 ): CompactShard[] {
 	const shards = full ? [full] : [];
 	for (const shard of retired) {
@@ -1111,11 +1182,15 @@ function regenerateMonth(
 			{
 				...shard,
 				events: shard.events.filter((event) => !revisions.supersededEventIds.has(event.id)),
-				sessions: shard.sessions.filter((session) => !revisions.supersededSessionIds.has(session.id)),
+				sessions: shard.sessions.filter((session) => !revisions.supersededSessions.has(session.id)),
 			},
 			shards,
 			true,
 		);
+		if (carry) shards.push(carry);
+	}
+	for (const shard of rebased) {
+		const carry = monthDelta(shard, shards, true);
 		if (carry) shards.push(carry);
 	}
 	if (shards.length <= MAX_SEALED_SHARDS) return shards;
@@ -1399,7 +1474,9 @@ async function publishStats(
 	const exportedAt = Math.max(now, publishedAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
 	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
-	// cache or publication writes. Within years 0000-9999 a later instant never seals an earlier month.
+	// cache or publication writes. This runs under the outbox lock `exportStats` holds; its release after
+	// the refusal is best effort and can fail. Within
+	// years 0000-9999 a later instant never seals an earlier month.
 	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
 		throw new ExportRefusal(
 			"watermark-ahead",
@@ -1411,7 +1488,8 @@ async function publishStats(
 		);
 	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
 	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
-	// later export could not tell them from months a clock-ahead export sealed: refuse (nothing written).
+	// later export could not tell them from months a clock-ahead export sealed: refuse (no cache or
+	// publication writes; this also runs under the outbox lock).
 	// A replacement seals nothing from the previous generation, so it may publish there. No refusal code:
 	// this clears by itself once the clock reaches that month, so callers keep retrying it.
 	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
@@ -1599,7 +1677,7 @@ async function publishStats(
 	const current = monthOf(exportedAt);
 	const revisions: Revisions = sealed
 		? detectRevisions(sealed, snapshot)
-		: { months: new Set(), supersededEventIds: new Set(), supersededSessionIds: new Set() };
+		: { months: new Set(), supersededEventIds: new Set(), supersededSessions: new Map() };
 	const prior = new Map<string, { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }[]>();
 	const retired = new Map<string, CompactShard[]>();
 	if (sealed)
@@ -1619,12 +1697,20 @@ async function publishStats(
 			prior.set(shard.month, refs);
 		}
 	const fresh = new Map(snapshot.shards.map((shard) => [shard.month, shard]));
+	const rebased = rebasedEnds(
+		retired,
+		(sealed?.shards ?? []).filter((shard) => shard.month < current) as CompactShard[],
+		fresh,
+		revisions,
+		current,
+	);
 	const publishedShards: CompactShard[] = [];
 	const writes: { file: string; bytes: Buffer }[] = [];
 	let remaining = MAX_BYTES;
 	for (const month of [...new Set([...prior.keys(), ...retired.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
+		const moved = rebased.filter((shard) => shard.month === month);
 		const replaced = retired.get(month);
 		const delta =
 			full &&
@@ -1632,7 +1718,8 @@ async function publishStats(
 				full,
 				old.map(({ shard }) => shard),
 			);
-		let deltas = replaced ? regenerateMonth(month, full, replaced, revisions) : delta ? [delta] : [];
+		let deltas =
+			replaced || moved.length ? regenerateMonth(month, full, replaced ?? [], revisions, moved) : delta ? [delta] : [];
 		if (old.length + deltas.length > MAX_SEALED_SHARDS) {
 			const base = nth(old, 0);
 			const rest = [...old.slice(1).map(({ shard }) => shard), ...deltas];
