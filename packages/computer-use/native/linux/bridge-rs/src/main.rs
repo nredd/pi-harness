@@ -326,8 +326,8 @@ async fn handle_request_with(
         #[cfg(feature = "testing")]
         "testingStall" => testing_stall(&request.id, &request.args).await,
         "atspiReadText" | "uiaReadText" | "axReadText" => {
-            read_text_with(state, &request.args, async |accessible| {
-                connect().await?.read_live_text(accessible).await
+            read_text_with(state, &request.args, async |root, accessible| {
+                connect().await?.read_live_text(root, accessible).await
             })
             .await
         }
@@ -707,8 +707,10 @@ fn initial_image_size(root: &RootSnapshot, base_size: Option<(u16, u16)>) -> (u1
 
 /// The accessibility operation needed after a look has resolved its target.
 trait SnapshotSource {
-    async fn snapshot_from(
+    /// Snapshot from `start`, refusing a `start` whose live ancestry up to `root` is protected.
+    async fn snapshot_within(
         &self,
+        root: &AccessibleRef,
         start: &AccessibleRef,
         max_nodes: usize,
         max_depth: usize,
@@ -716,13 +718,17 @@ trait SnapshotSource {
 }
 
 impl SnapshotSource for AtspiClient {
-    async fn snapshot_from(
+    async fn snapshot_within(
         &self,
+        root: &AccessibleRef,
         start: &AccessibleRef,
         max_nodes: usize,
         max_depth: usize,
     ) -> Result<Vec<NodeSnapshot>, ProtocolError> {
-        Ok(self.snapshot_from(start, max_nodes, max_depth).await?.nodes)
+        Ok(self
+            .snapshot_within(root, start, max_nodes, max_depth)
+            .await?
+            .nodes)
     }
 }
 
@@ -769,14 +775,14 @@ async fn look_with<S: SnapshotSource>(
         }
         (
             client
-                .snapshot_from(&scope.accessible, max_nodes, max_depth)
+                .snapshot_within(&root.accessible, &scope.accessible, max_nodes, max_depth)
                 .await?,
             Some(base),
         )
     } else {
         (
             client
-                .snapshot_from(&root.accessible, max_nodes, max_depth)
+                .snapshot_within(&root.accessible, &root.accessible, max_nodes, max_depth)
                 .await?,
             None,
         )
@@ -1341,11 +1347,17 @@ fn batch_outcome(steps: &[Value], stopped: bool) -> &'static str {
 async fn read_text_with(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
-    read: impl AsyncFnOnce(&AccessibleRef) -> Result<String, ProtocolError>,
+    read: impl AsyncFnOnce(&AccessibleRef, &AccessibleRef) -> Result<String, ProtocolError>,
 ) -> Result<Value, ProtocolError> {
     let look_id = required_str(args, "lookId", "atspiReadText requires lookId")?;
     let element_ref = required_str(args, "elementRef", "atspiReadText requires elementRef")?;
-    let node = lock(state)?.element(look_id, element_ref)?;
+    let (root, node) = {
+        let state = lock(state)?;
+        (
+            state.look(look_id)?.root.accessible,
+            state.element(look_id, element_ref)?,
+        )
+    };
     if node.is_secure {
         return Err(ProtocolError::new(
             "Refers to a secure text field; refusing to read its value",
@@ -1353,7 +1365,7 @@ async fn read_text_with(
         ));
     }
     let text = if node.interfaces.contains(TEXT) {
-        read(&node.accessible).await?
+        read(&root, &node.accessible).await?
     } else {
         String::new()
     };
@@ -1430,7 +1442,7 @@ async fn wait_for(
         } = match &scope {
             Some(scope) => {
                 client
-                    .snapshot_from(&scope.accessible, DEFAULT_MAX_NODES, 20)
+                    .snapshot_within(&root.accessible, &scope.accessible, DEFAULT_MAX_NODES, 20)
                     .await?
             }
             None => client.snapshot(&root, DEFAULT_MAX_NODES, 20).await?,
@@ -1536,7 +1548,7 @@ mod tests {
     use super::*;
     use linux_bridge::testing::RecordingSink;
     use std::collections::HashSet;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
 
@@ -1567,8 +1579,9 @@ mod tests {
     }
 
     impl SnapshotSource for SnapshotFixture {
-        async fn snapshot_from(
+        async fn snapshot_within(
             &self,
+            _root: &AccessibleRef,
             start: &AccessibleRef,
             max_nodes: usize,
             max_depth: usize,
@@ -1849,7 +1862,7 @@ mod tests {
                 .unwrap()
                 .insert_look(observed_root(), vec![editor, password], None);
         let args = |index: usize, offset| json!({"lookId":look_id,"elementRef":nodes[index].reference,"offset":offset,"limit":2});
-        let read = async |target: &AccessibleRef| {
+        let read = async |_root: &AccessibleRef, target: &AccessibleRef| {
             assert_eq!(target.path, "/node");
             Ok("A雪😊z".into())
         };
@@ -2003,7 +2016,7 @@ mod tests {
         let result = read_text_with(
             &state,
             &json!({"lookId": look_id, "elementRef": nodes[0].reference}),
-            async |_| panic!("non-text node requested text"),
+            async |_, _| panic!("non-text node requested text"),
         )
         .await
         .unwrap();
@@ -2048,6 +2061,8 @@ mod tests {
         role_name: &'static str,
         stalled_children: Option<StalledReply>,
         child: Option<&'static str>,
+        /// The live `Parent` (bus name, path); `None` fails the read.
+        parent: Option<(&'static str, &'static str)>,
         text: bool,
     }
 
@@ -2097,6 +2112,14 @@ mod tests {
             } else {
                 vec![]
             }
+        }
+
+        #[zbus(property)]
+        fn parent(&self) -> zbus::fdo::Result<(&str, OwnedObjectPath)> {
+            let (destination, path) = self
+                .parent
+                .ok_or_else(|| zbus::fdo::Error::Failed("parent unavailable".into()))?;
+            Ok((destination, OwnedObjectPath::try_from(path).unwrap()))
         }
     }
 
@@ -2149,6 +2172,7 @@ mod tests {
                         stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2197,6 +2221,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2260,6 +2285,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: true,
                         },
                     )?
@@ -2316,6 +2342,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2384,6 +2411,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: false,
                     },
                 )
@@ -2445,6 +2473,7 @@ mod tests {
                         stalled_role: None,
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2505,6 +2534,7 @@ mod tests {
                         stalled_role: Some(stall),
                         stalled_children: None,
                         child: None,
+                        parent: None,
                         text: true,
                     },
                 )?
@@ -2591,6 +2621,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: true,
                         },
                     )?
@@ -3018,6 +3049,342 @@ mod tests {
         .await;
     }
 
+    const CONTAINED_SECRET: &str = "private contained label";
+
+    /// A readable text field inside a panel whose live role the test controls (#1233).
+    fn serve_contained_field(
+        peer: zbus::connection::Builder<'static>,
+        panel_role: watch::Receiver<Option<u32>>,
+        panel_role_name: &'static str,
+        stalled_panel_role: Option<StalledReply>,
+        field_parent: Option<(&'static str, &'static str)>,
+        field_text: impl zbus::object_server::Interface,
+    ) -> zbus::Result<zbus::connection::Builder<'static>> {
+        peer.serve_at(
+            "/window",
+            PeerNode {
+                name: "Window",
+                role: watch::channel(Some(23)).1,
+                role_name: "frame",
+                stalled_role: None,
+                stalled_children: None,
+                child: Some("/window/panel"),
+                parent: None,
+                text: false,
+            },
+        )?
+        .serve_at(
+            "/window/panel",
+            PeerNode {
+                name: "Panel",
+                role: panel_role,
+                role_name: panel_role_name,
+                stalled_role: stalled_panel_role,
+                stalled_children: None,
+                child: Some("/window/panel/field"),
+                parent: Some((":1.1", "/window")),
+                text: false,
+            },
+        )?
+        .serve_at(
+            "/window/panel/field",
+            PeerNode {
+                name: CONTAINED_SECRET,
+                role: watch::channel(Some(61)).1,
+                role_name: "entry",
+                stalled_role: None,
+                stalled_children: None,
+                child: None,
+                parent: field_parent,
+                text: true,
+            },
+        )?
+        .serve_at("/window/panel/field", field_text)
+    }
+
+    /// Field text that turns the panel protected during the next `GetText` once armed.
+    struct ProtectingText {
+        panel_role: Arc<watch::Sender<Option<u32>>>,
+        armed: Arc<AtomicBool>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Text")]
+    impl ProtectingText {
+        fn get_text(&self, _start: i32, _end: i32) -> &str {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.panel_role.send(Some(PASSWORD_ROLE)).unwrap();
+            }
+            "private fixture text"
+        }
+    }
+
+    const PASSWORD_ROLE: u32 = 40;
+
+    /// The read paths that start below the root, for `field` of `look`: a scoped look, a scoped
+    /// wait and an explicit read.
+    fn contained_requests(
+        root_ref: &str,
+        look: &Value,
+        field: &Value,
+    ) -> [(&'static str, Value); 3] {
+        [
+            (
+                "look",
+                json!({
+                    "rootRef":root_ref,"includeImage":false,
+                    "baseLookId":look["lookId"],"scopeRef":field["ref"],
+                }),
+            ),
+            (
+                "atspiWaitFor",
+                json!({
+                    "rootRef":root_ref,"text":CONTAINED_SECRET,"timeoutMs":100,
+                    "lookId":look["lookId"],"scopeRef":field["ref"],
+                }),
+            ),
+            (
+                "atspiReadText",
+                json!({"lookId":look["lookId"],"elementRef":field["ref"]}),
+            ),
+        ]
+    }
+
+    async fn contained_reads(
+        state: &Arc<Mutex<HelperState>>,
+        connection: &Connection,
+        root_ref: &str,
+        look: &Value,
+        field: &Value,
+    ) -> Vec<Response> {
+        let mut replies = Vec::new();
+        for (cmd, args) in contained_requests(root_ref, look, field) {
+            replies.push(peer_request(state, connection, cmd, args).await);
+        }
+        replies
+    }
+
+    #[tokio::test]
+    async fn protected_container_protects_its_descendants() {
+        for (protected, stalled, code) in [
+            (Some(40), false, ErrorCode::SecureTextUnreadable),
+            (Some(67), false, ErrorCode::SecureTextUnreadable),
+            (Some(0), false, ErrorCode::SecureTextUnreadable),
+            (None, false, ErrorCode::InternalError),
+            (None, true, ErrorCode::Timeout),
+        ] {
+            let case = format!("panel role {protected:?}, stalled {stalled}");
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (role, panel_role) = watch::channel(Some(39));
+            let (stall, _stalled_requests) = StalledReply::new();
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    serve_contained_field(
+                        peer,
+                        panel_role,
+                        "panel",
+                        stalled.then_some(stall),
+                        Some((":1.1", "/window/panel")),
+                        PeerText::new(Arc::clone(&reads)),
+                    )
+                },
+                async |connection| {
+                    let look_args = json!({"rootRef":root_ref,"includeImage":false});
+                    let look = peer_request(&state, &connection, "look", look_args.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    let field = look["outline"]["children"][0]["children"][0].clone();
+                    assert_eq!(field["title"], CONTAINED_SECRET, "{case}");
+                    assert_eq!(field["value"], "private fixture text", "{case}");
+                    let [scoped, wait, read]: [Response; 3] =
+                        contained_reads(&state, &connection, &root_ref, &look, &field)
+                            .await
+                            .try_into()
+                            .unwrap();
+                    assert!(scoped
+                        .result
+                        .unwrap()
+                        .to_string()
+                        .contains(CONTAINED_SECRET));
+                    assert_eq!(wait.result.unwrap()["found"], true, "{case}");
+                    assert_eq!(read.result.unwrap()["text"], "private fixture text");
+
+                    role.send(protected).unwrap();
+                    let permitted_reads = reads.load(Ordering::SeqCst);
+                    let fresh = peer_request(&state, &connection, "look", look_args.clone())
+                        .await
+                        .result
+                        .unwrap();
+                    let text = fresh.to_string();
+                    assert!(!text.contains(CONTAINED_SECRET), "{case}: {text}");
+                    assert!(!text.contains("private fixture text"), "{case}: {text}");
+                    let panel = &fresh["outline"]["children"][0];
+                    assert_eq!(panel["title"], "[protected]", "{case}");
+                    assert_eq!(panel["truncated"], true, "{case}");
+                    assert_eq!(panel["children"], json!([]), "{case}");
+                    // The refs of the earlier, readable look no longer reach the field.
+                    for reply in
+                        contained_reads(&state, &connection, &root_ref, &look, &field).await
+                    {
+                        assert!(!reply.ok, "{case}: {reply:?}");
+                        assert_eq!(reply.error.unwrap().code, code, "{case}");
+                    }
+                    let unscoped = peer_request(
+                        &state,
+                        &connection,
+                        "atspiWaitFor",
+                        json!({"rootRef":root_ref,"text":CONTAINED_SECRET,"timeoutMs":100}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    assert_eq!(unscoped["found"], false, "{case}");
+                    let gone = peer_request(
+                        &state,
+                        &connection,
+                        "atspiWaitFor",
+                        json!({"rootRef":root_ref,"text":CONTAINED_SECRET,"gone":true}),
+                    )
+                    .await;
+                    assert_eq!(gone.error.unwrap().code, ErrorCode::Timeout, "{case}");
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads, "{case}");
+
+                    role.send(Some(39)).unwrap();
+                    let replies =
+                        contained_reads(&state, &connection, &root_ref, &look, &field).await;
+                    assert_eq!(
+                        replies[2].result.as_ref().unwrap()["text"],
+                        "private fixture text"
+                    );
+                },
+            )
+            .await;
+        }
+    }
+
+    /// A container that turns protected while its descendant is read discards the read.
+    #[tokio::test]
+    async fn container_protected_during_a_contained_read_discards_it() {
+        let (role, panel_role) = watch::channel(Some(39));
+        let role = Arc::new(role);
+        let armed = Arc::new(AtomicBool::new(false));
+        let (state, root_ref) = peer_root_state();
+        with_peer(
+            |peer| {
+                serve_contained_field(
+                    peer,
+                    panel_role,
+                    "panel",
+                    None,
+                    Some((":1.1", "/window/panel")),
+                    ProtectingText {
+                        panel_role: Arc::clone(&role),
+                        armed: Arc::clone(&armed),
+                    },
+                )
+            },
+            async |connection| {
+                let look = peer_request(
+                    &state,
+                    &connection,
+                    "look",
+                    json!({"rootRef":root_ref,"includeImage":false}),
+                )
+                .await
+                .result
+                .unwrap();
+                let field = look["outline"]["children"][0]["children"][0].clone();
+                assert_eq!(field["title"], CONTAINED_SECRET);
+                for (cmd, args) in contained_requests(&root_ref, &look, &field) {
+                    role.send(Some(39)).unwrap();
+                    armed.store(true, Ordering::SeqCst);
+                    let reply = peer_request(&state, &connection, cmd, args).await;
+                    assert!(!armed.load(Ordering::SeqCst), "{cmd} never read the text");
+                    assert!(!reply.ok, "{cmd}: {reply:?}");
+                    assert!(
+                        !format!("{reply:?}").contains("private fixture text"),
+                        "{cmd}"
+                    );
+                    assert_eq!(
+                        reply.error.unwrap().code,
+                        ErrorCode::SecureTextUnreadable,
+                        "{cmd}"
+                    );
+                }
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_ancestry_refuses_contained_reads() {
+        const PANEL: Option<(&str, &str)> = Some((":1.1", "/window/panel"));
+        for (field_parent, panel_role_name, code) in [
+            (PANEL, FAILING_ROLE_NAME, ErrorCode::InternalError),
+            (None, "panel", ErrorCode::InternalError),
+            (
+                Some((":1.2", "/window/panel")),
+                "panel",
+                ErrorCode::SecureTextUnreadable,
+            ),
+            (
+                Some(("", "/org/a11y/atspi/null")),
+                "panel",
+                ErrorCode::SecureTextUnreadable,
+            ),
+            (
+                Some((":1.1", "/window/panel/field")),
+                "panel",
+                ErrorCode::SecureTextUnreadable,
+            ),
+        ] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let (state, root_ref) = peer_root_state();
+            with_peer(
+                |peer| {
+                    serve_contained_field(
+                        peer,
+                        watch::channel(Some(39)).1,
+                        panel_role_name,
+                        None,
+                        field_parent,
+                        PeerText::new(Arc::clone(&reads)),
+                    )
+                },
+                async |connection| {
+                    let look = peer_request(
+                        &state,
+                        &connection,
+                        "look",
+                        json!({"rootRef":root_ref,"includeImage":false,"readText":"never"}),
+                    )
+                    .await
+                    .result
+                    .unwrap();
+                    let field = look["outline"]["children"][0]["children"][0].clone();
+                    assert_eq!(
+                        field["title"], CONTAINED_SECRET,
+                        "{field_parent:?} {panel_role_name:?}"
+                    );
+                    let permitted_reads = reads.load(Ordering::SeqCst);
+                    for reply in
+                        contained_reads(&state, &connection, &root_ref, &look, &field).await
+                    {
+                        assert!(!reply.ok, "{field_parent:?} {panel_role_name:?}: {reply:?}");
+                        assert_eq!(
+                            reply.error.unwrap().code,
+                            code,
+                            "{field_parent:?} {panel_role_name:?}"
+                        );
+                    }
+                    assert_eq!(reads.load(Ordering::SeqCst), permitted_reads);
+                },
+            )
+            .await;
+        }
+    }
+
     #[tokio::test]
     async fn wait_for_gone_rejects_incomplete_snapshot() {
         let (stall, mut requests) = StalledReply::new();
@@ -3035,6 +3402,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: Some("/window/parent"),
+                            parent: None,
                             text: false,
                         },
                     )?
@@ -3047,6 +3415,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: stalled,
                             child: Some("/window/parent/match"),
+                            parent: None,
                             text: false,
                         },
                     )?
@@ -3059,6 +3428,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: false,
                         },
                     )
@@ -3143,6 +3513,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: Some("/window/label"),
+                            parent: None,
                             text: false,
                         },
                     )?
@@ -3155,6 +3526,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
+                            parent: None,
                             text: false,
                         },
                     )
