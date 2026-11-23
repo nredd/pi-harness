@@ -774,7 +774,10 @@ element, `origin` (a nonnegative integer for a legacy pi row, else `null`), and 
 as the ten event elements, then the successor's fingerprint in canonical base64 and the reason code
 `1` (`revised`), sorted like events. A shard without lineage stays version 3, byte-identical to older
 kits. Older kits reject a version 4 shard as invalid and keep their last-good machine snapshot until
-they update; the manifest version (and the sync helper's allowlist) is unchanged.
+they update. The manifest version is unchanged, and so are shard file names: the dotfiles
+`pi-usage-sync` helper (not in this repo) checks only the manifest version (1-3), the
+`<month>-<sha256>.json.gz` name, size and digest, never a shard body, so by reading it passes a
+version 4 shard as is; no test here covers that.
 Offsets are milliseconds from the UTC month start; `harnessIndex` indexes
 `["pi", "claude", "codex", "opencode"]`. `entryId` is canonical base64 of the first 12 bytes of
 the full entry hash, or `null`. Export and deduplication refuse collisions between known full
@@ -834,7 +837,10 @@ harness's history may live only in frozen files); those refusals are coded `reco
 I/O reading the active snapshot surfaces uncoded. Then a frozen file is removed only when the active
 manifest does not reference it, it is a regular `.json.gz` file whose bytes match the SHA-256 in its
 name and decode as this machine's shard of its month, and the active snapshot already holds every
-row of it: each event byte-for-byte by identity (a corrected call is not covered), each session
+row of it: each event by identity and every value but lineage metadata (a corrected call is not
+covered; a frozen row without `origin` is covered by the same row published with one, and the
+reverse), or a frozen counted row the active snapshot has since retired (held there as a recorded
+replacement), each frozen retired row by an identical active retired row, each session
 within the merged active session's span and child marker, and each quota reading by an at least as
 fresh reading of the same window that resets no earlier (the reading `mergeQuota` would pick
 anyway). Everything else stays frozen and is listed in `kept` with a reason: `active`, `missing`,
@@ -889,9 +895,14 @@ transcripts of one session share is published as `null`, never guessed. On expor
 an origin is retired only when all of these hold, else it stays counted:
 
 - the scan no longer holds the row's fingerprint
+- the scan still holds another sealed row of that session at its published origin, so the
+  transcript is still there (not replaced by another file with the same session id after the usage
+  cache was rebuilt)
 - the scan holds a legacy row at that origin of that session, in the same UTC month, under the same
   provider and model
-- that successor is not already retired, and not already published under another (or no) origin
+- that successor is not published at all yet (counted or retired)
+- one-to-one: no other lost row names that same successor. A contested successor retires none of
+  them; they stay counted, and validation rejects two retired rows naming one successor
 
 A retired row is never deleted: its shard is rewritten with the row moved from `events` to `retired`,
 naming its `successor` and `reason` (`revised`), and the successor is published beside it. A retired
@@ -1029,7 +1040,11 @@ Compatibility: import accepts v1, v2 and v3 machines side by side, validated wit
 own version. A v1 event loads as `harness: "pi"`. Producers migrate on their next export;
 `exportedAt` ordering and atomic last-good imports are unchanged. Update viewers before producers:
 older kits cannot read v3 manifests, nor version 4 lineage shards (only producers with legacy
-rows publish them).
+rows publish them). Every producer writing to one outbox must be upgraded together, before any
+producer with legacy rows publishes version 4: an older v3-only exporter treats the manifest as
+unreadable and republishes from its scan, so sealed months and retired rows drop out of the active
+manifest and survive only as frozen recovery files. Update viewers, every producer and the
+`pi-usage-sync` helper's kit together.
 
 An encoding-only sample from one installation's three months measured 58,607,359 bytes for the
 same events re-encoded as one v2 generation versus 5,091,659 v3 gzip bytes (11.51x). It is not a

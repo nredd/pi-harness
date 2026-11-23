@@ -448,6 +448,10 @@ export function eventId(event: Omit<SnapshotEvent, "id">, version: number = SNAP
 /** Session metadata including children when the loader provided it. */
 const sessionsOf = (loaded: Loaded): Session[] => loaded.sessionMetadata ?? loaded.sessions;
 
+/** The lineage position `[session, origin]` a legacy row names, shared by `makeSnapshot` and the retirement rule. */
+const positionKey = (sessionId: string, origin: number | null | undefined): string =>
+	JSON.stringify([sessionId, origin]);
+
 /** Allowlist projection. No source objects, paths, names or message payloads are serialized. */
 export function makeSnapshot(
 	loaded: Loaded,
@@ -471,7 +475,7 @@ export function makeSnapshot(
 	const sessionId = (value: string): string => (HASH.test(value) ? value : opaqueId(`session:${value}`));
 	// Lineage needs a position that names one row: one shared by two scanned rows (two transcripts with one
 	// session id) is published as `null`, never guessed.
-	const originKey = (c: Call): string => JSON.stringify([sessionId(c.session), c.origin]);
+	const originKey = (c: Call): string => positionKey(sessionId(c.session), c.origin);
 	const positions = new Map<string, number>();
 	for (const c of loaded.calls)
 		if (c.origin !== undefined) positions.set(originKey(c), (positions.get(originKey(c)) ?? 0) + 1);
@@ -957,9 +961,14 @@ export function validateSnapshot(snapshot: MachineSnapshot): void {
 	}
 	for (const s of snapshot.shards)
 		for (const e of s.events) if (!metadata.has(e.sessionId)) throw new Error("Missing session metadata");
-	// A retired row is never also counted, and its successor is published: counted, or retired in turn.
-	for (const [id, successor] of retired)
-		if (events.has(id) || !(events.has(successor) || retired.has(successor))) throw new Error("Invalid row lineage");
+	// A retired row is never also counted, its successor is published (counted, or retired in turn), and each
+	// successor replaces at most one row.
+	const successors = new Set<string>();
+	for (const [id, successor] of retired) {
+		if (events.has(id) || !(events.has(successor) || retired.has(successor)) || successors.has(successor))
+			throw new Error("Invalid row lineage");
+		successors.add(successor);
+	}
 }
 
 /** Which harnesses an export reads, and where. Default is pi only: other tools are opt-in. */
@@ -1218,43 +1227,48 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 
 /**
  * Sealed legacy pi rows a clean scan revises, each mapped to the event id that replaces it. Lineage is the
- * persisted transcript origin (`SnapshotEvent.origin`): a sealed row with one is revised only when the scan no
- * longer holds it and holds exactly one legacy row at that origin of its session (`makeSnapshot` publishes
- * `null` for a shared one), in its month, under its provider and model, that is neither retired nor already
- * published under another (or an unknown) origin. Anything less establishes no lineage and the row stays
- * counted: never a guess from counts.
+ * persisted transcript origin (`SnapshotEvent.origin`): a sealed row with one is revised only when all hold:
+ * the scan no longer holds it; the scan still holds another sealed row of its session at that row's published
+ * origin (the transcript is still there, not replaced by another file with the same session id); the scan holds
+ * exactly one legacy row at the lost row's origin of its session (`makeSnapshot` publishes `null` for a shared
+ * one), in its month, under its provider and model, that is not published at all (counted or retired); and no
+ * other lost row names that same successor (one-to-one: a contested successor retires nobody). Anything less
+ * establishes no lineage and the row stays counted: never a guess from counts.
  */
 function lineageRetirements(sealed: readonly CompactShard[], next: MachineSnapshot): Map<string, string> {
-	const scanned = new Set<string>();
+	const scanned = new Map<string, number | null | undefined>();
 	const at = new Map<string, SnapshotEvent>();
-	const origin = (e: SnapshotEvent): string => JSON.stringify([e.sessionId, e.origin]);
 	for (const shard of next.shards)
 		for (const e of shard.events) {
-			scanned.add(e.id);
-			if (typeof e.origin === "number") at.set(origin(e), e);
+			scanned.set(e.id, e.origin);
+			if (typeof e.origin === "number") at.set(positionKey(e.sessionId, e.origin), e);
 		}
-	const published = new Map<string, number | null | undefined>();
-	const retired = new Set<string>();
+	const published = new Set<string>();
+	const anchored = new Set<string>();
 	for (const shard of sealed) {
-		for (const e of shard.events) published.set(e.id, e.origin);
-		for (const e of shard.retired ?? []) retired.add(e.id);
+		for (const e of shard.events) {
+			published.add(e.id);
+			if (typeof e.origin === "number" && scanned.get(e.id) === e.origin) anchored.add(e.sessionId);
+		}
+		for (const e of shard.retired ?? []) published.add(e.id);
 	}
-	const successors = new Map<string, string>();
+	const candidates = new Map<string, string[]>();
 	for (const shard of sealed)
 		for (const e of shard.events) {
-			if (typeof e.origin !== "number" || scanned.has(e.id)) continue;
-			const next = at.get(origin(e));
+			if (typeof e.origin !== "number" || scanned.has(e.id) || !anchored.has(e.sessionId)) continue;
+			const successor = at.get(positionKey(e.sessionId, e.origin));
 			if (
-				next === undefined ||
-				monthOf(next.ms) !== shard.month ||
-				next.provider !== e.provider ||
-				next.model !== e.model ||
-				retired.has(next.id) ||
-				(published.has(next.id) && published.get(next.id) !== e.origin)
+				successor === undefined ||
+				monthOf(successor.ms) !== shard.month ||
+				successor.provider !== e.provider ||
+				successor.model !== e.model ||
+				published.has(successor.id)
 			)
 				continue;
-			successors.set(e.id, next.id);
+			candidates.set(successor.id, [...(candidates.get(successor.id) ?? []), e.id]);
 		}
+	const successors = new Map<string, string>();
+	for (const [successor, ids] of candidates) if (ids.length === 1) successors.set(nth(ids, 0), successor);
 	return successors;
 }
 
@@ -1279,7 +1293,7 @@ function retireRows(shard: CompactShard, successors: ReadonlyMap<string, string>
 
 /**
  * The sealed ends of superseded sessions, under the scan's corrected start and child attribution, as carry
- * shards in the corrected start month: one per retired shard and month, so no shard repeats a session.
+ * shards in the corrected start month: one per regenerated sealed shard and month, so no shard repeats a session.
  * Carried: every distinct sealed end at or after the corrected start and before the active month. An end
  * before the corrected start is dominated by the scan's own end; one in the active month is not carried,
  * because that month is rebuilt from the scan (a deleted call there takes its end with it). Then each
@@ -1287,7 +1301,7 @@ function retireRows(shard: CompactShard, successors: ReadonlyMap<string, string>
  * wherever its old metadata was), in one more carry shard per month, so it never ends before its own call.
  */
 function rebasedEnds(
-	retired: ReadonlyMap<string, readonly CompactShard[]>,
+	regenerated: ReadonlyMap<string, readonly CompactShard[]>,
 	sealed: readonly CompactShard[],
 	fresh: ReadonlyMap<string, CompactShard>,
 	revisions: Revisions,
@@ -1297,7 +1311,7 @@ function rebasedEnds(
 	if (corrections.size === 0) return [];
 	const out: CompactShard[] = [];
 	const carried = new Map<string, number>();
-	for (const shards of retired.values())
+	for (const shards of regenerated.values())
 		for (const shard of shards) {
 			const byMonth = new Map<string, CompactShard>();
 			for (const prior of shard.sessions) {
@@ -1319,7 +1333,7 @@ function rebasedEnds(
 	for (const shard of sealed)
 		for (const event of shard.events) {
 			if (revisions.supersededEventIds.has(event.id)) continue;
-			if (retired.has(shard.month)) {
+			if (regenerated.has(shard.month)) {
 				let ids = published.get(shard.month);
 				if (!ids) {
 					ids = new Set(fresh.get(shard.month)?.events.map((e) => e.id));
@@ -1347,7 +1361,7 @@ function rebasedEnds(
 }
 
 /**
- * Regenerate a revised sealed month from the clean scan, then carry what its retired shards held that the
+ * Regenerate a revised sealed month from the clean scan, then carry what its replaced sealed shards held that the
  * scan no longer reproduces (archived calls and sessions, every distinct session end, quota readings) in
  * delta shards, plus the `rebased` sealed ends of sessions whose corrected start falls in this month. Only
  * the superseded rows themselves are dropped. Past the shard limit the carries are packed losslessly into
@@ -1357,12 +1371,12 @@ function rebasedEnds(
 function regenerateMonth(
 	month: string,
 	full: CompactShard | undefined,
-	retired: readonly CompactShard[],
+	replaced: readonly CompactShard[],
 	revisions: Revisions,
 	rebased: readonly CompactShard[],
 ): CompactShard[] {
 	const shards = full ? [full] : [];
-	for (const shard of retired) {
+	for (const shard of replaced) {
 		const carry = monthDelta(
 			{
 				...shard,
@@ -1902,14 +1916,14 @@ async function publishStats(
 		| { ref: Manifest["shards"][number]; shard: CompactShard; expandedBytes: number }
 		| { ref?: undefined; shard: CompactShard };
 	const prior = new Map<string, Kept[]>();
-	const retired = new Map<string, CompactShard[]>();
+	const regenerated = new Map<string, CompactShard[]>();
 	if (sealed)
 		for (const [i, original] of sealedShards.entries()) {
 			if (original.month >= current) continue;
 			const rewritten = lineaged[i];
 			const shard = rewritten ?? original;
 			if (revisions.months.has(shard.month)) {
-				retired.set(shard.month, [...(retired.get(shard.month) ?? []), shard]);
+				regenerated.set(shard.month, [...(regenerated.get(shard.month) ?? []), shard]);
 				continue;
 			}
 			const refs = prior.get(shard.month) ?? [];
@@ -1930,7 +1944,7 @@ async function publishStats(
 		]),
 	);
 	const rebased = rebasedEnds(
-		retired,
+		regenerated,
 		lineagedShards.filter((shard) => shard.month < current),
 		fresh,
 		revisions,
@@ -1955,11 +1969,11 @@ async function publishStats(
 		snapshot.manifest.shards.push({ month, file, sha256, bytes: bytes.length });
 		publishedShards.push(shard);
 	};
-	for (const month of [...new Set([...prior.keys(), ...retired.keys(), ...fresh.keys()])].sort()) {
+	for (const month of [...new Set([...prior.keys(), ...regenerated.keys(), ...fresh.keys()])].sort()) {
 		let old = prior.get(month) ?? [];
 		const full = fresh.get(month);
 		const moved = rebased.filter((shard) => shard.month === month);
-		const replaced = retired.get(month);
+		const replaced = regenerated.get(month);
 		const delta =
 			full &&
 			monthDelta(
@@ -2065,14 +2079,33 @@ export interface CleanupResult {
 
 /** Whether the active snapshot already holds every row of `shard`, so a viewer would see nothing more. */
 function coveredBy(active: readonly CompactShard[]): (shard: CompactShard) => boolean {
-	const events = new Map(active.flatMap((s) => s.events.map((e) => [e.id, JSON.stringify(e)] as const)));
+	// A row's identity and values, without lineage metadata: a pre-lineage frozen row and the same row published
+	// later with an `origin` (or the reverse) are the same call.
+	const row = (e: Omit<SnapshotEvent, "origin">): string =>
+		JSON.stringify([
+			e.id,
+			e.harness,
+			e.entryId,
+			e.sessionId,
+			e.ms,
+			e.provider,
+			e.model,
+			e.input,
+			e.output,
+			e.cacheRead,
+			e.cacheWrite,
+			e.cost,
+		]);
+	const events = new Map(active.flatMap((s) => s.events.map((e) => [e.id, row(e)] as const)));
 	const retired = new Map(active.flatMap((s) => (s.retired ?? []).map((e) => [e.id, JSON.stringify(e)] as const)));
+	// A frozen counted row the active snapshot has since retired is held there too, as a recorded replacement.
+	const retiredRows = new Map(active.flatMap((s) => (s.retired ?? []).map((e) => [e.id, row(e)] as const)));
 	const sessions = mergeSessionMetadata(
 		active.flatMap((s) => s.sessions.map((x) => ({ path: x.id, startMs: x.startMs, endMs: x.endMs, child: x.child }))),
 	);
 	const quota = active.flatMap((s) => s.quota);
 	return (shard) =>
-		shard.events.every((e) => events.get(e.id) === JSON.stringify(e)) &&
+		shard.events.every((e) => (events.get(e.id) ?? retiredRows.get(e.id)) === row(e)) &&
 		// A retired row is kept like any other: only an identical retired row covers it.
 		(shard.retired ?? []).every((e) => retired.get(e.id) === JSON.stringify(e)) &&
 		shard.sessions.every((s) => {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -46,10 +46,11 @@ interface Row {
 	model?: string;
 	input?: number;
 	output?: number;
+	cost?: number;
 }
 /** A pi assistant entry from before entry IDs existed: no `id`, so only its tuple and position identify it. */
-function legacy({ ms, model = "fixture", input = 100, output = 10 }: Row): string {
-	const row = JSON.parse(assistantLine({ ms, provider: "physical", model, input, output, cost: 0.01 }));
+function legacy({ ms, model = "fixture", input = 100, output = 10, cost = 0.01 }: Row): string {
+	const row = JSON.parse(assistantLine({ ms, provider: "physical", model, input, output, cost }));
 	delete row.id;
 	return JSON.stringify(row);
 }
@@ -91,6 +92,11 @@ function shards(month = "2026-10"): Shard[] {
 }
 const counted = (month = "2026-10"): SnapshotEvent[] => shards(month).flatMap((s) => s.events);
 const retired = (month = "2026-10"): RetiredEvent[] => shards(month).flatMap((s) => s.retired ?? []);
+/** Delete `file` and rebuild the stats cache, so its calls leave the scan (the cache otherwise keeps them). */
+function forget(file: string): void {
+	rmSync(join(agent, "sessions", file));
+	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
+}
 /** What a viewer on another machine counts. */
 async function viewed(): Promise<{ output: number; ms: number; model: string }[]> {
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
@@ -190,6 +196,12 @@ describe("row lineage", () => {
 		["another month", october(1).map((r, i) => (i === 2 ? { ...r, ms: utc("2026-09-30") } : r)), 6],
 		// The first call left the transcript: every later origin shifted onto a row published elsewhere.
 		["shifted origins", october().slice(1), 5],
+		// A call inserted mid-transcript: every later sealed row is still scanned, one origin further on.
+		[
+			"an inserted call",
+			[...october().slice(0, 2), { ms: utc("2026-10-05", 30), input: 999 }, ...october().slice(2)],
+			6,
+		],
 		// The last call was trimmed and the resumed session's next call reuses its origin in November.
 		["trimmed then resumed", [...october().slice(0, 4), { ms: utc("2026-11-01") }], 6],
 	])("keeps a sealed row counted when its lineage cannot be established: %s", async (_, rows, calls) => {
@@ -213,6 +225,51 @@ describe("row lineage", () => {
 		// Origin 0 is ambiguous, so the first call appends; the third has a unique origin and retires.
 		expect(retired().map((e) => e.output)).toEqual([10]);
 		expect(await viewed()).toHaveLength(7);
+	});
+
+	it("retires nothing when another transcript with the same session id replaces a sealed one", async () => {
+		await seal();
+		forget("a.jsonl");
+		// Distinct calls of the same model at the same origins: no row of the sealed transcript is left to anchor it.
+		transcript(
+			"b.jsonl",
+			"a",
+			october().map((r) => ({ ...r, input: (r.input ?? 0) + 100 })),
+		);
+		await exportStats(agent, out);
+		expect(retired()).toEqual([]);
+		expect(await viewed()).toHaveLength(10);
+	});
+
+	it("retires no row when two lost rows name one successor", async () => {
+		await seal();
+		forget("a.jsonl");
+		const b = october().map((r) => ({ ...r, input: (r.input ?? 0) + 100 }));
+		transcript("b.jsonl", "a", b);
+		await exportStats(agent, out);
+		// Correct the third call of b: its sealed row and a's at origin 2 both lost, both naming the new row.
+		transcript(
+			"b.jsonl",
+			"a",
+			b.map((r, i) => (i === 2 ? { ...r, output: 99 } : r)),
+		);
+		await exportStats(agent, out);
+		expect(retired()).toEqual([]);
+		expect(await viewed()).toHaveLength(11);
+	});
+
+	it("keeps a sealed row's published session and cost when the scan holds its fingerprint", async () => {
+		await seal();
+		const published = counted();
+		// Session id and cost are not part of the fingerprint: the scanned rows match the sealed ones.
+		transcript(
+			"a.jsonl",
+			"renamed",
+			october().map((r) => ({ ...r, cost: 0.5 })),
+		);
+		await exportStats(agent, out);
+		expect(retired()).toEqual([]);
+		expect(counted()).toEqual(published);
 	});
 
 	it("leaves rows published before lineage counted beside a correction, as before", async () => {
@@ -365,6 +422,11 @@ describe("lineage validation", () => {
 				lineageShard([legacyEvent({ output: 5, origin: 1 })], [retire(old, live.id)]),
 			],
 			"Duplicate retired identity",
+		],
+		[
+			"two retired rows naming one successor",
+			[lineageShard([live], [retire(old, live.id), retire(legacyEvent({ output: 7 }), live.id)])],
+			"Invalid row lineage",
 		],
 	])("rejects a machine with %s", (_, shardList, message) => {
 		expect(() => validateSnapshot({ manifest, shards: shardList })).toThrow(message);

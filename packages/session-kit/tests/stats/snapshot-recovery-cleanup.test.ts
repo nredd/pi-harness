@@ -248,6 +248,36 @@ describe("cleanRecovery", () => {
 		expect(result.kept).toEqual(covered ? [] : [{ file, reason: "not covered" }]);
 	});
 
+	it.each([
+		// A pre-lineage frozen v3 row carries no origin; the same call is now published with one.
+		[
+			"a pre-lineage row now published with an origin",
+			(row: SnapshotEvent) => shard({ events: [row], sessions: [session()] }),
+			true,
+		],
+		// The active snapshot retired the frozen counted row: it is held there as a recorded replacement.
+		[
+			"a counted row the active snapshot retired",
+			() => shard({ events: [event(2, { entryId: null })], sessions: [session()] }),
+			true,
+		],
+		[
+			"a counted row with another cost",
+			(row: SnapshotEvent) => shard({ events: [{ ...row, cost: 1 }], sessions: [session()] }),
+			false,
+		],
+	])("decides coverage of a frozen shard with %s", async (_, frozen, covered) => {
+		const row = event(1, { entryId: null });
+		const live = { ...row, origin: 0 };
+		const retiredRow = { ...event(2, { entryId: null }), successor: live.id, reason: "revised" as const };
+		publish([{ ...shard({ events: [live], sessions: [session()] }), version: 4, retired: [retiredRow] }]);
+		const { file } = write(frozen(row));
+		bookkeeping([file]);
+		const result = await cleanRecovery(agent, out);
+		expect(result.removed).toEqual(covered ? [file] : []);
+		expect(result.kept).toEqual(covered ? [] : [{ file, reason: "not covered" }]);
+	});
+
 	it("keeps active, missing, legacy and unreadable frozen files with their reasons", async () => {
 		publish([activeShard()]);
 		const active = manifestOf().shards[0]?.file as string;
