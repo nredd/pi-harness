@@ -1422,14 +1422,21 @@ def run_merge(tmp_path: Path, shards: dict[str, list[str]]) -> tuple[subprocess.
             path = temp / "shard-coverage" / artifact / report
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"{artifact}\n")
+    step = fan_in_step("Merge the shards' coverage reports")
+    assert step["id"] == "merge-coverage"
+    assert step["if"] == "${{ !cancelled() && steps.plan.outputs.run == 'true' }}"
+    assert step["run"] == "python3 scripts/ci_merge_shard_coverage.py"
+    assert not set(step) & {"env", "shell", "working-directory", "continue-on-error"}
     script = tmp_path / "merge.sh"
-    script.write_text(fan_in_step("Merge the shards' coverage reports")["run"])
+    script.write_text(step["run"])
     completed = subprocess.run(
         ["/bin/bash", "-e", str(script)],
+        cwd=ROOT,
         env=os.environ | {"RUNNER_TEMP": str(temp), "GITHUB_WORKSPACE": str(workspace)},
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     return completed, workspace
 
