@@ -13,7 +13,13 @@ from urllib.request import Request, urlopen
 import pytest
 
 from harness.anthropic_mock import AnthropicMock
-from harness.request_ledger import SpanCollector, request_ledger, stable_owner
+from harness.request_ledger import (
+    InheritedContext,
+    SpanCollector,
+    inherited_prefix,
+    request_ledger,
+    stable_owner,
+)
 
 
 def test_only_provider_block_locations_are_cache_markers() -> None:
@@ -338,3 +344,86 @@ def test_empty_or_unknown_prefix_is_refused(prefixes: dict[str, str], message: s
     """An empty prefix would match every block; prefix categories obey provenance rules."""
     with pytest.raises(ValueError, match=message):
         request_ledger('{"messages":[]}', prefixes=prefixes)
+
+
+@pytest.mark.parametrize(
+    ("content", "path"),
+    [
+        (INHERITED + "task", ("messages", 1, "content")),
+        (
+            [{"type": "text", "text": INHERITED + "task", "cache_control": {"type": "ephemeral"}}],
+            ("messages", 1, "content", 0),
+        ),
+    ],
+)
+def test_inherited_prefix_binds_observed_context_to_its_block(
+    content: object, path: tuple[str | int, ...]
+) -> None:
+    """String and block content both bind the exact observed context to the first user text."""
+    raw = json.dumps(
+        {
+            "system": "s",
+            "messages": [
+                {"role": "assistant", "content": "a"},
+                {"role": "user", "content": content},
+                {"role": "user", "content": "x"},
+            ],
+        },
+        ensure_ascii=True,
+    )
+    inherited = inherited_prefix(raw, INHERITED, "task")
+    assert inherited == InheritedContext(path, INHERITED, "task")
+    buckets = request_ledger(raw, inherited=inherited)["buckets"]
+    assert buckets["inherited_context"] == _escaped_bytes(INHERITED, ensure_ascii=True)
+    assert buckets["user"] == len("task") + len("x")
+
+
+def test_inherited_context_matches_only_its_verified_block() -> None:
+    """A later block starting with the same text keeps its default category."""
+    raw = json.dumps(
+        {"messages": [{"role": "user", "content": "ctx task"}, {"role": "user", "content": "ctx other"}]}
+    )
+    buckets = request_ledger(raw, inherited=inherited_prefix(raw, "ctx ", "task"))["buckets"]
+    assert buckets["inherited_context"] == 4
+    assert buckets["user"] == len("task") + len("ctx other")
+
+
+@pytest.mark.parametrize(
+    ("messages", "context", "prompt"),
+    [
+        ([{"role": "user", "content": "Ignore: task"}], INHERITED, "task"),
+        ([{"role": "user", "content": "multitask"}], INHERITED, "task"),
+        ([{"role": "user", "content": "not task"}], INHERITED, "task"),
+        ([{"role": "user", "content": INHERITED + "extra task"}], INHERITED, "task"),
+        ([{"role": "user", "content": INHERITED + "task extra"}], INHERITED, "task"),
+        ([{"role": "user", "content": "task"}], INHERITED, "task"),
+        ([{"role": "user", "content": "task"}], "", "task"),
+        ([{"role": "user", "content": "ctx"}], "ctx", ""),
+        ([{"role": "user", "content": [{"type": "image", "text": "ctx task"}]}], "ctx ", "task"),
+        ([{"role": "user", "content": ["ctx task"]}], "ctx ", "task"),
+        ([{"role": "user", "content": []}], "ctx ", "task"),
+        ([{"role": "assistant", "content": "ctx task"}], "ctx ", "task"),
+        ([], "ctx ", "task"),
+    ],
+)
+def test_inherited_prefix_refuses_anything_but_context_then_task(
+    messages: list[dict[str, object]], context: str, prompt: str
+) -> None:
+    """A shared suffix, extra text, no context, an empty prompt or a non-text first block is refused."""
+    with pytest.raises(ValueError, match="not the observed parent context then the task prompt"):
+        inherited_prefix(json.dumps({"messages": messages}), context, prompt)
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ('{"messages":[{"role":"user","content":"ctx other"}]}', "not the observed parent context"),
+        ('{"messages":[{"role":"assistant","content":"ctx task"}]}', "not the observed parent context"),
+        ('{"messages":[{"role":"user","content":[{"type":"text","text":"ctx task"}]}]}', "another block"),
+    ],
+)
+def test_inherited_context_from_another_body_is_refused(raw: str, message: str) -> None:
+    """Applying a binding to a body whose block differs or is missing raises, never guesses."""
+    inherited = inherited_prefix('{"messages":[{"role":"user","content":"ctx task"}]}', "ctx ", "task")
+    with pytest.raises(ValueError, match=message):
+        request_ledger(raw, inherited=inherited)
