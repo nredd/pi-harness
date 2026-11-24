@@ -469,7 +469,7 @@
               "native/windows/bridge-rs/src/freshness.rs": { "sha256": "48b942cd512789d7f9cc01b780135f5392ff7ecfd542c0816f4fb18bebb3b851", "lines": 28, "functions": 4 },
               "native/windows/bridge-rs/src/guard.rs": { "sha256": "fdabf8e34c059199f902e6be999830abd268db4fdea79a6d0dee90bc81ff9aef", "lines": 193, "functions": 16 },
               "native/windows/bridge-rs/src/input.rs": { "sha256": "903cf8e7c64ffc15ad5860d057e53fb5b2d398381ff1fa34c0d44eb6ee091964", "lines": 526, "functions": 69 },
-              "native/windows/bridge-rs/src/lib.rs": { "sha256": "5e804bdaae133f045e1c6a8ab1e926424af3b418493bf17a1bffaefc9de3afa6", "lines": 0, "functions": 0 },
+              "native/windows/bridge-rs/src/lib.rs": { "sha256": "af4ecce6d50d4095c126eb01c7ad3e0c1697f6822256e8db8ca4eeb50f65c010", "lines": 0, "functions": 0 },
               "native/windows/bridge-rs/src/main.rs": { "sha256": "cf567072a05f6b488c78c0031ae95d5b2b009b850e924b61da1038b59d6a33a0", "lines": 2562, "functions": 289 },
               "native/windows/bridge-rs/src/protocol.rs": { "sha256": "daa8318982877113bbc58f567e2b26cfe50fb2ed1e3b7e3440a82da1b0ba2f9b", "lines": 18, "functions": 2 },
               "native/windows/bridge-rs/src/refs.rs": { "sha256": "dbf1b26b72929ae406570a135de3809fd299dc6eb8315840e6aafdbb7115311b", "lines": 113, "functions": 24 },
