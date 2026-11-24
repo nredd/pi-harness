@@ -341,6 +341,16 @@ unmerged and gitlink entries, and entries hidden by `skip-worktree` or `assume-u
 keep, as does a `HEAD` the comparison cannot read; the cached `git diff-index` compares object IDs
 and reads no worktree files. This is defense in depth for a future `eligible` path; today it only
 names the keep reason.
+After the earlier holds pass, the guard hashes tracked entries in process as raw Git blobs (file
+bytes, or a symlink's target string, with no filters or stat cache) and compares each with its
+index object ID and mode, stopping at the first entry that keeps. A same-size edit with a restored
+mtime under `core.trustctime=false` therefore keeps. Parent directories are opened without
+following symlinks and the leaf is read relative to them. A symlinked parent, unmerged or
+unexpected index entries, and missing entries or entries that are neither regular files nor
+symlinks also keep, as does a parent or file whose replacement or rewrite during the hash the
+guard's rechecks detect. The rechecks are not atomic: a same-content replacement between the path
+stat and the open can pass. A tracked symlink compares by its target string only and passes when
+that matches.
 Limits:
 - Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
   Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
@@ -358,13 +368,18 @@ Limits:
   credential helper or askpass runs. This is local graph evidence: the fetched ref can be stale or
   locally rewritten, a shallow boundary can hide ancestry and a graft can make containment look
   true. It is a reason, never removal authority.
-- The guard omits `git status` and does not compare tracked worktree content with the index. Attributes
+- The guard omits `git status`. Attributes
   or driver configuration could change after an attribute scan and cause `git status` to run a
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
   `git status` or `git diff` on a retained worktree to fill that gap.
-- No raw content hash comparison is performed. With effective `core.trustctime=false`, a same-size
-  edit with its original mtime restored can look clean to Git, so the guard keeps the worktree
-  without trying to distinguish it from a clean one.
+- The scan is NOT atomic against concurrent writers. Deepest-first parent revalidation narrows,
+  but does not close, the race window. Any future deletion must separately exclude writers through
+  removal. Its total cost is unbounded: chunked reads bound per-file memory only and there is no time
+  budget yet (#1388); measure it before any deletion is enabled.
+- Non-goals here: a case-only rename can pass the raw comparison when the indexed spelling still
+  resolves to the renamed file (e.g. on a case-insensitive filesystem), and so can an intent-to-add
+  entry whose file is still empty; the index-vs-`HEAD` check in #1369 covers intent-to-add. The
+  CLI stays keep-only until #1220.
 - The guard does not check `core.ignorecase` or `core.symlinks`; the CLI authorizes nothing.
   A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
   older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
