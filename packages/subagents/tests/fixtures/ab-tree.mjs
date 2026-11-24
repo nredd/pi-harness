@@ -3,7 +3,8 @@
  * export another ref's tree without touching the shared repository state.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 const git = (cwd, args, options = {}) => execFileSync("git", args, { cwd, encoding: "utf-8", ...options }).trim();
@@ -23,18 +24,25 @@ export function resolveLayout(cwd) {
  * removal. Returns the exported package directory (`dest/<prefix>`).
  */
 export function exportTree(layout, sha, dest) {
-	const archive = execFileSync("git", ["archive", "--format=tar", sha], {
-		cwd: layout.root,
-		maxBuffer: 1 << 30,
-	});
-	execFileSync("tar", ["-x", "-C", dest], { input: archive });
+	// Archive to a file rather than a pipe buffer: a whole-repo tar can be large.
+	const scratch = mkdtempSync(join(tmpdir(), "pi-ab-archive-"));
+	try {
+		const archive = join(scratch, "tree.tar");
+		execFileSync("git", ["archive", "--format=tar", "-o", archive, sha], { cwd: layout.root });
+		execFileSync("tar", ["-x", "-C", dest, "-f", archive]);
+	} finally {
+		rmSync(scratch, { recursive: true, force: true });
+	}
 	return join(dest, layout.prefix);
 }
 
 /**
  * Share installed dependencies with the exported tree. npm workspaces hoist to
  * the repo root, so link that; also link a package-level `node_modules` when one
- * exists. Dependencies are identical for both sides by construction.
+ * exists. Dependencies are identical for both sides by construction. LIMIT:
+ * workspace siblings (`@nredd/*`) resolve through those links to the WORKING
+ * tree on both sides, so a comparison is invalid when the change under test
+ * lives in a sibling package rather than this one.
  */
 export function linkDependencies(layout, dest) {
 	const links = [join(layout.root, "node_modules")];
@@ -58,7 +66,9 @@ export function parseBenchReport(report) {
 			for (const bench of result.benchmarks ?? []) {
 				for (const task of bench.tasks ?? []) {
 					const median = task.latency?.p50 ?? task.latency?.mean;
-					if (median != null) out.set(`${bench.name}`, median);
+					// Key by task name too when a bench has several, so none is overwritten.
+					const key = bench.tasks.length > 1 ? `${bench.name} > ${task.name}` : `${bench.name}`;
+					if (median != null) out.set(key, median);
 				}
 			}
 		}

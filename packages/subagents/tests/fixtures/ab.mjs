@@ -27,7 +27,7 @@
  *    observation sits closest to the truth; the median makes each round robust
  *    to a single outlier rather than letting one GC pause set the number.
  *  - The working tree's benchmark files and fixtures are COPIED into the base
- *    worktree before it runs. The base commit does not contain them; without
+ *    tree before it runs. The base commit does not contain them; without
  *    this the older side silently benchmarks nothing.
  *  - Surplus arguments are ignored by JavaScript, which is what lets one
  *    benchmark file drive an older constructor. A benchmark that names a symbol
@@ -147,10 +147,10 @@ if (!existsSync(join(REPO, PERF_DIR)))
 	usage(`No ${PERF_DIR} directory here — run from the packages/subagents directory.`);
 
 const sha = git("rev-parse", "--short", opts.ref);
-let removeWorktree;
+let removeExport;
 let removeJsonDir;
 const exportRoot = makeTestTempDir("pi-subagents-ab-", (cleanup) => {
-	removeWorktree = cleanup;
+	removeExport = cleanup;
 });
 
 console.log(`\n  Comparing working tree against ${opts.ref} (${sha}), ${opts.rounds} round(s).`);
@@ -159,21 +159,21 @@ try {
 	const jsonDir = makeTestTempDir("pi-subagents-ab-json-", (cleanup) => {
 		removeJsonDir = cleanup;
 	});
-	const worktree = exportTree(LAYOUT, sha, exportRoot);
+	const baseDir = exportTree(LAYOUT, sha, exportRoot);
 	linkDependencies(LAYOUT, exportRoot);
 
 	// The base commit predates these files. Carrying them over is what makes the
 	// two runs the same benchmark.
-	mkdirSync(join(worktree, PERF_DIR), { recursive: true });
+	mkdirSync(join(baseDir, PERF_DIR), { recursive: true });
 	for (const file of readdirSync(join(REPO, PERF_DIR))) {
 		if (file.endsWith(".bench.ts")) {
-			cpSync(join(REPO, PERF_DIR, file), join(worktree, PERF_DIR, file));
+			cpSync(join(REPO, PERF_DIR, file), join(baseDir, PERF_DIR, file));
 		}
 	}
-	mkdirSync(join(worktree, "tests", "fixtures"), { recursive: true });
-	cpSync(join(REPO, FIXTURES), join(worktree, FIXTURES));
+	mkdirSync(join(baseDir, "tests", "fixtures"), { recursive: true });
+	cpSync(join(REPO, FIXTURES), join(baseDir, FIXTURES));
 	const benchmarkFixture = join("tests", "fixtures", "benchmark.ts");
-	cpSync(join(REPO, benchmarkFixture), join(worktree, benchmarkFixture));
+	cpSync(join(REPO, benchmarkFixture), join(baseDir, benchmarkFixture));
 
 	const head = new Map();
 	const base = new Map();
@@ -182,12 +182,12 @@ try {
 		process.stdout.write(`  round ${round}/${opts.rounds}: working tree… `);
 		mergeMin(head, runBench(REPO, opts.filter, join(jsonDir, `head-${round}.json`)));
 		process.stdout.write(`${sha}… `);
-		mergeMin(base, runBench(worktree, opts.filter, join(jsonDir, `base-${round}.json`)));
+		mergeMin(base, runBench(baseDir, opts.filter, join(jsonDir, `base-${round}.json`)));
 		console.log("done");
 	}
 
 	report(head, base, sha);
 } finally {
-	removeWorktree?.();
+	removeExport?.();
 	removeJsonDir?.();
 }

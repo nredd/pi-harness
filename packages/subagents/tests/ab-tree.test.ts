@@ -89,7 +89,29 @@ describe("parseBenchReport", () => {
 				{
 					assertionResults: [
 						{ benchmarks: [{ name: "g > a", tasks: [{ latency: { p50: 0.5, mean: 9 } }] }] },
-						{ benchmarks: [{ name: "g > b", tasks: [{ latency: { mean: 2 } }, { latency: {} }] }] },
+						{
+							benchmarks: [
+								{
+									name: "g > b",
+									tasks: [
+										{ name: "m", latency: { mean: 2 } },
+										{ name: "n", latency: {} },
+									],
+								},
+							],
+						},
+						{
+							benchmarks: [
+								{
+									name: "g > c",
+									tasks: [
+										{ name: "x", latency: { p50: 3 } },
+										{ name: "y", latency: { p50: 4 } },
+									],
+								},
+								{ name: "g > no tasks" },
+							],
+						},
 						{},
 					],
 				},
@@ -98,8 +120,25 @@ describe("parseBenchReport", () => {
 		};
 		expect([...parseBenchReport(report)]).toEqual([
 			["g > a", 0.5],
-			["g > b", 2],
+			["g > b > m", 2],
+			["g > c > x", 3],
+			["g > c > y", 4],
 		]);
 		expect(parseBenchReport({}).size).toBe(0);
 	});
+});
+
+describe("ab.mjs CLI", () => {
+	it("runs one round against HEAD and reports results on both sides", () => {
+		// Regression for #1378: a wrong cwd on either side leaves a column "n/a".
+		const out = execFileSync("node", ["tests/fixtures/ab.mjs", "HEAD", "--rounds", "1", "--filter", "ab-smoke"], {
+			cwd: join(import.meta.dirname, ".."),
+			encoding: "utf-8",
+			timeout: 110_000,
+		});
+		const row = out.split("\n").find((line) => line.includes("ab smoke > noop"));
+		expect(row).toBeDefined();
+		expect(row).not.toContain("n/a");
+		expect(out).not.toContain("ran on only one side");
+	}, 120_000);
 });
