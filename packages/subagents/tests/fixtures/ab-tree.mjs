@@ -3,9 +3,9 @@
  * export another ref's tree without touching the shared repository state.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, symlinkSync } from "node:fs";
 import { join, relative } from "node:path";
+import { makeOwnedTempDir } from "@nredd/pi-test-lib/temp-dir";
 
 const git = (cwd, args, options = {}) => execFileSync("git", args, { cwd, encoding: "utf-8", ...options }).trim();
 
@@ -25,13 +25,13 @@ export function resolveLayout(cwd) {
  */
 export function exportTree(layout, sha, dest) {
 	// Archive to a file rather than a pipe buffer: a whole-repo tar can be large.
-	const scratch = mkdtempSync(join(tmpdir(), "pi-ab-archive-"));
+	const scratch = makeOwnedTempDir("pi-ab-archive-");
 	try {
-		const archive = join(scratch, "tree.tar");
+		const archive = join(scratch.dir, "tree.tar");
 		execFileSync("git", ["archive", "--format=tar", "-o", archive, sha], { cwd: layout.root });
 		execFileSync("tar", ["-x", "-C", dest, "-f", archive]);
 	} finally {
-		rmSync(scratch, { recursive: true, force: true });
+		scratch.remove();
 	}
 	return join(dest, layout.prefix);
 }
