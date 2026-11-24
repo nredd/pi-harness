@@ -49,6 +49,14 @@ pub const PROC_ROOT: &str = "/proc";
 /// Bus proxies whose connection PID is not the application's, e.g. Flatpak's
 /// accessibility bus proxy, which every sandboxed app shares.
 const BUS_PROXY_EXECUTABLES: [&str; 1] = ["xdg-dbus-proxy"];
+/// The most of an interpreter's `/proc/<pid>/cmdline` read for its script aliases (#1333).
+const MAX_CMDLINE_BYTES: usize = 32 * 1024;
+/// The longest script alias reported, a file name's usual limit.
+const MAX_SCRIPT_ALIAS_BYTES: usize = 255;
+/// Script extensions whose stem is also an alias, so `tool` blocks `tool.py`.
+const SCRIPT_EXTENSIONS: [&str; 8] = [
+    ".py", ".pyw", ".pyz", ".js", ".mjs", ".cjs", ".jar", ".java",
+];
 /// Role names that contradict a readable numeric role.
 const PROTECTED_ROLE_NAMES: [&str; 3] = ["unknown", "invalid", "password text"];
 
@@ -74,16 +82,24 @@ pub struct Executable {
     /// The literal `exe` link basename. It differs from `name` only when the link ends in
     /// ` (deleted)`: a replaced binary or a file literally named so. Both names can block.
     pub link_name: String,
+    /// An interpreter's hosted script or module names from its app-controlled `cmdline`,
+    /// e.g. `tool.py` and `tool` for `python3 /opt/tool.py`. Block-only, never identity.
+    pub script_aliases: Vec<String>,
 }
 
 impl Executable {
-    /// Names that may only add a block, never admit: the literal link name when it differs.
+    /// Names that may only add a block, never admit: the literal link name when it differs,
+    /// then each script alias other than the identity, each once.
     pub fn block_aliases(&self) -> Vec<&str> {
-        if self.link_name == self.name {
-            Vec::new()
-        } else {
-            vec![self.link_name.as_str()]
+        let mut aliases = Vec::new();
+        let candidates = std::iter::once(self.link_name.as_str())
+            .chain(self.script_aliases.iter().map(String::as_str));
+        for alias in candidates {
+            if alias != self.name && !aliases.contains(&alias) {
+                aliases.push(alias);
+            }
         }
+        aliases
     }
 }
 
@@ -1407,17 +1423,319 @@ fn contradicts_readable_role(role_name: &str) -> bool {
 /// an unreadable or non-UTF-8 `exe` link, a relative target, or a shared bus proxy.
 /// A ` (deleted)` link suffix is ambiguous (a replaced binary, or a file literally named so),
 /// so the identity drops it and the literal basename stays a block-only alias.
+/// An interpreter also reports the script aliases of its `cmdline` ([`hosted_aliases`]).
 pub fn process_executable(proc_root: &Path, pid: u64) -> Option<Executable> {
     if pid == 0 {
         return None;
     }
-    let target = std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).ok()?;
+    let process = proc_root.join(pid.to_string());
+    let target = std::fs::read_link(process.join("exe")).ok()?;
     let link_name = target.to_str()?.strip_prefix('/')?.rsplit('/').next()?;
     let name = link_name.strip_suffix(" (deleted)").unwrap_or(link_name);
-    (!name.is_empty() && !BUS_PROXY_EXECUTABLES.contains(&name)).then(|| Executable {
+    if name.is_empty() || BUS_PROXY_EXECUTABLES.contains(&name) {
+        return None;
+    }
+    let aliases = Interpreter::of(name)
+        .and_then(|interpreter| {
+            let cmdline = read_cmdline(&process.join("cmdline"))?;
+            Some(hosted_aliases(interpreter, &cmdline))
+        })
+        .unwrap_or_default();
+    Some(Executable {
         name: name.to_owned(),
         link_name: link_name.to_owned(),
+        script_aliases: aliases,
     })
+}
+
+/// An interpreter whose executable is the host, not the app: its hosted script or module
+/// comes from `cmdline`, which the process controls, so it can only add a block (#1333).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Interpreter {
+    Python,
+    Node,
+    Java,
+    Gjs,
+}
+
+/// How an interpreter reads one option token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OptionArg {
+    /// A whole option: the next token is read on.
+    Flag,
+    /// An option whose value is the next token, skipped unread.
+    Value,
+    /// The next token is a module (`python -m`, `java -m`), or the inline value of
+    /// `java --module=`.
+    Module,
+    /// The next token is a jar path (`java -jar`).
+    Jar,
+    /// Inline code, stdin, help or an unknown option: no script follows that this reads.
+    Stop,
+}
+
+impl Interpreter {
+    /// The interpreter an `exe` basename names, `None` for any other executable.
+    fn of(name: &str) -> Option<Self> {
+        if is_python(name) {
+            return Some(Self::Python);
+        }
+        match name {
+            "node" | "nodejs" => Some(Self::Node),
+            "java" => Some(Self::Java),
+            "gjs" | "gjs-console" => Some(Self::Gjs),
+            _ => None,
+        }
+    }
+
+    /// How this interpreter reads `token`, which starts with `-`. An option this does not
+    /// know might take the next token as its value, so it stops rather than misread it.
+    fn option(self, token: &str) -> OptionArg {
+        match self {
+            Self::Python => match token {
+                "-b" | "-bb" | "-B" | "-d" | "-E" | "-i" | "-I" | "-O" | "-OO" | "-P" | "-q"
+                | "-R" | "-s" | "-S" | "-u" | "-v" | "-x" => OptionArg::Flag,
+                "-W" | "-X" | "--check-hash-based-pycs" => OptionArg::Value,
+                "-m" => OptionArg::Module,
+                _ if token.starts_with("-W") || token.starts_with("-X") => OptionArg::Flag,
+                _ => OptionArg::Stop,
+            },
+            Self::Node => match token {
+                "--inspect"
+                | "--inspect-brk"
+                | "--no-warnings"
+                | "--no-deprecation"
+                | "--trace-warnings"
+                | "--enable-source-maps"
+                | "--expose-gc"
+                | "--preserve-symlinks"
+                | "--preserve-symlinks-main"
+                | "--no-addons"
+                | "--abort-on-uncaught-exception"
+                | "--pending-deprecation"
+                | "--throw-deprecation"
+                | "--trace-deprecation"
+                | "--trace-uncaught"
+                | "--experimental-vm-modules"
+                | "--harmony" => OptionArg::Flag,
+                "-r"
+                | "--require"
+                | "--import"
+                | "--loader"
+                | "--experimental-loader"
+                | "-C"
+                | "--conditions"
+                | "--title"
+                | "--input-type" => OptionArg::Value,
+                _ => OptionArg::Stop,
+            },
+            Self::Java => match token {
+                "-server" | "-client" | "-showversion" | "-esa" | "-dsa" => OptionArg::Flag,
+                "-cp"
+                | "-classpath"
+                | "--class-path"
+                | "-p"
+                | "--module-path"
+                | "--upgrade-module-path"
+                | "--add-modules"
+                | "--add-exports"
+                | "--add-opens"
+                | "--add-reads"
+                | "--patch-module"
+                | "--limit-modules"
+                | "--enable-native-access"
+                | "--source" => OptionArg::Value,
+                "-m" | "--module" => OptionArg::Module,
+                "-jar" => OptionArg::Jar,
+                _ if [
+                    "-D",
+                    "-X",
+                    "-agentlib:",
+                    "-agentpath:",
+                    "-javaagent:",
+                    "-ea",
+                    "-da",
+                    "-enableassertions",
+                    "-disableassertions",
+                    "-verbose",
+                    "-splash:",
+                ]
+                .iter()
+                .any(|prefix| token.starts_with(prefix)) =>
+                {
+                    OptionArg::Flag
+                }
+                _ => OptionArg::Stop,
+            },
+            Self::Gjs => match token {
+                "-m" | "--module" | "-d" | "--debugger" => OptionArg::Flag,
+                "-I" | "--include-path" | "--coverage-prefix" | "--coverage-output" => {
+                    OptionArg::Value
+                }
+                _ => OptionArg::Stop,
+            },
+        }
+    }
+
+    /// How this interpreter reads a `--name=value` token by its `name`. Only a known option
+    /// that takes a value (now inline), `java --module=` or an allowlisted `=` form is read
+    /// on; any other, e.g. `--eval=code` or an unknown option, stops: whether the next token
+    /// is the script or an app argument is unknowable, and an argument may be a secret.
+    fn inline_option(self, name: &str) -> OptionArg {
+        match self.option(name) {
+            OptionArg::Value => OptionArg::Flag,
+            OptionArg::Module if self == Self::Java => OptionArg::Module,
+            _ if self == Self::Node && NODE_INLINE_OPTIONS.contains(&name) => OptionArg::Flag,
+            _ => OptionArg::Stop,
+        }
+    }
+}
+
+/// Node options read whole only in their `--name=value` form.
+const NODE_INLINE_OPTIONS: [&str; 5] = [
+    "--inspect",
+    "--inspect-brk",
+    "--inspect-port",
+    "--max-old-space-size",
+    "--stack-size",
+];
+
+/// Whether an `exe` basename is `python`, `python3` or `python3.12`: `python` plus a
+/// version of dot-separated digit runs.
+fn is_python(name: &str) -> bool {
+    name.strip_prefix("python").is_some_and(|version| {
+        version.is_empty()
+            || version
+                .split('.')
+                .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    })
+}
+
+/// `cmdline` at `path`, read only from a regular file and at most [`MAX_CMDLINE_BYTES`], or
+/// `None` when it cannot be read. A longer one keeps only its complete leading tokens.
+fn read_cmdline(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_CMDLINE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_CMDLINE_BYTES {
+        bytes.truncate(MAX_CMDLINE_BYTES);
+        let complete = bytes
+            .iter()
+            .rposition(|&byte| byte == 0)
+            .map_or(0, |end| end + 1);
+        bytes.truncate(complete);
+    }
+    Some(bytes)
+}
+
+/// The block-only names of the script or module `interpreter` runs per its NUL-separated
+/// `cmdline`: one conservative rule, the first token after the options that the
+/// interpreter runs, so never an option value, inline code or a later app argument. Only
+/// that token's basename (and stem, e.g. `tool` of `tool.py`) or module name is kept,
+/// never the rest of argv, which can carry secrets. Anything it cannot read whole as
+/// that (non-UTF-8, an unknown option or `=` option, a control character, past 255
+/// bytes) is no alias.
+fn hosted_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
+    let java = interpreter == Interpreter::Java;
+    let mut tokens = cmdline.split(|&byte| byte == 0).skip(1);
+    let mut options = true;
+    while let Some(token) = tokens.next() {
+        let Ok(token) = std::str::from_utf8(token) else {
+            return Vec::new();
+        };
+        let (kind, inline) = match token {
+            "--" if options => {
+                options = false;
+                continue;
+            }
+            "-" => (OptionArg::Stop, None),
+            _ if options && token.starts_with('-') => match token.split_once('=') {
+                Some((name, value)) if token.starts_with("--") => {
+                    (interpreter.inline_option(name), Some(value))
+                }
+                _ => (interpreter.option(token), None),
+            },
+            // `java Tool.java` runs a source file; any other Java target is a class name.
+            _ if java && token.ends_with(".java") => return file_aliases(token),
+            _ if java && token.starts_with('@') => (OptionArg::Stop, None),
+            _ if java => return module_aliases(token, false),
+            _ => return file_aliases(token),
+        };
+        let mut value = || {
+            inline.or_else(|| {
+                tokens
+                    .next()
+                    .and_then(|value| std::str::from_utf8(value).ok())
+            })
+        };
+        match kind {
+            OptionArg::Flag => {}
+            OptionArg::Value => {
+                value();
+            }
+            OptionArg::Module => {
+                return value().map_or_else(Vec::new, |module| module_aliases(module, java));
+            }
+            OptionArg::Jar => return value().map_or_else(Vec::new, file_aliases),
+            OptionArg::Stop => return Vec::new(),
+        }
+    }
+    Vec::new()
+}
+
+/// A script path's basename, plus its stem for a known script extension.
+fn file_aliases(path: &str) -> Vec<String> {
+    let Some(basename) = path.rsplit('/').next().filter(|name| is_hosted_name(name)) else {
+        return Vec::new();
+    };
+    let stem = SCRIPT_EXTENSIONS
+        .iter()
+        .find_map(|extension| basename.strip_suffix(extension))
+        .filter(|stem| is_hosted_name(stem));
+    std::iter::once(basename)
+        .chain(stem)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A dotted module or class name (`pkg.tool`, `org.example.Main`), plus a Java
+/// `module/class` pair's two names when `split_main` is set. A name with any other
+/// character is no alias.
+fn module_aliases(module: &str, split_main: bool) -> Vec<String> {
+    let names: Vec<&str> = if split_main {
+        module.split('/').collect()
+    } else {
+        vec![module]
+    };
+    let dotted = |name: &&str| {
+        is_hosted_name(name)
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$'))
+    };
+    if names.len() > 2 || !names.iter().all(dotted) {
+        return Vec::new();
+    }
+    names.into_iter().map(str::to_owned).collect()
+}
+
+/// Whether `name` is reportable as a script, module or class alias: a non-empty name other
+/// than `.` and `..`, at most [`MAX_SCRIPT_ALIAS_BYTES`], with no control character.
+fn is_hosted_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_SCRIPT_ALIAS_BYTES
+        && name != "."
+        && name != ".."
+        && !name.chars().any(char::is_control)
 }
 
 fn protected_ancestry() -> ProtocolError {
@@ -2574,6 +2892,7 @@ mod tests {
             executable: Some(Executable {
                 name: "fixture-editor".into(),
                 link_name: "fixture-editor".into(),
+                script_aliases: Vec::new(),
             }),
             wm_class: Some(("fixture".into(), "Fixture".into())),
             class_candidates: Vec::new(),
@@ -2609,10 +2928,28 @@ mod tests {
         replaced.executable = Some(Executable {
             name: "editor".into(),
             link_name: "editor (deleted)".into(),
+            script_aliases: Vec::new(),
         });
         let replaced = root_json("@w3", &replaced, 0);
         assert_eq!(replaced["appId"], "editor");
         assert_eq!(replaced["blockAliases"], json!(["editor (deleted)"]));
+
+        // An interpreter keeps its own identity; its script names are block-only, each once.
+        let mut hosted = root.clone();
+        hosted.wm_class = None;
+        hosted.class_candidates = vec![("tool".into(), "Tool".into())];
+        hosted.executable = Some(Executable {
+            name: "python3".into(),
+            link_name: "python3 (deleted)".into(),
+            script_aliases: vec!["tool.py".into(), "tool".into(), "python3".into()],
+        });
+        let hosted = root_json("@w4", &hosted, 0);
+        assert_eq!(hosted["appId"], "python3");
+        assert_eq!(hosted["processName"], "python3");
+        assert_eq!(
+            hosted["blockAliases"],
+            json!(["python3 (deleted)", "tool.py", "tool", "Tool"])
+        );
 
         let mut wayland_root = root;
         wayland_root.x11_window = None;
@@ -3390,5 +3727,281 @@ mod tests {
         for pid in [0, 12, 13, 14, 17, 99] {
             assert_eq!(process_executable(proc, pid), None, "pid {pid}");
         }
+    }
+
+    /// The script aliases `interpreter` reports for the argv `args`, joined with NULs.
+    fn aliases_of(interpreter: Interpreter, args: &[&str]) -> Vec<String> {
+        let mut cmdline = args.join("\0").into_bytes();
+        cmdline.push(0);
+        hosted_aliases(interpreter, &cmdline)
+    }
+
+    #[test]
+    fn interpreters_are_named_by_their_exe_basename() {
+        for name in ["python", "python3", "python3.12", "python2.7"] {
+            assert_eq!(Interpreter::of(name), Some(Interpreter::Python), "{name}");
+        }
+        for name in [
+            "python3.",
+            "python.3",
+            "python3..1",
+            "pythonw",
+            "python3-config",
+        ] {
+            assert_eq!(Interpreter::of(name), None, "{name}");
+        }
+        assert_eq!(Interpreter::of("node"), Some(Interpreter::Node));
+        assert_eq!(Interpreter::of("nodejs"), Some(Interpreter::Node));
+        assert_eq!(Interpreter::of("java"), Some(Interpreter::Java));
+        assert_eq!(Interpreter::of("gjs"), Some(Interpreter::Gjs));
+        assert_eq!(Interpreter::of("gjs-console"), Some(Interpreter::Gjs));
+        for name in ["KeePassXC", "bash", "electron", "perl"] {
+            assert_eq!(Interpreter::of(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn script_aliases_read_only_the_run_target() {
+        use Interpreter::{Gjs, Java, Node, Python};
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|&name| name.to_owned())
+                .collect::<Vec<_>>()
+        };
+        let none: Vec<String> = Vec::new();
+        let cases: &[(Interpreter, &[&str], Vec<String>)] = &[
+            // The script's basename and stem, never a later app argument.
+            (
+                Python,
+                &["python3", "-u", "/opt/tool.py", "--token", "secret"],
+                names(&["tool.py", "tool"]),
+            ),
+            (
+                Python,
+                &["python3", "-W", "ignore", "tool"],
+                names(&["tool"]),
+            ),
+            (
+                Python,
+                &["python3", "-Wignore", "-X", "dev", "a/b.pyw"],
+                names(&["b.pyw", "b"]),
+            ),
+            (
+                Python,
+                &["python3", "-m", "pkg.tool", "x.py"],
+                names(&["pkg.tool"]),
+            ),
+            (
+                Python,
+                &["python3", "--", "-dash.py"],
+                names(&["-dash.py", "-dash"]),
+            ),
+            (Python, &["python3", "-OO", "--", "--"], names(&["--"])),
+            // Inline code, stdin, help, an unknown option or a missing value: no alias.
+            (Python, &["python3", "-c", "import tool"], none.clone()),
+            (Python, &["python3", "-", "tool.py"], none.clone()),
+            (Python, &["python3", "-h"], none.clone()),
+            (
+                Python,
+                &["python3", "-Q", "secret", "tool.py"],
+                none.clone(),
+            ),
+            (Python, &["python3", "-m"], none.clone()),
+            (Python, &["python3", "-m", "pkg/tool"], none.clone()),
+            (Python, &["python3", "-u"], none.clone()),
+            (Python, &["python3"], none.clone()),
+            (Python, &["python3", "/opt/"], none.clone()),
+            (Python, &["python3", ".."], none.clone()),
+            (Python, &["python3", "tool\u{7}.py"], none.clone()),
+            (Python, &["python3", ".py"], names(&[".py"])),
+            (
+                Node,
+                &[
+                    "node",
+                    "--max-old-space-size=4096",
+                    "--inspect",
+                    "/app/main.js",
+                ],
+                names(&["main.js", "main"]),
+            ),
+            (
+                Node,
+                &["node", "-r", "dotenv/config", "srv.mjs"],
+                names(&["srv.mjs", "srv"]),
+            ),
+            (Node, &["node", "-e", "run()"], none.clone()),
+            (Node, &["node", "--eval", "run()"], none.clone()),
+            // Inline code in a long `=` option is code, not a flag: the next token is argv.
+            (Node, &["node", "--eval=run()", "main.js"], none.clone()),
+            (Node, &["node", "--print=1", "main.js"], none.clone()),
+            // A known value option's `=` form is whole; an unknown `=` option stops.
+            (
+                Node,
+                &["node", "--require=x.js", "app.js", "secretArg"],
+                names(&["app.js", "app"]),
+            ),
+            (
+                Node,
+                &["node", "--inspect=9229", "app.js"],
+                names(&["app.js", "app"]),
+            ),
+            (Node, &["node", "--unknown=x", "secretArg"], none.clone()),
+            (
+                Node,
+                &["node", "--no-warnings=x", "secretArg"],
+                none.clone(),
+            ),
+            (
+                Node,
+                &["node", "--unknown", "secret", "main.js"],
+                none.clone(),
+            ),
+            (
+                Java,
+                &[
+                    "java",
+                    "-Xmx1g",
+                    "-Dk=v",
+                    "-cp",
+                    "/lib/*",
+                    "org.example.Main",
+                    "--key",
+                ],
+                names(&["org.example.Main"]),
+            ),
+            (
+                Java,
+                &["java", "-jar", "/opt/KeePass.jar", "--secret"],
+                names(&["KeePass.jar", "KeePass"]),
+            ),
+            (
+                Java,
+                &["java", "--module", "app.mod/app.Main"],
+                names(&["app.mod", "app.Main"]),
+            ),
+            (
+                Java,
+                &["java", "--add-opens=a/b=ALL", "-m", "app.mod"],
+                names(&["app.mod"]),
+            ),
+            (
+                Java,
+                &["java", "--module=app.mod/app.Main", "secretArg"],
+                names(&["app.mod", "app.Main"]),
+            ),
+            (
+                Java,
+                &["java", "--add-opens=a/b=ALL-UNNAMED", "Main", "secretArg"],
+                names(&["Main"]),
+            ),
+            (
+                Java,
+                &["java", "--enable-preview=x", "secretArg"],
+                none.clone(),
+            ),
+            (Java, &["java", "--module="], none.clone()),
+            // Source-file mode: the basename and stem, from a bare or a full path.
+            (
+                Java,
+                &["java", "Tool.java", "secretArg"],
+                names(&["Tool.java", "Tool"]),
+            ),
+            (
+                Java,
+                &["java", "--source", "21", "/opt/Tool.java"],
+                names(&["Tool.java", "Tool"]),
+            ),
+            (Java, &["java", "-m", "a/b/c"], none.clone()),
+            (Java, &["java", "-m", "a/"], none.clone()),
+            (Java, &["java", "@argfile"], none.clone()),
+            (Java, &["java", "/opt/Main"], none.clone()),
+            (Java, &["java", "-jar"], none.clone()),
+            (Java, &["java", "-version"], none.clone()),
+            (
+                Gjs,
+                &["gjs", "-m", "-I", "/lib", "/usr/share/org.example.Tool.js"],
+                names(&["org.example.Tool.js", "org.example.Tool"]),
+            ),
+            (Gjs, &["gjs", "-c", "print(1)"], none.clone()),
+            (Gjs, &["gjs", "--command=print(1)", "x.js"], none.clone()),
+            (
+                Gjs,
+                &["gjs", "--include-path=/lib", "app.js"],
+                names(&["app.js", "app"]),
+            ),
+            (Gjs, &["gjs", "--module=x", "secretArg"], none.clone()),
+            (
+                Python,
+                &["python3", "--check-hash-based-pycs=always", "tool.py"],
+                names(&["tool.py", "tool"]),
+            ),
+            (Python, &["python3", "--help=x", "secretArg"], none.clone()),
+        ];
+        for (interpreter, args, expected) in cases {
+            assert_eq!(&aliases_of(*interpreter, args), expected, "{args:?}");
+        }
+        // The alias is bounded; a non-UTF-8 token before the target is unreadable.
+        let long = format!("{}.py", "t".repeat(MAX_SCRIPT_ALIAS_BYTES));
+        assert_eq!(aliases_of(Python, &["python3", &long]), none);
+        let stem = "t".repeat(MAX_SCRIPT_ALIAS_BYTES - 3);
+        assert_eq!(
+            aliases_of(Python, &["python3", &format!("{stem}.py")]),
+            names(&[&format!("{stem}.py"), &stem])
+        );
+        assert_eq!(hosted_aliases(Python, b"python3\0-u\0\xff.py\0"), none);
+        assert_eq!(
+            hosted_aliases(Python, b"python3\0-W\0\xff\0tool.py\0"),
+            names(&["tool.py", "tool"])
+        );
+        // A rewritten title is one token: no argv to read.
+        assert_eq!(hosted_aliases(Python, b"python3 tool.py"), none);
+    }
+
+    #[test]
+    fn process_executable_adds_interpreter_script_aliases() {
+        let fixture = ProcFixture::new(&[
+            (20, "/usr/bin/python3.12"),
+            (21, "/usr/bin/KeePassXC"),
+            (22, "/usr/bin/python3"),
+            (23, "/usr/bin/python3"),
+            (24, "/usr/bin/python3"),
+            (25, "/usr/bin/python3"),
+            (26, "/usr/bin/python3"),
+            (27, "/usr/bin/node (deleted)"),
+        ]);
+        let proc = fixture.0.as_path();
+        let cmdline = |pid: u64| proc.join(pid.to_string()).join("cmdline");
+        std::fs::write(cmdline(20), b"python3\0/opt/tool.py\0--token\0secret\0").unwrap();
+        std::fs::write(cmdline(21), b"python3\0/opt/tool.py\0").unwrap();
+        // 22 has no cmdline: the identity stands, with no alias.
+        std::os::unix::fs::symlink(cmdline(20), cmdline(23)).unwrap();
+        std::fs::create_dir(cmdline(24)).unwrap();
+        // A target past the read cap is cut, so no partial name becomes an alias.
+        let mut cut = b"python3\0-W\0".to_vec();
+        cut.resize(MAX_CMDLINE_BYTES - 4, b'x');
+        cut.extend_from_slice(b"\0tool.py\0");
+        std::fs::write(cmdline(25), &cut).unwrap();
+        // A target before the cap is kept however long the argv after it.
+        let mut long = b"python3\0tool.py\0".to_vec();
+        long.resize(MAX_CMDLINE_BYTES * 2, b'x');
+        std::fs::write(cmdline(26), &long).unwrap();
+        std::fs::write(cmdline(27), b"node\0main.js\0").unwrap();
+
+        let aliases =
+            |pid| process_executable(proc, pid).map(|executable| executable.script_aliases);
+        assert_eq!(aliases(20), Some(vec!["tool.py".into(), "tool".into()]));
+        assert_eq!(process_executable(proc, 20).unwrap().name, "python3.12");
+        assert_eq!(aliases(21), Some(Vec::new()), "not an interpreter");
+        for pid in [22, 23, 24, 25] {
+            assert_eq!(aliases(pid), Some(Vec::new()), "pid {pid}");
+        }
+        assert_eq!(aliases(26), Some(vec!["tool.py".into(), "tool".into()]));
+        let node = process_executable(proc, 27).unwrap();
+        assert_eq!(node.name, "node");
+        assert_eq!(
+            node.block_aliases(),
+            vec!["node (deleted)", "main.js", "main"]
+        );
     }
 }

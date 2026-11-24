@@ -432,12 +432,12 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Native runtime closure remains #696; headless tests do not prove desktop adapters or exclude their policy logic.",
-      "note": "Pinned Linux ARM64 measurement (#696): shared peer tests and AT-SPI root discovery reduced uncovered L/F/regions from 967/129/1793 to 930/125/1730. Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches.",
+      "note": "Ubuntu main runs 45225473086 and 45229504804 (same crate sources) agree on 727/106/1245 uncovered L/F/regions (#696). Initial Ubuntu receipt: run 43183336941, artifact 13927707571 (#758). Includes cfg(test) modules in src; regions are not branches. The earlier pinned Linux ARM64 measurement no longer applies to the Ubuntu x64 reference. The cited runs were cancelled or superseded overall; their computer-use jobs succeeded and produced the reports.",
       "signals": {
         "primary": {
           "report": "coverage/native-linux/coverage.json",
           "producer": "llvm-cov",
-          "max_uncovered": { "linux": { "lines": 834, "functions": 108 } },
+          "max_uncovered": { "linux": { "lines": 727, "functions": 106 } },
           "enforcement": "report-only",
           "reason": "Source-complete Ubuntu producer (#758), with advisory references ratcheted from headless Linux measurements. Runtime and inline-test attribution closure remains #696.",
           "reporters": ["text", "lcov", "json"],
@@ -453,13 +453,13 @@
       "status": "measured",
       "goal": "excluded",
       "goal_reason": "Headless x64 tests do not prove live desktop behavior or Windows ARM64 coverage (#696).",
-      "note": "Hosted runs 44914453077 and 44876056492 agree on 3000/324/4868 uncovered lines/functions/regions. Mapped totals (5181 lines, 619 functions) come from main run 45009970545 at the sources they hash. Source tests inside src count; regions are not branches.",
+      "note": "Hosted main runs 45204703192 and 45210838089 (unchanged crate sources) agree on 2899/311 uncovered lines/functions (uncovered regions 4659 and 4656; uncapped). Mapped totals (5181 lines, 619 functions) come from main run 45009970545 at the sources they hash. Source tests inside src count; regions are not branches.",
       "signals": {
         "primary": {
           "report": "coverage/native-windows/lcov.info",
           "producer": "llvm-lcov",
           "platforms": ["win32"],
-          "max_uncovered": { "win32": { "lines": 3000, "functions": 324 } },
+          "max_uncovered": { "win32": { "lines": 2899, "functions": 311 } },
           "reporters": ["text", "lcov", "json"],
           "mapped_totals": {
             "win32": {
@@ -469,7 +469,7 @@
               "native/windows/bridge-rs/src/freshness.rs": { "sha256": "48b942cd512789d7f9cc01b780135f5392ff7ecfd542c0816f4fb18bebb3b851", "lines": 28, "functions": 4 },
               "native/windows/bridge-rs/src/guard.rs": { "sha256": "fdabf8e34c059199f902e6be999830abd268db4fdea79a6d0dee90bc81ff9aef", "lines": 193, "functions": 16 },
               "native/windows/bridge-rs/src/input.rs": { "sha256": "903cf8e7c64ffc15ad5860d057e53fb5b2d398381ff1fa34c0d44eb6ee091964", "lines": 526, "functions": 69 },
-              "native/windows/bridge-rs/src/lib.rs": { "sha256": "5e804bdaae133f045e1c6a8ab1e926424af3b418493bf17a1bffaefc9de3afa6", "lines": 0, "functions": 0 },
+              "native/windows/bridge-rs/src/lib.rs": { "sha256": "af4ecce6d50d4095c126eb01c7ad3e0c1697f6822256e8db8ca4eeb50f65c010", "lines": 0, "functions": 0 },
               "native/windows/bridge-rs/src/main.rs": { "sha256": "cf567072a05f6b488c78c0031ae95d5b2b009b850e924b61da1038b59d6a33a0", "lines": 2562, "functions": 289 },
               "native/windows/bridge-rs/src/protocol.rs": { "sha256": "daa8318982877113bbc58f567e2b26cfe50fb2ed1e3b7e3440a82da1b0ba2f9b", "lines": 18, "functions": 2 },
               "native/windows/bridge-rs/src/refs.rs": { "sha256": "dbf1b26b72929ae406570a135de3809fd299dc6eb8315840e6aafdbb7115311b", "lines": 113, "functions": 24 },
@@ -510,10 +510,10 @@
       "signals": {
         "primary": {
           "report": "coverage/swift/lcov.info",
-          "max_uncovered": { "darwin": { "lines": 1567, "functions": 396, "branches": null } },
+          "max_uncovered": { "darwin": { "lines": 1532, "functions": 382, "branches": null } },
           "reporters": ["text", "lcov"],
           "enforcement": "report-only",
-          "reason": "Report full-source headless Swift coverage for #645 without claiming all-native coverage. Swift tests run locally and on macOS main/dispatch, not in PR CI.",
+          "reason": "Report full-source headless Swift coverage for #645 without claiming all-native coverage. Swift tests run locally and on macOS main/dispatch, not in PR CI. The cap is a local Mac measurement; a hosted macos-14 run counted 3 more uncovered functions than local on the same base, so a hosted main artifact reading up to that offset above the cap is advisory, not a failure.",
           "skip_hosts": ["linux"],
           "gate": "check-ts"
         }
