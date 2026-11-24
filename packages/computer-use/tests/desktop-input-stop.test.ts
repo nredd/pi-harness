@@ -44,7 +44,7 @@ test.for([
 	const failure = new HelperCommandError("app_blocked: 'Vault' is blocked", "app_blocked", { postedUnits: units });
 	const error = await rendered({ action: "keypress", keys: ["cmd+s", "tab"] }, failure);
 	expect(error.message).toBe(
-		`desktop_input stopped (app_blocked): a blocked app was frontmost or held key focus. ${posted}. Do not replay this call; take a desktop_screenshot to see what arrived.`,
+		`desktop_input stopped (app_blocked): a blocked app was frontmost or held key focus, or key focus could not be read. ${posted}. Do not replay this call; take a desktop_screenshot to see what arrived.`,
 	);
 	expect(error).toBeInstanceOf(HelperCommandError);
 	expect((error as HelperCommandError).code).toBe("app_blocked");
