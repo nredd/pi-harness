@@ -42,11 +42,6 @@
   "packages/computer-use: test/macos-native-pure.test.mjs: test-extension",
   "packages/computer-use: test/macos-observe-target.test.mjs: test-extension",
   "packages/computer-use: test/make-signing-cert.test.mjs: test-extension",
-  "packages/computer-use: test/managed-browser-headless.test.mjs: test-extension",
-  "packages/computer-use: test/managed-browser-launch.test.mjs: test-extension",
-  "packages/computer-use: test/managed-browser-observe.test.mjs: test-extension",
-  "packages/computer-use: test/managed-browser-profile.test.mjs: test-extension",
-  "packages/computer-use: test/managed-browser-stuck.test.mjs: test-extension",
   "packages/computer-use: test/note-view.test.mjs: test-extension",
   "packages/computer-use: test/outline-store-edges.test.mjs: test-extension",
   "packages/computer-use: test/outline-store.test.mjs: test-extension",
@@ -74,6 +69,5 @@
   "packages/computer-use: test/windows-native-refusals.test.mjs: test-extension",
   "packages/computer-use: test/wsl-detection.test.mjs: test-extension",
   "packages/computer-use: test/wsl2-diagnostics.test.mjs: test-extension",
-  "packages/computer-use: test: top-level-entry",
-  "packages/subagents: package.json: script-name bench:ab"
+  "packages/computer-use: test: top-level-entry"
 ]

@@ -5,6 +5,7 @@ line-length = 110
 target-version = "py313"
 # These scripts run on the hosted runner's system python3 (3.12), before any uv environment exists.
 [tool.ruff.per-file-target-version]
+"ci_account_windows_coverage.py" = "py312"
 "ci_fork_check.py" = "py312"
 "ci_merge_shard_coverage.py" = "py312"
 "ci_paths.py" = "py312"

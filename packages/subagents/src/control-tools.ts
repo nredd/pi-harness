@@ -8,8 +8,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { abortable } from "./abortable.ts";
-import { type AgentManager, describeEvicted, type EvictedNote, isTopLevelAgent } from "./agent-manager.ts";
-import { type AgentRef, agentNotFound, type SurvivorReach } from "./agent-ref.ts";
+import {
+	type AgentManager,
+	describeEvicted,
+	describeEvictedResult,
+	type EvictedNote,
+	isTopLevelAgent,
+} from "./agent-manager.ts";
+import type { AgentRef, SurvivorReach } from "./agent-ref.ts";
 import { getAgentConversation, SUBAGENT_TOOL_NAMES, steerAgent } from "./agent-runner.ts";
 import type { Clock } from "./clock.ts";
 import { NOTIFICATION_HOLD_MS } from "./completion-outbox.ts";
@@ -404,4 +410,12 @@ export function registerControlTools(deps: ControlToolDeps): void {
 			},
 		}),
 	);
+}
+
+/** "Not found" for `label` as asked, or what became of the agent by its resolved eviction `note`. */
+export function agentNotFound(label: string, note?: EvictedNote, withResult = false): string {
+	const result = withResult && note ? describeEvictedResult(note) : undefined;
+	return note
+		? describeEvicted(note) + (result ? `\n\n${result}` : "")
+		: `Agent not found: "${label}". It may have been cleaned up.`;
 }

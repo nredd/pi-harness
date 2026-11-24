@@ -185,8 +185,9 @@ def git(
 
     The fixed builtins read refs, config, worktree inventory and the raw index;
     prune is dry-run only. Attribute and EOL queries do not run filters, the
-    reflog is read directly, and remote get-url only resolves config. No status,
-    diff/textconv, signature checks or submodule commands run. Transport (even
+    reflog is read directly, and remote get-url only resolves config. The only diff
+    is a cached `diff-index` of object IDs. No status, worktree diff, textconv,
+    signature checks or submodule commands run. Transport (even
     for a missing promisor object) and paging are disabled; Git never needs
     SSH, credentials or askpass. Only the explicit gh PR queries use the network.
 
@@ -465,6 +466,7 @@ def check_status(path: Path, admin: Path) -> None:
     untracked = git(path, "ls-files", "--others", "-z")
     if untracked:
         raise KeepError(f"untracked or ignored paths: {untracked!r}")
+    check_staged(path)
     # ls-files --eol classifies raw index blobs and worktree bytes; it does not convert them.
     check_eol(git(path, "ls-files", "--eol", "-z"))
     flags = [
@@ -485,6 +487,23 @@ def check_status(path: Path, admin: Path) -> None:
         raise KeepError(
             "`core.trustctime` is disabled; restored mtimes may hide content changes"
         )
+
+
+def check_staged(path: Path) -> None:
+    """Hold if any index entry, including intent-to-add, differs from HEAD.
+
+    The plumbing cached comparison reads only tree and index object IDs; it never
+    reads worktree files or blob content, so no filter, textconv or external diff runs.
+
+    Parameters:
+        path: Path, Candidate checkout.
+    Returns:
+        None.
+    Raises:
+        KeepError: The index differs from HEAD or Git cannot compare them.
+    """
+    if git(path, "diff-index", "--cached", "--name-only", "-z", "HEAD", "--"):
+        raise KeepError("staged changes: index differs from HEAD")
 
 
 def check_eol(data: bytes) -> None:
