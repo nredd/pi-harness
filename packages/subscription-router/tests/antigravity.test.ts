@@ -107,10 +107,36 @@ describe("parseAntigravity", () => {
 			{ name: "3p-5h", usedPercent: 50, resetAt: undefined },
 			{ name: "3p-7d", usedPercent: 50, resetAt: undefined },
 		]);
-		const offset = parseAntigravity({
-			groups: [{ buckets: [bucket("gemini-5h", "5h", 0, "2026-11-30T13:10:54-08:00")] }],
+		const invalid = parseAntigravity({
+			groups: [
+				{
+					buckets: [
+						bucket("gemini-feb", "5h", 0.5, "2026-02-30T21:10:54Z"),
+						bucket("gemini-space", "weekly", 0.5, "2026-11-30 21:10:54Z"),
+						bucket("3p-hour", "5h", 0.5, "2026-11-30T24:00:00+00:00"),
+					],
+				},
+			],
 		});
-		expect(offset?.windows[0]?.resetAt).toBe(Date.parse("2026-11-30T21:10:54Z"));
+		expect(invalid?.windows.map(({ name, resetAt }) => [name, resetAt])).toEqual([
+			["5h", undefined],
+			["7d", undefined],
+			["3p-5h", undefined],
+		]);
+		const offsets = parseAntigravity({
+			groups: [
+				{
+					buckets: [
+						bucket("gemini-5h", "5h", 0, "2026-11-30T13:10:54.250-08:00"),
+						bucket("gemini-weekly", "weekly", 0, "2026-12-01t02:40:54+05:30"),
+					],
+				},
+			],
+		});
+		expect(offsets?.windows.map(({ resetAt }) => resetAt)).toEqual([
+			Date.parse("2026-11-30T21:10:54.250Z"),
+			Date.parse("2026-11-30T21:10:54Z"),
+		]);
 	});
 
 	it("clamps out-of-range fractions and skips non-finite ones", () => {

@@ -24,8 +24,8 @@ const ANTIGRAVITY_BUCKETS = [
 	{ prefix: "gemini-", families: ["gemini"], namePrefix: "" },
 	{ prefix: "3p-", families: ["claude", "gpt"], namePrefix: "3p-" },
 ] as const;
-/** RFC 3339 needs an explicit offset; without one `Date.parse` would read the host time zone. */
-const RFC3339_OFFSET = /(?:Z|[+-]\d{2}:\d{2})$/i;
+/** RFC 3339 date-time with an explicit offset; without one `Date.parse` would read the host time zone. */
+const RFC3339 = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/i;
 /** Reported Antigravity `window` values, as window name suffix and span. */
 const ANTIGRAVITY_WINDOWS: ReadonlyMap<unknown, { name: string; durationMs: number }> = new Map([
 	["5h", { name: "5h", durationMs: FIVE_HOURS_MS }],
@@ -46,6 +46,21 @@ function timestamp(value: unknown): number | undefined {
 	if (raw === undefined) return undefined;
 	const ms = raw < SECONDS_VS_MS_THRESHOLD ? raw * 1000 : raw;
 	return Number.isNaN(new Date(ms).getTime()) ? undefined : ms;
+}
+
+/**
+ * Epoch ms from a strict RFC 3339 date-time, or undefined. The stated fields must round-trip, so an
+ * impossible date such as `2026-02-30` stays unknown instead of normalizing into March.
+ */
+function rfc3339(value: unknown): number | undefined {
+	const match = typeof value === "string" ? RFC3339.exec(value) : null;
+	if (!match) return undefined;
+	const [, fields, sign, hours = "0", minutes = "0"] = match;
+	const ms = Date.parse(value as string);
+	const offsetMs = (sign === "-" ? -1 : 1) * (Number(hours) * 60 + Number(minutes)) * 60_000;
+	if (Number.isNaN(ms) || new Date(ms + offsetMs).toISOString().slice(0, 19) !== fields?.toUpperCase())
+		return undefined;
+	return ms;
 }
 
 function percentage(value: unknown): number | undefined {
@@ -186,7 +201,8 @@ function codexAccountId(token: string): string | undefined {
  * known `bucketId` prefix and `window` becomes a model-scoped window: `gemini-*` gates the `gemini`
  * family, `3p-*` the `claude` and `gpt` families. `remainingFraction` (0..1, clamped) becomes
  * `usedPercent`; a bucket without a finite fraction is skipped. `resetTime` is absent while a
- * bucket is untouched, which leaves the reset unknown, as does one without an explicit offset.
+ * bucket is untouched, which leaves the reset unknown, as does anything but a valid RFC 3339 date-time
+ * with an explicit offset.
  */
 export function parseAntigravity(payload: unknown): CollectorReading | undefined {
 	const groups = asRecord(payload)?.groups;
@@ -207,10 +223,7 @@ export function parseAntigravity(payload: unknown): CollectorReading | undefined
 			windows.push({
 				name,
 				usedPercent: (1 - Math.min(Math.max(remaining, 0), 1)) * 100,
-				resetAt:
-					typeof bucket?.resetTime === "string" && RFC3339_OFFSET.test(bucket.resetTime)
-						? timestamp(bucket.resetTime)
-						: undefined,
+				resetAt: rfc3339(bucket?.resetTime),
 				durationMs: span.durationMs,
 				spanSource: "reported",
 				scope: "model",
