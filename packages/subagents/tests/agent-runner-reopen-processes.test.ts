@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { isolatedHomeEnv } from "@nredd/pi-test-lib/isolated-home";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, it, onTestFinished } from "vitest";
 import { heldClaimRefusal, WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
@@ -25,15 +26,28 @@ class Reopener {
 	readonly child: ChildProcessWithoutNullStreams;
 	private readonly lines: string[] = [];
 	private stderr = "";
+	private failure: Error | undefined;
 	private closed = false;
 	private waiting: (() => void) | undefined;
 
 	constructor(name: string, file: string, release: string, root: string) {
 		this.name = name;
-		// Never the developer's agent dir or session settings.
-		const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: join(root, "agent-dir") };
+		// Isolated home and agent dir so direct Vitest runs never read developer config.
+		const home = join(root, `home-${name}`);
+		mkdirSync(home, { recursive: true });
+		const env: NodeJS.ProcessEnv = {
+			...process.env,
+			...isolatedHomeEnv(home),
+			PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+		};
 		delete env.PI_CODING_AGENT_SESSION_DIR;
 		this.child = spawn(process.execPath, [CHILD, file, release, name], { cwd: root, env });
+		const recordFailure = (err: Error) => {
+			this.failure ??= new Error(`${this.name} stream failed: ${err.message}${this.stderr ? `: ${this.stderr}` : ""}`);
+			this.waiting?.();
+		};
+		this.child.on("error", recordFailure);
+		this.child.stdin.on("error", recordFailure);
 		createInterface({ input: this.child.stdout }).on("line", (line) => {
 			this.lines.push(line);
 			this.waiting?.();
@@ -51,9 +65,10 @@ class Reopener {
 		});
 	}
 
-	/** The next line the child writes, or its stderr when it exits first. */
+	/** The next line the child writes, or its failure/stderr when it terminates first. */
 	async next(): Promise<string> {
 		while (this.lines.length === 0) {
+			if (this.failure) throw this.failure;
 			if (this.closed) {
 				throw new Error(`${this.name} exited ${this.child.exitCode ?? this.child.signalCode}: ${this.stderr}`);
 			}
@@ -68,10 +83,19 @@ class Reopener {
 		this.child.stdin.end("go\n");
 	}
 
+	hasBufferedOutput(): boolean {
+		return this.lines.length > 0;
+	}
+
 	async exit(): Promise<number | null> {
+		if (this.failure) throw this.failure;
 		if (this.child.exitCode === null && this.child.signalCode === null) {
-			await new Promise((resolve) => this.child.once("exit", resolve));
+			await new Promise<void>((resolve) => {
+				this.child.once("exit", () => resolve());
+				this.child.once("error", () => resolve());
+			});
 		}
+		if (this.failure) throw this.failure;
 		return this.child.exitCode;
 	}
 }
@@ -132,9 +156,11 @@ it("lets one of two processes racing runAgent reopen claim, open and write the t
 	expect(heldClaimRefusal(file)).toBe(
 		`child session is in use (writer claim held by pid ${winner.child.pid}): ${file}`,
 	);
+	expect(winner.hasBufferedOutput()).toBe(false);
 	expect(readFileSync(file)).toEqual(baseline);
 
 	writeFileSync(release, "");
+	expect(await winner.next()).toBe("opened");
 	expect(await winner.next()).toBe(`done reply ${winner.name}`);
 	expect(await winner.exit()).toBe(0);
 	expect(existsSync(`${file}${WRITER_CLAIM_SUFFIX}`)).toBe(false);

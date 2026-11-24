@@ -7,14 +7,16 @@
  * both children at once after neither observes a held claim. Whichever acquires
  * the writer claim reports `verified` from its simulated `verifyResumeFile`
  * barrier (which always returns `undefined`) and blocks there, still holding the
- * claim, until the `release` file exists. It ends with `done <reply>` or
- * `refused <message>`.
+ * claim, until the `release` file exists, then reports `opened` from
+ * `SessionManager.open` and ends with `done <reply>`; the refused process ends
+ * with `refused <message>`.
  *
  * argv: transcript, release file, name (sent as the prompt and the reply).
  */
 import { existsSync, writeSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerAgents } from "../../src/agent-types.ts";
 import { heldClaimRefusal } from "../../src/transcript-claim.ts";
 import type { AgentConfig } from "../../src/types.ts";
@@ -64,6 +66,12 @@ const ctx = {
 	isProjectTrusted: () => true,
 	model,
 	modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
+};
+
+const realOpen = SessionManager.open.bind(SessionManager);
+SessionManager.open = (...args: Parameters<typeof SessionManager.open>) => {
+	report("opened");
+	return realOpen(...args);
 };
 
 // Simulated dispatch-time claim probe only; real recovery validation lives in launch/top-level.ts.
