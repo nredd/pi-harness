@@ -40,7 +40,8 @@ export const LINUX_HELPER_PROTOCOL_VERSION = 10;
 /**
  * Helper features the client requires beyond the protocol version, from `diagnostics.features`. A helper
  * built before a feature shipped speaks the same protocol but lacks it, so it is rejected and replaced like a
- * protocol mismatch. `snapshot-deadline`: one deadline bounds each AT-SPI snapshot (#1349, #1352).
+ * protocol mismatch. `snapshot-deadline`: one deadline bounds each AT-SPI snapshot (#1349, #1352); it
+ * shipped after the interpreter `blockAliases` (#1333), so a helper reporting it also has them.
  */
 export const LINUX_REQUIRED_HELPER_FEATURES = ["snapshot-deadline"] as const;
 export const LINUX_HELPER_PATH =

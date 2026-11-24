@@ -3,7 +3,7 @@
 // agent directory and project, so nothing under the real `~/.pi` is read or written.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -307,6 +307,52 @@ test("package agents load with the shared skills, independently of Pi's source f
 				SKILLS,
 			);
 		}
+	}));
+
+test("a global agent copy shadows the packaged agent until it is retired, then only package agents load", () =>
+	withSandbox(async (box) => {
+		box.settingsManager.setPackages([
+			{ source: pkgRoot, extensions: ["src/index.ts"], skills: ["skills/**"], prompts: [], themes: [] },
+		]);
+		setPackageAgentsGate(["pi-preset"]);
+		const copy = join(box.agentDir, "agents/critic.md");
+		mkdirSync(join(box.agentDir, "agents"));
+		writeFileSync(copy, "---\nname: critic\ndescription: Local copy.\n---\nLocal.\n");
+		type Origin = [name: string, source: string | undefined, path: string | undefined];
+		const sources = (): Origin[] =>
+			[...loadCustomAgents(box.cwd, true, { homeDir: box.home }).entries()]
+				.map(([name, agent]): Origin => [name, agent.source, agent.sourcePath])
+				.sort(([a], [b]) => a.localeCompare(b));
+		const overlap = sources();
+		assert.equal(overlap.length, 8);
+		assert.deepEqual(
+			overlap.find(([name]) => name === "critic"),
+			["critic", "global", copy],
+		);
+		assert.ok(overlap.filter(([name]) => name !== "critic").every(([, source]) => source === "package"));
+		rmSync(copy);
+		const retired = sources();
+		assert.equal(retired.length, 8);
+		assert.ok(
+			retired.every(([name, source, path]) => source === "package" && path === join(pkgRoot, `agents/${name}.md`)),
+		);
+	}));
+
+test("a trusted project agent copy also shadows the packaged agent, an untrusted one does not", () =>
+	withSandbox(async (box) => {
+		box.settingsManager.setPackages([
+			{ source: pkgRoot, extensions: ["src/index.ts"], skills: ["skills/**"], prompts: [], themes: [] },
+		]);
+		setPackageAgentsGate(["pi-preset"]);
+		const copy = join(box.cwd, ".pi/agents/critic.md");
+		mkdirSync(join(box.cwd, ".pi/agents"), { recursive: true });
+		writeFileSync(copy, "---\nname: critic\ndescription: Project copy.\n---\nProject.\n");
+		const origin = (projectTrusted: boolean) => {
+			const critic = loadCustomAgents(box.cwd, true, { homeDir: box.home, projectTrusted }).get("critic");
+			return [critic?.source, critic?.sourcePath];
+		};
+		assert.deepEqual(origin(true), ["project", copy]);
+		assert.deepEqual(origin(false), ["package", join(pkgRoot, "agents/critic.md")]);
 	}));
 
 test("declared subagent agents resolve inside the package and parse with Pi's frontmatter reader", () => {
