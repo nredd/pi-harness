@@ -23,6 +23,7 @@ import {
 	heldClaimRefusal,
 	openClaimed,
 	pidDomainOf,
+	processStartOf,
 	TAKEOVER_SUFFIX,
 	type TranscriptClaim,
 	WRITER_CLAIM_SUFFIX,
@@ -73,6 +74,29 @@ describe("pidDomainOf", () => {
 		expect(pidDomainOf("linux", ns, () => " \n")).toBeUndefined();
 		expect(pidDomainOf("linux", () => "", boot)).toBeUndefined();
 		expect(claimHost.pidDomain()).toBe(pidDomainOf(process.platform, readlinkSync, readFileSync));
+	});
+});
+
+describe("processStartOf", () => {
+	it("reads a pid's start time on Linux, past a command name with spaces and parentheses", () => {
+		// Fields 3..22 after `comm)`; 98765 is field 22 (starttime).
+		const stat = (path: string) =>
+			path === "/proc/42/stat"
+				? "42 (a b) c) S 1 42 42 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 98765 12345 678\n"
+				: "?";
+		expect(processStartOf("linux", 42, stat)).toBe("98765");
+		expect(processStartOf("darwin", 42, stat)).toBeUndefined();
+		expect(processStartOf("win32", 42, stat)).toBeUndefined();
+		// Gone, unreadable, cut short or not a tick count: unknown.
+		expect(
+			processStartOf("linux", 42, () => {
+				throw new Error("ENOENT");
+			}),
+		).toBeUndefined();
+		expect(processStartOf("linux", 42, () => "42 (x) S 1 42")).toBeUndefined();
+		expect(processStartOf("linux", 42, () => "42 (x) S 1 42 42 0 -1 0 0 0 0 0 0 0 0 0 0 0 1 0 -5 1")).toBeUndefined();
+		expect(claimHost.processStart(process.pid)).toBe(processStartOf(process.platform, process.pid, readFileSync));
+		if (process.platform === "linux") expect(claimHost.processStart(process.pid)).toMatch(/^\d+$/);
 	});
 });
 
@@ -202,6 +226,36 @@ describe("claimTranscript", () => {
 		} else {
 			claimTranscript(file).release();
 		}
+	});
+
+	it("takes over a live pid only when its start time shows it was reused", () => {
+		stubVerifiedDomain();
+		const { file, claimPath } = transcript();
+		const live = `child session is in use (writer claim held by pid ${process.ppid}): ${file}`;
+		const start = vi.spyOn(claimHost, "processStart").mockReturnValue("200");
+		// The holder itself, still running.
+		writeHolder(claimPath, process.ppid, { start: "200" });
+		expect(() => claimTranscript(file)).toThrow(live);
+		// An older claim without a start time, or a start time this host cannot read: still the holder.
+		writeHolder(claimPath, process.ppid);
+		expect(() => claimTranscript(file)).toThrow(live);
+		writeHolder(claimPath, process.ppid, { start: "100" });
+		start.mockReturnValue(undefined);
+		expect(() => claimTranscript(file)).toThrow(live);
+		// Another or unverified PID domain: a start time from elsewhere compares with nothing here.
+		start.mockReturnValue("200");
+		writeHolder(claimPath, process.ppid, { start: "100", domain: undefined });
+		expect(() => claimTranscript(file)).toThrow(live);
+		const domain = vi.spyOn(claimHost, "pidDomain").mockReturnValue(undefined);
+		writeHolder(claimPath, process.ppid, { start: "100", domain: VERIFIED_DOMAIN });
+		expect(() => claimTranscript(file)).toThrow(live);
+		domain.mockReturnValue(VERIFIED_DOMAIN);
+		// Same pid, same domain, another start: an unrelated process reused it.
+		expect(writerClaimHolder(file)).toBeUndefined();
+		const claim = claimTranscript(file);
+		const written = JSON.parse(readFileSync(claimPath, "utf8"));
+		expect([written.pid, written.start]).toEqual([process.pid, "200"]);
+		claim.release();
 	});
 
 	it("reads a link, a FIFO, a directory or an oversized file as an unreadable claim", () => {

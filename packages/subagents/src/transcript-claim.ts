@@ -8,8 +8,9 @@
  * run and removes it when the run settles. A claim left by a crash is taken
  * over only when its holder is verifiably gone: same host, same verified PID
  * domain (Linux only: PID namespace and boot id) and `kill(pid, 0)` reports
- * `ESRCH`. Anything else (another host, another or unverified PID domain, a
- * live pid, an unreadable claim, a takeover lock left in place, a hard-linked
+ * `ESRCH`, or its pid now names a process with another start time (reused).
+ * Anything else (another host, another or unverified PID domain, a live pid,
+ * an unreadable claim, a takeover lock left in place, a hard-linked
  * transcript) refuses the run: in doubt, nobody writes.
  */
 import { randomUUID } from "node:crypto";
@@ -52,6 +53,7 @@ interface ClaimHolder {
 	pid: number;
 	host: string;
 	domain: string | undefined;
+	start: string | undefined;
 }
 
 /**
@@ -78,9 +80,37 @@ export function pidDomainOf(
 	}
 }
 
-/** This process's PID domain; an object so tests can stand in for another namespace. */
+/**
+ * When `pid` started, in clock ticks since boot (`/proc/<pid>/stat` field 22),
+ * on Linux only; undefined elsewhere or when it cannot be read or parsed. Within
+ * one PID domain (namespace and boot) a pid plus its start time names one
+ * process, so a live pid with another start time is a reuse, not the holder.
+ * The command name (field 2) may hold spaces and parentheses: fields are
+ * counted after its last `)`.
+ */
+export function processStartOf(
+	platform: NodeJS.Platform,
+	pid: number,
+	readText: (path: string) => { toString(): string },
+): string | undefined {
+	if (platform !== "linux") return undefined;
+	try {
+		const stat = readText(`/proc/${pid}/stat`).toString();
+		// After `comm)`: field 3 (state) onward, so field 22 is the 20th.
+		const start = stat
+			.slice(stat.lastIndexOf(")") + 1)
+			.trim()
+			.split(/\s+/)[19];
+		return start !== undefined && /^\d+$/.test(start) ? start : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** This process's PID domain and a pid's start time; an object so tests can stand in for another namespace. */
 export const claimHost = {
 	pidDomain: (): string | undefined => pidDomainOf(process.platform, readlinkSync, readFileSync),
+	processStart: (pid: number): string | undefined => processStartOf(process.platform, pid, readFileSync),
 };
 
 function errorCode(error: unknown): unknown {
@@ -205,7 +235,8 @@ function parseHolder(raw: string): ClaimHolder | undefined {
 		if (typeof value?.pid === "number" && Number.isSafeInteger(value.pid) && value.pid > 0) {
 			if (typeof value.host === "string") {
 				const domain = typeof value.domain === "string" ? value.domain : undefined;
-				return { pid: value.pid, host: value.host, domain };
+				const start = typeof value.start === "string" ? value.start : undefined;
+				return { pid: value.pid, host: value.host, domain, start };
 			}
 		}
 	} catch {
@@ -236,7 +267,7 @@ function holderReason(raw: string, claimPath: string): string | undefined {
 	if (domain !== undefined && holder.domain !== undefined && holder.domain !== domain) {
 		return `writer claim held by pid ${holder.pid} in another PID namespace; remove ${claimPath} once it has exited`;
 	}
-	if (processAlive(holder.pid)) {
+	if (processAlive(holder.pid) && !reusedPid(holder, domain)) {
 		return `writer claim held by pid ${holder.pid}${holder.pid === process.pid ? " (this process)" : ""}`;
 	}
 	// Gone here, but without a verified domain on both sides "here" may not be where it ran.
@@ -244,6 +275,18 @@ function holderReason(raw: string, claimPath: string): string | undefined {
 		return `writer claim held by pid ${holder.pid} in an unverified PID namespace (automatic takeover needs Linux); remove ${claimPath} once it has exited`;
 	}
 	return undefined;
+}
+
+/**
+ * Whether the live `holder.pid` is another process than the one that wrote the
+ * claim: same verified PID domain, both start times known and different. An
+ * unknown start time (an older claim, a pid that exited meanwhile, an
+ * unreadable `/proc`) proves nothing, so the pid counts as the holder.
+ */
+function reusedPid(holder: ClaimHolder, domain: string | undefined): boolean {
+	if (domain === undefined || holder.domain !== domain || holder.start === undefined) return false;
+	const start = claimHost.processStart(holder.pid);
+	return start !== undefined && start !== holder.start;
 }
 
 function inUse(reason: string, file: string): string {
@@ -347,6 +390,7 @@ export function claimTranscript(file: string): TranscriptClaim {
 		pid: process.pid,
 		host: hostname(),
 		domain: claimHost.pidDomain(),
+		start: claimHost.processStart(process.pid),
 		token: randomUUID(),
 	});
 	if (!publishFresh(claimPath, body, file)) {
