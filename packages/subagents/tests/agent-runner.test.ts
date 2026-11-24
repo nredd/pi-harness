@@ -1012,6 +1012,11 @@ const unusedManager: NestedAgentManager = {
 	awaitStartup: vi.fn(),
 	spawnAndWait: vi.fn(),
 	getRecord: vi.fn(),
+	records: vi.fn(),
+	latestId: vi.fn(),
+	tombstoneById: vi.fn(),
+	tombstoneByName: vi.fn(),
+	getEvictedNote: vi.fn(),
 	resume: vi.fn(),
 };
 
