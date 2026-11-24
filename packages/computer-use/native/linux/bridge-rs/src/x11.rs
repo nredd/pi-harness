@@ -978,6 +978,16 @@ impl InputState {
             }
         }
     }
+    fn load_restart_debt(&self, journal: &Journal) {
+        // The write could have preceded a press that never ran. Observe up only:
+        // a down key could now be held by somebody else.
+        self.owing().debt = journal
+            .releases()
+            .iter()
+            .copied()
+            .map(Owed::unknown)
+            .collect();
+    }
     fn journal_slot(&self) -> std::sync::MutexGuard<'_, Option<Journal>> {
         self.journal.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1084,6 +1094,7 @@ pub struct Input<S: InputSink = XtestSink> {
     state: Arc<InputState>,
     journal: std::cell::RefCell<Option<(Journal, Binding)>>,
     exit_limit: Option<(std::time::Instant, Duration)>,
+    cleanup_error: std::cell::RefCell<Option<ProtocolError>>,
     delivered: Cell<usize>,
     uncertain: Cell<bool>,
 }
@@ -1155,14 +1166,7 @@ impl Input<XtestSink> {
             }
         };
         if !continuing {
-            // Across a restart the write could have preceded a press that never ran.
-            // Observe up only: a down key could now be held by somebody else.
-            state.owing().debt = journal
-                .releases()
-                .iter()
-                .copied()
-                .map(Owed::unknown)
-                .collect();
+            state.load_restart_debt(&journal);
         }
         let input = Self::with_state(
             XtestSink {
@@ -1196,6 +1200,7 @@ impl<S: InputSink> Input<S> {
             state,
             journal: std::cell::RefCell::new(None),
             exit_limit: None,
+            cleanup_error: std::cell::RefCell::new(None),
             delivered: Cell::new(0),
             uncertain: Cell::new(false),
         }
@@ -1240,6 +1245,23 @@ impl<S: InputSink> Input<S> {
             .rfind(|entry| entry.same_input(owed))
         {
             *entry = owed.unknown();
+        }
+    }
+    /// Attach journal failures raised during cleanup without losing the action error.
+    pub fn with_cleanup_error(
+        &self,
+        result: Result<(), ProtocolError>,
+    ) -> Result<(), ProtocolError> {
+        let Some(cleanup) = self.cleanup_error.borrow_mut().take() else {
+            return result;
+        };
+        match result {
+            Ok(()) => Err(cleanup),
+            Err(mut error) => {
+                error.message.push_str("; cleanup: ");
+                error.message.push_str(&cleanup.message);
+                Err(error)
+            }
         }
     }
     pub fn sink(&self) -> &S {
@@ -1469,7 +1491,8 @@ impl<S: InputSink> Input<S> {
                 Ok(Some(true) | None) | Err(_) => Some(owed),
             };
         }
-        if self.sync_journal(Some(owed)).is_err() {
+        if let Err(error) = self.sync_journal(Some(owed)) {
+            *self.cleanup_error.borrow_mut() = Some(error);
             return Some(owed);
         }
         // Another held release may sync the full snapshot before hand_over runs.
@@ -1629,7 +1652,9 @@ impl<S: InputSink> Drop for Held<'_, S> {
         }
         unconfirmed.reverse();
         self.input.state.hand_over(unconfirmed, released);
-        let _ = self.input.sync_journal(None);
+        if let Err(error) = self.input.sync_journal(None) {
+            self.input.cleanup_error.borrow_mut().get_or_insert(error);
+        }
     }
 }
 
@@ -2717,14 +2742,24 @@ mod tests {
         assert!(locked, "the live helper holds the cross-process lock");
         let recovered = Journal::open(home.path()).unwrap();
         recovered.bind(&binding).unwrap();
-        assert_eq!(
-            recovered.releases(),
-            &[Owed {
-                event: KEY_RELEASE_EVENT,
-                detail: 37,
-                ambiguous: false
-            }]
-        );
+        let state = Arc::new(InputState::default());
+        state.load_restart_debt(&recovered);
+        let down = Input::with_state(RecordingSink::default().held(false, 37), Arc::clone(&state));
+        assert_eq!(down.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert!(down.sink().events().is_empty());
+        let up = Input::with_state(RecordingSink::default(), state);
+        assert!(!recovered.releases().is_empty());
+        *up.journal.borrow_mut() = Some((recovered, binding));
+        up.settle().unwrap();
+        assert!(up.sink().events().is_empty());
+        assert!(up
+            .journal
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .0
+            .releases()
+            .is_empty());
     }
 
     #[test]

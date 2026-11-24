@@ -1264,7 +1264,7 @@ fn deliver_physical<S: InputSink>(
         "performed":{"grounding":"coordinates","delivery":"hid","mechanism":"xtest","deltaSource":"snapshot","windowId":owning_window},
         "evidence":{"mechanism":"xtest","windowId":owning_window}
     });
-    match result {
+    match input.with_cleanup_error(result) {
         Ok(()) => Ok(response),
         Err(error) if input.delivered_units() == 0 && !input.delivery_uncertain() => Err(error),
         Err(error) => {

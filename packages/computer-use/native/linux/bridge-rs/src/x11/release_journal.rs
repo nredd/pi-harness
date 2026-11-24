@@ -150,17 +150,26 @@ impl Journal {
             server: server.clone(),
             releases,
         });
-        self.write(next.as_ref()).map_err(|cause| format!("could not update release-debt record '{}': {cause}; verify that the inputs are up before clearing the record", self.path.display()))?;
-        self.record = next;
-        Ok(())
+        self.publish(next).map_err(|cause| format!("could not update release-debt record '{}': {cause}; verify that the inputs are up before clearing the record", self.path.display()))
     }
 
-    fn write(&self, record: Option<&Record>) -> io::Result<()> {
-        let Some(record) = record else {
-            return match unlinkat(&self.dir, RECORD, AtFlags::empty()) {
-                Ok(()) | Err(Errno::NOENT) => sync_dir(&self.dir),
-                Err(err) => Err(err.into()),
-            };
+    fn publish(&mut self, next: Option<Record>) -> io::Result<()> {
+        self.publish_with(next, sync_dir)
+    }
+
+    fn publish_with(
+        &mut self,
+        next: Option<Record>,
+        sync: impl FnOnce(&OwnedFd) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let Some(record) = next.as_ref() else {
+            match unlinkat(&self.dir, RECORD, AtFlags::empty()) {
+                Ok(()) | Err(Errno::NOENT) => {}
+                Err(err) => return Err(err.into()),
+            }
+            sync(&self.dir)?;
+            self.record = None;
+            return Ok(());
         };
         let bytes = serde_json::to_vec(record).map_err(io::Error::other)?;
         if bytes.len() > MAX_RECORD_BYTES {
@@ -180,13 +189,16 @@ impl Journal {
             let mut file = File::from(fd);
             file.write_all(&bytes)?;
             file.sync_all()?;
-            renameat(&self.dir, &stage, &self.dir, RECORD)?;
-            sync_dir(&self.dir)
+            renameat(&self.dir, &stage, &self.dir, RECORD).map_err(io::Error::from)
         })();
-        if result.is_err() {
+        if let Err(err) = result {
             let _ = unlinkat(&self.dir, &stage, AtFlags::empty());
+            return Err(err);
         }
-        result
+        // Rename already published the record. Keep it for recovery even if
+        // the directory sync fails; callers must still refuse the press.
+        self.record = next;
+        sync(&self.dir)
     }
 }
 
@@ -214,11 +226,24 @@ fn open_anchor_dir(path: &Path, uid: u32, strict_private: bool) -> Result<OwnedF
     let mut fd = openat(CWD, "/", flags, Mode::empty()).map_err(open_error)?;
     for part in path.components() {
         if let Component::Normal(name) = part {
+            let stat = fstat(&fd).map_err(open_error)?;
+            // Linux is the shipped runtime. Headless macOS tests can run under
+            // a shared scratch mount, while still validating the journal itself.
+            if cfg!(target_os = "linux")
+                && !trusted_ancestor(stat.st_uid, uid, Mode::from_raw_mode(stat.st_mode))
+            {
+                return Err(format!("unsafe ancestor of '{}'", path.display()));
+            }
             fd = openat(&fd, name, flags, Mode::empty()).map_err(open_error)?;
         }
     }
     validate_dir_fd(&fd, path, uid, strict_private)?;
     Ok(fd)
+}
+
+fn trusted_ancestor(owner: u32, uid: u32, mode: Mode) -> bool {
+    (owner == 0 || owner == uid)
+        && (!mode.intersects(Mode::WGRP | Mode::WOTH) || mode.contains(Mode::SVTX))
 }
 
 fn descend_dir(
@@ -472,6 +497,39 @@ mod tests {
         }
         reader.sync(&owner, Vec::new()).unwrap();
         assert!(!record.exists());
+    }
+
+    #[test]
+    fn published_record_remains_named_after_directory_sync_failure() {
+        let home = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(home.path()).unwrap();
+        let record = Record {
+            version: 1,
+            server: Binding {
+                server_id: "x".into(),
+                boot_id: "b".into(),
+                session_id: None,
+            },
+            releases: vec![Owed {
+                event: super::super::KEY_RELEASE_EVENT,
+                detail: 37,
+                ambiguous: false,
+            }],
+        };
+        assert!(journal
+            .publish_with(Some(record), |_| Err(io::Error::other("sync failed")))
+            .is_err());
+        assert!(journal.recovery("sync failed").contains("keycode 37"));
+        assert!(journal.path.is_file());
+    }
+
+    #[test]
+    fn rejects_untrusted_ancestor_modes() {
+        assert!(!trusted_ancestor(1000, 1000, Mode::from_raw_mode(0o777)));
+        assert!(!trusted_ancestor(1000, 1000, Mode::from_raw_mode(0o775)));
+        assert!(!trusted_ancestor(1001, 1000, Mode::from_raw_mode(0o755)));
+        assert!(trusted_ancestor(0, 1000, Mode::from_raw_mode(0o1777)));
+        assert!(trusted_ancestor(1000, 1000, Mode::from_raw_mode(0o700)));
     }
 
     #[test]
