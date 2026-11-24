@@ -142,6 +142,10 @@ try {
 		{ mode: 0o600 },
 	);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+	// The startup runtime can vanish mid-session (e.g. a package manager upgraded it in place), so the
+	// shim falls back to the `node` on PATH at commit time and otherwise names the stale path.
+	const stale = quote(process.execPath);
+	const runtimeLookup = `rt=${stale}\nif [ ! -x "$rt" ]; then\n\trt=$(command -v node) || {\n\t\techo "git_commit merge approval: runtime "${stale}" no longer exists and no node is on PATH" >&2\n\t\texit 1\n\t}\nfi\n`;
 	for (const hook of proxiedHooks(approval.hooks)) {
 		// Only the commit-tree hooks check the index. Any other hook with no real counterpart at call
 		// time is a no-op, so the shell skips it instead of starting a runtime: Git calls
@@ -149,7 +153,7 @@ try {
 		const skip = CHECKED_HOOKS.includes(hook) ? "" : `[ -e ${quote(join(approval.hooks, hook))} ] || exit 0\n`;
 		writeFileSync(
 			join(directory, hook),
-			`#!/bin/sh\n${skip}exec env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 ${quote(process.execPath)} ${quote(runner)} ${quote(hook)} "$@"\n`,
+			`#!/bin/sh\n${skip}${runtimeLookup}exec env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 "$rt" ${quote(runner)} ${quote(hook)} "$@"\n`,
 			{
 				mode: 0o700,
 			},
