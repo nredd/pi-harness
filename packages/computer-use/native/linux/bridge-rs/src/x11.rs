@@ -1135,7 +1135,9 @@ impl Input<XtestSink> {
                         journal_error(journal.recovery(&error.message))
                     }
                 })?;
-            journal.bind(&binding).map_err(journal_error)?;
+            journal
+                .bind_for_reconnect(&binding)
+                .map_err(journal_error)?;
             Ok::<_, ProtocolError>((conn, root, binding))
         })();
         let (conn, root, binding) = match opened {
@@ -1891,7 +1893,7 @@ fn live_binding(conn: &RustConnection) -> Result<Binding, ProtocolError> {
         server_id: server_id_of(conn)?,
         session_id: std::env::var("XDG_SESSION_ID")
             .ok()
-            .filter(|id| !id.is_empty()),
+            .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_graphic())),
         boot_id: release_journal::read_boot_id_from(std::path::Path::new("/proc"))
             .map_err(journal_error)?,
     })

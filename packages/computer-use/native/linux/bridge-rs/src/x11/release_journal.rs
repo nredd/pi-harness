@@ -140,6 +140,17 @@ impl Journal {
         Ok(())
     }
 
+    /// Reconnect settlement requires positive evidence of the original session.
+    pub(super) fn bind_for_reconnect(&self, live: &Binding) -> Result<(), String> {
+        self.bind(live)?;
+        if !self.releases().is_empty() && live.session_id.is_none() {
+            return Err(self.recovery(
+                "Cannot verify the original login session: XDG_SESSION_ID is unavailable.",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn releases(&self) -> &[Owed] {
         self.record.as_ref().map_or(&[], |record| &record.releases)
     }
@@ -533,6 +544,32 @@ mod tests {
             .is_err());
         assert!(journal.recovery("sync failed").contains("keycode 37"));
         assert!(journal.path.is_file());
+    }
+
+    #[test]
+    fn reconnect_cannot_settle_without_a_session_id() {
+        let home = tempfile::tempdir().unwrap();
+        let mut journal = Journal::open(home.path()).unwrap();
+        let live = Binding {
+            server_id: "x".into(),
+            boot_id: "b".into(),
+            session_id: None,
+        };
+        journal
+            .sync(
+                &live,
+                vec![Owed {
+                    event: super::super::KEY_RELEASE_EVENT,
+                    detail: 37,
+                    ambiguous: false,
+                }],
+            )
+            .unwrap();
+        assert!(journal
+            .bind_for_reconnect(&live)
+            .unwrap_err()
+            .contains("keycode 37"));
+        assert_eq!(journal.releases().len(), 1);
     }
 
     #[test]
