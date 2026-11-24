@@ -508,6 +508,7 @@ node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
   [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE]
   [--replace-harnesses]
 node ARTIFACT import --agent-dir DIR --input REPO
+node ARTIFACT restore --agent-dir DIR --input SRC --output OUT
 node ARTIFACT clean-recovery --agent-dir DIR --output OUT
 ```
 
@@ -652,6 +653,16 @@ CLI results:
   stdout. `stale` lists `{machineId, harness, lastGoodAt}` for every cached machine harness whose
   `lastGoodAt` is more than 2 days behind its manifest `exportedAt` (data carried through failures);
   each is also a stderr line, and none changes the exit code.
+- Restore: `{ "machineId", "snapshotDir", "exportedAt", "restored": [..] }` on stdout, plus `warnings`
+  if releasing the export lock failed. Requires `--agent-dir`, `--input SRC` and `--output OUT` (rejecting
+  export-only flags). `SRC` may be a sync root (`<SRC>/machines/<UUID>`) or a direct machine snapshot
+  directory (`<SRC>`) distinct from the target outbox, holding `manifest.json` and its referenced shards
+  (or only `manifest.json` when the shards are already in the outbox, or only the missing/damaged shards
+  when `manifest.json` is already in the outbox). Under the outbox's `.export.lock` it validates the
+  manifest as this machine's, authenticates every referenced shard within the 128 MiB cumulative expansion
+  budget, and validates the whole snapshot before writing: missing, damaged, denied or symlinked shard
+  files are atomically written first and `manifest.json` last, without pruning unreferenced files or
+  modifying outbox bookkeeping.
 - Clean-recovery: `{ "machineId", "snapshotDir", "removed": [..], "failed": [..], "kept": [{ "file", "reason" }] }`
   on stdout, plus `warnings` when an unlink failed or cleanup stopped (see recovery cleanup below), each
   escaped to one line. It exits 0 whatever it kept, except 1 (with no refusal line) when it stopped on a
@@ -857,9 +868,10 @@ still protected. Right before each unlink the active manifest is authenticated a
 after that shard pass, and the candidate is authenticated again (regular file, bytes matching its
 name); on any change cleanup stops, lists that file and the rest in `kept` as `changed` (still
 protected), warns `recovery cleanup stopped: the active manifest changed; N redundant files left in
-place` and exits 1 with no refusal code (any error during the recheck counts as a change). That recheck narrows the window, it does not eliminate it: checkout and restore
-writers do not take the export lock yet ([#1331](https://github.com/nredd/pi-harness/issues/1331)), so a writer that skips it (e.g. a
-manual restore into the outbox) must be quiescent while cleanup runs. Coverage is judged against
+place` and exits 1 with no refusal code (any error during the recheck counts as a change). Restoring
+files into the outbox through `pi-stats-export restore` (`restoreSnapshot`) takes the same `.export.lock`,
+so `clean-recovery` has real exclusion against restores; the pre-unlink recheck remains as a guard
+against anything that modifies the outbox outside the lock. Coverage is judged against
 the active snapshot as it is now: once removed, those rows are as protected as any other published
 history, no more. Shard files outside the frozen set are left to export pruning.
 
@@ -1207,7 +1219,7 @@ Harness API:
 
 - `src/stats/library.ts` is a Pi-independent barrel for parser, aggregation and snapshot APIs.
 - `parseSession`, `flatten`, `dedupCalls`, `hourlySeries`, `makeSnapshot`, `validateManifest`,
-  `validateShard`, `validateSnapshot`, `exportStats`, `importStats`, `loadCombined`, `coverageLabel`.
+  `validateShard`, `validateSnapshot`, `exportStats`, `importStats`, `restoreSnapshot`, `cleanRecovery`, `loadCombined`, `coverageLabel`.
 - `hourlySeries(calls, "5h" | "24h", now, keyOf?)` is deterministic, zero-filled, filters exact
   rolling boundaries and labels partial edges. UTC buckets keep repeated DST hours separate;
   viewer-local labels carry UTC offsets, including fractional-offset zones.

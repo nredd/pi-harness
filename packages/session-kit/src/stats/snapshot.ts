@@ -2160,9 +2160,9 @@ async function keptReason(
  * authenticates as this machine's v3 shard and the active snapshot holds every row of it. Everything else stays
  * frozen, with a reason. Every candidate stays in the recovery set until its unlink succeeds; the set shrinks
  * once, after the unlinks, so a crash or failed bookkeeping write leaves only stale names of absent files, which
- * are harmless, never an unprotected frozen file. Right before each unlink the manifest is authenticated and
- * reread and the file authenticated again; on any change cleanup stops. That recheck only narrows the window for
- * writers that skip the export lock (a manual restore into the outbox): they must be quiescent while cleanup runs.
+ * are harmless, never an unprotected frozen file. `restoreSnapshot` holds the same export lock, giving cleanup real
+ * exclusion against restores; right before each unlink the manifest is also authenticated and reread and the file
+ * authenticated again, stopping cleanup if an external writer modified the outbox outside the lock.
  */
 export async function cleanRecovery(dir: string, output: string): Promise<CleanupResult> {
 	const identity = await machineIdentity(dir);
@@ -2282,6 +2282,96 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 			kept,
 			...(warnings.length ? { warnings } : {}),
 		};
+	});
+}
+
+/** What an explicit locked outbox restore wrote or repaired. */
+export interface RestoreResult {
+	machineId: string;
+	snapshotDir: string;
+	exportedAt: number;
+	/** Shard files and `manifest.json` written or repaired in `snapshotDir`, shards first and `manifest.json` last. */
+	restored: string[];
+	warnings?: string[];
+}
+
+/** Whether `path` is already a readable regular file (never a symlink) holding `expected`. */
+async function sameRegularFile(path: string, expected: Buffer): Promise<boolean> {
+	try {
+		return (await lstat(path)).isFile() && (await readFile(path)).equals(expected);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Restore this machine's manifest and/or referenced shards from `input` into `<output>/machines/<machineId>` under
+ * the outbox's `.export.lock`, giving `exportStats` and `cleanRecovery` real mutual exclusion against restores.
+ * `input` may be a sync root (`<input>/machines/<machineId>`) or a direct machine snapshot directory (`<input>`).
+ * Validates the manifest as this machine's, authenticates every referenced shard within the 128 MiB cumulative
+ * expansion budget (from `sourceDir` when present there, else from `snapshotDir`), and validates the whole snapshot
+ * before writing any file: missing, damaged, denied or symlinked shards are atomically written first, then
+ * `manifest.json` last, without pruning unreferenced files or modifying outbox bookkeeping.
+ */
+export async function restoreSnapshot(dir: string, input: string, output: string): Promise<RestoreResult> {
+	const identity = await machineIdentity(dir);
+	const snapshotDir = join(output, "machines", identity.machineId);
+	return withExportLock<RestoreResult>(snapshotDir, async () => {
+		if (!(await lstat(input)).isDirectory())
+			throw new Error(`Restore source ${JSON.stringify(input)} is not a directory`);
+		const nested = join(input, "machines", identity.machineId);
+		const nestedStat = await lstat(nested).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return undefined;
+			throw error;
+		});
+		if (nestedStat && !nestedStat.isDirectory())
+			throw new Error(`Restore source ${JSON.stringify(nested)} is not a directory`);
+		const sourceDir = nestedStat ? nested : input;
+		if ((await realpath(sourceDir)) === (await realpath(snapshotDir)))
+			throw new Error(`Restore source ${JSON.stringify(sourceDir)} is the target outbox`);
+		const sourceManifest = await lstat(join(sourceDir, "manifest.json")).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT") return undefined;
+			throw error;
+		});
+		const manifestBase = sourceManifest ? sourceDir : snapshotDir;
+		const manifest = validateManifest(await jsonFile(join(manifestBase, "manifest.json")));
+		if (manifest.machineId !== identity.machineId)
+			throw new Error(
+				`Restore manifest machineId (${manifest.machineId}) does not match this installation (${identity.machineId})`,
+			);
+		const shards: Shard[] = [];
+		const fromSource: { file: string; bytes: Buffer }[] = [];
+		let remaining = MAX_BYTES;
+		for (const ref of manifest.shards) {
+			const inSource = await lstat(join(sourceDir, ref.file)).catch((error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") return undefined;
+				throw error;
+			});
+			const read = await readShard(inSource ? sourceDir : snapshotDir, manifest, ref, remaining);
+			remaining -= read.expandedBytes;
+			shards.push(read.shard);
+			if (inSource) fromSource.push({ file: ref.file, bytes: read.bytes });
+		}
+		if (!sourceManifest && fromSource.length === 0)
+			throw new Error(
+				`Restore source ${JSON.stringify(sourceDir)} contains neither manifest.json nor any referenced shard`,
+			);
+		validateSnapshot({ manifest, shards });
+		const restored: string[] = [];
+		for (const { file, bytes } of fromSource) {
+			const target = join(snapshotDir, file);
+			if (!(await sameRegularFile(target, bytes))) {
+				await atomicContents(target, bytes);
+				restored.push(file);
+			}
+		}
+		const manifestPath = join(snapshotDir, "manifest.json");
+		const manifestBytes = Buffer.from(JSON.stringify(manifest));
+		if (!(await sameRegularFile(manifestPath, manifestBytes))) {
+			await atomicContents(manifestPath, manifestBytes);
+			restored.push("manifest.json");
+		}
+		return { machineId: identity.machineId, snapshotDir, exportedAt: manifest.exportedAt, restored };
 	});
 }
 

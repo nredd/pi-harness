@@ -38,6 +38,8 @@ it("preserves every type-only binding from the original export-star targets", ()
 	expectTypeOf<library.MachineCoverage>().toEqualTypeOf<snapshot.MachineCoverage>();
 	expectTypeOf<library.Coverage>().toEqualTypeOf<snapshot.Coverage>();
 	expectTypeOf<library.Combined>().toEqualTypeOf<snapshot.Combined>();
+	expectTypeOf<library.CleanupResult>().toEqualTypeOf<snapshot.CleanupResult>();
+	expectTypeOf<library.RestoreResult>().toEqualTypeOf<snapshot.RestoreResult>();
 	expectTypeOf<library.RefusalCode>().toEqualTypeOf<snapshot.RefusalCode>();
 });
 
