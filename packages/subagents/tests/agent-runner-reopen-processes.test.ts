@@ -1,19 +1,23 @@
 /**
- * Two real processes reopening one saved transcript through the real `runAgent`
- * (#1247): both pass the dispatch check before either reaches the runner, and
- * the writer claim lets exactly one recheck, open and write it. The child is
- * `fixtures/runner-reopen-child.ts`; the claim alone is raced in `transcript-claim.test.ts`.
+ * Runner-level writer-claim race across two real processes (#1247): both run
+ * the real `runAgent` reopen against one saved transcript after a simulated
+ * `heldClaimRefusal` probe and synchronize at a simulated `verifyResumeFile`
+ * barrier (`fixtures/runner-reopen-child.ts`), so the writer claim lets
+ * exactly one open and write the transcript. Full `reopenTombstone` /
+ * `savedSessionChecker` dispatch and recheck are not exercised here; the claim
+ * helper alone is raced in `transcript-claim.test.ts`.
  */
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, it, onTestFinished } from "vitest";
 import { heldClaimRefusal, WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
 
-const CHILD = new URL("./fixtures/runner-reopen-child.ts", import.meta.url).pathname;
+const CHILD = fileURLToPath(new URL("./fixtures/runner-reopen-child.ts", import.meta.url));
 
 /** A real process running the runner's reopen; see the fixture for its protocol. */
 class Reopener {
@@ -100,7 +104,7 @@ function savedTranscript(root: string): string {
 	return file;
 }
 
-it("lets one of two processes that both judged a transcript free reopen and write it", {
+it("lets one of two processes racing runAgent reopen claim, open and write the transcript", {
 	timeout: 60_000,
 }, async () => {
 	// Canonical, as claims are: a temp root behind a symlink (macOS `/var`) would not compare equal.
@@ -109,12 +113,13 @@ it("lets one of two processes that both judged a transcript free reopen and writ
 	const release = join(root, "release");
 	const reopeners = [new Reopener("a", file, release, root), new Reopener("b", file, release, root)];
 	for (const reopener of reopeners) expect(await reopener.next()).toBe("ready free");
+	const baseline = readFileSync(file);
 	for (const reopener of reopeners) reopener.go();
 
-	// The first to claim parks in its pre-open recheck, claim held; the other stops at its claim.
+	// The first to claim parks in its simulated verifyResumeFile barrier, claim held; the other stops at its claim.
 	const outcomes = await Promise.all(reopeners.map((reopener) => reopener.next()));
 	const winner = reopeners[outcomes.indexOf("verified")];
-	if (!winner) throw new Error(`no process reached the recheck: ${outcomes.join("\n")}`);
+	if (!winner) throw new Error(`no process reached verifyResumeFile: ${outcomes.join("\n")}`);
 	const loser = reopeners.find((reopener) => reopener !== winner) as Reopener;
 	expect(
 		outcomes.filter((outcome) => outcome === "verified"),
@@ -127,16 +132,17 @@ it("lets one of two processes that both judged a transcript free reopen and writ
 	expect(heldClaimRefusal(file)).toBe(
 		`child session is in use (writer claim held by pid ${winner.child.pid}): ${file}`,
 	);
-	const before = readFileSync(file, "utf8");
+	expect(readFileSync(file)).toEqual(baseline);
 
 	writeFileSync(release, "");
 	expect(await winner.next()).toBe(`done reply ${winner.name}`);
 	expect(await winner.exit()).toBe(0);
 	expect(existsSync(`${file}${WRITER_CLAIM_SUFFIX}`)).toBe(false);
 	// The winner continued the saved conversation; the refused process never wrote to it.
-	const after = readFileSync(file, "utf8");
-	expect(after.startsWith(before)).toBe(true);
-	expect(after).toContain(`prompt ${winner.name}`);
-	expect(after).toContain(`reply ${winner.name}`);
-	expect(after).not.toContain(`prompt ${loser.name}`);
+	const after = readFileSync(file);
+	expect(after.subarray(0, baseline.length)).toEqual(baseline);
+	const afterText = after.toString("utf8");
+	expect(afterText).toContain(`prompt ${winner.name}`);
+	expect(afterText).toContain(`reply ${winner.name}`);
+	expect(afterText).not.toContain(`prompt ${loser.name}`);
 });

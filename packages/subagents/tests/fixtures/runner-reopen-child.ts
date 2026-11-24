@@ -1,11 +1,14 @@
 /**
- * One recovering process for the two-process reopen test in `agent-runner-reopen-processes.test.ts`
- * (#1247): the real `runAgent` reopening a saved transcript on a faux model.
- * It runs the dispatch-time check, reports it and waits on stdin for `go`; the
- * parent releases every child at once, so each has passed its check before any
- * reaches the runner. Whichever claims the transcript reports `verified` from
- * its pre-open recheck and blocks there, still holding the claim, until the
- * `release` file exists. It ends with `done <reply>` or `refused <message>`.
+ * One runner process for the two-process claim-race test in `agent-runner-reopen-processes.test.ts`
+ * (#1247): the real `runAgent` reopening a saved transcript on a faux model,
+ * with a simulated dispatch claim probe and pre-open barrier rather than full
+ * `reopenTombstone` / `savedSessionChecker` recovery. It probes `heldClaimRefusal`
+ * directly, reports the result and waits on stdin for `go`; the parent releases
+ * both children at once after neither observes a held claim. Whichever acquires
+ * the writer claim reports `verified` from its simulated `verifyResumeFile`
+ * barrier (which always returns `undefined`) and blocks there, still holding the
+ * claim, until the `release` file exists. It ends with `done <reply>` or
+ * `refused <message>`.
  *
  * argv: transcript, release file, name (sent as the prompt and the reply).
  */
@@ -21,12 +24,12 @@ import { runAgent } from "./run-selected-agent.ts";
 
 const [file = "", release = "", name = ""] = process.argv.slice(2);
 
-/** Written straight to the descriptor: a pipe write is asynchronous on macOS, and the recheck blocks the loop. */
+/** Written straight to the descriptor: a pipe write is asynchronous on macOS, and the barrier blocks the loop. */
 function report(line: string): void {
 	writeSync(1, `${line}\n`);
 }
 
-/** Block this process, claim held, until the parent creates `release`. */
+/** Simulated `verifyResumeFile` barrier: block with the claim held until `release` exists, then succeed. */
 function holdUntilReleased(): undefined {
 	report("verified");
 	const pause = new Int32Array(new SharedArrayBuffer(4));
@@ -63,6 +66,7 @@ const ctx = {
 	modelRegistry: { ...backend.modelRegistry, runtime: backend.modelRuntime },
 };
 
+// Simulated dispatch-time claim probe only; real recovery validation lives in launch/top-level.ts.
 report(`ready ${heldClaimRefusal(file) ?? "free"}`);
 const lines = createInterface({ input: process.stdin });
 lines.once("line", async () => {
