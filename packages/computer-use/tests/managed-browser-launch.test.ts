@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { shutdownComputerUseSession, testing } from "../src/bridge.ts";
 import { loadComputerUseConfig } from "../src/config.ts";
 
-const FAKE_BROWSER = fileURLToPath(new URL("./fixtures/fake-browser.mjs", import.meta.url));
+const FAKE_BROWSER = fileURLToPath(new URL("../test/fixtures/fake-browser.mjs", import.meta.url));
 const ENV = [
 	"PI_COMPUTER_USE_CHROME_EXECUTABLE",
 	"PI_COMPUTER_USE_HELIUM_EXECUTABLE",
@@ -28,7 +28,7 @@ const platform = (value) => vi.spyOn(process, "platform", "get").mockReturnValue
 
 describe("managed browser executable discovery", () => {
 	const { managedBrowserExecutableCandidates: candidates } = testing;
-	let bin;
+	let bin: string;
 
 	beforeEach(({ onTestFinished }) => {
 		bin = path.join(makeTestTempDir("pi-cu-discovery-", onTestFinished), "pi-cu-bin");
@@ -110,8 +110,8 @@ describe("managed browser executable discovery", () => {
 });
 
 describe.skipIf(process.platform === "win32")("launch_browser with the managed browser", () => {
-	let scratch;
-	let tmp;
+	let scratch: string;
+	let tmp: string;
 
 	beforeEach(({ onTestFinished }) => {
 		scratch = makeTestTempDir("pi-cu-launch-", onTestFinished);
@@ -218,8 +218,8 @@ describe.skipIf(process.platform === "win32")("launch_browser with the managed b
 });
 
 describe.skipIf(process.platform === "win32")("managed browser launch edge cases", () => {
-	let scratch;
-	let tmp;
+	let scratch: string;
+	let tmp: string;
 
 	beforeEach(({ onTestFinished }) => {
 		scratch = makeTestTempDir("pi-cu-launch-edge-", onTestFinished);
