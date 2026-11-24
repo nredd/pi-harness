@@ -345,6 +345,10 @@ describe("antigravity balanced routing", () => {
 		expect(await route(0.95, 80)).toMatchObject({ provider: "antigravity", id: GEMINI.id });
 	});
 
+	it("picks the later chain entry when both are eligible and it has more headroom", async () => {
+		expect(await route(0.1, 10)).toMatchObject({ provider: "anthropic", id: SONNET.id });
+	});
+
 	it("steers to another provider once the Gemini 5h window is exhausted", async () => {
 		expect(await route(0, 80)).toMatchObject({ provider: "anthropic", id: SONNET.id });
 	});
