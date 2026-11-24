@@ -37,8 +37,8 @@ const LEGACY_DISPLAY = {
 
 /**
  * V1 rows beyond the legacy pair, with the router's built-in display. Each renders as a generic row,
- * and only once the router has read it or holds a block: a session without that credential gets no
- * placeholder row.
+ * and only for a snapshot that is not `unavailable` or an active block: a session without that
+ * credential gets no placeholder row.
  * Their windows are model-scoped, but the row label names the models, so the selected windows are
  * shown whatever the current model (v1, or a v2 view that keeps this selection).
  */

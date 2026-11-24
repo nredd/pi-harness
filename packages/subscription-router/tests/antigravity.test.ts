@@ -5,6 +5,7 @@ import { BUILTIN_COLLECTORS, parseAntigravity } from "../src/builtin-collectors.
 import { collectedProviders, collectorFor, registerCollector } from "../src/collectors.ts";
 import type { ChainEntry, Profile } from "../src/config.ts";
 import { ExhaustionTracker } from "../src/exhaustion.ts";
+import { refKey } from "../src/model-ref.ts";
 import { type RouteEnv, Router } from "../src/router.ts";
 import { scoreQuota } from "../src/selection.ts";
 import { UsageService, type UsageTransport } from "../src/usage.ts";
@@ -125,6 +126,8 @@ describe("parseAntigravity", () => {
 					buckets: [
 						bucket("imagen-5h", "5h", 0),
 						bucket("gemini-daily", "daily", 0),
+						bucket("gemini-proto", "constructor", 0),
+						bucket("gemini-string", "toString", 0),
 						{ bucketId: 7, window: "5h", remainingFraction: 0 },
 						{ bucketId: "gemini-5h", window: 5, remainingFraction: 0 },
 						"gemini-5h",
@@ -250,7 +253,12 @@ describe("antigravity usage", () => {
 
 	it("reports an unreadable credential as having no usage source without a request", async () => {
 		const { usage, requests } = service({}, "ya29.bare");
-		expect(await usage.get(ctx, "antigravity")).toMatchObject({ status: "unavailable" });
+		const snapshot = await usage.get(ctx, "antigravity");
+		expect(snapshot).toMatchObject({
+			status: "unavailable",
+			message: "This credential has no subscription usage window (e.g. an API key).",
+		});
+		expect(JSON.stringify(snapshot)).not.toContain("ya29");
 		expect(requests).toEqual([]);
 	});
 });
@@ -292,5 +300,23 @@ describe("antigravity balanced routing", () => {
 
 	it("steers to another provider once the Gemini 5h window is exhausted", async () => {
 		expect(await route(0, 80)).toMatchObject({ provider: "anthropic", id: SONNET.id });
+	});
+
+	it("admission parks only Gemini dispatches on a cached exhausted Gemini 5h window", async () => {
+		const { usage, clock } = service({ [URL]: summary(0, 0.9) });
+		await usage.get(ctx, "antigravity");
+		const router = new Router(usage, new ExhaustionTracker(() => clock.now), () => clock.now);
+		const env: RouteEnv = { resolve: model, refresh: async () => undefined };
+		const profiles = new Map([[profile.id, profile]]);
+		expect(router.admit("antigravity/gemini-4-neon", profiles, env)).toEqual({
+			ok: false,
+			resetAt: Date.parse(RESET_5H),
+			wait: true,
+		});
+		expect(router.admit("antigravity/claude-sonnet-4-6", profiles, env)).toEqual({
+			ok: true,
+			resolvedModel: "antigravity/claude-sonnet-4-6",
+		});
+		expect(router.admit("router/balanced", profiles, env)).toEqual({ ok: true, resolvedModel: refKey(SONNET) });
 	});
 });

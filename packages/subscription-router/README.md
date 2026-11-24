@@ -452,8 +452,9 @@ reported basis; extensions cannot set snapshot metadata.
 The built-in `antigravity` collector reads quota for Pi's `antigravity` provider (the
 `pi-antigravity` package). It ships no OAuth client: Pi hands it that provider's credential, the
 `{"token","projectId"}` JSON string `pi-antigravity` returns from `getApiKey`, and core owns login
-and refresh. Any other credential shape is reported as having no subscription window, without a
-request. The read is one `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+and refresh. Only a non-empty string `token` is read; `projectId` is unused. A credential that is
+not a JSON object with such a `token` reads as `unavailable` (no subscription usage window),
+without a request and without echoing the credential. The read is one `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
 with body `{}`, a bearer token and the Antigravity CLI `User-Agent`. There is no fallback: the
 `cloudcode-pa.googleapis.com` host is never tried, so a failure on the daily host is an ordinary
 failed read with the usual backoff.

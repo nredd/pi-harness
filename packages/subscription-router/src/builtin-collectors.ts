@@ -25,10 +25,10 @@ const ANTIGRAVITY_BUCKETS = [
 	{ prefix: "3p-", families: ["claude", "gpt"], namePrefix: "3p-" },
 ] as const;
 /** Reported Antigravity `window` values, as window name suffix and span. */
-const ANTIGRAVITY_WINDOWS: Readonly<Record<string, { name: string; durationMs: number }>> = {
-	"5h": { name: "5h", durationMs: FIVE_HOURS_MS },
-	weekly: { name: "7d", durationMs: WEEK_MS },
-};
+const ANTIGRAVITY_WINDOWS: ReadonlyMap<unknown, { name: string; durationMs: number }> = new Map([
+	["5h", { name: "5h", durationMs: FIVE_HOURS_MS }],
+	["weekly", { name: "7d", durationMs: WEEK_MS }],
+]);
 
 function finiteNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -197,7 +197,7 @@ export function parseAntigravity(payload: unknown): CollectorReading | undefined
 			const bucket = asRecord(entry);
 			const id = bucket?.bucketId;
 			const kind = typeof id === "string" ? ANTIGRAVITY_BUCKETS.find(({ prefix }) => id.startsWith(prefix)) : undefined;
-			const span = typeof bucket?.window === "string" ? ANTIGRAVITY_WINDOWS[bucket.window] : undefined;
+			const span = ANTIGRAVITY_WINDOWS.get(bucket?.window);
 			const remaining = finiteNumber(bucket?.remainingFraction);
 			if (!kind || !span || remaining === undefined) continue;
 			const name = `${kind.namePrefix}${span.name}`;

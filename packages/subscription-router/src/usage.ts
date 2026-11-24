@@ -595,7 +595,10 @@ export class UsageService {
 		try {
 			signal.throwIfAborted();
 			if (collector.acceptsCredential?.(token) === false) {
-				return { snapshot: unmeasured(provider, now, "API-key auth has no subscription usage window."), failed: false };
+				return {
+					snapshot: unmeasured(provider, now, "This credential has no subscription usage window (e.g. an API key)."),
+					failed: false,
+				};
 			}
 			signal.throwIfAborted();
 			let parsed: CollectorReading | undefined;

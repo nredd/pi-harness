@@ -440,7 +440,7 @@ describe("UsageService", () => {
 		const snapshot = await service.get(ctx, "anthropic");
 		expect(snapshot).toMatchObject({
 			status: "unavailable",
-			message: "API-key auth has no subscription usage window.",
+			message: "This credential has no subscription usage window (e.g. an API key).",
 		});
 		expect(requests).toHaveLength(0);
 	});

@@ -143,8 +143,9 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   Counts such as `37/250 req obs` describe locally observed usage, not account-wide quota;
   unknown limits have no denominator. Model buckets appear for the routed or directly selected
   model and for models with active blocks. No Google collector or credentials are needed by the footer.
-  V1 replies also get a `Gemini` (`Gem`) row with the router's `antigravity` 5h and 7d windows once
-  the router has read that provider or holds a block for it; an `unavailable` read (no credential)
+  V1 replies also get a `Gemini` (`Gem`) row with the router's `antigravity` 5h and 7d windows when
+  the reply carries an `antigravity` snapshot that is not `unavailable` (the router returns only
+  cached readings, fresh or stale) or an active block for it; no credential, or an unreadable one,
   adds no row. Those windows are Gemini-scoped but the row name says so, so they show whatever the
   current model, as does a v2 view that keeps that selection.
   Every active block is shown, legacy rows included: v1 `blocks` attach to their provider (a block
