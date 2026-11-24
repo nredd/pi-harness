@@ -125,6 +125,11 @@ export function boundToolError(tool: string, error: unknown): Error {
 	);
 }
 
+/** The revocation guard of the stored `@o` page `ref`; `undefined` for stateless or unknown pages. */
+export function storedOutputGuard(ref: string): (() => boolean) | undefined {
+	return outputs.get(ref)?.revoked;
+}
+
 export function readStoredOutput(
 	ref: string,
 	offsetValue: unknown,

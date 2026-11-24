@@ -53,7 +53,7 @@ export interface OperationState {
 	contextId?: string;
 	/** Process-local order of the live look this desktop state holds; a restored state has none and counts as oldest. */
 	lookSeq?: number;
-	/** The state's protection revision when this operation read it: a graft that later saw protection bumps it. */
+	/** The protection revision of the record this operation read: a graft that later saw protection bumps it. */
 	protectionRevision?: number;
 }
 
@@ -103,6 +103,11 @@ interface DesktopObservation {
 	imageMode?: ImageMode;
 	/** In-memory only: `SavedStates.nextLook` order of the live look. Restored states have none. */
 	lookSeq?: number;
+	/**
+	 * The protection revision this record's outline was sanitized at. It travels with the outline, so a record written
+	 * before a graft bumped the revision reads as revoked until the grafted record replaces it.
+	 */
+	protectionRevision?: number;
 }
 
 interface BrowserObservation {
@@ -249,7 +254,7 @@ export class SavedStates {
 			resourceKey: record.resourceKey,
 			epoch: record.epoch,
 			lookSeq: record.value.lookSeq,
-			protectionRevision: this.protectionRevision(record.stateId),
+			protectionRevision: record.value.protectionRevision ?? 0,
 		};
 	}
 
@@ -275,6 +280,7 @@ export class SavedStates {
 				note: state.currentNote ? structuredClone(state.currentNote) : undefined,
 				imageMode: state.currentImageMode,
 				lookSeq: state.lookSeq,
+				protectionRevision: state.protectionRevision,
 			},
 		});
 	}

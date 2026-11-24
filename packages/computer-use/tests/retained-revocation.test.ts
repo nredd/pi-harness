@@ -196,6 +196,32 @@ describe("a later live look of the same root", () => {
 		assert.match(fake.text(current), /AXSecureTextField/);
 	});
 
+	test("revokes a page re-stored from reading one of the state's pages", async () => {
+		const fake = await desktop([wireNode("c", "AXStaticText", SECRET)]);
+		const first = await fake.observe();
+		// Short lines: the 16 KiB `@o` page itself overflows the line budget and is stored behind another `@o`.
+		const text = `${SECRET}\n${"s\n".repeat(5_000)}`;
+		fake.readTextResult = async () => ({
+			text,
+			offset: 0,
+			limit: text.length,
+			totalChars: text.length,
+			hasMore: false,
+		});
+		const page = outputRef(fake, await fake.call(fake.bridge.executeReadText, { stateId: first.stateId, ref: "@e2" }));
+		const repaged = outputRef(fake, await fake.call(fake.bridge.executeReadText, { ref: page }));
+		assert.notEqual(repaged, page);
+		assert.match(fake.text(await fake.call(fake.bridge.executeReadText, { ref: repaged })), new RegExp(SECRET));
+
+		fake.tree = [secureField()];
+		await fake.observe();
+		for (const ref of [repaged, page])
+			await assert.rejects(
+				fake.call(fake.bridge.executeReadText, { ref }),
+				/unavailable, was evicted, or was revoked by a later protected look/,
+			);
+	});
+
 	test("with no protected element keeps the older state readable", async () => {
 		const fake = await desktop([wireNode("c", "AXStaticText", SECRET)]);
 		const first = await fake.observe();
@@ -258,7 +284,7 @@ describe("a scoped look that sees a protected element", () => {
 	});
 
 	/** Gate the next root listing, so a protected observe can run while `expand_ui` resolves its root. */
-	async function racedExpand(scopedKid: () => object) {
+	async function racedExpand(scopedKid: () => object, onState?: (fake: Result, stateId: string) => void) {
 		const fake = await desktop([]);
 		let protectedTree = false;
 		fake.lookPayload = (request: { scopeRef?: string }) =>
@@ -273,6 +299,7 @@ describe("a scoped look that sees a protected element", () => {
 							: [wireNode("g", "AXGroup", SECRET, { truncated: true, children: [] })],
 					});
 		const { stateId } = await fake.observe();
+		onState?.(fake, stateId);
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
@@ -296,10 +323,55 @@ describe("a scoped look that sees a protected element", () => {
 		await assertRevoked(racedExpand(() => secureField("kid")));
 	});
 
-	test("without protection still withholds a result whose state was revoked meanwhile", async () => {
+	test("without protection still withholds a result whose state was revoked meanwhile, and does not save it", async () => {
+		let fake: Result;
+		let stateId: string | undefined;
 		await assert.rejects(
-			racedExpand(() => wireNode("kid", "AXStaticText", "plain")),
+			racedExpand(
+				() => wireNode("kid", "AXStaticText", "plain"),
+				(raced, id) => {
+					fake = raced;
+					stateId = id;
+				},
+			),
 			/was revoked: .* This call's result was withheld; any actions it ran may have taken effect\./,
 		);
+		const record = fake.bridge.testing.savedState(stateId);
+		assert.equal(fake.looks.at(-1).scopeRef, "g", "the scoped look ran");
+		assert.notEqual(record.value.look.lookId, "scoped", "the withheld graft was saved");
+		assert.ok(!JSON.stringify(record.value.outline).includes("plain"), "the withheld graft was saved");
+	});
+
+	test("refuses a state hydrated after its graft saw protection but before the sanitized record is saved", async () => {
+		const fake = await desktop([]);
+		let kid = wireNode("kid", "AXStaticText", SECRET);
+		fake.lookPayload = (request: { scopeRef?: string }) =>
+			request.scopeRef === "g"
+				? {
+						...lookPayload({ lookId: "scoped", image: false }),
+						outline: wireNode("g", "AXGroup", "Group", { children: [kid] }),
+					}
+				: lookPayload({ children: [wireNode("g", "AXGroup", "Group", { truncated: true, children: [kid] })] });
+		const { stateId } = await fake.observe();
+		kid = secureField("kid");
+		// Start a cached query right after the graft's bump: it hydrates the record saved before the graft.
+		let raced: Promise<unknown> | undefined;
+		const bump = SavedStates.prototype.bumpProtection;
+		const spy = vi.spyOn(SavedStates.prototype, "bumpProtection").mockImplementation(function (
+			this: SavedStates,
+			id: string,
+		) {
+			const revision = bump.call(this, id);
+			raced = fake.call(fake.bridge.executeSearchUi, { stateId, text: SECRET });
+			return revision;
+		});
+		onTestFinished(() => spy.mockRestore());
+		const expanded = await fake.call(fake.bridge.executeExpandUi, { stateId, ref: "@e2" });
+		assert.ok(raced, "the graft saw protection");
+		await assertRevoked(raced);
+		assert.ok(!fake.text(expanded).includes(SECRET));
+		const after = await fake.call(fake.bridge.executeSearchUi, { stateId, text: SECRET });
+		assert.ok(!fake.text(after).includes(SECRET), "the saved grafted record is sanitized");
+		assert.equal(fake.bridge.testing.savedState(stateId).value.protectionRevision, 1);
 	});
 });

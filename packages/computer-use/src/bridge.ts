@@ -103,6 +103,7 @@ import {
 	boundToolError,
 	clearStoredOutputs,
 	readStoredOutput,
+	storedOutputGuard,
 	UI_TEXT_PAGE_CHARS,
 } from "./output.ts";
 import type { PermissionStatus } from "./permissions.ts";
@@ -2628,7 +2629,7 @@ async function performExpandUi(
 		outline.lookId = scoped.lookId;
 		state.currentOutline = outline;
 		state.currentLook = { ...scoped, image: state.currentLook?.image, outline: outline.root, parsedOutline: outline };
-		persistOperation(state);
+		// `executeTool` saves the grafted record, with its protection revision, only once no later look revoked it.
 	}
 	const folded = foldToBudget(outline, { maxDepth: depth, maxNodes: 150 }, [target.ref]);
 	const details: OutlineToolDetails = {
@@ -4322,7 +4323,8 @@ async function executeTool<P, D>(
 	signal: AbortSignal | undefined,
 	run: () => Promise<AgentToolResult<D>>,
 ): Promise<AgentToolResult<D>> {
-	const outputRef = trimOrUndefined((params as { ref?: string } | undefined)?.ref)?.startsWith("@o") === true;
+	const ref = trimOrUndefined((params as { ref?: string } | undefined)?.ref);
+	const outputRef = ref?.startsWith("@o") ? ref : undefined;
 	const requestedStateId = outputRef
 		? undefined
 		: trimOrUndefined((params as { stateId?: string } | undefined)?.stateId);
@@ -4333,16 +4335,20 @@ async function executeTool<P, D>(
 	const operation = savedStates.hydrate(stateRecord);
 	const hydrated = savedStates.provenance(operation);
 	if (hydrated && savedStates.isRevoked(hydrated)) throw revokedStateError(hydrated.stateId);
+	/** A page of a guarded `@o` ref inherits its guard, so re-storing an oversized page cannot escape revocation. */
+	let pageGuard: (() => boolean) | undefined;
 	return await savedStates.operations.run(operation, async () => {
 		const { value: pending } = await resourceScheduler.read("session-lifecycle", async () => {
 			await ensureReady(ctx, signal, () => {
 				assertCdpUseAllowed(tool, params as PolicyPreflightParams);
-				assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef);
+				assertKnownRootNotBlocked(tool, params as PolicyPreflightParams, outputRef !== undefined);
 			});
 			throwIfAborted(signal);
 			// Start the tool before releasing readiness: launch_browser joins its lifecycle
 			// synchronously, so shutdown cannot drain readiness and overtake that launch.
 			// Do not await the tool here; unrelated operations must still overlap.
+			// `read_text` reads an `@o` page before its first await, so the guard taken here is the page's own.
+			if (outputRef) pageGuard = storedOutputGuard(outputRef);
 			const result = run();
 			void result.catch(() => undefined);
 			return { result };
@@ -4355,7 +4361,7 @@ async function executeTool<P, D>(
 				`${revokedStateError(final.stateId).message} This call's result was withheld; any actions it ran may have taken effect.`,
 			);
 		persistOperation(operation);
-		return applyOutputEnvelope(tool, result, final ? () => savedStates.isRevoked(final) : undefined);
+		return applyOutputEnvelope(tool, result, final ? () => savedStates.isRevoked(final) : pageGuard);
 	});
 }
 
