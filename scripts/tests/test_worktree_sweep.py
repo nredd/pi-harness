@@ -688,6 +688,11 @@ def fail_read(message: str) -> bytes:
     raise AssertionError(message)
 
 
+def test_fail_read_raises() -> None:
+    with pytest.raises(AssertionError, match="boom"):
+        fail_read("boom")
+
+
 def hash_with(
     root: Path, name: bytes, monkeypatch: pytest.MonkeyPatch, **hooks: Callable[[Hook], Hook]
 ) -> tuple[bytes, str]:
