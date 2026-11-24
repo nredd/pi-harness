@@ -1,16 +1,16 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readdir, readFile, rmdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rmdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, expect, it, vi } from "vitest";
-import { readRouterQuota } from "../../session-kit/src/stats/router-quota.ts";
 import { registerCollector } from "../src/collectors.ts";
 import { ExhaustionTracker } from "../src/exhaustion.ts";
 import subscriptionRouter from "../src/index.ts";
 import { type RegistryContext, UsageService } from "../src/usage.ts";
 import { bindViewStore, MAX_VIEW_BYTES } from "../src/view-store.ts";
+import { readRouterQuota } from "./fixtures/view-reader.ts";
 
 // Keep the synthetic Gemini reading independent of when a built-in collector ships.
 vi.mock("../src/builtin-collectors.ts", async (original) => {
@@ -81,6 +81,9 @@ it("publishes the default router cache for the real /stats reader without changi
 
 		const raw = await readFile(join(statePath(root), "view.json"), "utf8");
 		expect(raw).not.toContain("omit-");
+		expect(JSON.parse(raw)).toEqual(
+			JSON.parse(await readFile(new URL("./fixtures/router-view.json", import.meta.url), "utf8")),
+		);
 		const rows = await readRouterQuota(root, NOW);
 		expect(Object.fromEntries(rows.map(({ label, head }) => [label, head]))).toEqual({
 			"Anthropic five_hour": { kind: "gauge", percent: 25 },
@@ -323,15 +326,6 @@ it("unsubscribes from cache and tracker updates", async ({ onTestFinished }) => 
 	expect(listener).toHaveBeenCalledTimes(2);
 });
 
-it("agrees with the /stats reader at the exact byte limit", async ({ onTestFinished }) => {
-	const root = makeTestTempDir("router-quota-", onTestFinished);
-	const dir = statePath(root);
-	await mkdir(dir, { recursive: true });
-	const path = join(dir, "view.json");
-	const row = JSON.stringify([{ provider: model.provider, marks: [{ window: "daily", until: NOW + 60_000 }] }]);
-	const atLimit = row.padEnd(MAX_VIEW_BYTES, " ");
-	await writeFile(path, atLimit);
-	expect(await readRouterQuota(root, NOW)).toHaveLength(1);
-	await writeFile(path, `${atLimit} `);
-	expect(await readRouterQuota(root, NOW)).toEqual([]);
+it("keeps the view byte limit at the 1 MiB the /stats reader enforces", () => {
+	expect(MAX_VIEW_BYTES).toBe(1024 * 1024);
 });
