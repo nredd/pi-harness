@@ -350,7 +350,14 @@ Limits:
 - The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate has no other hold. Report only the guard's evidence; delete nothing.
-- The guard does not probe upstream transports. If no PR exists, it reports `no PR; upstream not checked`.
+- The guard does not probe upstream transports. With no PR, it reports
+  `no PR; live upstream not checked; <local evidence>`. The local evidence is
+  `local graph: fetched <ref> contains HEAD`, `local graph: HEAD has commits outside fetched <ref>`,
+  or `local upstream unavailable: <why>` when no fetched `refs/remotes/` upstream can be read.
+  Only local config, refs and the local commit walk are read, so no transport, `core.sshCommand`,
+  credential helper or askpass runs. This is local graph evidence: the fetched ref can be stale or
+  locally rewritten, a shallow boundary can hide ancestry and a graft can make containment look
+  true. It is a reason, never removal authority.
 - The guard omits `git status` and does not compare tracked worktree content with the index. Attributes
   or driver configuration could change after an attribute scan and cause `git status` to run a
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
