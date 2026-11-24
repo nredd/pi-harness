@@ -84,7 +84,7 @@ describe("stats CLI", () => {
 		utimesSync(lock, old, old);
 		const diagnostic =
 			`Suspected stale export lock ${JSON.stringify(lock)} (age 7200s); ` +
-			"verify no export is running before removing the lock directory, then retry";
+			"verify no export, restore or cleanup is running before removing the lock directory, then retry";
 		for (let attempt = 1; attempt <= 2; attempt++) {
 			process.exitCode = 0;
 			await run();

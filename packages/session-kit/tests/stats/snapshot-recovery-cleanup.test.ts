@@ -742,22 +742,25 @@ describe("restoreSnapshot", () => {
 			kept: [],
 		});
 
-		// Restore from a direct machine backup (`<SRC>/manifest.json`) when only manifest.json was lost.
+		// Restore from a direct machine backup (`<SRC>/manifest.json`) with a distinct fixed exportedAt.
 		const directBackup = join(root, "direct-backup");
-		publish([second], {}, directBackup);
+		const directExportedAt = at("2026-11-01");
+		publish([second], { exportedAt: directExportedAt }, directBackup);
 		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
 		expect(await restoreSnapshot(agent, directBackup, out)).toEqual({
 			machineId,
 			snapshotDir,
-			exportedAt: syncManifest.exportedAt,
+			exportedAt: directExportedAt,
 			restored: ["manifest.json"],
 		});
+		expect(manifestOf().exportedAt).toBe(directExportedAt);
 		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 	});
 
 	it("restores only a damaged shard from a shard-only source or only manifest.json when shards remain in the outbox", async () => {
-		const s1 = shard({ events: [event(1)], sessions: [session()] });
-		const s2 = shard({ events: [event(2)] });
+		// No quota rows: the follow-up pi export must not refuse a narrower harness set.
+		const s1 = shard({ events: [event(1)], sessions: [session()], quota: [] });
+		const s2 = shard({ events: [event(2)], quota: [] });
 		publish([s1, s2]);
 		const [ref1] = manifestOf().shards;
 		const file1 = ref1?.file as string;
@@ -773,8 +776,10 @@ describe("restoreSnapshot", () => {
 		expect(await restoreSnapshot(agent, shardOnly, out)).toMatchObject({
 			restored: [file1],
 		});
+		await expect(exportStats(agent, out)).resolves.toMatchObject({ machineId, snapshotDir });
 
 		// Manifest-only source (`manifest.json` in source, referenced shards only in outbox).
+		publish([s1, s2]);
 		const manifestOnly = join(root, "manifest-only");
 		mkdirSync(manifestOnly, { recursive: true });
 		writeFileSync(join(manifestOnly, "manifest.json"), savedManifest);
@@ -782,6 +787,7 @@ describe("restoreSnapshot", () => {
 		expect(await restoreSnapshot(agent, manifestOnly, out)).toMatchObject({
 			restored: ["manifest.json"],
 		});
+		await expect(exportStats(agent, out)).resolves.toMatchObject({ machineId, snapshotDir });
 		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 	});
 

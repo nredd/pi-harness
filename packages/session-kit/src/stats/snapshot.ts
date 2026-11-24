@@ -1627,7 +1627,7 @@ async function withExportLock<T extends { warnings?: string[] }>(
 			if (cause.code === "ENOENT") return undefined;
 			throw Object.assign(
 				new Error(
-					`Export lock exists at ${JSON.stringify(lock)} but could not be inspected (${cause.code}); verify no export is running before removing the lock directory`,
+					`Export lock exists at ${JSON.stringify(lock)} but could not be inspected (${cause.code}); verify no export, restore or cleanup is running before removing the lock directory`,
 					{ cause },
 				),
 				{ code: cause.code, path: lock },
@@ -1637,8 +1637,8 @@ async function withExportLock<T extends { warnings?: string[] }>(
 		const details = `${JSON.stringify(lock)} (age ${age === undefined ? "unknown" : `${age}s`})`;
 		const message =
 			age !== undefined && age >= 3600
-				? `Suspected stale export lock ${details}; verify no export is running before removing the lock directory, then retry`
-				: `Export lock is held at ${details}; retry after the other export finishes. If this persists, verify no export is running before removing the lock directory`;
+				? `Suspected stale export lock ${details}; verify no export, restore or cleanup is running before removing the lock directory, then retry`
+				: `Export lock is held at ${details}; retry after the other operation finishes. If this persists, verify no export, restore or cleanup is running before removing the lock directory`;
 		throw Object.assign(new Error(message, { cause: error }), { code: error.code, path: lock });
 	});
 	let outcome: { ok: true; result: T } | { ok: false; error: unknown };
@@ -1650,7 +1650,7 @@ async function withExportLock<T extends { warnings?: string[] }>(
 	try {
 		await rmdir(lock);
 	} catch (unlockError) {
-		const warning = `could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`;
+		const warning = `could not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export, restore or cleanup is running`;
 		// Never turn an already-visible publish into a failure, nor hide the primary publication error.
 		// A refusal keeps its code: the unlock failure is a secondary diagnostic, never a retryable cause.
 		if (!outcome.ok && outcome.error instanceof ExportRefusal)
@@ -2362,18 +2362,15 @@ export async function restoreSnapshot(dir: string, input: string, output: string
 			);
 		validateSnapshot({ manifest, shards });
 		const restored: string[] = [];
-		for (const { file, bytes } of fromSource) {
+		for (const { file, bytes } of [
+			...fromSource,
+			{ file: "manifest.json", bytes: Buffer.from(JSON.stringify(manifest)) },
+		]) {
 			const target = join(snapshotDir, file);
 			if (!(await sameRegularFile(target, bytes))) {
 				await atomicContents(target, bytes);
 				restored.push(file);
 			}
-		}
-		const manifestPath = join(snapshotDir, "manifest.json");
-		const manifestBytes = Buffer.from(JSON.stringify(manifest));
-		if (!(await sameRegularFile(manifestPath, manifestBytes))) {
-			await atomicContents(manifestPath, manifestBytes);
-			restored.push("manifest.json");
 		}
 		return { machineId: identity.machineId, snapshotDir, exportedAt: manifest.exportedAt, restored };
 	});

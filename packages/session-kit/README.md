@@ -540,11 +540,12 @@ refused unless `--replace-harnesses` is given; with a recorded set it still guar
 (If both the state and the snapshot have gone bad, a stale state can understate a widening that
 was never recorded; that double fault is not defended.)
 
-Exports lock the machine outbox from reading the previous manifest through pruning and recording
-export state. A concurrent export fails without publishing; the CLI exits 1 and prints the lock
-path and age. At one hour it reports a *suspected* stale lock, not proof that the writer stopped.
-A crash can leave `.export.lock` behind. Stop scheduled writers, verify no export is running,
-then run `rmdir` on the reported lock directory and retry the export. No export reclaims a lock
+Exports, `restore` and `clean-recovery` lock the machine outbox with `.export.lock` (exports hold it
+from reading the previous manifest through pruning and recording export state). A concurrent
+operation fails without modifying the outbox; the CLI exits 1 and prints the lock path and age. At
+one hour it reports a *suspected* stale lock, not proof that the writer stopped. A crash can leave
+`.export.lock` behind. Stop scheduled writers, verify no export, restore or cleanup is running,
+then run `rmdir` on the reported lock directory and retry. No operation reclaims a lock
 by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
 with the lock path. A failed publication still reports the original error; if releasing the lock
 also fails, it is an `AggregateError` whose message is the original error followed by the same lock
