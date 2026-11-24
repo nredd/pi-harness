@@ -359,15 +359,11 @@ impl AtspiClient {
         }
     }
 
-    /// Whether `child`'s live `Parent` is still `parent`, the node that listed it. Only a
-    /// provider that does not implement `Parent` keeps the `GetChildren` edge unconfirmed; a
-    /// failed or timed-out read fails closed (#1233).
+    /// Whether `child`'s live `Parent` is still `parent`, the node that listed it. A failed or
+    /// timed-out read, or a provider that does not implement `Parent` (`UnknownProperty`),
+    /// cannot confirm the `GetChildren` edge and fails closed (#1233, #1377).
     async fn parent_is(&self, child: &AccessibleRef, parent: &AccessibleRef) -> bool {
-        match self.parent_link(child).await {
-            Ok(Some(live)) => live == *parent,
-            Ok(None) => true,
-            Err(_) => false,
-        }
+        self.parent(child).await.is_ok_and(|live| live == *parent)
     }
 
     /// Refuse unless every live ancestor of `accessible`, up to and including `root`, is on the
@@ -1960,6 +1956,8 @@ mod tests {
         role: &'static str,
         children: &'static [(&'static str, &'static str)],
         has_text: bool,
+        /// The live `Parent` (bus name, path); `None` does not implement the property.
+        parent: Option<(&'static str, &'static str)>,
     }
 
     #[zbus::interface(name = "org.a11y.atspi.Accessible")]
@@ -2004,6 +2002,14 @@ mod tests {
                 vec![]
             }
         }
+
+        #[zbus(property)]
+        fn parent(&self) -> zbus::fdo::Result<(&str, OwnedObjectPath)> {
+            let (destination, path) = self
+                .parent
+                .ok_or_else(|| zbus::fdo::Error::UnknownProperty("no Parent".into()))?;
+            Ok((destination, OwnedObjectPath::try_from(path).unwrap()))
+        }
     }
 
     struct WindowExtents {
@@ -2038,6 +2044,7 @@ mod tests {
                     role,
                     children,
                     has_text: false,
+                    parent: None,
                 };
                 server
                     .serve_at(FIXTURE_DBUS_ROOT, MockBus)?
@@ -2204,6 +2211,7 @@ mod tests {
                             role: "desktop",
                             children: &[(DESTINATION, APP)],
                             has_text: false,
+                            parent: None,
                         },
                     )?
                     .serve_at(
@@ -2361,6 +2369,7 @@ mod tests {
                         role: "desktop",
                         children: &[(":1.42", "/app")],
                         has_text: false,
+                        parent: None,
                     };
                     let server = server.serve_at(FIXTURE_REGISTRY_ROOT, registry)?;
                     if stalled_pid {
@@ -2553,6 +2562,7 @@ mod tests {
                 role: "desktop",
                 children: &GATED_APPS,
                 has_text: false,
+                parent: None,
             },
         )?;
         for ((_, app), window) in GATED_APPS.into_iter().zip(GATED_WINDOWS) {
@@ -2571,6 +2581,7 @@ mod tests {
                         role: "frame",
                         children: &[],
                         has_text: false,
+                        parent: None,
                     },
                 )?;
         }
@@ -2804,6 +2815,7 @@ mod tests {
                                 (DESTINATION, LABEL),
                             ],
                             has_text: false,
+                            parent: None,
                         },
                     )?
                     .serve_at(
@@ -2813,6 +2825,7 @@ mod tests {
                             role: "PaSsWoRd TeXt",
                             children: &[],
                             has_text: true,
+                            parent: Some((DESTINATION, ROOT)),
                         },
                     )?
                     .serve_at(PASSWORD, password_text.clone())?
@@ -2823,6 +2836,7 @@ mod tests {
                             role: "label",
                             children: &[(DESTINATION, ROOT)],
                             has_text: true,
+                            parent: Some((DESTINATION, ROOT)),
                         },
                     )?
                     .serve_at(LABEL, label_text.clone())
@@ -2997,6 +3011,7 @@ mod tests {
                     role,
                     children,
                     has_text: false,
+                    parent: None,
                 };
                 server
                     .serve_at(FIXTURE_DBUS_ROOT, OwnerBus)?
@@ -3165,6 +3180,7 @@ mod tests {
                     role,
                     children,
                     has_text: false,
+                    parent: None,
                 };
                 server
                     .serve_at(FIXTURE_DBUS_ROOT, bus)?
@@ -3476,6 +3492,7 @@ mod tests {
                     role,
                     children,
                     has_text: false,
+                    parent: None,
                 };
                 server
                     .serve_at(FIXTURE_DBUS_ROOT, OwnerBus)?
@@ -3569,6 +3586,7 @@ mod tests {
                                 role: "desktop",
                                 children: &[(":1.42", "/app")],
                                 has_text: false,
+                                parent: None,
                             },
                         )?
                         .serve_at(
@@ -3578,6 +3596,7 @@ mod tests {
                                 role: "application",
                                 children: &[(":1.42", "/app/window")],
                                 has_text: false,
+                                parent: None,
                             },
                         )
                 },
@@ -3616,6 +3635,7 @@ mod tests {
                             role: "frame",
                             children: &[(":1.42", "/window/label"), (":1.43", "/foreign")],
                             has_text: false,
+                            parent: None,
                         },
                     )?
                     .serve_at(
@@ -3625,6 +3645,7 @@ mod tests {
                             role: "label",
                             children: &[],
                             has_text: false,
+                            parent: Some((":1.42", "/window")),
                         },
                     )?
                     .serve_at(
@@ -3634,6 +3655,7 @@ mod tests {
                             role: "label",
                             children: &[],
                             has_text: true,
+                            parent: None,
                         },
                     )?
                     .serve_at("/foreign", foreign_text.clone())
@@ -3657,6 +3679,70 @@ mod tests {
                 assert!(snapshot.nodes[0].unread, "the parent is marked unread");
                 assert!(!snapshot.nodes[1].unread);
                 assert!(foreign_text.0.lock().unwrap().is_empty());
+            },
+        )
+        .await;
+    }
+
+    /// A child whose provider does not implement `Parent` (`UnknownProperty`) cannot confirm its
+    /// `GetChildren` edge, so it is never read and its listing node is `truncated` (#1377).
+    #[tokio::test]
+    async fn snapshots_never_read_children_without_a_parent_link() {
+        let orphan_text = TreeText::default();
+        with_peer(
+            |server| {
+                server
+                    .serve_at(
+                        "/window",
+                        TreeNode {
+                            name: "frame",
+                            role: "frame",
+                            children: &[(":1.42", "/window/label"), (":1.42", "/window/orphan")],
+                            has_text: false,
+                            parent: None,
+                        },
+                    )?
+                    .serve_at(
+                        "/window/label",
+                        TreeNode {
+                            name: "label",
+                            role: "label",
+                            children: &[],
+                            has_text: false,
+                            parent: Some((":1.42", "/window")),
+                        },
+                    )?
+                    .serve_at(
+                        "/window/orphan",
+                        TreeNode {
+                            name: "orphan secret",
+                            role: "label",
+                            children: &[],
+                            has_text: true,
+                            parent: None,
+                        },
+                    )?
+                    .serve_at("/window/orphan", orphan_text.clone())
+            },
+            async |connection| {
+                let root = AccessibleRef {
+                    destination: ":1.42".into(),
+                    path: "/window".into(),
+                };
+                let snapshot = peer_client(connection)
+                    .snapshot_from(&root, 10, 10)
+                    .await
+                    .unwrap();
+                let paths = snapshot
+                    .nodes
+                    .iter()
+                    .map(|node| node.accessible.path.as_str())
+                    .collect::<Vec<_>>();
+                assert_eq!(paths, ["/window", "/window/label"]);
+                assert!(snapshot.incomplete);
+                assert!(snapshot.nodes[0].unread, "the listing node is truncated");
+                assert!(!snapshot.nodes[1].unread);
+                assert!(orphan_text.0.lock().unwrap().is_empty());
             },
         )
         .await;
