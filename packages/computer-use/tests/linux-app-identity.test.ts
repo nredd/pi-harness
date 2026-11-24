@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { expect, test, vi } from "vitest";
-import { executeFind, executeObserve, executeReadText, executeSearchUi } from "../src/bridge.ts";
+import { executeFind, executeObserve, executeReadText, executeSearchUi, executeWaitFor } from "../src/bridge.ts";
 import { currentPlatformBackend, platformBackendForRuntime } from "../src/platform/index.ts";
 import { linuxBackend } from "../src/platform/linux/backend.ts";
 import { linuxHelper } from "../src/platform/linux/helper.ts";
@@ -53,9 +53,8 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	vi.stubEnv("PI_CODING_AGENT_DIR", cwd);
 	vi.stubEnv("PI_COMPUTER_USE_BLOCKED_APPS", undefined);
 	vi.stubEnv("PI_COMPUTER_USE_CDP_PORT", undefined);
-	Object.assign(currentPlatformBackend, platformBackendForRuntime("linux"), {
-		ensureReady: async (_ctx: unknown, state: unknown) => state,
-	});
+	const readiness = vi.fn(async (_ctx: unknown, state: unknown) => state);
+	Object.assign(currentPlatformBackend, platformBackendForRuntime("linux"), { ensureReady: readiness });
 	// `lookRootClient` answers `atspiLookRoot` through a real helper client instead, e.g. over a no-reply transport.
 	// `x11Pairing` is the X11 status every `atspiLookRoot` reply reports for its root, `listX11Pairing` the one every
 	// `listRoots` reply reports for each root (#1311). `beforeList`, when set, runs before each `listRoots` reply.
@@ -137,7 +136,14 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 		(await executeSearchUi("t", { stateId, text: "Body" }, undefined, undefined, ctx)).details.matches![0].ref;
 	const readText = async (stateId: string, ref: string, signal?: AbortSignal) =>
 		await executeReadText("t", { stateId, ref }, signal, undefined, ctx);
-	return { state, userFile, find, observe, looks, calls, search, readText };
+	const waitFor = async (stateId: string) =>
+		await executeWaitFor("t", { stateId, text: "Body", timeoutMs: 250 }, undefined, undefined, ctx);
+	// Every helper command and readiness check so far, in order, with its arguments.
+	const helperLog = () => ({
+		commands: command.mock.calls.map(([name, args]) => [name, structuredClone(args)]),
+		readiness: readiness.mock.calls.length,
+	});
+	return { state, userFile, find, observe, looks, calls, search, readText, waitFor, helperLog };
 }
 
 test("Linux blocks roots by executable basename, never by the accessible app name", async ({ onTestFinished }) => {
@@ -191,6 +197,39 @@ test("Linux blocks roots by executable basename, never by the accessible app nam
 	state.roots = [linuxRoot(102, "Editor", "KeePassXC"), linuxRoot(103, "Prompt", "PINENTRY")];
 	expect(await byPid()).toMatchObject({ 102: { blocked: false }, 103: { blocked: true } });
 	expect(fetch).not.toHaveBeenCalled();
+});
+
+test("Linux refuses a known blocked root before readiness or any helper command (#1179)", async ({
+	onTestFinished,
+}) => {
+	const { userFile, find, observe, search, readText, waitFor, helperLog } = useLinuxRoots(onTestFinished, [
+		linuxRoot(101, "Editor", "fixture-editor"),
+		linuxRoot(102, "Editor", "KeePassXC"),
+		linuxRoot(103, "Anonymous"),
+	]);
+	const windows = await find();
+	const refOf = (pid: number) => {
+		const root = windows.find((candidate) => candidate.pid === pid);
+		if (!root) throw new Error(`no root for pid ${pid}`);
+		return root.windowRef;
+	};
+	expect(windows.map((root) => [root.pid, root.blocked])).toEqual([
+		[101, false],
+		[102, true],
+		[103, true],
+	]);
+	const { stateId } = (await observe(refOf(101))).details.capture;
+	const ref = await search(stateId);
+	// Block the observed app too: its saved state is refused without another listing.
+	writeFileSync(userFile, JSON.stringify({ blocked_apps: ["fixture-editor", "keepassxc"] }));
+	const before = helperLog();
+
+	for (const pid of [101, 102, 103]) {
+		await expect(observe(refOf(pid)), String(pid)).rejects.toMatchObject({ code: "app_blocked" });
+	}
+	await expect(readText(stateId, ref)).rejects.toMatchObject({ code: "app_blocked" });
+	await expect(waitFor(stateId)).rejects.toMatchObject({ code: "app_blocked" });
+	expect(helperLog()).toEqual(before);
 });
 
 test("Linux browser_use classifies roots by executable basename, never the accessible app name (#1295)", async ({
