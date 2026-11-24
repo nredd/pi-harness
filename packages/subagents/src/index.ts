@@ -55,7 +55,7 @@ import {
 	markConsumed,
 	type OwnedPending,
 } from "./agent-manager.ts";
-import { agentNotFound, createAgentLookup } from "./agent-ref.ts";
+import { createAgentLookup } from "./agent-ref.ts";
 import { rosterJson } from "./agent-roster.ts";
 import {
 	childSessionDir,
@@ -88,7 +88,7 @@ import {
 import { inChildSessionContext } from "./child-context.ts";
 import { type Clock, realClock, type TimerHandle } from "./clock.ts";
 import { CompletionOutbox } from "./completion-outbox.ts";
-import { createStopActions, isLiveWorkflow, registerControlTools } from "./control-tools.ts";
+import { agentNotFound, createStopActions, isLiveWorkflow, registerControlTools } from "./control-tools.ts";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.ts";
 import { loadCustomAgents } from "./custom-agents.ts";
 import {
