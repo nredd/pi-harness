@@ -25,7 +25,7 @@ import {
 
 import type { ProviderConfig } from "./config.ts";
 
-export { parseAnthropic, parseCodex } from "./builtin-collectors.ts";
+export { parseAnthropic, parseAntigravity, parseCodex } from "./builtin-collectors.ts";
 
 import { type ModelRef, refKey } from "./model-ref.ts";
 
@@ -47,6 +47,8 @@ const FAILURE_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 15 * 60_000] as cons
  * implausible evidence and becomes unknown, which blocks only while the reading is fresh.
  */
 const MAX_EXTERNAL_RESET_MS = 31 * 24 * 60 * 60_000;
+/** Clock-skew tolerance added to an Antigravity window's reported span when bounding resets. */
+const ANTIGRAVITY_RESET_SKEW_MS = 5 * 60_000;
 /** Upper bound on a server-supplied `Retry-After`, so a bogus header cannot park a provider for days. */
 const RETRY_AFTER_CEILING_MS = 60 * 60_000;
 /** `available`: fresh data. `stale`: old data kept after an expiry or failed refresh. */
@@ -595,7 +597,10 @@ export class UsageService {
 		try {
 			signal.throwIfAborted();
 			if (collector.acceptsCredential?.(token) === false) {
-				return { snapshot: unmeasured(provider, now, "API-key auth has no subscription usage window."), failed: false };
+				return {
+					snapshot: unmeasured(provider, now, "This credential has no subscription usage window (e.g. an API key)."),
+					failed: false,
+				};
 			}
 			signal.throwIfAborted();
 			let parsed: CollectorReading | undefined;
@@ -620,7 +625,11 @@ export class UsageService {
 				const read = collector.read({ token, signal, now: () => this.transport.now() });
 				parsed = await untilAborted(read, signal);
 			}
-			const latestReset = isBuiltinCollector(collector) ? Infinity : now + MAX_EXTERNAL_RESET_MS;
+			const latestReset = !isBuiltinCollector(collector)
+				? () => now + MAX_EXTERNAL_RESET_MS
+				: collector.provider === "antigravity"
+					? (durationMs: number | undefined) => now + Number(durationMs) + ANTIGRAVITY_RESET_SKEW_MS
+					: () => Infinity;
 			const reading = normalizeReading(parsed, latestReset);
 			if (!reading) return failure("Usage response had an unsupported shape.");
 			return {

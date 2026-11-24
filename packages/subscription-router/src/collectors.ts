@@ -17,7 +17,13 @@ export type Collector = {
 } & (
 	| {
 			kind: "http";
-			request(token: string): { url: string; method?: "GET" | "POST"; headers: Record<string, string>; body?: string };
+			request(token: string): {
+				url: string;
+				method?: "GET" | "POST";
+				headers: Record<string, string>;
+				body?: string;
+				redirect?: RequestRedirect;
+			};
 			parse(payload: unknown): CollectorReading | undefined;
 	  }
 	| {

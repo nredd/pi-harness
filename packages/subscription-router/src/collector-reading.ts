@@ -138,10 +138,11 @@ function copyBucket(
 		kind,
 		resetRule,
 	}: CollectorReading["windows"][number] | NonNullable<CollectorReading["meters"]>[number],
-	latestReset: number,
+	latestReset: (durationMs: number | undefined) => number,
 ) {
 	return {
-		resetAt: resetAt !== undefined && Math.abs(resetAt) <= 8.64e15 && resetAt <= latestReset ? resetAt : undefined,
+		resetAt:
+			resetAt !== undefined && Math.abs(resetAt) <= 8.64e15 && resetAt <= latestReset(durationMs) ? resetAt : undefined,
 		durationMs,
 		spanSource: spanSource as "reported" | "assumed" | undefined,
 		scope,
@@ -157,7 +158,10 @@ function copyBucket(
  * Validation and every later step see one router-owned copy, so adapter getters and array
  * methods cannot change a value after it was checked. A throwing getter throws.
  */
-export function normalizeReading(reading: unknown, latestReset: number): CollectorReading | undefined {
+export function normalizeReading(
+	reading: unknown,
+	latestReset: (durationMs: number | undefined) => number,
+): CollectorReading | undefined {
 	const copy = record(reading, Object.keys(READING_FIELDS), READING_FIELDS);
 	if (!Check(schema, copy)) return undefined;
 	const { windows, meters, pools, credits } = copy;

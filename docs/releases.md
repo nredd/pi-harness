@@ -44,7 +44,7 @@ those bullets can still conflict. `make check-changelog-fragments` is read-only 
 Every enrolled package other than `subagents` ships `CHANGELOG.md` and none packs `changes/`.
 A release cut from `main` without folding ships a changelog missing its pending fragments. Run `make fold-changelog` during release prep and commit the result
 before tagging. `todo` currently has six pending fragments: #292, #414, #444, #448, #522 and #918;
-`preset` has five: #1024, #1050, #1057, #1126 and #1223.
+`preset` has six: #1024, #1050, #1057, #1126, #1223 and #1400; `subscription-router` has one: #1400.
 
 The fold appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
 Security order and orders new bullets numerically by issue within each category. Existing
