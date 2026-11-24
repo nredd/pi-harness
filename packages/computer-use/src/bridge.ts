@@ -2093,6 +2093,16 @@ function outlineConditionPresent(outline: Outline, condition: ReturnType<typeof 
 	);
 }
 
+function nativeNodeMatchesCondition(node: OutlineNode, condition: ReturnType<typeof validateCondition>): boolean {
+	if (condition.role && normalizedRole(node.role) !== normalizedRole(condition.role)) return false;
+	if (
+		condition.text &&
+		![node.title, node.description, node.value].join("\n").toLowerCase().includes(condition.text.toLowerCase())
+	)
+		return false;
+	return !condition.value || normalizeText(node.value) === normalizeText(condition.value);
+}
+
 /** Why a successor outline cannot corroborate a `gone` condition (see `absenceUnproven`). */
 interface AbsenceUnproven {
 	/** `present`: the successor still shows it; `unread`: nodes it could hide in are unread; `scope_unmatched`: its scope did not carry over and the condition shows elsewhere. */
@@ -2108,7 +2118,7 @@ interface AbsenceUnproven {
  * public refs carry over structurally, so a moved scope can arrive under a fresh ref: a scope ref missing from the
  * successor proves nothing while the condition shows anywhere in it. A `childrenUnread` marker blocks too, unless
  * `provenScope` (see `provenExactScope`) is the exact scope: then that node is the element the wait read, its own
- * fields were read, and nothing unread below or beside it can satisfy a condition on the node itself (#1310, #1338).
+ * fields were read, and nothing unread below it can satisfy a condition on the node itself (#1310).
  * `undefined` when corroborated.
  */
 function absenceUnproven(
@@ -2117,14 +2127,15 @@ function absenceUnproven(
 	provenScope?: OutlineNode,
 ): AbsenceUnproven | undefined {
 	if (outlineConditionPresent(outline, condition)) return { reason: "present", unreadRefs: [] };
-	const scope = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
+	if (provenScope && nativeNodeMatchesCondition(provenScope, condition)) return { reason: "present", unreadRefs: [] };
+	const scope = provenScope ?? (condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined);
 	if (condition.scopeRef && !scope && outlineConditionPresent(outline, { ...condition, scopeRef: undefined }))
 		return { reason: "scope_unmatched", unreadRefs: [] };
 	const unreadRefs = outline.nodes
 		.filter(
 			(node) =>
 				node.truncated &&
-				!(provenScope && provenScope === scope && node.childrenUnread) &&
+				!(provenScope && node === provenScope && node.childrenUnread) &&
 				(!scope ||
 					nodeWithinScope(scope, node.ref, false) ||
 					(!condition.scopeExact && nodeWithinScope(node, scope.ref, false))),
@@ -2134,11 +2145,13 @@ function absenceUnproven(
 }
 
 /**
- * The successor's exact scope node when the helper proves it is the element the wait read: `sameElement` on the wire
- * ref the wait was sent and the successor node's. A public ref carries over structurally, so without that proof the
- * node may be a lookalike whose unread descendants hide the waited one (#1310). Asked only when the condition is
- * absent and every unread node at or above the scope is `childrenUnread`; a backend without the check, a failed or
- * negative check (e.g. an older helper, an aged-out base look) proves nothing, and so does a protected scope.
+ * The successor's exact scope node when the helper proves it is the element the wait read (`sameElement` on the wire
+ * ref the wait was sent and the successor node's). A public ref carries over structurally (and changes when the
+ * element's title or description changes), so without that proof a structurally matched node may be a lookalike whose
+ * unread descendants hide the waited one (#1310). When the old public ref no longer carries over (or points to
+ * another element), checks the rest of the successor outline to follow a renamed exact scope. Asked only when a
+ * `childrenUnread` candidate has no `truncated` ancestor; a backend without the check, a failed or negative check
+ * (e.g. an older helper, an aged-out base look), a truncated ancestor or a protected scope proves nothing.
  */
 async function provenExactScope(
 	outline: Outline,
@@ -2149,20 +2162,34 @@ async function provenExactScope(
 	const sameElement = currentPlatformBackend.sameElement;
 	if (!condition.scopeExact || !waitedWireRef || !sameElement || outlineConditionPresent(outline, condition))
 		return undefined;
-	const scope = nodeByRef(outline, condition.scopeRef!);
-	// A protected or unconfirmed node's own text is not evidence: its fields are redacted or never read.
-	if (!scope?.wireRef || scope.pictureOnly || scope.unconfirmed || isProtectedNode(scope)) return undefined;
-	const unread: OutlineNode[] = [];
-	for (let node: OutlineNode | undefined = scope; node; node = node.parent) if (node.truncated) unread.push(node);
-	if (unread.length === 0 || unread.some((node) => !node.childrenUnread)) return undefined;
-	try {
-		return (await sameElement.call(currentPlatformBackend, waitedWireRef, scope.wireRef, { signal }))
-			? scope
-			: undefined;
-	} catch (error) {
-		if (signal?.aborted) throw error;
-		return undefined;
+	const eligible = (node: OutlineNode | undefined): node is OutlineNode => {
+		if (
+			!node?.wireRef ||
+			!node.truncated ||
+			!node.childrenUnread ||
+			node.pictureOnly ||
+			node.unconfirmed ||
+			isProtectedNode(node)
+		)
+			return false;
+		for (let ancestor = node.parent; ancestor; ancestor = ancestor.parent) if (ancestor.truncated) return false;
+		return true;
+	};
+	const direct = nodeByRef(outline, condition.scopeRef!);
+	const candidates = [
+		...(eligible(direct) ? [direct] : []),
+		...outline.nodes.filter((node) => node !== direct && eligible(node)),
+	];
+	for (const candidate of candidates) {
+		try {
+			if (await sameElement.call(currentPlatformBackend, waitedWireRef, candidate.wireRef!, { signal }))
+				return candidate;
+		} catch (error) {
+			if (signal?.aborted) throw error;
+			return undefined;
+		}
 	}
+	return undefined;
 }
 
 function absenceUnprovenMessage(unproven: AbsenceUnproven): string {
@@ -4639,17 +4666,18 @@ failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
 On macOS a `childrenUnread` exact `ref` scope (every own matchable field read,
-only its descendants unread: a failed `AXChildren` read or the walk's cut), or
-a `childrenUnread` node above it, does not block once the helper's
-`axSameElement` shows the successor's scope node is the element the wait read
-(`CFEqual` on the two looks' `AXUIElement`s). The public ref carries over
-structurally, so without that check a same-role, same-label replacement could
-hide the waited node under its unread children. A bare `truncated` there still
-blocks, as do a protected scope, a failed check, a helper without
-`axSameElement` and the Linux and Windows helpers. This shows the condition gone
-from that node, never that the node is gone, and trusts the app's AX element
-identity: an app that gives a replacement the identity of the element it
-replaced defeats it.
+only its descendants unread: a failed `AXChildren` read or the walk's cut) with
+no `truncated` ancestor does not block once the helper's `axSameElement` shows
+the successor's scope node is the element the wait read (`CFEqual` on the two
+looks' `AXUIElement`s). The public ref carries over structurally (and changes
+when the element's title or description changes), so `provenExactScope` follows
+a renamed scope by native identity; without that check a same-role, same-label
+replacement could hide the waited node under its unread children. A bare
+`truncated` there or any `truncated` ancestor still blocks, as do a protected
+scope, a failed check, a helper without `axSameElement` and the Linux and
+Windows helpers. This shows the condition gone from that node, never that the
+node is gone, and trusts the app's AX element identity: an app that gives a
+replacement the identity of the element it replaced defeats it.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 

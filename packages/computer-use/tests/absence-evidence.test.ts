@@ -84,20 +84,21 @@ test.for([
 		unread: ["@e2"],
 	},
 	{
-		name: "an exact scope under an ancestor whose children are unread",
+		name: "an exact scope under an ancestor whose children are unread, though proven the waited element",
 		tree: () => [
-			wireNode("outer", "AXGroup", "Outer", {
+			wireNode("outer2", "AXGroup", "Outer", {
 				...CHILDREN_UNREAD,
-				children: [wireNode("inner", "AXGroup", "Inner")],
+				children: [wireNode("inner2", "AXGroup", "Inner", CHILDREN_UNREAD)],
 			}),
 		],
 		condition: { ref: "@e3" },
-		unread: ["@e2"],
-		asked: [["inner", "inner"]],
+		unread: ["@e2", "@e3"],
+		same: (wireRef: string, otherRef: string) => wireRef === "inner" && otherRef === "inner2",
+		asked: [["inner", "outer2"]],
 	},
 	{
 		name: "a subtree scope whose children are unread, though the helper says it is the waited element",
-		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
+		tree: () => [wireNode("outer2", "AXGroup", "Outer", CHILDREN_UNREAD)],
 		condition: { scopeRef: "@e2" },
 		unread: ["@e2"],
 		same: true,
@@ -105,21 +106,21 @@ test.for([
 	{
 		// The successor binds the scope's public ref structurally: only native identity proves the waited node.
 		name: "an exact scope whose children alone are unread, not proven the waited element",
-		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
+		tree: () => [wireNode("outer2", "AXGroup", "Outer", CHILDREN_UNREAD)],
 		condition: { ref: "@e2" },
 		unread: ["@e2"],
-		asked: [["outer", "outer"]],
+		asked: [["outer", "outer2"]],
 	},
 	{
 		name: "a protected exact scope whose children are unread, though proven the waited element",
-		tree: () => [wireNode("outer", "AXGroup", "Outer", { ...CHILDREN_UNREAD, subrole: "AXSecureTextField" })],
+		tree: () => [wireNode("outer2", "AXGroup", "Outer", { ...CHILDREN_UNREAD, subrole: "AXSecureTextField" })],
 		condition: { ref: "@e2" },
-		unread: ["@e2"],
+		unread: ["@e4"],
 		same: true,
 	},
 	{
 		name: "a bare truncated exact scope, though proven the waited element",
-		tree: () => [wireNode("outer", "AXGroup", "Outer", UNREAD)],
+		tree: () => [wireNode("outer2", "AXGroup", "Outer", UNREAD)],
 		condition: { ref: "@e2" },
 		unread: ["@e2"],
 		same: true,
@@ -127,9 +128,9 @@ test.for([
 	{
 		name: "an exact scope whose children are unread under a bare truncated ancestor, though proven the waited element",
 		tree: () => [
-			wireNode("outer", "AXGroup", "Outer", {
+			wireNode("outer2", "AXGroup", "Outer", {
 				...UNREAD,
-				children: [wireNode("inner", "AXGroup", "Inner", CHILDREN_UNREAD)],
+				children: [wireNode("inner2", "AXGroup", "Inner", CHILDREN_UNREAD)],
 			}),
 		],
 		condition: { ref: "@e3" },
@@ -140,7 +141,8 @@ test.for([
 	"a helper's gone is inconclusive with $name in the successor",
 	async ({ tree, condition, unread, same, asked }, { onTestFinished }) => {
 		const fake = await installFakeDesktop(onTestFinished);
-		fake.sameElement = async () => same === true;
+		fake.sameElement = async (wireRef, otherRef) =>
+			typeof same === "function" ? same(wireRef, otherRef) : same === true;
 		fake.tree = [wireNode("outer", "AXGroup", "Outer", { children: [wireNode("inner", "AXGroup", "Inner")] })];
 		const { stateId } = await fake.observe();
 		// The Windows UIA wait returns `gone` even when its walk was truncated; only the successor shows the cut.
@@ -162,7 +164,7 @@ test.for([
 			fake.text(result),
 			/^Inconclusive: the condition is not proven gone: \d nodes? in its scope could not be read \(@e/,
 		);
-		// Identity is asked only when a `childrenUnread` marker at or above an exact, readable scope is all that blocks.
+		// Identity is asked only when a `childrenUnread` marker on an exact, readable scope with no unread ancestor blocks.
 		assert.deepEqual(fake.identityChecks, asked ?? []);
 	},
 );
@@ -821,30 +823,32 @@ async function waitExactAbsence(
 
 test.for([
 	{
-		name: "its children alone are unread",
-		before: () => [wireButton("go", "Go")],
-		after: () => [wireButton("go", "Stop", CHILDREN_UNREAD)],
+		name: "its children alone are unread and its title changed (fresh wire ref and fresh public ref)",
+		before: () => [wireButton("go-1", "Go")],
+		after: () => [wireButton("go-2", "Stop", CHILDREN_UNREAD)],
 		ref: "@e2",
-		asked: [["go", "go"]],
+		same: (wireRef: string, otherRef: string) => wireRef === "go-1" && otherRef === "go-2",
+		asked: [["go-1", "go-2"]],
 	},
 	{
-		// The window's budget cut leaves an ancestor `childrenUnread`; the proven scope cannot hide there (#1338).
-		name: "it sits under ancestors whose children the walk cut",
-		before: () => [wireNode("outer", "AXGroup", "Outer", { children: [wireButton("go", "Go")] })],
+		name: "its children alone are unread after a sibling took its old structural slot",
+		before: () => [wireNode("go-1", "AXButton", "Save", { value: "Go" })],
 		after: () => [
-			wireNode("outer", "AXGroup", "Outer", {
-				...CHILDREN_UNREAD,
-				children: [wireButton("go", "Stop", CHILDREN_UNREAD)],
-			}),
+			wireNode("other-2", "AXButton", "Save", { value: "Idle", ...CHILDREN_UNREAD }),
+			wireNode("go-2", "AXButton", "Done", { value: "Stop", ...CHILDREN_UNREAD }),
 		],
-		ref: "@e3",
-		asked: [["go", "go"]],
+		ref: "@e2",
+		same: (wireRef: string, otherRef: string) => wireRef === "go-1" && otherRef === "go-2",
+		asked: [
+			["go-1", "other-2"],
+			["go-1", "go-2"],
+		],
 	},
 ])(
 	"a proven exact scope corroborates a gone condition when $name",
-	async ({ before, after, ref, asked }, { onTestFinished }) => {
+	async ({ before, after, ref, same, asked }, { onTestFinished }) => {
 		const fake = await installFakeDesktop(onTestFinished);
-		fake.sameElement = async (wireRef, otherRef) => wireRef === otherRef;
+		fake.sameElement = async (wireRef, otherRef) => same(wireRef, otherRef);
 		const result = await waitExactAbsence(fake, before(), after(), ref);
 		assert.deepEqual(
 			[result.details.found, result.details.gone, result.details.inconclusive, result.details.unreadRefs],
@@ -855,6 +859,92 @@ test.for([
 	},
 );
 
+test("a proven exact scope that still matches the native multiline text or role predicate stays inconclusive", async ({
+	onTestFinished,
+}) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.sameElement = async (wireRef, otherRef) => wireRef === "go-1" && otherRef === "go-2";
+	fake.tree = [wireNode("go-1", "AXButton", "Action", { description: "Save", value: "Go" })];
+	const { stateId } = await fake.observe();
+	// `searchOutline` joins fields with spaces, so `Save\nGo` is invisible to `outlineConditionPresent`, yet the native
+	// predicate joins title, description and value with newlines.
+	fake.waitFor = async () => {
+		fake.tree = [wireNode("go-2", "AXButton", "Renamed", { description: "Save", value: "Go", ...CHILDREN_UNREAD })];
+		return { found: true, gone: true, nodeCount: 1 };
+	};
+	const multiline = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		text: "Save\nGo",
+		until: "absent",
+		ref: "@e2",
+	});
+	assert.deepEqual(
+		[multiline.details.found, multiline.details.gone, multiline.details.inconclusive, multiline.details.unreadRefs],
+		[false, undefined, true, undefined],
+	);
+	assert.match(
+		fake.text(multiline),
+		/^Inconclusive: the condition is not proven gone: the successor observation still shows the condition\./,
+	);
+	// Role-only exact condition on a renamed element whose new public ref differs from `@e2`.
+	const roleStillMatches = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		role: "button",
+		until: "absent",
+		ref: "@e2",
+	});
+	assert.deepEqual(
+		[roleStillMatches.details.found, roleStillMatches.details.gone, roleStillMatches.details.inconclusive],
+		[false, undefined, true],
+	);
+	const valueMismatch = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		role: "button",
+		value: "Stop",
+		until: "absent",
+		ref: "@e2",
+	});
+	assert.deepEqual([valueMismatch.details.found, valueMismatch.details.gone], [true, true]);
+	const roleMismatch = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		role: "group",
+		until: "absent",
+		ref: "@e2",
+	});
+	assert.deepEqual([roleMismatch.details.found, roleMismatch.details.gone], [true, true]);
+});
+
+test("an exact scope under an ancestor whose children alone are unread stays inconclusive", async ({
+	onTestFinished,
+}) => {
+	// An ancestor's `childrenUnread` says only that the ancestor's own fields read, not that every descendant's own
+	// fields did: the exact scope's own `AXValue` read may have failed during the wait (#1338).
+	const fake = await installFakeDesktop(onTestFinished);
+	fake.sameElement = async (wireRef, otherRef) => wireRef === "inner" && otherRef === "inner2";
+	fake.tree = [wireNode("outer", "AXGroup", "Outer", { children: [wireNode("inner", "AXGroup", "Inner")] })];
+	const { stateId } = await fake.observe();
+	fake.waitFor = async () => {
+		fake.tree = [
+			wireNode("outer2", "AXGroup", "Outer", {
+				...CHILDREN_UNREAD,
+				children: [wireNode("inner2", "AXGroup", "Inner")],
+			}),
+		];
+		return { found: true, gone: true, nodeCount: 2 };
+	};
+	const result = await fake.call(fake.bridge.executeWaitFor, {
+		stateId,
+		text: "Target",
+		until: "absent",
+		ref: "@e3",
+	});
+	assert.deepEqual(
+		[result.details.found, result.details.gone, result.details.inconclusive, result.details.unreadRefs],
+		[false, undefined, true, ["@e2"]],
+	);
+	assert.deepEqual(fake.identityChecks, [["inner", "outer2"]]);
+});
+
 test("an exact scope whose children are unread stays inconclusive without an identity check", async ({
 	onTestFinished,
 }) => {
@@ -864,11 +954,11 @@ test("an exact scope whose children are unread stays inconclusive without an ide
 	delete currentPlatformBackend.sameElement;
 	const result = await waitExactAbsence(
 		fake,
-		[wireButton("go", "Go")],
-		[wireButton("go", "Stop", CHILDREN_UNREAD)],
+		[wireButton("go-1", "Go")],
+		[wireButton("go-2", "Stop", CHILDREN_UNREAD)],
 		"@e2",
 	);
-	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
+	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e3"]]);
 });
 
 test("a failed identity check proves nothing", async ({ onTestFinished }) => {
@@ -879,12 +969,12 @@ test("a failed identity check proves nothing", async ({ onTestFinished }) => {
 	};
 	const result = await waitExactAbsence(
 		fake,
-		[wireButton("go", "Go")],
-		[wireButton("go", "Stop", CHILDREN_UNREAD)],
+		[wireButton("go-1", "Go")],
+		[wireButton("go-2", "Stop", CHILDREN_UNREAD)],
 		"@e2",
 	);
-	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
-	assert.deepEqual(fake.identityChecks, [["go", "go"]]);
+	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e3"]]);
+	assert.deepEqual(fake.identityChecks, [["go-1", "go-2"]]);
 });
 
 test("an identity check cancelled with the call rejects instead of settling", async ({ onTestFinished }) => {
@@ -898,8 +988,8 @@ test("an identity check cancelled with the call rejects instead of settling", as
 	await expect(
 		waitExactAbsence(
 			fake,
-			[wireButton("go", "Go")],
-			[wireButton("go", "Stop", CHILDREN_UNREAD)],
+			[wireButton("go-1", "Go")],
+			[wireButton("go-2", "Stop", CHILDREN_UNREAD)],
 			"@e2",
 			controller.signal,
 		),
@@ -925,7 +1015,7 @@ test.for([
 		};
 		// The node stops showing "Go" while its `AXChildren` read keeps failing; the native exact wait says `gone`.
 		fake.waitFor = async () => {
-			fake.tree = [wireButton("go", "Stop", marker)];
+			fake.tree = [wireButton("go-2", "Stop", marker)];
 			return { found: true, gone: true, nodeCount: 1 };
 		};
 		const result = await fake.call(fake.bridge.executeAct, {
@@ -934,6 +1024,6 @@ test.for([
 			expect: { ref: "@e2", text: "Go", until: "absent", timeoutMs: 250 },
 		});
 		assert.equal(result.details.execution.verification.status, status);
-		assert.deepEqual(fake.identityChecks, marker === UNREAD ? [] : [["go", "go"]]);
+		assert.deepEqual(fake.identityChecks, marker === UNREAD ? [] : [["go", "go-2"]]);
 	},
 );

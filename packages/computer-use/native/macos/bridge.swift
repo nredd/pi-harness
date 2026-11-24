@@ -75,15 +75,17 @@ enum AXStringRead: Equatable {
 }
 
 /// A look node's own matchable fields (what a `waitFor` condition, the ref snapshot and the protection check read),
-/// each read once. A failed read leaves its field `""` and `complete` false, so the node never claims its own
-/// fields read (`LookNode.childrenUnread`) whatever its children (#1310).
+/// each read once. A failed read leaves its field `""` and `complete` false, so the node is `truncated` and never
+/// claims its own fields read (`LookNode.childrenUnread`) whatever its children (#1310). When either classification
+/// attribute (`AXRole` or `AXSubrole`) fails to read, the node may be a secure field: it emits an empty role and
+/// subrole (which `isProtectedNode` treats as protected) and does not read `AXValue` or the other text attributes.
 struct LookOwnFields {
 	let role: String
 	let subrole: String
 	let identifier: String
 	let title: String
 	let description: String
-	/// `""` for a secure field, whose value is never read.
+	/// `""` for a secure or unclassified field, whose value is never read.
 	let value: String
 	/// Every read succeeded or was authoritatively absent.
 	let complete: Bool
@@ -104,6 +106,16 @@ struct LookOwnFields {
 		}
 		let role = field(kAXRoleAttribute)
 		let subrole = field(kAXSubroleAttribute)
+		guard complete else {
+			self.role = ""
+			self.subrole = ""
+			identifier = ""
+			title = ""
+			description = ""
+			value = ""
+			self.complete = false
+			return
+		}
 		self.role = role
 		self.subrole = subrole
 		identifier = field("AXIdentifier")
@@ -1731,7 +1743,7 @@ final class LookNode {
 	var text: [[String: Any]]
 	var children: [LookNode]
 
-	init(element: AXUIElement?, ref: String, role: String, subrole: String, identifier: String, title: String, description: String, value: String, actions: [String], canPress: Bool, canFocus: Bool, canSetValue: Bool, canScroll: Bool, canIncrement: Bool, canDecrement: Bool, isTextInput: Bool, rect: CGRect, focused: Bool = false, offscreen: Bool = false, pictureOnly: Bool = false, ownFieldsRead: Bool = false) {
+	init(element: AXUIElement?, ref: String, role: String, subrole: String, identifier: String, title: String, description: String, value: String, actions: [String], canPress: Bool, canFocus: Bool, canSetValue: Bool, canScroll: Bool, canIncrement: Bool, canDecrement: Bool, isTextInput: Bool, rect: CGRect, focused: Bool = false, offscreen: Bool = false, pictureOnly: Bool = false, ownFieldsRead: Bool = true) {
 		self.element = element
 		self.ref = ref
 		self.role = role
@@ -1753,7 +1765,7 @@ final class LookNode {
 		self.offscreen = offscreen
 		self.pictureOnly = pictureOnly
 		self.ownFieldsRead = ownFieldsRead
-		self.truncated = false
+		self.truncated = !ownFieldsRead
 		self.childrenUnread = false
 		self.text = []
 		self.children = []
@@ -5960,7 +5972,7 @@ An advertised AX action is a delivery capability, not proof of an application-le
 
 - An empty outline usually indicates missing Accessibility trust, an inaccessible target, or an app that exposes no useful AX hierarchy.
 - `truncated` means the bounded walk did not retrieve the complete descendant tree.
-- `childrenUnread` comes with `truncated` only when the node's own matchable fields (role, subrole, identifier, title, description, value) all read or were authoritatively absent and only its descendants are unread. It never proves an absence by itself: `wait_for` and `act_ui` `expect` ignore it only at or above an exact `ref` scope that `axSameElement` proved is the element the wait read, because a public ref carried over structurally may name a lookalike.
+- `childrenUnread` comes with `truncated` only when the node's own matchable fields (role, subrole, identifier, title, description, value) all read or were authoritatively absent and only its descendants are unread. It never proves an absence by itself: `wait_for` and `act_ui` `expect` ignore it only on an exact `ref` scope that `axSameElement` proved is the element the wait read, because a public ref carried over structurally may name a lookalike.
 - `pictureOnly` means the element came from visual evidence and cannot be targeted by AX ref.
 - A supported action describes what the element reports, not whether the app will honor it.
 - AX frames and Core Graphics windows are paired heuristically; low-confidence pairing must not be treated as exact identity.

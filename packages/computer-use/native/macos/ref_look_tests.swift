@@ -413,9 +413,9 @@ private func runLookOutlineAssertions() {
     late.childrenUnread && build(root, children: tree, expiresAfter: 0).childrenUnread,
     "the deadline leaves only the descendants unread")
   // A failed own-field read beside the failed children read: the node keeps only the bare marker (#1310).
-  func walkedFieldNode(_ reads: [String: AXStringRead]) -> LookNode {
+  func walkedFieldNode(_ reads: [String: AXStringRead], children: [Node]? = nil) -> LookNode {
     LookOutlineWorld<Node>(
-      children: { _ in nil }, rootNode: { _ in fieldNode("own", reads: reads) }, childNodes: { _ in { node($0.name) } },
+      children: { _ in children }, rootNode: { _ in fieldNode("own", reads: reads) }, childNodes: { _ in { node($0.name) } },
       now: { 0 }
     ).build(root: root, nodeLimit: 2000, timeLimit: 20, requestDeadline: .infinity)
   }
@@ -428,12 +428,32 @@ private func runLookOutlineAssertions() {
       && readOwn.value == "Stop",
     "failed children with every own field read carry childrenUnread")
   for attribute in [kAXRoleAttribute, kAXSubroleAttribute, "AXIdentifier", kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
-    var reads = readable
-    reads[attribute] = .failed
-    let failed = walkedFieldNode(reads).payload()
+    for childList in [nil, [Node]()] {
+      var reads = readable
+      reads[attribute] = .failed
+      let failed = walkedFieldNode(reads, children: childList).payload()
+      check(
+        failed["truncated"] as? Bool == true && failed["childrenUnread"] == nil,
+        "a failed \(attribute) read with children \(String(describing: childList)) sends only the bare truncated")
+    }
+  }
+  // If role or subrole cannot be read, the element may be a secure field: emit an empty classification and never read
+  // value or other text attributes.
+  for classification in [kAXRoleAttribute, kAXSubroleAttribute] {
+    var asked: [String] = []
+    let unclassified = LookOwnFields(
+      read: { attribute in
+        let name = attribute as String
+        asked.append(name)
+        if name == classification { return .failed }
+        return .value(name == kAXRoleAttribute ? "AXTextField" : "secret")
+      },
+      secure: { $0 == "AXSecureTextField" || $1 == "AXSecureTextField" })
     check(
-      failed["truncated"] as? Bool == true && failed["childrenUnread"] == nil,
-      "a failed \(attribute) read with failed children sends only the bare truncated")
+      !unclassified.complete && unclassified.role.isEmpty && unclassified.subrole.isEmpty
+        && unclassified.identifier.isEmpty && unclassified.title.isEmpty && unclassified.description.isEmpty
+        && unclassified.value.isEmpty && !asked.contains(kAXValueAttribute),
+      "a failed \(classification) read fails closed without reading value or text fields")
   }
   var secureReads = readable
   secureReads[kAXRoleAttribute] = .value("AXSecureTextField")
