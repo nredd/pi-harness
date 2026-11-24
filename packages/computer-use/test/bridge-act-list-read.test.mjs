@@ -479,7 +479,7 @@ describe("read_text on stored output", () => {
 	test("an unknown or evicted output ref is refused", async () => {
 		await assert.rejects(
 			() => call(executeReadText, { ref: "@o9999" }),
-			/Output ref '@o9999' is unavailable or was evicted\. Rerun the focused query\./,
+			/Output ref '@o9999' is unavailable, was evicted, or was revoked by a later protected look\. Rerun the focused query\./,
 		);
 	});
 });

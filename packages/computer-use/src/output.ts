@@ -17,6 +17,8 @@ interface StoredOutput {
 	storedBytes: number;
 	totalBytes: number;
 	complete: boolean;
+	/** Whether the state this output's text came from was revoked since (#1279); absent for stateless output. */
+	revoked?: () => boolean;
 }
 
 const outputs = new Map<string, StoredOutput>();
@@ -37,7 +39,17 @@ function boundedPrefix(value: string, maxBytes: number, maxLines: number): strin
 	return new TextDecoder().decode(utf8Prefix(new TextEncoder().encode(lineBounded), maxBytes));
 }
 
-function storeOutput(value: string): StoredOutput {
+function removeOutput(entry: StoredOutput): void {
+	outputs.delete(entry.ref);
+	outputBytes -= entry.storedBytes;
+	try {
+		unlinkSync(entry.filePath);
+	} catch {
+		/* already removed */
+	}
+}
+
+function storeOutput(value: string, revoked?: () => boolean): StoredOutput {
 	const encoded = new TextEncoder().encode(value);
 	const stored = encoded.byteLength > OUTPUT_ENTRY_MAX_BYTES ? utf8Prefix(encoded, OUTPUT_ENTRY_MAX_BYTES) : encoded;
 	outputDirectory ??= mkdtempSync(path.join(os.tmpdir(), "pi-computer-use-output-"));
@@ -50,19 +62,11 @@ function storeOutput(value: string): StoredOutput {
 		storedBytes: stored.byteLength,
 		totalBytes: encoded.byteLength,
 		complete: stored.byteLength === encoded.byteLength,
+		revoked,
 	};
 	outputs.set(entry.ref, entry);
 	outputBytes += entry.storedBytes;
-	while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) {
-		const [oldestRef, oldest] = outputs.entries().next().value!;
-		outputs.delete(oldestRef);
-		outputBytes -= oldest.storedBytes;
-		try {
-			unlinkSync(oldest.filePath);
-		} catch {
-			/* already removed */
-		}
-	}
+	while (outputBytes > OUTPUT_STORE_MAX_BYTES && outputs.size > 1) removeOutput(outputs.values().next().value!);
 	return entry;
 }
 
@@ -74,7 +78,15 @@ function refinementFor(tool: string): string {
 	return "request a smaller or more focused result";
 }
 
-export function applyOutputEnvelope<T>(tool: string, result: AgentToolResult<T>): AgentToolResult<T> {
+/**
+ * Bound `result`'s text; an oversized one is stored behind an `@o` ref. `revoked`, when given, is consulted on every
+ * read: once it holds, the page is deleted and reads as unavailable.
+ */
+export function applyOutputEnvelope<T>(
+	tool: string,
+	result: AgentToolResult<T>,
+	revoked?: () => boolean,
+): AgentToolResult<T> {
 	const textParts = result.content.filter(
 		(part): part is Extract<(typeof result.content)[number], { type: "text" }> => part.type === "text",
 	);
@@ -83,7 +95,7 @@ export function applyOutputEnvelope<T>(tool: string, result: AgentToolResult<T>)
 	const lines = combined === "" ? 0 : combined.split("\n").length;
 	if (bytes <= MODEL_TEXT_MAX_BYTES && lines <= MODEL_TEXT_MAX_LINES) return result;
 
-	const entry = storeOutput(combined);
+	const entry = storeOutput(combined, revoked);
 	const preview = boundedPrefix(combined, MODEL_PREVIEW_BYTES, MODEL_TEXT_MAX_LINES - 4);
 	const returnedBytes = new TextEncoder().encode(preview).byteLength;
 	const availability = entry.complete
@@ -113,6 +125,11 @@ export function boundToolError(tool: string, error: unknown): Error {
 	);
 }
 
+/** The revocation guard of the stored `@o` page `ref`; `undefined` for stateless or unknown pages. */
+export function storedOutputGuard(ref: string): (() => boolean) | undefined {
+	return outputs.get(ref)?.revoked;
+}
+
 export function readStoredOutput(
 	ref: string,
 	offsetValue: unknown,
@@ -121,6 +138,10 @@ export function readStoredOutput(
 	| undefined {
 	const entry = outputs.get(ref);
 	if (!entry) return undefined;
+	if (entry.revoked?.()) {
+		removeOutput(entry);
+		return undefined;
+	}
 	let offset = Math.min(
 		entry.storedBytes,
 		Math.max(0, Math.trunc(typeof offsetValue === "number" && Number.isFinite(offsetValue) ? offsetValue : 0)),

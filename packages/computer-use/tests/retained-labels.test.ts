@@ -79,16 +79,21 @@ async function desktop(shape: Shape) {
 		fake.frontmost = { appName: root.appName, appId: root.appId, pid: root.pid, windowId: root.windowId };
 	}
 	const { executeExpandUi, executeInspectUi, executeSearchUi } = fake.bridge;
-	/** Every read-only query surface for `ref`, checked against the secret. */
-	const assertQueriesClean = async (stateId: string, ref: string) => {
+	/**
+	 * Every read-only query surface for `ref`, checked against the secret. An OCR-escalated search adopts a fresh look,
+	 * which revokes `stateId` when it holds a protected node (#1279), so later queries follow the returned state.
+	 */
+	const assertQueriesClean = async (initialStateId: string, ref: string) => {
+		const expanded = await fake.call(executeExpandUi, { stateId: initialStateId, ref, depth: 3 });
+		assertNoSecret(expanded, fake.text(expanded), "expand_ui");
+		const inspected = await fake.call(executeInspectUi, { stateId: initialStateId, ref });
+		assertNoSecret(inspected, fake.text(inspected), "inspect_ui");
+		let stateId = initialStateId;
 		for (const text of [SECRET, SECRET_VALUE, "private", "hunter2"]) {
 			const found = await fake.call(executeSearchUi, { stateId, text });
 			assertNoSecret(found, fake.text(found), `search_ui(${text})`);
+			stateId = found.details.stateId;
 		}
-		const expanded = await fake.call(executeExpandUi, { stateId, ref, depth: 3 });
-		assertNoSecret(expanded, fake.text(expanded), "expand_ui");
-		const inspected = await fake.call(executeInspectUi, { stateId, ref });
-		assertNoSecret(inspected, fake.text(inspected), "inspect_ui");
 	};
 	/** Press `Keep` (`@e3`) while the live tree turns into `next`; act_ui chains the note from `stateId`. */
 	const actWhile = async (stateId: string, next: object[]) => {
@@ -162,10 +167,18 @@ describe.each(Object.entries(PROTECTED_SHAPES))("a readable node that turns %s",
 		assert.equal(second.acted.details.view, "diff");
 		assertNoSecret(second.acted, second.text, "act_ui");
 		assert.match(second.text, /\[redacted\] +changed +\(not matched in latest look\)/);
+		// The act's own look saw the protected node, so the earlier state no longer answers from its look (#1279).
+		for (const [execute, params] of [
+			[fake.bridge.executeInspectUi, { ref: "@e2" }],
+			[fake.bridge.executeExpandUi, { ref: "@e2" }],
+			[fake.bridge.executeSearchUi, { text: SECRET }],
+		] as const)
+			await assert.rejects(fake.call(execute, { stateId: first.stateId, ...params }), (error: Error) => {
+				assert.match(error.message, new RegExp(`State '${first.stateId}' was revoked: a later look`));
+				assert.ok(!error.message.includes(SECRET));
+				return true;
+			});
 		await assertQueriesClean(second.stateId, "@e2");
-		// The earlier state still answers for its own look (#1263, #1279); only later states consult the new classification.
-		const earlier = await fake.call(fake.bridge.executeInspectUi, { stateId: first.stateId, ref: "@e2" });
-		assert.match(fake.text(earlier), new RegExp(SECRET));
 	});
 });
 
@@ -1159,11 +1172,13 @@ describe("OCR text over a protected node (#1263)", () => {
 					}),
 				],
 			});
-		const { stateId, text, result } = await fake.observe({ detail: "outline" });
-		assertNoSecret(result, text, "observe_ui");
+		const observed = await fake.observe({ detail: "outline" });
+		assertNoSecret(observed.result, observed.text, "observe_ui");
+		let stateId = observed.stateId;
 		for (const query of [SECRET, "private"]) {
 			const found = await fake.call(fake.bridge.executeSearchUi, { stateId, text: query });
 			assertNoSecret(found, fake.text(found), `search_ui(${query})`);
+			stateId = found.details.stateId;
 		}
 	});
 });
