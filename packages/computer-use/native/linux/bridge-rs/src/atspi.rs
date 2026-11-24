@@ -4034,6 +4034,10 @@ mod tests {
                 );
             }
             assert_eq!(aliases_of(interpreter, &[name, "/opt/tool"]), ["tool"]);
+            let other_suffix = if name == "perl" { "tool.rb" } else { "tool.pl" };
+            for other in [other_suffix, "tool.js"] {
+                assert_eq!(aliases_of(interpreter, &[name, other]), [other]);
+            }
         }
     }
 
