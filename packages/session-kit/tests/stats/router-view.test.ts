@@ -15,18 +15,23 @@ async function place(root: string): Promise<string> {
 	return path;
 }
 
-// The fixture is the subscription-router writer's output for anthropic, openai-codex and a synthetic
-// antigravity reading; the router package asserts its writer still emits it field for field, and
+// The router package checks each fixture view against its writer output, and
 // scripts/tests/test_router_view_fixture.py keeps both copies identical.
-it("reads the router writer's view for anthropic, openai-codex and antigravity", async ({ onTestFinished }) => {
+it("reads fresh and stale gauges, a meter, a pool and a mark from the router writer fixture", async ({
+	onTestFinished,
+}) => {
 	const root = makeTestTempDir("kit-router-view-", onTestFinished);
 	await place(root);
 	const rows = await readRouterQuota(root, NOW);
-	expect(Object.fromEntries(rows.map(({ label, head }) => [label, head]))).toEqual({
-		"Anthropic five_hour": { kind: "gauge", percent: 25 },
-		"OpenAI 5h (assumed span)": { kind: "gauge", percent: 15 },
-		"Gemini 5h": { kind: "gauge", percent: 35 },
-	});
+	expect(rows.map(({ label, head, basis, old }) => [label, head, basis, old])).toEqual([
+		["Gemini 5h", { kind: "gauge", percent: 35 }, "reported", false],
+		["Anthropic five_hour", { kind: "gauge", percent: 25 }, "reported", false],
+		["OpenAI 5h (assumed span)", { kind: "gauge", percent: 15 }, "reported", false],
+		["Producing collector weekly (stale)", { kind: "gauge", percent: 40 }, "reported", true],
+		["Producing collector daily (stale)", { kind: "text", text: "1/5 requests" }, "reported", true],
+		["Producing collector paid (stale)", { kind: "text", text: "10 credits balance" }, undefined, true],
+		["Producing collector daily", { kind: "text", text: "blocked until 2027-01-15 08:01 UTC" }, "observed", false],
+	]);
 });
 
 it("accepts exactly the 1 MiB the router writer caps at and rejects one byte more", async ({ onTestFinished }) => {

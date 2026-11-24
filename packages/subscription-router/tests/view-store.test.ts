@@ -22,6 +22,8 @@ const SHARED_KEY = Symbol.for("pi-subscription-router.shared");
 const host = globalThis as typeof globalThis & { [SHARED_KEY]?: unknown };
 const statePath = (root: string) => join(root, "router-state", "v1");
 const NOW = 1_800_000_000_000;
+const fixture = new URL("./fixtures/router-view.json", import.meta.url);
+const fixtureViews = async (): Promise<{ provider: string }[]> => JSON.parse(await readFile(fixture, "utf8"));
 const model = { provider: "faux", id: "model" };
 const decision = { block: true, window: "daily", scope: "provider", resetAt: NOW + 60_000 } as const;
 const ctx = { modelRegistry: { getApiKeyForProvider: async () => "omit-credential" } } as unknown as RegistryContext;
@@ -34,9 +36,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-it("publishes the default router cache for the real /stats reader without changing usage RPC", async ({
-	onTestFinished,
-}) => {
+it("matches the fresh writer fixture without changing usage RPC", async ({ onTestFinished }) => {
 	const root = makeTestTempDir("router-quota-", onTestFinished);
 	vi.stubEnv("PI_CODING_AGENT_DIR", root);
 	vi.spyOn(Date, "now").mockReturnValue(NOW);
@@ -81,9 +81,7 @@ it("publishes the default router cache for the real /stats reader without changi
 
 		const raw = await readFile(join(statePath(root), "view.json"), "utf8");
 		expect(raw).not.toContain("omit-");
-		expect(JSON.parse(raw)).toEqual(
-			JSON.parse(await readFile(new URL("./fixtures/router-view.json", import.meta.url), "utf8")),
-		);
+		expect(JSON.parse(raw)).toEqual((await fixtureViews()).filter(({ provider }) => provider !== "alias"));
 		const rows = await readRouterQuota(root, NOW);
 		expect(Object.fromEntries(rows.map(({ label, head }) => [label, head]))).toEqual({
 			"Anthropic five_hour": { kind: "gauge", percent: 25 },
@@ -221,47 +219,49 @@ it("oversized reading does not retain cleared blocks", async ({ onTestFinished }
 	]);
 });
 
-it("uses the producing alias binding's display only for snapshots", async ({ onTestFinished }) => {
+it("matches the stale alias writer fixture with a mark, meter and pool", async ({ onTestFinished }) => {
 	const root = makeTestTempDir("router-quota-", onTestFinished);
 	const usage = makeUsage();
 	const tracker = new ExhaustionTracker(() => NOW);
 	const store = bindViewStore(root, usage, tracker);
+	let failed = false;
 	const register = (provider: string, full: string) =>
 		onTestFinished(
 			registerCollector({
 				provider,
 				kind: "custom",
 				display: { full, compact: full },
-				read: async () => ({
-					windows: [{ name: "weekly", usedPercent: 40, scope: "provider" }],
-					meters: [
-						{
-							name: "daily",
-							scope: "provider",
-							quantity: { unit: "requests", used: 1, limit: 5 },
-							resetAt: NOW + 60_000,
-							resetRule: { at: "00:00", timeZone: "UTC", every: "day" },
-						},
-					],
-					pools: [{ name: "paid", unit: "credits", role: "prepaid", balance: 10 }],
-				}),
+				read: async () => {
+					if (failed) throw new Error("Synthetic quota read failed");
+					return {
+						windows: [{ name: "weekly", usedPercent: 40, scope: "provider" }],
+						meters: [
+							{
+								name: "daily",
+								scope: "provider",
+								quantity: { unit: "requests", used: 1, limit: 5 },
+								resetAt: NOW + 60_000,
+								resetRule: { at: "00:00", timeZone: "UTC", every: "day" },
+							},
+						],
+						pools: [{ name: "paid", unit: "credits", role: "prepaid", balance: 10 }],
+					};
+				},
 			}),
 		);
 	register("alias", "Wrong collector");
 	register("source", "Producing collector");
 	const alias = { ...model, provider: "alias" };
 	usage.configureCollectors({ alias: { collector: { id: "source" } } });
-	tracker.mark(alias, decision);
+	tracker.mark(alias, { ...decision, evidence: "observed" });
 	await store.flush();
 	expect((await readRouterQuota(root, NOW)).map(({ label }) => label)).toEqual(["alias daily"]);
-	await usage.get(ctx, alias.provider);
+	expect((await usage.get(ctx, alias.provider)).status).toBe("available");
+	failed = true;
+	expect((await usage.get(ctx, alias.provider, { force: true })).status).toBe("stale");
 	await store.flush();
-	expect((await readRouterQuota(root, NOW)).map(({ label }) => label)).toEqual([
-		"Producing collector weekly",
-		"Producing collector daily",
-		"Producing collector paid",
-		"Producing collector daily",
-	]);
+	const raw = await readFile(join(statePath(root), "view.json"), "utf8");
+	expect(JSON.parse(raw)).toEqual((await fixtureViews()).filter(({ provider }) => provider === alias.provider));
 });
 
 it("omits unused Codex balance text and stale diagnostic messages", async ({ onTestFinished }) => {
