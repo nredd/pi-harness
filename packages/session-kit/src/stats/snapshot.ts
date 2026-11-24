@@ -2153,6 +2153,14 @@ async function keptReason(
 	return covered(shard as CompactShard) ? undefined : "not covered";
 }
 
+/** `lstat(path)`, or `undefined` when `path` is absent (`ENOENT`); other errors pass through. */
+async function statIfPresent(path: string) {
+	return lstat(path).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	});
+}
+
 /**
  * Explicit, recovery-only cleanup of frozen shard files; no export ever runs it. Under the outbox's export lock,
  * and only when its active v3 manifest and every shard it references authenticate and its own bookkeeping records
@@ -2160,9 +2168,10 @@ async function keptReason(
  * authenticates as this machine's v3 shard and the active snapshot holds every row of it. Everything else stays
  * frozen, with a reason. Every candidate stays in the recovery set until its unlink succeeds; the set shrinks
  * once, after the unlinks, so a crash or failed bookkeeping write leaves only stale names of absent files, which
- * are harmless, never an unprotected frozen file. `restoreSnapshot` holds the same export lock, giving cleanup real
- * exclusion against restores; right before each unlink the manifest is also authenticated and reread and the file
- * authenticated again, stopping cleanup if an external writer modified the outbox outside the lock.
+ * are harmless, never an unprotected frozen file. Stage checkouts or backups outside the outbox and restore them
+ * through `restoreSnapshot`, which holds the same export lock and gives cleanup real exclusion without outbox
+ * quiescence; right before each unlink the manifest is also authenticated and reread and the file authenticated
+ * again, narrowing the window against any external writer that modifies the outbox outside the lock.
  */
 export async function cleanRecovery(dir: string, output: string): Promise<CleanupResult> {
 	const identity = await machineIdentity(dir);
@@ -2171,10 +2180,7 @@ export async function cleanRecovery(dir: string, output: string): Promise<Cleanu
 	const refused = (code: RefusalCode, why: string): ExportRefusal =>
 		new ExportRefusal(code, `Recovery cleanup refused: ${why}; nothing was removed`);
 	// Only absence is "no outbox"; any other error (EACCES, EIO) is the operator's to fix, so it surfaces as is.
-	const outbox = await lstat(snapshotDir).catch((error: NodeJS.ErrnoException) => {
-		if (error.code === "ENOENT") return undefined;
-		throw error;
-	});
+	const outbox = await statIfPresent(snapshotDir);
 	if (!outbox?.isDirectory())
 		throw refused("recovery-outbox-missing", `no outbox for this machine at ${JSON.stringify(snapshotDir)}`);
 	/** `loaded` when it authenticates as this machine's v3 snapshot. */
@@ -2295,12 +2301,19 @@ export interface RestoreResult {
 	warnings?: string[];
 }
 
-/** Whether `path` is already a readable regular file (never a symlink) holding `expected`. */
+/**
+ * Whether `path` is already a readable regular file (never a symlink) of `expected.length` bytes holding `expected`.
+ * Size is checked before reading so an oversized damaged destination is replaced without loading it into memory;
+ * only absence (`ENOENT`) or permission denial (`EACCES`/`EPERM`) triggers replacement, while unexpected I/O throws.
+ */
 async function sameRegularFile(path: string, expected: Buffer): Promise<boolean> {
 	try {
-		return (await lstat(path)).isFile() && (await readFile(path)).equals(expected);
-	} catch {
-		return false;
+		const info = await lstat(path);
+		return info.isFile() && info.size === expected.length && (await readFile(path)).equals(expected);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "EACCES" || code === "EPERM") return false;
+		throw error;
 	}
 }
 
@@ -2320,19 +2333,13 @@ export async function restoreSnapshot(dir: string, input: string, output: string
 		if (!(await lstat(input)).isDirectory())
 			throw new Error(`Restore source ${JSON.stringify(input)} is not a directory`);
 		const nested = join(input, "machines", identity.machineId);
-		const nestedStat = await lstat(nested).catch((error: NodeJS.ErrnoException) => {
-			if (error.code === "ENOENT") return undefined;
-			throw error;
-		});
+		const nestedStat = await statIfPresent(nested);
 		if (nestedStat && !nestedStat.isDirectory())
 			throw new Error(`Restore source ${JSON.stringify(nested)} is not a directory`);
 		const sourceDir = nestedStat ? nested : input;
 		if ((await realpath(sourceDir)) === (await realpath(snapshotDir)))
 			throw new Error(`Restore source ${JSON.stringify(sourceDir)} is the target outbox`);
-		const sourceManifest = await lstat(join(sourceDir, "manifest.json")).catch((error: NodeJS.ErrnoException) => {
-			if (error.code === "ENOENT") return undefined;
-			throw error;
-		});
+		const sourceManifest = await statIfPresent(join(sourceDir, "manifest.json"));
 		const manifestBase = sourceManifest ? sourceDir : snapshotDir;
 		const manifest = validateManifest(await jsonFile(join(manifestBase, "manifest.json")));
 		if (manifest.machineId !== identity.machineId)
@@ -2343,10 +2350,7 @@ export async function restoreSnapshot(dir: string, input: string, output: string
 		const fromSource: { file: string; bytes: Buffer }[] = [];
 		let remaining = MAX_BYTES;
 		for (const ref of manifest.shards) {
-			const inSource = await lstat(join(sourceDir, ref.file)).catch((error: NodeJS.ErrnoException) => {
-				if (error.code === "ENOENT") return undefined;
-				throw error;
-			});
+			const inSource = await statIfPresent(join(sourceDir, ref.file));
 			const read = await readShard(inSource ? sourceDir : snapshotDir, manifest, ref, remaining);
 			remaining -= read.expandedBytes;
 			shards.push(read.shard);

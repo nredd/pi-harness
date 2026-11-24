@@ -9,7 +9,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { lstat, rename, unlink } from "node:fs/promises";
+import { lstat, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,13 @@ import { assistantLine, at, outboxStatePath, sessionFile } from "../fixtures/sta
 
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
-	return { ...actual, lstat: vi.fn(actual.lstat), rename: vi.fn(actual.rename), unlink: vi.fn(actual.unlink) };
+	return {
+		...actual,
+		lstat: vi.fn(actual.lstat),
+		readFile: vi.fn(actual.readFile),
+		rename: vi.fn(actual.rename),
+		unlink: vi.fn(actual.unlink),
+	};
 });
 
 let root: string;
@@ -51,6 +57,7 @@ beforeEach(async ({ onTestFinished }) => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.mocked(lstat).mockRestore();
+	vi.mocked(readFile).mockRestore();
 	vi.mocked(rename).mockRestore();
 	vi.mocked(unlink).mockRestore();
 });
@@ -102,28 +109,29 @@ function quota(over: Partial<SnapshotQuota> = {}): SnapshotQuota {
 function shard(rows: Partial<Pick<Shard, "month" | "events" | "sessions" | "quota">>): Shard {
 	return { version: 3, machineId, month: MONTH, events: [], sessions: [], quota: [], ...rows };
 }
-/** Write `s` under its content address and return its manifest reference. */
-function write(s: Shard): Manifest["shards"][number] {
+/** Write `s` under its content address in `targetDir` and return its manifest reference. */
+function write(s: Shard, targetDir = snapshotDir): Manifest["shards"][number] {
 	const bytes = encodeShard(s);
 	const sha256 = createHash("sha256").update(bytes).digest("hex");
 	const file = `${s.month}-${sha256}.json.gz`;
-	mkdirSync(snapshotDir, { recursive: true });
-	writeFileSync(join(snapshotDir, file), bytes);
+	mkdirSync(targetDir, { recursive: true });
+	writeFileSync(join(targetDir, file), bytes);
 	return { month: s.month, file, sha256, bytes: bytes.length };
 }
-/** Publish `active` as this machine's v3 manifest. */
-function publish(active: Shard[], over: Partial<Manifest> = {}): void {
-	mkdirSync(snapshotDir, { recursive: true });
-	const manifest = {
+/** Publish `active` as this machine's v3 manifest in `targetDir`. */
+function publish(active: Shard[], over: Partial<Manifest> = {}, targetDir = snapshotDir): Manifest {
+	mkdirSync(targetDir, { recursive: true });
+	const manifest: Manifest = {
 		version: 3,
 		machineId,
 		label: "fixture",
 		exportedAt: Date.now(),
 		lastGoodAt: {},
-		shards: active.map(write),
+		shards: active.map((s) => write(s, targetDir)),
 		...over,
 	};
-	writeFileSync(join(snapshotDir, "manifest.json"), JSON.stringify(manifest));
+	writeFileSync(join(targetDir, "manifest.json"), JSON.stringify(manifest));
+	return manifest;
 }
 /** This outbox's own bookkeeping, as an export records it. */
 function bookkeeping(recoveryFiles: string[] | null, over: Record<string, unknown> = {}): void {
@@ -684,45 +692,30 @@ describe("cleanRecovery", () => {
 });
 
 describe("restoreSnapshot", () => {
-	/** Write `active` as this machine's v3 snapshot at `targetDir`. */
-	function writeSnapshotAt(targetDir: string, active: Shard[], over: Partial<Manifest> = {}): Manifest {
-		mkdirSync(targetDir, { recursive: true });
-		const shards = active.map((s) => {
-			const bytes = encodeShard(s);
-			const sha256 = createHash("sha256").update(bytes).digest("hex");
-			const file = `${s.month}-${sha256}.json.gz`;
-			writeFileSync(join(targetDir, file), bytes);
-			return { month: s.month, file, sha256, bytes: bytes.length };
-		});
-		const manifest: Manifest = {
-			version: 3,
-			machineId,
-			label: "fixture",
-			exportedAt: Date.now(),
-			lastGoodAt: {},
-			shards,
-			...over,
-		};
-		writeFileSync(join(targetDir, "manifest.json"), JSON.stringify(manifest));
-		return manifest;
-	}
-
 	it("restores from a sync root or direct machine backup and unblocks cleanRecovery and exportStats", async () => {
 		const first = shard({ events: [event(1)], sessions: [session()] });
 		const second = shard({ events: [event(1), event(2)], sessions: [session()] });
 		const syncBackup = join(root, "sync-backup");
-		const syncManifest = writeSnapshotAt(join(syncBackup, "machines", machineId), [second]);
+		const syncManifest = publish([second], {}, join(syncBackup, "machines", machineId));
 		const activeFile = syncManifest.shards[0]?.file as string;
 		publish([second]);
 		const frozenFile = write(first).file;
 		bookkeeping([frozenFile]);
 
-		// Damage both manifest.json and the active shard in the outbox so cleanRecovery and exportStats refuse.
-		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
-		writeFileSync(join(snapshotDir, activeFile), "corrupt");
+		// Damage both manifest.json (different size: skipped before readFile) and the active shard (same size,
+		// different bytes: read and replaced) in the outbox so cleanRecovery and exportStats refuse.
+		const targetShard = join(snapshotDir, activeFile);
+		const targetManifest = join(snapshotDir, "manifest.json");
+		const originalShard = readFileSync(targetShard);
+		const sameLengthCorrupt = Buffer.from(originalShard);
+		sameLengthCorrupt[0] = (sameLengthCorrupt[0] ?? 0) ^ 0xff;
+		writeFileSync(targetShard, sameLengthCorrupt);
+		writeFileSync(targetManifest, "oversized-or-truncated-corrupt-manifest");
 		await expect(cleanRecovery(agent, out)).rejects.toMatchObject({ refusal: "recovery-snapshot-unverified" });
 
-		// Restore from a sync root (`<SRC>/machines/<UUID>`): repairs the shard first, then manifest.json.
+		// Restore from a sync root (`<SRC>/machines/<UUID>`): repairs the shard first, then manifest.json,
+		// without reading the wrong-sized destination manifest into memory.
+		vi.mocked(readFile).mockClear();
 		const restored = await restoreSnapshot(agent, syncBackup, out);
 		expect(restored).toEqual({
 			machineId,
@@ -730,6 +723,9 @@ describe("restoreSnapshot", () => {
 			exportedAt: syncManifest.exportedAt,
 			restored: [activeFile, "manifest.json"],
 		});
+		const readPaths = vi.mocked(readFile).mock.calls.map(([path]) => String(path));
+		expect(readPaths).toContain(targetShard);
+		expect(readPaths).not.toContain(targetManifest);
 		expect(existsSync(join(snapshotDir, ".export.lock"))).toBe(false);
 		// Re-running when the outbox already holds the exact regular files rewrites nothing.
 		expect(await restoreSnapshot(agent, syncBackup, out)).toEqual({
@@ -748,7 +744,7 @@ describe("restoreSnapshot", () => {
 
 		// Restore from a direct machine backup (`<SRC>/manifest.json`) when only manifest.json was lost.
 		const directBackup = join(root, "direct-backup");
-		writeSnapshotAt(directBackup, [second]);
+		publish([second], {}, directBackup);
 		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
 		expect(await restoreSnapshot(agent, directBackup, out)).toEqual({
 			machineId,
@@ -794,7 +790,7 @@ describe("restoreSnapshot", () => {
 		async ({ onTestFinished }) => {
 			const active = activeShard();
 			const backup = join(root, "backup");
-			const manifest = writeSnapshotAt(backup, [active]);
+			const manifest = publish([active], {}, backup);
 			const shardFile = manifest.shards[0]?.file as string;
 			publish([active]);
 
@@ -817,6 +813,14 @@ describe("restoreSnapshot", () => {
 			const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 			expect((await actual.lstat(shardTarget)).isFile()).toBe(true);
 			expect((await actual.lstat(manifestTarget)).isFile()).toBe(true);
+			// An EPERM on reading a destination file is also repaired by atomic replacement.
+			vi.mocked(readFile).mockImplementation(async (path, options) => {
+				if (String(path) === manifestTarget)
+					throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM", syscall: "open" });
+				return actual.readFile(path, options);
+			});
+			expect((await restoreSnapshot(agent, backup, out)).restored).toEqual(["manifest.json"]);
+			vi.mocked(readFile).mockImplementation(actual.readFile);
 			expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 		},
 	);
@@ -825,7 +829,7 @@ describe("restoreSnapshot", () => {
 		const older = shard({ events: [event(1)], sessions: [session()] });
 		const newer = shard({ events: [event(1), event(2)], sessions: [session()] });
 		const backup = join(root, "older-backup");
-		const olderManifest = writeSnapshotAt(backup, [older], { exportedAt: at("2026-11-01") });
+		const olderManifest = publish([older], { exportedAt: at("2026-11-01") }, backup);
 		const olderFile = olderManifest.shards[0]?.file as string;
 		publish([newer]);
 		write(older);
@@ -921,32 +925,35 @@ describe("restoreSnapshot", () => {
 		// Foreign machineId in source manifest.
 		const foreign = join(root, "foreign");
 		const foreignId = "11111111-1111-4111-8111-111111111111";
-		writeSnapshotAt(foreign, [], { machineId: foreignId });
+		publish([], { machineId: foreignId }, foreign);
 		await expect(restoreSnapshot(agent, foreign, out)).rejects.toThrow(
 			`Restore manifest machineId (${foreignId}) does not match this installation (${machineId})`,
 		);
 
 		// Corrupt shard in source and cross-shard inconsistency (event without session metadata).
 		const corruptSource = join(root, "corrupt-source");
-		const corruptManifest = writeSnapshotAt(corruptSource, [activeShard()]);
+		const corruptManifest = publish([activeShard()], {}, corruptSource);
 		writeFileSync(join(corruptSource, corruptManifest.shards[0]?.file as string), "corrupt");
 		await expect(restoreSnapshot(agent, corruptSource, out)).rejects.toThrow("Invalid shard size/type");
 
 		const inconsistentSource = join(root, "inconsistent-source");
-		writeSnapshotAt(inconsistentSource, [shard({ events: [event(1)], sessions: [] })]);
+		publish([shard({ events: [event(1)], sessions: [] })], {}, inconsistentSource);
 		await expect(restoreSnapshot(agent, inconsistentSource, out)).rejects.toThrow("Missing session metadata");
 		checkUntouched();
 	});
 
-	it("surfaces non-ENOENT filesystem errors inspecting the restore source", async () => {
+	it("surfaces non-ENOENT filesystem errors inspecting the restore source or destination", async () => {
 		const backup = join(root, "io-backup");
-		const manifest = writeSnapshotAt(backup, [activeShard()]);
+		const manifest = publish([activeShard()], {}, backup);
 		const shardFile = manifest.shards[0]?.file as string;
+		publish([activeShard()]);
 		const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 		for (const failingPath of [
 			join(backup, "machines", machineId),
 			join(backup, "manifest.json"),
 			join(backup, shardFile),
+			join(snapshotDir, shardFile),
+			join(snapshotDir, "manifest.json"),
 		]) {
 			vi.mocked(lstat).mockImplementation(async (path, options) => {
 				if (String(path) === failingPath)

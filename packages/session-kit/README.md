@@ -662,7 +662,8 @@ CLI results:
   manifest as this machine's, authenticates every referenced shard within the 128 MiB cumulative expansion
   budget, and validates the whole snapshot before writing: missing, damaged, denied or symlinked shard
   files are atomically written first and `manifest.json` last, without pruning unreferenced files or
-  modifying outbox bookkeeping.
+  modifying outbox bookkeeping. Restore preserves the restored manifest's `exportedAt`, so viewers
+  already holding a newer snapshot of this machine retain their copy until a later export passes it.
 - Clean-recovery: `{ "machineId", "snapshotDir", "removed": [..], "failed": [..], "kept": [{ "file", "reason" }] }`
   on stdout, plus `warnings` when an unlink failed or cleanup stopped (see recovery cleanup below), each
   escaped to one line. It exits 0 whatever it kept, except 1 (with no refusal line) when it stopped on a
@@ -763,9 +764,11 @@ Manifest exact keys:
 - `version`: `3` (`1`/`2` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
-- `exportedAt`: positive UTC Unix milliseconds. Monotonic per outbox: `max(now, published
-  exportedAt + 1)` against the readable published manifest (including one whose shards are
-  unreadable), so it can run ahead of a clock that is behind.
+- `exportedAt`: positive UTC Unix milliseconds. Exports advance it monotonically per outbox:
+  `max(now, published exportedAt + 1)` against the readable published manifest (including one whose
+  shards are unreadable), so it can run ahead of a clock that is behind. `restore` preserves the
+  restored manifest's `exportedAt`; viewers holding a newer snapshot keep their copy until a later
+  export passes it.
 - `lastGoodAt` (v2+): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
@@ -868,10 +871,12 @@ still protected. Right before each unlink the active manifest is authenticated a
 after that shard pass, and the candidate is authenticated again (regular file, bytes matching its
 name); on any change cleanup stops, lists that file and the rest in `kept` as `changed` (still
 protected), warns `recovery cleanup stopped: the active manifest changed; N redundant files left in
-place` and exits 1 with no refusal code (any error during the recheck counts as a change). Restoring
-files into the outbox through `pi-stats-export restore` (`restoreSnapshot`) takes the same `.export.lock`,
-so `clean-recovery` has real exclusion against restores; the pre-unlink recheck remains as a guard
-against anything that modifies the outbox outside the lock. Coverage is judged against
+place` and exits 1 with no refusal code (any error during the recheck counts as a change). Stage any
+git checkout or backup copy outside the outbox and run `pi-stats-export restore` (`restoreSnapshot`),
+which takes the same `.export.lock` so `clean-recovery` has real exclusion against restores and needs
+no outbox quiescence. The pre-unlink recheck only narrows the window against a raw checkout or manual
+copy directly into the outbox that skips `restore` and the lock: a direct write landing between that
+recheck and `unlink` can still lose the frozen shard it references. Coverage is judged against
 the active snapshot as it is now: once removed, those rows are as protected as any other published
 history, no more. Shard files outside the frozen set are left to export pruning.
 
