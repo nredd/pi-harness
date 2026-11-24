@@ -18,6 +18,7 @@ from pathlib import Path
 from shlex import quote
 from textwrap import dedent
 from typing import Any, NamedTuple
+from unittest.mock import Mock
 
 import pytest
 
@@ -704,14 +705,10 @@ def test_fifo_swapped_in_after_stat_keeps(tmp_path: Path, monkeypatch: pytest.Mo
 
         return opened
 
-    def forbid_read(real: Hook) -> Hook:
-        def read(*args: object, **kwargs: object) -> bytes:
-            pytest.fail("read called on swapped FIFO")
-
-        return read
-
+    read = Mock(side_effect=AssertionError("read called on swapped FIFO"))
     with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry is not a regular file: b'tracked'"):
-        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, open=swap, read=forbid_read)
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, open=swap, read=lambda _real: read)
+    read.assert_not_called()
 
 
 @pytest.mark.parametrize(
