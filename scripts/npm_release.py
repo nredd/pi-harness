@@ -577,7 +577,7 @@ def native_check(repo: Path, output: Path) -> None:
         output (Path): New external artifact directory.
 
     Returns:
-        None: Both built payloads passed the packed Mach-O contract and report the packed build.
+        None: Both built payloads passed the packed Mach-O contract and embed the packed build identity.
     """
     if output.exists() or output.is_relative_to(repo):
         raise ReleaseError(f"Artifact directory must be new and outside the checkout: '{output}'")

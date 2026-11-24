@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import io
 import json
-import shutil
 import subprocess
 import sys
 import tarfile
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -27,6 +27,7 @@ import release_descriptors as rd
 ROOT = Path(__file__).resolve().parents[2]
 COMPUTER_USE = ROOT / "packages/computer-use"
 HELPER_BUILD = "src/platform/macos/helper-build.mjs"
+STALE = ("0.0.1+" + "0" * 64).encode()
 
 
 def node_helper_build(package: Path) -> str:
@@ -38,20 +39,21 @@ def node_helper_build(package: Path) -> str:
     Returns:
         str: The identity the client expects from that package's helper.
     """
-    node = shutil.which("node")
-    assert node is not None, "node is required"
     script = (
         "const [module, root] = process.argv.slice(1);"
         "const { macosHelperBuild } = await import(module);"
         "process.stdout.write(macosHelperBuild(root));"
     )
     module = (package / HELPER_BUILD).as_uri()
-    return subprocess.check_output(
-        [node, "--input-type=module", "-e", script, module, str(package)],
+    result = subprocess.run(
+        [pc.locate_executable("node"), "--input-type=module", "-e", script, module, str(package)],
+        capture_output=True,
         text=True,
-        stderr=subprocess.PIPE,
+        check=False,
         timeout=60,
     )
+    assert result.returncode == 0, f"node exited {result.returncode}: {result.stderr}"
+    return result.stdout
 
 
 def helper(arch: str, *literals: bytes) -> bytes:
@@ -174,8 +176,8 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
         monkeypatch (pytest.MonkeyPatch): Substitute only the Swift compiler and host platform.
 
     Returns:
-        None: Both compiled architectures pass the packed contract and build identity; a helper
-            reporting another build and invalid destinations refuse.
+        None: Both compiled architectures pass the packed contract and build identity; invalid
+            destinations refuse.
     """
     descriptor = rd.descriptor_for("@nredd/pi-computer-use")
     assert descriptor is not None
@@ -208,55 +210,6 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
     output = tmp_path / "artifacts"
     nr.native_check(ROOT, output)
     assert len(compiled) == 1
-    # On macOS `npm run build` recompiles both helpers for real, so expect another build instead.
-    with monkeypatch.context() as patch:
-        patch.setattr(pc, "macos_helper_build", lambda _tarball: "0.0.1+" + "0" * 64)
-        with pytest.raises(
-            pc.ContractError, match=r"arm64/bridge reports build .*, expected '0\.0\.1\+0{64}'"
-        ):
-            nr.native_check(ROOT, tmp_path / "stale")
-    original_read = pc.read_member
-    seen: list[str] = []
-    original_check = pc.check_macos_helper_build
-
-    def check_with_stale_x64(tarball: Path, arch: pc.MACHO_ARCH, expected: str) -> str:
-        """Check each architecture with only the x64 identity changed in its packed bytes.
-
-        Parameters:
-            tarball (Path): Packed tarball.
-            arch (pc.MACHO_ARCH): Architecture under check.
-            expected (str): Packed sources' identity.
-
-        Returns:
-            str: The real check's summary.
-        """
-        seen.append(arch)
-        if arch == "x64":
-            with monkeypatch.context() as patch:
-
-                def stale_read(path: Path, name: str) -> bytes:
-                    """Replace only x64's identity with a different valid identity.
-
-                    Parameters:
-                        path (Path): Packed tarball.
-                        name (str): Member path.
-
-                    Returns:
-                        bytes: The x64 helper's bytes with its identity replaced.
-                    """
-                    assert name == "prebuilt/macos/x64/bridge"
-                    stale = ("0.0.1+" + "0" * 64).encode()
-                    return original_read(path, name).replace(expected.encode(), stale)
-
-                patch.setattr(pc, "read_member", stale_read)
-                return original_check(tarball, arch, expected)
-        return original_check(tarball, arch, expected)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(pc, "check_macos_helper_build", check_with_stale_x64)
-        with pytest.raises(pc.ContractError, match=r"x64/bridge reports build '0\.0\.1\+0{64}'"):
-            nr.native_check(ROOT, tmp_path / "stale-x64")
-    assert seen == ["arm64", "x64"]
     assert len(list(output.glob("nredd-pi-computer-use-*.tgz"))) == 1
     with pytest.raises(nr.ReleaseError, match="must be new and outside the checkout"):
         nr.native_check(ROOT, output)
@@ -266,6 +219,34 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(rd, "DESCRIPTORS", ())
     with pytest.raises(nr.ReleaseError, match="Missing computer-use descriptor"):
         nr.native_check(ROOT, tmp_path / "missing")
+
+
+@pytest.mark.parametrize("stale", ["arm64", "x64"])
+def test_native_check_refuses_a_stale_packed_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale: pc.MACHO_ARCH
+) -> None:
+    """`native_check` refuses a tarball whose one packed helper embeds another build identity.
+
+    Parameters:
+        tmp_path (Path): Fixture tarball and artifact parents.
+        monkeypatch (pytest.MonkeyPatch): Substitute staging and packing with the fixture tarball.
+        stale (pc.MACHO_ARCH): The only architecture whose packed bytes hold a stale identity.
+
+    Returns:
+        None: The stale architecture fails; the other one, checked first for `x64`, passes.
+    """
+    build = node_helper_build(COMPUTER_USE).encode()
+    helpers = {
+        f"prebuilt/macos/{arch}/bridge": helper(arch, b"diagnostics", STALE if arch == stale else build)
+        for arch in ("arm64", "x64")
+    }
+    tarball = write_tarball(tmp_path / "stale.tgz", package_members(COMPUTER_USE) | helpers)
+    monkeypatch.setattr(nr, "build_native_workspace", lambda *_: COMPUTER_USE)
+    monkeypatch.setattr(pc, "pack", lambda *_: SimpleNamespace(path=tarball))
+    monkeypatch.setattr(nr, "validate_native_tarball", lambda *_: None)
+    monkeypatch.setattr(nr, "check_built_payloads", lambda *_: None)
+    with pytest.raises(pc.ContractError, match=rf"{stale}/bridge contains build '0\.0\.1\+0{{64}}'"):
+        nr.native_check(ROOT, tmp_path / "artifacts")
 
 
 def test_native_build_starts_from_a_clean_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -437,7 +418,7 @@ def test_packed_build_refuses_unreadable_inputs(tmp_path: Path) -> None:
         ((), r"has 0 build identities, expected exactly 1: \[\]"),
         ((b"x1.2.3+" + b"a" * 64,), "has 0 build identities"),
         ((b"1.2.3+" + b"a" * 64, b"1.2.3+" + b"b" * 64), "has 2 build identities"),
-        ((b"1.2.3+" + b"b" * 64,), "reports build '1.2.3[+]b+', expected '1.2.3[+]a+'"),
+        ((b"1.2.3+" + b"b" * 64,), "contains build '1.2.3[+]b+', expected '1.2.3[+]a+'"),
     ],
     ids=["none", "not-delimited", "several", "other"],
 )

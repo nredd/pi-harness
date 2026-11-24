@@ -4373,7 +4373,8 @@ def check_macos_helper_build(tarball: Path, arch: MACHO_ARCH, expected: str) -> 
     """Require a packed helper's compiled build identity to equal the packed sources' identity.
 
     Read the identity literal from the bytes without running, installing or contacting a helper.
-    This does not establish what its `diagnostics` reply reports or whether it can reply.
+    This shows only what the binary embeds, not what its `diagnostics` reply reports or whether it
+    can reply.
 
     Parameters:
         tarball (Path): Packed tarball.
@@ -4391,7 +4392,7 @@ def check_macos_helper_build(tarball: Path, arch: MACHO_ARCH, expected: str) -> 
         {match.decode() for match in MACOS_HELPER_BUILD_LITERAL.findall(read_member(tarball, name))}
     )
     require(len(found) == 1, f"{name} has {len(found)} build identities, expected exactly 1: {found}")
-    require(found[0] == expected, f"{name} reports build '{found[0]}', expected '{expected}'")
+    require(found[0] == expected, f"{name} contains build '{found[0]}', expected '{expected}'")
     return f"{arch} build {found[0]}"
 
 
