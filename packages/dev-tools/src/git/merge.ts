@@ -143,9 +143,22 @@ try {
 	);
 	const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 	// The startup runtime can vanish mid-session (e.g. a package manager upgraded it in place), so the
-	// shim falls back to the `node` on PATH at commit time and otherwise names the stale path.
+	// shim runs it to check it still loads, falls back to the working `node` on PATH, and otherwise names the stale path.
 	const stale = quote(process.execPath);
-	const runtimeLookup = `rt=${stale}\nif [ ! -x "$rt" ]; then\n\trt=$(command -v node) || {\n\t\techo "git_commit merge approval: runtime "${stale}" no longer exists and no node is on PATH" >&2\n\t\texit 1\n\t}\nfi\n`;
+	const runtimeLookup = [
+		`rt=${stale}`,
+		// Probe by running it: a binary that exists and is executable can still fail to load (e.g. a dylib
+		// removed by an in-place upgrade). The probe uses the runner's env so a bun binary acts as node.
+		`probe() { env BUN_BE_BUN=1 ELECTRON_RUN_AS_NODE=1 "$1" -e 0 >/dev/null 2>&1; }`,
+		`if ! probe "$rt"; then`,
+		`\talt=$(command -v node) && probe "$alt" || {`,
+		`\t\tprintf 'git_commit merge approval: runtime %s is unusable and no working node is on PATH\\n' ${stale} >&2`,
+		`\t\texit 1`,
+		`\t}`,
+		`\trt=$alt`,
+		`fi`,
+		``,
+	].join("\n");
 	for (const hook of proxiedHooks(approval.hooks)) {
 		// Only the commit-tree hooks check the index. Any other hook with no real counterpart at call
 		// time is a no-op, so the shell skips it instead of starting a runtime: Git calls

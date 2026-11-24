@@ -464,6 +464,31 @@ describe("git_commit merge approval", () => {
 		expect(parents(repo)).toHaveLength(2);
 	});
 
+	it("falls back to the PATH node when the startup runtime exists but fails to load", async () => {
+		const { root, repo } = mergeFixture();
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		symlinkSync(process.execPath, join(bin, "node"));
+		vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+		const broken = join(root, "broken-node");
+		writeFileSync(broken, "#!/bin/sh\necho 'dyld: Library not loaded: libsimdjson.dylib' >&2\nexit 134\n", {
+			mode: 0o755,
+		});
+		const startup = process.execPath;
+		process.execPath = broken;
+		try {
+			const result = await mock.call(
+				"git_commit",
+				{ subject: "Merge after broken runtime", paths: ["shared.txt"], push: false },
+				repo,
+			);
+			expect(result.isError, mock.text(result)).toBe(false);
+		} finally {
+			process.execPath = startup;
+		}
+		expect(parents(repo)).toHaveLength(2);
+	});
+
 	it("names the stale runtime when no node is on PATH", async () => {
 		const { root, repo } = mergeFixture();
 		const startup = process.execPath;
@@ -483,7 +508,7 @@ describe("git_commit merge approval", () => {
 		const run = spawnSync("/bin/sh", [join(dir, "pre-commit")], { env: { PATH: empty }, encoding: "utf8" });
 		expect(run.status).toBe(1);
 		expect(run.stderr).toContain(stale);
-		expect(run.stderr).toContain("no node is on PATH");
+		expect(run.stderr).toContain("no working node is on PATH");
 	});
 
 	it("leaves the named paths staged when a merge is rejected", async () => {
