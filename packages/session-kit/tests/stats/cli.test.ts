@@ -419,7 +419,7 @@ describe("stats CLI", () => {
 		await main();
 		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
 		await main();
-		const { snapshotDir } = JSON.parse(log.mock.calls[1]?.[0] as string);
+		const { snapshotDir } = JSON.parse(log.mock.lastCall?.[0] as string);
 		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
 
 		const restore = [
@@ -433,9 +433,11 @@ describe("stats CLI", () => {
 			"--output",
 			output,
 		];
+		log.mockClear();
 		process.argv = restore;
 		await main();
-		expect(JSON.parse(log.mock.calls[2]?.[0] as string)).toMatchObject({
+		expect(log).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(log.mock.lastCall?.[0] as string)).toMatchObject({
 			snapshotDir,
 			restored: ["manifest.json"],
 		});

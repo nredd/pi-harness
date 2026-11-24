@@ -714,7 +714,7 @@ describe("restoreSnapshot", () => {
 		await expect(cleanRecovery(agent, out)).rejects.toMatchObject({ refusal: "recovery-snapshot-unverified" });
 
 		// Restore from a sync root (`<SRC>/machines/<UUID>`): repairs the shard first, then manifest.json,
-		// without reading the wrong-sized destination manifest into memory.
+		// without a second, byte-for-byte read of the wrong-sized destination manifest.
 		vi.mocked(readFile).mockClear();
 		const restored = await restoreSnapshot(agent, syncBackup, out);
 		expect(restored).toEqual({
@@ -725,7 +725,9 @@ describe("restoreSnapshot", () => {
 		});
 		const readPaths = vi.mocked(readFile).mock.calls.map(([path]) => String(path));
 		expect(readPaths).toContain(targetShard);
-		expect(readPaths).not.toContain(targetManifest);
+		expect(vi.mocked(readFile).mock.calls.filter(([path]) => path === targetManifest)).toEqual([
+			[targetManifest, "utf8"],
+		]);
 		expect(existsSync(join(snapshotDir, ".export.lock"))).toBe(false);
 		// Re-running when the outbox already holds the exact regular files rewrites nothing.
 		expect(await restoreSnapshot(agent, syncBackup, out)).toEqual({
@@ -837,7 +839,8 @@ describe("restoreSnapshot", () => {
 		const backup = join(root, "older-backup");
 		const olderManifest = publish([older], { exportedAt: at("2026-11-01") }, backup);
 		const olderFile = olderManifest.shards[0]?.file as string;
-		publish([newer]);
+		const newerManifest = publish([newer]);
+		const newerFile = newerManifest.shards[0]?.file as string;
 		write(older);
 		bookkeeping([olderFile]);
 
@@ -855,39 +858,65 @@ describe("restoreSnapshot", () => {
 			code: "EEXIST",
 			message: expect.stringContaining("Export lock is held at"),
 		});
-		// Retrying restoreSnapshot after cleanRecovery releases the lock restores both olderFile and manifest.json.
-		expect(await restoreSnapshot(agent, backup, out)).toEqual({
-			machineId,
-			snapshotDir,
-			exportedAt: olderManifest.exportedAt,
-			restored: [olderFile, "manifest.json"],
-		});
-		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
+		// After cleanup releases the lock, refuse the older backup even if the newer shard needs repair.
+		const newerPath = join(snapshotDir, newerFile);
+		const newerBytes = readFileSync(newerPath);
+		writeFileSync(newerPath, "corrupt");
+		await expect(restoreSnapshot(agent, backup, out)).rejects.toThrow("the outbox has a newer manifest");
+		expect(manifestOf()).toEqual(newerManifest);
+		expect(existsSync(join(snapshotDir, olderFile))).toBe(false);
+		expect(readFileSync(newerPath, "utf8")).toBe("corrupt");
+		writeFileSync(newerPath, newerBytes);
+		await exportStats(agent, out);
+		expect(manifestOf().shards).toEqual(newerManifest.shards);
+		expect(readFileSync(newerPath)).toEqual(newerBytes);
 
 		// Direction 2: restoreSnapshot holds .export.lock mid-restore; concurrent cleanRecovery fails closed on the
-		// lock, and once restoreSnapshot finishes cleanRecovery sees olderFile referenced by the restored manifest.
-		publish([newer]);
-		bookkeeping([olderFile]);
+		// lock, and once restoreSnapshot finishes cleanRecovery sees the repaired shard as active.
+		const updatedBackup = publish([newer], { exportedAt: manifestOf().exportedAt + 1 }, backup);
+		unlinkSync(newerPath);
+		bookkeeping([newerFile]);
 		let concurrentCleanupError: unknown;
 		vi.mocked(rename).mockImplementationOnce(async (from, to) => {
 			concurrentCleanupError = await cleanRecovery(agent, out).catch((e: unknown) => e);
 			return actual.rename(from, to);
 		});
 		expect(await restoreSnapshot(agent, backup, out)).toMatchObject({
-			restored: ["manifest.json"],
+			exportedAt: updatedBackup.exportedAt,
+			restored: [newerFile, "manifest.json"],
 		});
+		expect(manifestOf()).toEqual(updatedBackup);
 		expect(concurrentCleanupError).toMatchObject({
 			code: "EEXIST",
 			message: expect.stringContaining("Export lock is held at"),
 		});
 		expect(await cleanRecovery(agent, out)).toMatchObject({
 			removed: [],
-			kept: [{ file: olderFile, reason: "active" }],
+			kept: [{ file: newerFile, reason: "active" }],
 		});
-		expect(existsSync(join(snapshotDir, olderFile))).toBe(true);
+		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 	});
 
-	it("rejects invalid restore sources and leaves the outbox untouched", async () => {
+	it("rejects over-budget retained wire bytes before reading the excess shard", async () => {
+		const backup = join(root, "wire-backup");
+		const first = shard({ events: [event(1)], sessions: [session()] });
+		const second = shard({ events: [event(2)], sessions: [session()] });
+		const { shards: refs } = publish([first, second], {}, backup);
+		const budget = refs.reduce((sum, ref) => sum + ref.bytes, 0);
+		vi.mocked(readFile).mockClear();
+		await expect(restoreSnapshot(agent, backup, out, budget - 1)).rejects.toThrow("retained wire byte budget");
+		const readPaths = vi.mocked(readFile).mock.calls.map(([path]) => String(path));
+		expect(readPaths).toContain(join(backup, refs[0]?.file as string));
+		expect(readPaths).not.toContain(join(backup, refs[1]?.file as string));
+		// Lock acquisition creates a target directory even though validation publishes nothing.
+		expect(readdirSync(snapshotDir)).toEqual([]);
+		expect((await restoreSnapshot(agent, backup, out, budget)).restored).toEqual([
+			...refs.map(({ file }) => file),
+			"manifest.json",
+		]);
+	});
+
+	it("rejects invalid restore sources without changing the existing outbox files", async () => {
 		publish([activeShard()]);
 		const before = readdirSync(snapshotDir)
 			.sort()

@@ -2321,12 +2321,18 @@ async function sameRegularFile(path: string, expected: Buffer): Promise<boolean>
  * Restore this machine's manifest and/or referenced shards from `input` into `<output>/machines/<machineId>` under
  * the outbox's `.export.lock`, giving `exportStats` and `cleanRecovery` real mutual exclusion against restores.
  * `input` may be a sync root (`<input>/machines/<machineId>`) or a direct machine snapshot directory (`<input>`).
- * Validates the manifest as this machine's, authenticates every referenced shard within the 128 MiB cumulative
- * expansion budget (from `sourceDir` when present there, else from `snapshotDir`), and validates the whole snapshot
- * before writing any file: missing, damaged, denied or symlinked shards are atomically written first, then
- * `manifest.json` last, without pruning unreferenced files or modifying outbox bookkeeping.
+ * Refuses to replace a readable newer manifest for this machine, even when its shards are damaged.
+ * Authenticates all referenced shards within a 128 MiB cumulative expansion budget and separately bounds
+ * retained source wire bytes to 128 MiB (`wireBudget` can lower that limit). Validates the whole snapshot
+ * before publishing missing, damaged, denied or symlinked shards atomically, then `manifest.json` last,
+ * without pruning or changing outbox bookkeeping. Locking may create an empty target directory on failure.
  */
-export async function restoreSnapshot(dir: string, input: string, output: string): Promise<RestoreResult> {
+export async function restoreSnapshot(
+	dir: string,
+	input: string,
+	output: string,
+	wireBudget = MAX_BYTES,
+): Promise<RestoreResult> {
 	const identity = await machineIdentity(dir);
 	const snapshotDir = join(output, "machines", identity.machineId);
 	return withExportLock<RestoreResult>(snapshotDir, async () => {
@@ -2346,11 +2352,29 @@ export async function restoreSnapshot(dir: string, input: string, output: string
 			throw new Error(
 				`Restore manifest machineId (${manifest.machineId}) does not match this installation (${identity.machineId})`,
 			);
+		if (sourceManifest) {
+			const current = await jsonFile(join(snapshotDir, "manifest.json"))
+				.then(validateManifest)
+				.catch((error: unknown) => {
+					const code = (error as NodeJS.ErrnoException).code;
+					// Missing, damaged or permission-denied manifests are repairable; ambiguous I/O is not.
+					if (readFailure(error) && code !== "EACCES" && code !== "EPERM") throw error;
+					return undefined;
+				});
+			if (current?.machineId === identity.machineId && current.exportedAt > manifest.exportedAt)
+				throw new Error("Restore refused: the outbox has a newer manifest for this machine; use a current backup");
+		}
 		const shards: Shard[] = [];
 		const fromSource: { file: string; bytes: Buffer }[] = [];
 		let remaining = MAX_BYTES;
+		let remainingWire = Math.min(wireBudget, MAX_BYTES);
 		for (const ref of manifest.shards) {
 			const inSource = await statIfPresent(join(sourceDir, ref.file));
+			if (inSource) {
+				if (!(ref.bytes <= remainingWire))
+					throw new Error(`Restore exceeds retained wire byte budget (from ${ref.file})`);
+				remainingWire -= ref.bytes;
+			}
 			const read = await readShard(inSource ? sourceDir : snapshotDir, manifest, ref, remaining);
 			remaining -= read.expandedBytes;
 			shards.push(read.shard);
