@@ -61,5 +61,21 @@ def test_fragment_exception_is_not_a_markdown_or_directory_waiver(tmp_path: Path
     problems = package_layout.check_package("packages/subagents", [path], tmp_path, publish=True)
     assert any(problem.rule in {"fragment-path", "top-level-entry"} for problem in problems)
     assert not package_layout.markdown_allowed("src/932.fixed.md", "packages/subagents")
-    assert not package_layout.markdown_allowed("changes/932.fixed.md", "packages/subscription-router")
-    assert package_layout.top_level_violation("packages/subscription-router", "changes", True) is not None
+    assert not package_layout.markdown_allowed("changes/932.fixed.md", "packages/computer-use")
+    assert package_layout.top_level_violation("packages/computer-use", "changes", True) is not None
+
+
+@pytest.mark.parametrize("package", ["packages/preset", "packages/subscription-router"])
+def test_preset_and_router_are_enrolled(package: str) -> None:
+    """Pin the #932 enrollment of preset and subscription-router, leaving computer-use out.
+
+    Parameters:
+        package (str): Newly enrolled package directory.
+
+    Returns:
+        None: Assert the package accepts canonical fragments and computer-use does not.
+    """
+    assert package in changelog_fragments.PACKAGES
+    assert package_layout.markdown_allowed("changes/932.fixed.md", package)
+    assert package_layout.top_level_violation(package, "changes", True) is None
+    assert "packages/computer-use" not in changelog_fragments.PACKAGES

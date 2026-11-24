@@ -150,6 +150,44 @@ it("keeps a call and session archived only in published history when a revision 
 	expect(combined.sessions.map((session) => session.startMs).sort()).toEqual([at("2026-10-05"), at("2026-10-09")]);
 });
 
+it("keeps quota readings and archived sessions when a month regenerates beside a lineage retirement", async () => {
+	/** A pi call from before entry IDs: retired only through its persisted transcript origin. */
+	const legacyLine = (ms: number, output: number): string => {
+		const row = JSON.parse(assistantLine({ ms, provider: "physical", model: "fixture", input: 7, output }));
+		delete row.id;
+		return JSON.stringify(row);
+	};
+	const legacy = join(agent, "sessions", "legacy.jsonl");
+	const writeLegacy = (output: number): void =>
+		sessionFile(legacy, {
+			startMs: at("2026-10-06"),
+			lines: [legacyLine(at("2026-10-06"), 1), legacyLine(at("2026-10-06", 1), output)],
+		});
+	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 10)] });
+	writeLegacy(2);
+	const archived = join(agent, "sessions", "archived.jsonl");
+	sessionFile(archived, { startMs: at("2026-10-09"), lines: [line("old", at("2026-10-09"), 500)] });
+	const { snapshotDir } = await exportStats(agent, out);
+	plant(snapshotDir, [{ quota: [quotaRow("fixture")] }]);
+	rmSync(archived);
+	// One export: the identified revision regenerates October and the legacy correction retires its row.
+	writeLegacy(3);
+	await revise();
+	const published = manifest(snapshotDir);
+	const retired = octoberRefs(snapshotDir).flatMap(
+		(ref) => decodeShard(readFileSync(join(snapshotDir, ref.file)), published, ref.month).retired ?? [],
+	);
+	expect(retired.map((row) => row.output)).toEqual([2]);
+	const combined = await viewed();
+	expect(combined.calls.map((call) => `${call.input}/${call.output}`).sort()).toEqual(["11/2", "500/2", "7/1", "7/3"]);
+	expect(combined.sessions.map((session) => session.startMs).sort()).toEqual([
+		at("2026-10-05"),
+		at("2026-10-06"),
+		at("2026-10-09"),
+	]);
+	expect(combined.quota).toEqual([quotaRow("fixture")]);
+});
+
 it("keeps a sealed session end the scan no longer reaches when a revision regenerates its month", async () => {
 	sessionFile(mainPath(), { startMs: at("2026-10-05"), lines: [line("call", at("2026-10-05"), 10)] });
 	const truncated = join(agent, "sessions", "truncated.jsonl");

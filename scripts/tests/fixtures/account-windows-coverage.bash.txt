@@ -1,0 +1,11 @@
+reports="$RUNNER_TEMP/windows-coverage"
+destination="$reports/packages/computer-use/coverage/native-windows"
+mkdir -p "$destination"
+set -- "$reports"/windows-*
+if [ "$#" -ne 1 ]; then
+  echo '::error::Expected exactly one Windows coverage producer directory'
+  exit 1
+fi
+cp "$1"/{lcov.info,coverage.json,metadata.json} "$destination/"
+uv run --locked --project tests/integration python scripts/coverage_accounting.py \
+  --os win32 --base "$BASE" --reports-root "$reports" --summary coverage/windows-x64-summary.json

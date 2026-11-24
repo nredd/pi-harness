@@ -199,7 +199,8 @@ and `InteractiveHarnessOptions` from the fork's `/testing/interactive`, and
 `tests/scenarios/footer-model.test.ts` still imports its `InteractiveHarness` type.
 Those hosts depend on private `InteractiveMode` and TUI render flushing; private model-route
 and interactive behavior are unchanged. Run `npm run check` for lint, types, Node and Bun tests plus the
-packed-file contract. `CHANGELOG.md` records releases from `0.5.0` on, with unreleased changes under `[Unreleased]`;
+packed-file contract. `CHANGELOG.md` records releases from `0.5.0` on, with unreleased changes under `[Unreleased]` and
+[changelog fragments](#changelog-fragments);
 earlier history remains in the root `docs/releases.md`. Pi resource directories and license texts keep their names.
 
 ## Contents
@@ -327,6 +328,11 @@ attributes (including `text=auto`), conversion configuration or mismatched index
 endings also mean keep. The `git ls-files --eol` probe classifies raw bytes without running
 filters. Effective
 `core.filemode=false` means keep because Git status can hide executable-bit changes.
+Staged changes (an index that differs from `HEAD`, including staged deletions, intent-to-add,
+unmerged and gitlink entries, and entries hidden by `skip-worktree` or `assume-unchanged`) mean
+keep, as does a `HEAD` the comparison cannot read; the cached `git diff-index` compares object IDs
+and reads no worktree files. This is defense in depth for a future `eligible` path; today it only
+names the keep reason.
 After the earlier holds pass, the guard hashes tracked entries in process as raw Git blobs (file
 bytes, or a symlink's target string, with no filters or stat cache) and compares each with its
 index object ID and mode, stopping at the first entry that keeps. A same-size edit with a restored
@@ -345,7 +351,7 @@ Limits:
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate has no other hold. Report only the guard's evidence; delete nothing.
 - The guard does not probe upstream transports. If no PR exists, it reports `no PR; upstream not checked`.
-- The guard omits `git status` and does not compare staged changes. Attributes
+- The guard omits `git status`. Attributes
   or driver configuration could change after an attribute scan and cause `git status` to run a
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
   `git status` or `git diff` on a retained worktree to fill that gap.
@@ -427,3 +433,22 @@ Discovery tests redirect `HOME`, `USERPROFILE`, `PI_CODING_AGENT_DIR`, `TMPDIR`/
 and `PI_OFFLINE` into a temporary directory (restored afterwards) and pass the agent dir explicitly.
 They run in the test process, so a path Pi computed at import time would not be redirected; Pi 1.3.0
 computes none of the ones used (see the comment in `tests/discovery.test.ts`).
+
+## Changelog fragments
+
+Add `changes/<issue>.<category>.md` instead of editing the shared Unreleased block.
+Use the [one-line fragment grammar](https://github.com/nredd/pi-harness/blob/main/packages/subagents/README.md#changelog-fragments), including
+its matching issue link. From the repository root, `make check-changelog-fragments` validates
+all enrolled packages; `make fold-changelog` explicitly folds them without releasing.
+See the [release contract](https://github.com/nredd/pi-harness/blob/main/docs/releases.md#changelog-fragments).
+
+The npm package ships `CHANGELOG.md`, not `changes/`. A release cut from `main` without
+a fold omits pending fragments from the shipped changelog. Run `make fold-changelog`
+during release prep and commit the result before tagging. The pending fragment list is kept in
+one place, the release contract's Changelog fragments section.
+
+The #932 migration preserves 11 historical bullets: 4 exact bullets move to `fixed` fragments,
+their original category, and 7 remain in `CHANGELOG.md`. The two `1025.changed` bullets share one
+issue/category and remain; the #1175 and four #1178 bullets lack the required issue link.
+The emptied `### Fixed` heading is dropped; a fold recreates it.
+Historical attribution and released sections are unchanged; no issue IDs are invented.

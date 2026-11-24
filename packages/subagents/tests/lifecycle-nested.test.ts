@@ -44,7 +44,12 @@ function fixture() {
 		[child.id, child],
 	]);
 	const spawnAndWait = vi.fn<NestedAgentManager["spawnAndWait"]>().mockRejectedValue(new Error("worktree copy failed"));
-	const manager = { getRecord: (id: string) => records.get(id), spawnAndWait } as unknown as NestedAgentManager;
+	const manager = {
+		getRecord: (id: string) => records.get(id),
+		records: () => records.values(),
+		latestId: (id: string) => id,
+		spawnAndWait,
+	} as unknown as NestedAgentManager;
 	const ctx = {
 		cwd: dir,
 		modelRegistry: { getAll: () => [], getAvailable: () => [] },

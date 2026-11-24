@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AgentManager, describeEvicted, describeEvictedResult, type EvictedNote } from "./agent-manager.ts";
+// Types only: nested tools import this module, so a value import of the manager would close a cycle through the runner.
+import type { AgentManager, EvictedNote } from "./agent-manager.ts";
 import { listAllRunningDetached, listRunningDetached } from "./detached-results.ts";
 import { stripAgentPrefix } from "./mention.ts";
 import type { AgentRecord, AgentTombstone } from "./types.ts";
@@ -69,9 +70,15 @@ export interface AgentSources {
 	workflowTasks(): ReadonlyMap<string, WorkflowTask>;
 }
 
+/** What `agentSources` reads from a manager: its records, successor links and saved history. */
+export type RefManager = Pick<
+	AgentManager,
+	"getRecord" | "records" | "latestId" | "tombstoneById" | "tombstoneByName" | "getEvictedNote"
+>;
+
 /** Sources backed by `manager`, plus the survivors and workflow runs it cannot see. */
 export function agentSources(
-	manager: AgentManager,
+	manager: RefManager,
 	survivors: () => readonly AgentRecord[],
 	workflowTasks: ReadonlyMap<string, WorkflowTask>,
 ): AgentSources {
@@ -236,6 +243,16 @@ export function refRecord(ref: AgentRef): AgentRecord | undefined {
 const SESSION: Asker = { kind: "session" };
 /** The legacy lookup never answered with a workflow run, so it reads none. */
 const NO_WORKFLOWS: ReadonlyMap<string, WorkflowTask> = new Map();
+const NO_SURVIVORS = (): readonly AgentRecord[] => [];
+
+/**
+ * What `input` names to the nested parent `parentAgentId`: only its own
+ * children, by exact id or run id, through `manager` alone (no survivors, no
+ * workflow runs, no names or saved history, which are the session's).
+ */
+export function resolveChildRef(input: string, parentAgentId: string, manager: RefManager): AgentRef {
+	return resolveAgent(input, { kind: "agent", parentAgentId }, agentSources(manager, NO_SURVIVORS, NO_WORKFLOWS));
+}
 const ID_ONLY: ReadonlySet<Step> = new Set(["id"]);
 
 /**
@@ -276,12 +293,4 @@ export function createAgentLookup(
 		resolveAgent(input, SESSION, agentSources(manager, survivorsFor[reach], getWorkflowTasks()));
 
 	return { liveAgentById, resolveSessionRef };
-}
-
-/** "Not found" for `label` as asked, or what became of the agent by its resolved eviction `note`. */
-export function agentNotFound(label: string, note?: EvictedNote, withResult = false): string {
-	const result = withResult && note ? describeEvictedResult(note) : undefined;
-	return note
-		? describeEvicted(note) + (result ? `\n\n${result}` : "")
-		: `Agent not found: "${label}". It may have been cleaned up.`;
 }
