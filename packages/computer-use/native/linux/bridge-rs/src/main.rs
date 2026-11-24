@@ -246,9 +246,20 @@ async fn settle_before_exit() -> i32 {
 /// The exit status for inputs that may stay held: 0 for none, else
 /// `EXIT_RELEASE_DEBT` with them named on stderr for the client.
 fn exit_status(held: Vec<String>) -> i32 {
-    let journal_problem = InputState::shared().exit_journal_problem();
+    report_exit(held, InputState::shared().exit_journal_problem(), |line| {
+        eprintln!("{line}")
+    })
+}
+
+fn report_exit(
+    held: Vec<String>,
+    journal_problem: Option<String>,
+    mut report: impl FnMut(String),
+) -> i32 {
     if let Some(problem) = &journal_problem {
-        eprintln!("linux-bridge: unresolved release journal: {problem}");
+        report(format!(
+            "linux-bridge: unresolved release journal: {problem}"
+        ));
     }
     if held.is_empty() {
         return if journal_problem.is_some() {
@@ -257,12 +268,25 @@ fn exit_status(held: Vec<String>) -> i32 {
             0
         };
     }
-    eprintln!(
+    report(format!(
         "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",
         held.join(", ")
-    );
-    eprintln!("linux-bridge: if a fresh helper still refuses, check its journal recovery instructions before removing any record.");
+    ));
+    report("linux-bridge: if a fresh helper still refuses, check its journal recovery instructions before removing any record.".into());
     EXIT_RELEASE_DEBT
+}
+
+#[test]
+fn journal_problem_alone_returns_debt_status_and_reports_why() {
+    for problem in [
+        "record names keycode 37",
+        "journal clear has not been confirmed",
+    ] {
+        let mut lines = Vec::new();
+        let status = report_exit(Vec::new(), Some(problem.into()), |line| lines.push(line));
+        assert_eq!(status, EXIT_RELEASE_DEBT);
+        assert!(lines[0].contains(problem));
+    }
 }
 
 /// Read stdin lines on their own task, so EOF is seen even while every worker is busy

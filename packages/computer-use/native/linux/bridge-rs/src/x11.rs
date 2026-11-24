@@ -1136,7 +1136,10 @@ impl Input<XtestSink> {
                 let home = std::env::var_os("HOME").ok_or_else(|| {
                     journal_error("No HOME for the X11 release-debt journal".to_owned())
                 })?;
-                let journal = Journal::open(std::path::Path::new(&home)).map_err(journal_error)?;
+                let journal = Journal::open_reporting(std::path::Path::new(&home), |cause| {
+                    state.set_journal_problem(Some(cause.to_owned()));
+                })
+                .map_err(journal_error)?;
                 journal.require_fresh().map_err(|cause| {
                     state.set_journal_problem(Some(cause.clone()));
                     journal_error(cause)
@@ -1213,6 +1216,15 @@ impl<S: InputSink> Input<S> {
     }
     /// Store the full snapshot outside the state mutex so shutdown can still report
     /// held inputs if the filesystem stalls. Override one entry before a release.
+    fn journal_update_pending(&self) {
+        if let Some((journal, _)) = self.journal.borrow().as_ref() {
+            if !journal.releases().is_empty() {
+                self.state.set_journal_problem(Some(
+                    journal.recovery("A journal update has not been confirmed."),
+                ));
+            }
+        }
+    }
     fn sync_journal(&self, unknown: Option<Owed>) -> Result<(), ProtocolError> {
         let mut active = self.journal.borrow_mut();
         let Some((journal, binding)) = active.as_mut() else {
@@ -1314,6 +1326,7 @@ impl<S: InputSink> Input<S> {
             let left = catch_unwind(AssertUnwindSafe(|| self.settle_one(owed)))
                 // A panic mid-post leaves its delivery unknown.
                 .unwrap_or(Ok(Some(owed.unknown())))?;
+            self.journal_update_pending();
             self.state.resolve(owed, left);
             self.sync_journal(None)?;
         }
@@ -1593,6 +1606,7 @@ impl<'a, S: InputSink> Held<'a, S> {
                 admit()
             };
             if let Err(error) = readmit() {
+                self.input.journal_update_pending();
                 self.input.state.unhold(owed);
                 self.input.sync_journal(None)?;
                 return Err(error);
@@ -1618,6 +1632,7 @@ impl<'a, S: InputSink> Held<'a, S> {
         match result {
             Err(PostFailure::Rejected(error)) => {
                 self.owed.pop();
+                self.input.journal_update_pending();
                 self.input.state.unhold(owed);
                 self.input.sync_journal(None)?;
                 Err(error)
@@ -1647,6 +1662,7 @@ impl<'a, S: InputSink> Held<'a, S> {
         match self.input.post_checked(owed.event, owed.detail, 0, 0) {
             Ok(()) => {
                 self.owed.pop();
+                self.input.journal_update_pending();
                 self.input.state.unhold(owed);
                 self.input.sync_journal(None)
             }
@@ -1688,6 +1704,7 @@ impl<S: InputSink> Drop for Held<'_, S> {
             released.push(owed);
         }
         unconfirmed.reverse();
+        self.input.journal_update_pending();
         self.input.state.hand_over(unconfirmed, released);
         if let Err(error) = self.input.sync_journal(None) {
             self.input.cleanup_error.borrow_mut().get_or_insert(error);

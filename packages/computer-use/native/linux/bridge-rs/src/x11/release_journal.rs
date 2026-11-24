@@ -93,7 +93,15 @@ pub(super) struct Journal {
 }
 
 impl Journal {
+    #[cfg(test)]
     pub(super) fn open(home: &Path) -> Result<Self, String> {
+        Self::open_reporting(home, |_| {})
+    }
+
+    pub(super) fn open_reporting(
+        home: &Path,
+        record_error: impl FnOnce(&str),
+    ) -> Result<Self, String> {
         let uid = geteuid().as_raw();
         let anchor = open_anchor_dir(home, uid, false)?;
         let dir_path = home.join(DIR);
@@ -105,7 +113,8 @@ impl Journal {
         let lock_path = dir_path.join(LOCK);
         let lock = acquire_lock(&dir, &lock_path)?;
         let path = dir_path.join(RECORD);
-        let record = read_existing_record(&dir, RECORD, &path)?;
+        let record =
+            read_existing_record(&dir, RECORD, &path).inspect_err(|error| record_error(error))?;
         Ok(Self {
             dir,
             _lock: lock,
