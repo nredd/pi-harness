@@ -406,9 +406,10 @@ describe("stats CLI", () => {
 				"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
 				"the replacement keep it until this machine exports a later one\n" +
 				"  A clock behind the last published export in its month still publishes, just after it, with a warning; " +
-				"a corrupt manifest still publishes after the outbox's recorded watermark, as does a denied or missing one " +
-				"under --replace-harnesses (ordinary exports refuse those: history-unreadable, manifest-missing); with " +
-				"that watermark lost too, it publishes by the wall clock with a warning",
+				"a corrupt manifest still publishes after the last instant the outbox's watermark recorded, as does a denied " +
+				"or missing one under --replace-harnesses (ordinary exports refuse those: history-unreadable, manifest-missing; " +
+				"older kits do not update that watermark, so a later export by one can leave a silent gap if the manifest is " +
+				"lost or restored); with no recorded watermark, it publishes by the wall clock with a warning",
 		);
 	});
 

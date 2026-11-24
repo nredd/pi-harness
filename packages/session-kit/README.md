@@ -723,7 +723,9 @@ Installation state, never synced:
   ever reclaims a lock by age. Then move the checkout and `outboxes/<old key>.json` (with
   `outboxes/<old key>.published.json`, which keeps the publication watermark) to the new key before
   the next export. Never overwrite an existing `outboxes/<new key>.json` without reconciling
-  its `recoveryFiles` with the old one: the overwritten set is unprotected from pruning. To accept
+  its `recoveryFiles` with the old one (the overwritten set is unprotected from pruning), and when
+  both keys have a valid `.published.json` keep the greater `exportedAt` rather than overwriting a
+  newer destination watermark. To accept
   the loss instead, pass `--replace-harnesses`.
   A missing `manifest.json` is a first export only when the outbox has no own bookkeeping and no
   shard files. Otherwise (e.g. the manifest alone was deleted) publishing the scan would replace the
@@ -734,15 +736,20 @@ Installation state, never synced:
   history`. A crash between the first export's shard writes and its manifest is refused the same
   way; nothing was published, so `--replace-harnesses` loses nothing there.
 - `DIR/pi-session-kit/outboxes/<sha256>.published.json`: the outbox's publication watermark, same
-  key and directory as its bookkeeping, exactly `{version: 1, exportedAt}` with `exportedAt` a
-  non-negative millisecond instant before year 10000. Every export writes it (0600, atomic rename)
-  under the outbox lock after its refusals and before any shard or manifest write, so it is never
-  behind a published `exportedAt`; failing to write it fails the export with nothing published, and a
-  later failed publication leaves it harmlessly ahead. It bounds the next publication instant with the
-  manifest (see the clock-behind rules under "Offline stats and portable snapshots"). A missing, unreadable or invalid file is ignored
-  and never refuses: the manifest alone bounds the export. It is a separate file because older kits
-  refuse any extra bookkeeping field. It never counts as an earlier publication for the missing-manifest
-  check above, and older kits neither read nor advance it.
+  key and directory as its bookkeeping, `{version: 1, exportedAt}` with `exportedAt` a positive
+  integer millisecond instant before year 10000 (`0`, or a read or validation failure on the file,
+  supplies no bound and leaves the manifest alone to bound `exportedAt`; successful publication still
+  requires writing the replacement atomically, so e.g. a directory at its path aborts the export with
+  nothing published). Every export writes it (0600, atomic rename) under the outbox lock after its
+  refusals and before any shard or manifest write, so it is never behind a published `exportedAt`
+  that this kit wrote; failing to write it fails the export with nothing published. Tradeoff: a later
+  failed shard write or manifest rename leaves that unpublished `exportedAt` recorded and still bounds
+  subsequent exports (including the later-month refusal or, if the failed run's clock had jumped more
+  than 366 days ahead and was then corrected, `watermark-ahead`, even though `manifest.json` never
+  published that timestamp). It bounds the next publication instant with the manifest (see the
+  clock-behind rules under "Offline stats and portable snapshots"). It is a separate file because
+  older kits refuse any extra bookkeeping field. It never counts as an earlier publication for the
+  missing-manifest check above, and older kits neither read nor advance it.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -954,12 +961,21 @@ export (viewers import it) and drops sealed history absent from the scan; until 
 month, each export needs it again. The bound is the later of the readable manifest's `exportedAt`
 (including a manifest whose shards are unreadable) and the outbox's recorded watermark
 (`outboxes/<sha256>.published.json`, above), which every export writes before publishing anything. So
-a corrupt manifest, and under `--replace-harnesses` a denied or missing one, still publishes strictly
-after the last export, and so does an export over a restored older manifest; viewers holding the later
-snapshot import it. Only with neither (the watermark deleted, unreadable or invalid, the checkout moved
-and so rekeyed, or the last publications came from an older kit that records none) does the export
-use the wall clock rather than guess a watermark. An ordinary
-export over a corrupt manifest, and a `--replace-harnesses` export over a corrupt, denied or missing one
+an export over a corrupt manifest, under `--replace-harnesses` over a denied or missing one, or over a
+restored older manifest still publishes strictly after every timestamp the watermark actually recorded,
+and viewers holding that recorded snapshot import it. Older kits neither read nor advance the file:
+while `manifest.json` stays readable at an older kit's later `B`, the max still follows `B`, but if an
+older kit published `B` after the file recorded `A` and `manifest.json` is then corrupt, denied or
+missing under `--replace-harnesses`, or restored to `A` (or before `B`), the new export is bounded only
+by `A`; while this clock is behind `B` it can publish between `A` and `B`, viewers holding `B` reject
+it (`Older machine snapshot`, reported as `Incomplete snapshot <machine id>`) until an export passes
+`B`, and because `A` is a valid recorded watermark the unbounded warning below does not fire (silent
+mixed-version gap). Only with neither (the watermark deleted, unreadable, invalid or `0`, the checkout
+moved and so rekeyed without rebinding, or every earlier publication came from an older kit that
+recorded none) does the export use the wall clock rather than guess a watermark. An ordinary
+export over a corrupt manifest (when a recorded harness set survives; with no own or inherited
+`harnesses` set either, an ordinary export refuses `harness-set-unknown`), and a `--replace-harnesses`
+export over a corrupt, denied or missing one
 (missing while this outbox's bookkeeping or shard files remain), then still publishes and exits 0 but warns
 `no readable published manifest bounds this export (<manifest.json unreadable|EACCES on
 manifest.json|manifest.json missing>); published at <exportedAt> by this clock, so viewers holding a
@@ -970,8 +986,9 @@ complete (a viewer holding
 nothing of this machine imports it), but a viewer holding a later snapshot rejects its older `exportedAt`
 and reports it as `Incomplete snapshot <machine id>` until this clock passes the lost watermark, which
 nothing here can detect. Restoring `manifest.json` from the sync checkout, or moving
-`outboxes/<old key>.published.json` along with the bookkeeping when the checkout moves, before
-exporting keeps the bound. The warning fires once: the wall-clock publication records a new manifest
+`outboxes/<old key>.published.json` along with the bookkeeping when the checkout moves (keeping the
+greater valid watermark when the destination key already has one), before exporting keeps the recorded
+bound. The warning fires once: the wall-clock publication records a new manifest
 and watermark that bound later exports, and the lost watermark is forgotten, so a wrapper that ignores
 warnings never notices. The
 same applies to a far-future clock, which predates this warning: with no manifest or watermark the

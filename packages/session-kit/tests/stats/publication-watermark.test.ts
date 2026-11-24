@@ -1,14 +1,14 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { exportStats, importStats, type Manifest } from "../../src/stats/snapshot.ts";
-import { assistantLine, outboxWatermarkPath, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, outboxStatePath, outboxWatermarkPath, sessionFile } from "../fixtures/stats/fixtures.ts";
 
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
-	return { ...actual, readFile: vi.fn(actual.readFile) };
+	return { ...actual, readFile: vi.fn(actual.readFile), rename: vi.fn(actual.rename) };
 });
 
 /** UTC instants in one month, so no fixture depends on the host time zone or crosses a month. */
@@ -34,6 +34,7 @@ beforeEach(({ onTestFinished }) => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.mocked(readFile).mockRestore();
+	vi.mocked(rename).mockRestore();
 });
 
 const manifestOf = (snapshotDir: string): Manifest =>
@@ -116,8 +117,9 @@ it.each([
 	{ label: "an extra field", contents: JSON.stringify({ version: 1, exportedAt: AHEAD, extra: 1 }) },
 	{ label: "another version", contents: JSON.stringify({ version: 2, exportedAt: AHEAD }) },
 	{ label: "a negative instant", contents: JSON.stringify({ version: 1, exportedAt: -1 }) },
+	{ label: "a zero instant", contents: JSON.stringify({ version: 1, exportedAt: 0 }) },
 	{ label: "an instant past year 9999", contents: JSON.stringify({ version: 1, exportedAt: LAST_ISO_MS + 1 }) },
-])("ignores a recorded watermark with $label, as if it were lost", async ({ contents }) => {
+])("supplies no bound from a recorded watermark with $label, as if it were lost", async ({ contents }) => {
 	const published = await exportStats(agent, out);
 	writeFileSync(outboxWatermarkPath(agent, published.snapshotDir), contents);
 	writeFileSync(join(published.snapshotDir, "manifest.json"), "corrupt");
@@ -141,4 +143,112 @@ it("fails the export with nothing published when the watermark cannot be recorde
 	vi.mocked(Date.now).mockReturnValue(AHEAD + 1000);
 	await expect(exportStats(agent, out)).rejects.toThrow();
 	expect(manifestOf(published.snapshotDir).exportedAt).toBe(AHEAD);
+});
+
+it("leaves an unpublished exportedAt recorded if manifest rename fails, refusing watermark-ahead after a jumped clock is fixed", async () => {
+	const published = await exportStats(agent, out);
+	const manifestPath = join(published.snapshotDir, "manifest.json");
+	const watermarkPath = outboxWatermarkPath(agent, published.snapshotDir);
+	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+	vi.mocked(Date.now).mockReturnValue(FAR);
+	vi.mocked(rename).mockImplementation(async (from, to) => {
+		if (to === manifestPath) throw new Error("manifest rename failed");
+		await actual.rename(from, to);
+	});
+	await expect(exportStats(agent, out)).rejects.toThrow("manifest rename failed");
+	expect(manifestOf(published.snapshotDir).exportedAt).toBe(AHEAD);
+	expect(JSON.parse(readFileSync(watermarkPath, "utf8"))).toEqual({ version: 1, exportedAt: FAR });
+
+	vi.mocked(rename).mockRestore();
+	vi.mocked(Date.now).mockReturnValue(AHEAD);
+	await expect(exportStats(agent, out, undefined, { replaceHarnesses: true })).rejects.toMatchObject({
+		refusal: "watermark-ahead",
+		message: expect.stringMatching(/^Recorded usage publication watermark exportedAt /),
+	});
+	expect(manifestOf(published.snapshotDir).exportedAt).toBe(AHEAD);
+});
+
+it.each(["corrupt", "restored"] as const)(
+	"does not bound past an older kit's unrecorded later export or warn over a %s manifest",
+	async (damage) => {
+		const viewer = join(root, "viewer");
+		vi.mocked(Date.now).mockReturnValue(WALL);
+		const first = await exportStats(agent, out);
+		const manifestPath = join(first.snapshotDir, "manifest.json");
+		const recordedManifest = readFileSync(manifestPath);
+		// Older kit publishes at AHEAD: updates manifest.json without advancing .published.json past WALL.
+		writeFileSync(
+			manifestPath,
+			JSON.stringify({ ...manifestOf(first.snapshotDir), exportedAt: AHEAD, lastGoodAt: { pi: AHEAD } }),
+		);
+		expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+
+		if (damage === "corrupt") writeFileSync(manifestPath, "corrupt");
+		else writeFileSync(manifestPath, recordedManifest);
+		const next = await exportStats(agent, out);
+		expect(unboundedWarning(next.warnings)).toBe(false);
+		expect(manifestOf(first.snapshotDir).exportedAt).toBe(WALL + 1);
+		expect(await importStats(viewer, out)).toMatchObject({
+			imported: 0,
+			retained: 1,
+			problems: [`Incomplete snapshot ${first.machineId}`],
+		});
+	},
+);
+
+it("keeps the bound across a real outbox move when rebound (retaining the greater valid watermark), and warns when not", async () => {
+	const viewer = join(root, "viewer");
+	const published = await exportStats(agent, out);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+
+	// Moving the checkout without rebinding rekeys both files: ordinary export lacks a recorded harness set,
+	// and --replace-harnesses publishes unbounded by the wall clock.
+	const unrebound = join(root, "unrebound");
+	renameSync(out, unrebound);
+	const unreboundSnapshot = join(unrebound, "machines", published.machineId);
+	writeFileSync(join(unreboundSnapshot, "manifest.json"), "corrupt");
+	vi.mocked(Date.now).mockReturnValue(WALL);
+	await expect(exportStats(agent, unrebound)).rejects.toMatchObject({ refusal: "harness-set-unknown" });
+	const missed = await exportStats(agent, unrebound, undefined, { replaceHarnesses: true });
+	expect(unboundedWarning(missed.warnings)).toBe(true);
+	expect(manifestOf(unreboundSnapshot).exportedAt).toBe(WALL);
+
+	// Rebinding state + watermark to a fresh destination key preserves the bound across a real move.
+	vi.mocked(Date.now).mockReturnValue(AHEAD);
+	await exportStats(agent, unrebound);
+	const rebound = join(root, "rebound");
+	const oldState = outboxStatePath(agent, unreboundSnapshot);
+	const oldWatermark = outboxWatermarkPath(agent, unreboundSnapshot);
+	renameSync(unrebound, rebound);
+	const reboundSnapshot = join(rebound, "machines", published.machineId);
+	renameSync(oldState, outboxStatePath(agent, reboundSnapshot));
+	renameSync(oldWatermark, outboxWatermarkPath(agent, reboundSnapshot));
+	writeFileSync(join(reboundSnapshot, "manifest.json"), "corrupt");
+	vi.mocked(Date.now).mockReturnValue(WALL);
+	const kept = await exportStats(agent, rebound);
+	expect(unboundedWarning(kept.warnings)).toBe(false);
+	expect(manifestOf(reboundSnapshot).exportedAt).toBe(AHEAD + 1);
+	expect(await importStats(viewer, rebound)).toMatchObject({ imported: 1, problems: [] });
+
+	// Moving back onto a key that already holds a newer valid watermark retains the greater exportedAt.
+	mkdirSync(join(out, "machines", published.machineId), { recursive: true });
+	const destState = outboxStatePath(agent, published.snapshotDir);
+	const destWatermark = outboxWatermarkPath(agent, published.snapshotDir);
+	writeFileSync(destWatermark, JSON.stringify({ version: 1, exportedAt: AHEAD + 500 }));
+	rmSync(out, { recursive: true });
+	const srcState = outboxStatePath(agent, reboundSnapshot);
+	const srcWatermark = outboxWatermarkPath(agent, reboundSnapshot);
+	renameSync(rebound, out);
+	renameSync(srcState, destState);
+	const reconciled = Math.max(
+		JSON.parse(readFileSync(srcWatermark, "utf8")).exportedAt as number,
+		JSON.parse(readFileSync(destWatermark, "utf8")).exportedAt as number,
+	);
+	writeFileSync(destWatermark, JSON.stringify({ version: 1, exportedAt: reconciled }));
+	rmSync(srcWatermark);
+	writeFileSync(join(published.snapshotDir, "manifest.json"), "corrupt");
+	const merged = await exportStats(agent, out);
+	expect(unboundedWarning(merged.warnings)).toBe(false);
+	expect(manifestOf(published.snapshotDir).exportedAt).toBe(AHEAD + 501);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
 });

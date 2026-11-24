@@ -358,14 +358,14 @@ async function privateOutboxes(dir: string): Promise<void> {
 	if ((info.mode & 0o777) !== 0o700) await chmod(dir, 0o700);
 }
 /**
- * The last instant this outbox key published, beside its bookkeeping and never synced, so a corrupt,
- * denied or missing `manifest.json` still has a watermark to follow. A separate file, because older kits
- * refuse any extra bookkeeping field.
+ * The last publication instant this outbox key recorded, beside its bookkeeping and never synced, so a
+ * corrupt, denied or missing `manifest.json` still has the recorded watermark to follow. A separate file,
+ * because older kits refuse any extra bookkeeping field.
  */
 const watermarkFile = (statePath: string): string => statePath.replace(/\.json$/, ".published.json");
 /**
- * The recorded watermark, `0` when there is none. A file that cannot be read or does not validate is
- * ignored: the manifest alone bounds the export, as it did before the file existed.
+ * The recorded watermark, `0` when there is none. A read or validation failure supplies no bound (the
+ * manifest alone bounds `exportedAt`), though publishing still requires replacing this file atomically.
  */
 async function recordedWatermark(path: string): Promise<number> {
 	try {
@@ -1702,9 +1702,9 @@ async function publishStats(
 	const statePath = await outboxStateFile(dir, snapshotDir);
 	await privateOutboxes(dirname(statePath));
 	const watermarkPath = watermarkFile(statePath);
-	// The publication instant is monotonic over the readable manifest and this outbox's recorded watermark:
-	// strictly after the last published export, even when this clock is behind it, so viewers holding the
-	// published snapshot accept this one as newer. With neither there is nothing to follow.
+	// The publication instant is monotonic over the readable manifest and what this outbox's watermark
+	// actually recorded: strictly after the later of the two, even when this clock is behind it. Older kits
+	// neither read nor advance the watermark, so a later export by one is reflected only in `manifest.json`.
 	const manifestAt =
 		loadedPrevious === null || loadedPrevious === "unreadable"
 			? 0
@@ -1769,8 +1769,10 @@ async function publishStats(
 				"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 				"or pass --replace-harnesses to publish without that history",
 		);
-	// Without the manifest and the recorded watermark (deleted, or the checkout moved and so rekeyed) there
-	// is no watermark to follow: publish by the wall clock rather than guess one, and say so.
+	// Without the manifest and any recorded watermark (deleted, or the checkout moved and so rekeyed) there
+	// is no watermark to follow: publish by the wall clock rather than guess one, and say so. An older kit
+	// that published after a recorded watermark leaves that earlier watermark valid, so this warning does
+	// not fire even when `manifest.json` is lost or restored to the earlier export.
 	const unbounded = recordedAt > 0 ? undefined : unboundedBy(loadedPrevious, publishedBefore);
 	const unboundedWarning =
 		unbounded === undefined
@@ -2032,7 +2034,9 @@ async function publishStats(
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	validateManifest(snapshot.manifest);
 	// Recorded before anything is published, so it is never behind a published `exportedAt`; failing to
-	// record it fails the export with nothing published. A failed publication leaves it ahead, harmlessly.
+	// record it fails the export with nothing published. Tradeoff: a later failed shard write or manifest
+	// rename leaves this unpublished `exportedAt` recorded, bounding later exports (and refusing with the
+	// later-month check or `watermark-ahead` if this run's clock had jumped forward and was then corrected).
 	await atomicJson(watermarkPath, { version: 1, exportedAt });
 	for (const { file, bytes } of writes) {
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
