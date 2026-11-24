@@ -493,11 +493,19 @@ export function mergeSessionMetadata(sessions: readonly Session[]): Map<string, 
 export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"> {
 	const sessions: Session[] = [];
 	const candidates: Call[] = [];
+	const fingerprints = new Map<string, boolean>();
+	const sessionLengths = new Map<string, { longest: number; shared: number }>();
+	const fingerprint = (c: Call): string => JSON.stringify([c.session, legacyKey(c)]);
 	let badLines = 0;
 	const ordered = Object.entries(files).sort(([pa, a], [pb, b]) => a.startMs - b.startMs || pa.localeCompare(pb));
 	for (const [path, file] of ordered) {
 		badLines += file.badLines;
 		const session = file.sessionId ?? opaqueId(`legacy-session:${path}`);
+		const lengths = sessionLengths.get(session) ?? { longest: 0, shared: 0 };
+		// Each file occupies a contiguous prefix of call positions. The second-longest prefix is shared.
+		lengths.shared = Math.max(lengths.shared, Math.min(lengths.longest, file.calls.length));
+		lengths.longest = Math.max(lengths.longest, file.calls.length);
+		sessionLengths.set(session, lengths);
 		for (const [i, tuple] of file.calls.entries()) {
 			const [ms, index, input, output, cacheRead, cacheWrite, cost] = tuple;
 			// Preserve raw attribution for dedup and export; sanitize only in display code.
@@ -505,7 +513,7 @@ export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"
 
 			const slash = raw.indexOf("/");
 			const entryId = file.entryIds?.[i] ?? undefined;
-			candidates.push({
+			const call: Call = {
 				harness: "pi",
 				session,
 				entryId,
@@ -518,12 +526,24 @@ export function flatten(files: Record<string, FileStats>): Omit<Loaded, "errors"
 				cacheRead,
 				cacheWrite,
 				cost,
-			});
+			};
+			if (call.origin !== undefined) {
+				const key = fingerprint(call);
+				fingerprints.set(key, !fingerprints.has(key));
+			}
+			candidates.push(call);
 		}
 		if (file.calls.length > 0)
 			sessions.push({ path: session, startMs: file.startMs, endMs: file.endMs, child: file.child });
 	}
-	const calls = dedupCalls(candidates);
+	// Dedup can hide a second occurrence, but it cannot prove which one owns the published origin.
+	const calls = dedupCalls(candidates).map((call) => {
+		if (call.origin === undefined) return call;
+		const lengths = sessionLengths.get(call.session) as { shared: number };
+		if (call.origin >= lengths.shared && fingerprints.get(fingerprint(call))) return call;
+		const { origin: _, ...row } = call;
+		return row;
+	});
 	const owners = new Set(calls.map((c) => c.session));
 	const metadata = mergeSessionMetadata(sessions);
 	return {

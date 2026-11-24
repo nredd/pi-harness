@@ -23,6 +23,8 @@ export interface PlatformDiagnostics {
 	parentBundleId?: string;
 	parentPath?: string;
 	executablePath?: string;
+	/** macOS kernel vnode identity (`"<dev>:<ino>"`) of the helper's mapped executable image. */
+	executableId?: string;
 	os?: string;
 	arch?: string;
 	accessibility?: boolean;
@@ -57,6 +59,9 @@ interface PlatformAppIdentity {
 	 */
 	blockAliases?: string[];
 }
+
+/** What a backend classifies a browser by; Linux ignores the app-controlled accessible `appName` (#1295). */
+export type BrowserAppIdentity = { appName: string } & Pick<PlatformAppIdentity, "appId" | "bundleId">;
 
 export interface PlatformApp extends PlatformAppIdentity {
 	appName: string;
@@ -296,8 +301,9 @@ export interface ComputerUsePlatformBackend {
 		args: PlatformWaitForRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformWaitForResponse>;
-	isBrowserApp(appName: string, bundleId?: string): boolean;
-	isChromeFamilyApp(appName: string, bundleId?: string): boolean;
+	/** Browser classification: macOS by bundle id or app name, Windows by process name, Linux by `appId` alone. */
+	isBrowserApp(app: BrowserAppIdentity): boolean;
+	isChromeFamilyApp(app: BrowserAppIdentity): boolean;
 	openBrowserLocation(
 		target: { appName: string; bundleId?: string },
 		url: string,
