@@ -357,13 +357,19 @@ export class UsageService {
 	}
 
 	/** Subscribe to changes in cached readings. */
-	subscribe(listener: () => void): void {
+	subscribe(listener: () => void): () => void {
 		this.listeners.add(listener);
+		return () => void this.listeners.delete(listener);
 	}
 
 	/** Read the current cache without refreshing credentials or making requests. */
 	cachedSnapshots(): UsageSnapshot[] {
 		return [...this.cache.values()];
+	}
+
+	/** Display metadata from the binding that produced this exact cached reading. */
+	displayForSnapshot(snapshot: UsageSnapshot) {
+		return this.evidence.get(snapshot)?.collector.display;
 	}
 
 	private notify(): void {

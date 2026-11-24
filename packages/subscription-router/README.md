@@ -220,7 +220,14 @@ issue is named:
   Read-confirmed marks stay in memory only. Not built yet: marks live in memory (#1402, with L8
   reload) and the ledger does not exist (#1401, with declared `windows`, `observed` and L5 early
   clear)
-- The router atomically writes its cached quota readings and active blocks as a plain `ProviderView[]` to `<agentDir>/router-state/v1/view.json` for `/stats`. This does not trigger provider requests. Separate Pi processes sharing an agent directory publish independently; the last write wins. Only providers with cached readings or active blocks appear, including Gemini when an `antigravity` collector supplies usage.
+- The router atomically writes cached quota readings and active blocks to
+  `<agentDir>/router-state/v1/view.json` for `/stats`, without triggering provider requests. The
+  disk view contains only fields used by `/stats`; the v1 RPC is unchanged. An oversized
+  provider reading is dropped without dropping its active blocks that fit. Both provider rows
+  and the complete file have byte limits. Gemini appears when an `antigravity` collector supplies
+  usage. A cold process leaves the file alone until it has data to publish; after that, processes
+  sharing an agent directory are last writer wins. The first scheduled publication also prunes
+  abandoned write temps older than 24 hours.
 - Not built yet: live v2 `router:rpc:usage` views and applied `label`
   (#1403), applied `quotaGroup` and the access-flip rule (#1405), an end-to-end third-party
   collector proof (#1404)

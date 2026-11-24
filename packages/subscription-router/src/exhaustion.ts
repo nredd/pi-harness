@@ -168,8 +168,9 @@ export class ExhaustionTracker {
 	}
 
 	/** Subscribe to mark additions, updates and removals. */
-	subscribe(listener: () => void): void {
+	subscribe(listener: () => void): () => void {
 		this.listeners.add(listener);
+		return () => void this.listeners.delete(listener);
 	}
 
 	/** Forget every mark, e.g. from `/router reset`. */

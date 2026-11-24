@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readdir, readFile, rmdir, symlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, rmdir, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
@@ -9,8 +9,8 @@ import { readRouterQuota } from "../../session-kit/src/stats/router-quota.ts";
 import { registerCollector } from "../src/collectors.ts";
 import { ExhaustionTracker } from "../src/exhaustion.ts";
 import subscriptionRouter from "../src/index.ts";
-import { UsageService } from "../src/usage.ts";
-import { bindViewStore } from "../src/view-store.ts";
+import { type RegistryContext, UsageService } from "../src/usage.ts";
+import { bindViewStore, MAX_VIEW_BYTES } from "../src/view-store.ts";
 
 // Keep the synthetic Gemini reading independent of when a built-in collector ships.
 vi.mock("../src/builtin-collectors.ts", async (original) => {
@@ -22,6 +22,10 @@ const SHARED_KEY = Symbol.for("pi-subscription-router.shared");
 const host = globalThis as typeof globalThis & { [SHARED_KEY]?: unknown };
 const statePath = (root: string) => join(root, "router-state", "v1");
 const NOW = 1_800_000_000_000;
+const model = { provider: "faux", id: "model" };
+const decision = { block: true, window: "daily", scope: "provider", resetAt: NOW + 60_000 } as const;
+const ctx = { modelRegistry: { getApiKeyForProvider: async () => "omit-credential" } } as unknown as RegistryContext;
+const makeUsage = () => new UsageService({ fetch, now: () => NOW, getAccessToken: async () => "omit-credential" });
 
 afterEach(() => {
 	delete host[SHARED_KEY];
@@ -43,6 +47,7 @@ it("publishes the default router cache for the real /stats reader without changi
 		display,
 		read: async () => ({ windows: [{ name: "5h", usedPercent: 35, resetAt: NOW + 60_000, scope: "provider" }] }),
 	});
+	let retired = false;
 	try {
 		const events = new EventEmitter();
 		const { pi, handlers } = createRecordingPi({
@@ -84,10 +89,11 @@ it("publishes the default router cache for the real /stats reader without changi
 		});
 		expect(fetch).toHaveBeenCalledTimes(2);
 		unregister();
+		retired = true;
 		await handlers.get("session_shutdown")?.[0]?.({}, ctx);
 		expect((await readRouterQuota(root, NOW)).map((row) => row.label)).not.toContain("Gemini 5h");
 	} finally {
-		unregister();
+		if (!retired) unregister();
 	}
 });
 
@@ -95,8 +101,6 @@ it("publishes the latest marks and clears them without a usage read", async ({ o
 	const root = makeTestTempDir("router-quota-", onTestFinished);
 	const tracker = new ExhaustionTracker(() => NOW);
 	const store = bindViewStore(root, new UsageService(), tracker);
-	const model = { provider: "faux", id: "model" };
-	const decision = { block: true, window: "daily", scope: "provider", resetAt: NOW + 60_000 } as const;
 	tracker.mark(model, decision);
 	await store.flush();
 	expect((await readRouterQuota(root, NOW)).map((row) => row.label)).toEqual(["faux daily"]);
@@ -117,12 +121,227 @@ it("ignores a symlinked state directory and cleans up a failed atomic replacemen
 	await store.schedule();
 	expect(await readdir(other)).toEqual([]);
 	const cleanRoot = makeTestTempDir("router-quota-", onTestFinished);
-	const clean = bindViewStore(cleanRoot, new UsageService(), new ExhaustionTracker());
+	const tracker = new ExhaustionTracker(() => NOW);
+	const clean = bindViewStore(cleanRoot, new UsageService(), tracker);
 	const destination = join(statePath(cleanRoot), "view.json");
 	await mkdir(destination, { recursive: true });
-	await clean.schedule();
+	tracker.mark(model, decision);
+	await clean.flush();
 	expect(await readdir(statePath(cleanRoot))).toEqual(["view.json"]);
 	await rmdir(destination);
 	await clean.schedule();
-	expect(await readFile(destination, "utf8")).toBe("[]");
+	expect(await readRouterQuota(cleanRoot, NOW)).toHaveLength(1);
+});
+
+it("cold publisher preserves live rows", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	const liveTracker = new ExhaustionTracker(() => NOW);
+	const live = bindViewStore(root, makeUsage(), liveTracker);
+	onTestFinished(
+		registerCollector({
+			provider: model.provider,
+			kind: "custom",
+			read: async () => undefined,
+		}),
+	);
+	liveTracker.mark(model, decision);
+	await live.flush();
+	const rows = await readRouterQuota(root, NOW);
+	expect(rows.map(({ label }) => label)).toEqual(["faux daily"]);
+
+	const coldUsage = makeUsage();
+	const cold = bindViewStore(root, coldUsage, new ExhaustionTracker());
+	await cold.flush();
+	await cold.schedule();
+	await coldUsage.get(ctx, model.provider);
+	await cold.schedule();
+	expect(await readRouterQuota(root, NOW)).toEqual(rows);
+});
+
+it("oversized reading does not retain cleared blocks", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	const usage = makeUsage();
+	const tracker = new ExhaustionTracker(() => NOW);
+	const store = bindViewStore(root, usage, tracker);
+	const giant = "large-source";
+	const families = Array.from({ length: 128 }, (_, i) => String(i).padEnd(256, "界"));
+	onTestFinished(
+		registerCollector({
+			provider: giant,
+			kind: "custom",
+			read: async () => ({
+				windows: Array.from({ length: 128 }, (_, i) => ({
+					name: `window-${i}`,
+					usedPercent: 99,
+					scope: "model",
+					families,
+				})),
+			}),
+		}),
+	);
+	let percent = 20;
+	onTestFinished(
+		registerCollector({
+			provider: model.provider,
+			kind: "custom",
+			read: async () => ({ windows: [{ name: "weekly", usedPercent: percent, scope: "provider" }] }),
+		}),
+	);
+	await usage.get(ctx, model.provider);
+	tracker.mark({ ...model, provider: giant }, decision);
+	await store.flush();
+	expect((await readRouterQuota(root, NOW)).map(({ label }) => label)).toEqual(["faux weekly", "large-source daily"]);
+
+	const oversized = await usage.get(ctx, giant);
+	expect(oversized.status).toBe("available");
+	expect(Buffer.byteLength(JSON.stringify(oversized))).toBeGreaterThan(MAX_VIEW_BYTES);
+	await store.flush();
+	expect((await readRouterQuota(root, NOW)).map(({ label }) => label)).toEqual(["faux weekly", "large-source daily"]);
+	percent = 70;
+	usage.invalidate(model.provider);
+	await usage.get(ctx, model.provider);
+	tracker.clear();
+	await store.flush();
+	expect(await readRouterQuota(root, NOW)).toEqual([
+		expect.objectContaining({ label: "faux weekly", head: { kind: "gauge", percent: 70 } }),
+	]);
+});
+
+it("uses the producing alias binding's display only for snapshots", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	const usage = makeUsage();
+	const tracker = new ExhaustionTracker(() => NOW);
+	const store = bindViewStore(root, usage, tracker);
+	const register = (provider: string, full: string) =>
+		onTestFinished(
+			registerCollector({
+				provider,
+				kind: "custom",
+				display: { full, compact: full },
+				read: async () => ({
+					windows: [{ name: "weekly", usedPercent: 40, scope: "provider" }],
+					meters: [
+						{
+							name: "daily",
+							scope: "provider",
+							quantity: { unit: "requests", used: 1, limit: 5 },
+							resetAt: NOW + 60_000,
+							resetRule: { at: "00:00", timeZone: "UTC", every: "day" },
+						},
+					],
+					pools: [{ name: "paid", unit: "credits", role: "prepaid", balance: 10 }],
+				}),
+			}),
+		);
+	register("alias", "Wrong collector");
+	register("source", "Producing collector");
+	const alias = { ...model, provider: "alias" };
+	usage.configureCollectors({ alias: { collector: { id: "source" } } });
+	tracker.mark(alias, decision);
+	await store.flush();
+	expect((await readRouterQuota(root, NOW)).map(({ label }) => label)).toEqual(["alias daily"]);
+	await usage.get(ctx, alias.provider);
+	await store.flush();
+	expect((await readRouterQuota(root, NOW)).map(({ label }) => label)).toEqual([
+		"Producing collector weekly",
+		"Producing collector daily",
+		"Producing collector paid",
+		"Producing collector daily",
+	]);
+});
+
+it("omits unused Codex balance text and stale diagnostic messages", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	let now = NOW;
+	const source = vi.fn(async () =>
+		Response.json({
+			rate_limit: { primary_window: { used_percent: 30, reset_at: (NOW + 3_600_000) / 1000 } },
+			credits: { has_credits: true, unlimited: false, balance: "omit-codex-balance" },
+		}),
+	);
+	const usage = new UsageService({ fetch: source, now: () => now, getAccessToken: async () => "token" });
+	const store = bindViewStore(root, usage, new ExhaustionTracker());
+	expect((await usage.get(ctx, "openai-codex")).credits?.balance).toBe("omit-codex-balance");
+	await store.flush();
+	const path = join(statePath(root), "view.json");
+	expect(await readFile(path, "utf8")).not.toContain("omit-codex-balance");
+	now += 6 * 60_000;
+	source.mockImplementationOnce(async () => new Response(null, { status: 503 }));
+	const stale = await usage.get(ctx, "openai-codex");
+	expect(stale).toMatchObject({ status: "stale", message: expect.any(String) });
+	await store.flush();
+	expect(await readFile(path, "utf8")).not.toContain('"message"');
+	expect((await readRouterQuota(root, now)).map(({ label }) => label)).toEqual(["OpenAI 5h (assumed span) (stale)"]);
+});
+
+it("prunes abandoned view temps while keeping recent and unrelated files", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	const dir = statePath(root);
+	await mkdir(dir, { recursive: true });
+	vi.spyOn(Date, "now").mockReturnValue(NOW);
+	const stale = ".view-00000000-0000-4000-8000-000000000001.tmp";
+	const recent = ".view-00000000-0000-4000-8000-000000000002.tmp";
+	const link = ".view-00000000-0000-4000-8000-000000000003.tmp";
+	const unrelated = ".view-unrelated.tmp";
+	for (const file of [stale, recent, unrelated]) {
+		const path = join(dir, file);
+		await writeFile(path, "partial");
+		const age = file === recent ? 60_000 : 25 * 60 * 60_000;
+		await utimes(path, new Date(NOW - age), new Date(NOW - age));
+	}
+	await symlink(stale, join(dir, link));
+	const store = bindViewStore(root, makeUsage(), new ExhaustionTracker());
+	await store.schedule();
+	expect((await readdir(dir)).sort()).toEqual([recent, link, unrelated]);
+});
+
+it("caps the total view and still admits later small rows", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	const tracker = new ExhaustionTracker(() => NOW);
+	const store = bindViewStore(root, makeUsage(), tracker);
+	const large = "界".repeat(Math.floor(MAX_VIEW_BYTES / 15));
+	for (let i = 0; i < 5; i++) tracker.mark({ ...model, provider: `provider-${i}` }, { ...decision, window: large });
+	tracker.mark(model, decision);
+	await store.flush();
+	const raw = await readFile(join(statePath(root), "view.json"), "utf8");
+	expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(MAX_VIEW_BYTES);
+	const rows = await readRouterQuota(root, NOW);
+	expect(rows).toHaveLength(5);
+	expect(rows.at(-1)?.label).toBe("faux daily");
+});
+
+it("unsubscribes from cache and tracker updates", async ({ onTestFinished }) => {
+	const usage = makeUsage();
+	const tracker = new ExhaustionTracker(() => NOW);
+	const listener = vi.fn();
+	const stopUsage = usage.subscribe(listener);
+	const stopTracker = tracker.subscribe(listener);
+	onTestFinished(
+		registerCollector({
+			provider: model.provider,
+			kind: "custom",
+			read: async () => ({ windows: [] }),
+		}),
+	);
+	await usage.get(ctx, model.provider);
+	tracker.mark(model, decision);
+	expect(listener).toHaveBeenCalledTimes(2);
+	stopUsage();
+	stopTracker();
+	usage.invalidate(model.provider);
+	tracker.clear();
+	expect(listener).toHaveBeenCalledTimes(2);
+});
+
+it("agrees with the /stats reader at the exact byte limit", async ({ onTestFinished }) => {
+	const root = makeTestTempDir("router-quota-", onTestFinished);
+	const dir = statePath(root);
+	await mkdir(dir, { recursive: true });
+	const path = join(dir, "view.json");
+	const row = JSON.stringify([{ provider: model.provider, marks: [{ window: "daily", until: NOW + 60_000 }] }]);
+	const atLimit = row.padEnd(MAX_VIEW_BYTES, " ");
+	await writeFile(path, atLimit);
+	expect(await readRouterQuota(root, NOW)).toHaveLength(1);
+	await writeFile(path, `${atLimit} `);
+	expect(await readRouterQuota(root, NOW)).toEqual([]);
 });
