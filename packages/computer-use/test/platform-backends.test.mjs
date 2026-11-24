@@ -365,6 +365,17 @@ describe("macOS backend", () => {
 		assert.deepEqual(lastCall(fakes.macos), ["axReadText", { rootRef: "r", offset: 1 }, options]);
 		await macosBackend.waitFor({ pid: 1, rootRef: "r", windowId: 3 }, options);
 		assert.deepEqual(lastCall(fakes.macos), ["axWaitFor", { pid: 1, windowId: 3, windowRef: "r" }, options]);
+		// Only an explicit `true` proves one element; an older helper's or a malformed reply proves nothing.
+		for (const [reply, same] of [
+			[{ same: true }, true],
+			[{ same: false }, false],
+			[{ same: "true" }, false],
+			[undefined, false],
+		]) {
+			fakes.macos.command.mockResolvedValueOnce(reply);
+			assert.equal(await macosBackend.sameElement("e1", "e2", options), same);
+			assert.deepEqual(lastCall(fakes.macos), ["axSameElement", { ref: "e1", otherRef: "e2" }, options]);
+		}
 	});
 
 	test("shutdown closes the glow and setActivity toggles it", async () => {
@@ -749,9 +760,21 @@ describe("platform facade", () => {
 		await backend.actBatch([]);
 		await backend.readText({});
 		await backend.waitFor({});
+		await backend.sameElement("e1", "e2");
 		assert.deepEqual(
 			fakes.macos.command.mock.calls.map(([command]) => command),
-			["listApps", "listRoots", "getFrontmost", "focusWindow", "look", "act", "actBatch", "axReadText", "axWaitFor"],
+			[
+				"listApps",
+				"listRoots",
+				"getFrontmost",
+				"focusWindow",
+				"look",
+				"act",
+				"actBatch",
+				"axReadText",
+				"axWaitFor",
+				"axSameElement",
+			],
 		);
 		assert.equal(backend.isBrowserApp("Safari"), true);
 		assert.equal(backend.isChromeFamilyApp("Safari"), false);

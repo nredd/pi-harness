@@ -74,6 +74,58 @@ enum AXStringRead: Equatable {
 	case failed
 }
 
+/// A look node's own matchable fields (what a `waitFor` condition, the ref snapshot and the protection check read),
+/// each read once. A failed read leaves its field `""` and `complete` false, so the node is `truncated` and never
+/// claims its own fields read (`LookNode.childrenUnread`) whatever its children (#1310). When either classification
+/// attribute (`AXRole` or `AXSubrole`) fails to read, the node may be a secure field: it emits an empty role and
+/// subrole (which `isProtectedNode` treats as protected) and does not read `AXValue` or the other text attributes.
+struct LookOwnFields {
+	let role: String
+	let subrole: String
+	let identifier: String
+	let title: String
+	let description: String
+	/// `""` for a secure or unclassified field, whose value is never read.
+	let value: String
+	/// Every read succeeded or was authoritatively absent.
+	let complete: Bool
+
+	/// - Parameters:
+	///   - read: The element's string attribute read.
+	///   - secure: Whether a role and subrole name a secure text field.
+	init(read: (CFString) -> AXStringRead, secure: (String, String) -> Bool) {
+		var complete = true
+		func field(_ attribute: String) -> String {
+			switch read(attribute as CFString) {
+			case .value(let text): return text
+			case .absent: return ""
+			case .failed:
+				complete = false
+				return ""
+			}
+		}
+		let role = field(kAXRoleAttribute)
+		let subrole = field(kAXSubroleAttribute)
+		guard complete else {
+			self.role = ""
+			self.subrole = ""
+			identifier = ""
+			title = ""
+			description = ""
+			value = ""
+			self.complete = false
+			return
+		}
+		self.role = role
+		self.subrole = subrole
+		identifier = field("AXIdentifier")
+		title = field(kAXTitleAttribute)
+		description = field(kAXDescriptionAttribute)
+		value = secure(role, subrole) ? "" : field(kAXValueAttribute)
+		self.complete = complete
+	}
+}
+
 /// The element fields a `waitFor` condition reads.
 enum AXWaitField {
 	case role
@@ -217,7 +269,8 @@ struct LookOutlineWorld<Element: AnyObject> {
 	/// root node was built (the root's own reads never spend the walk's budget) or `requestDeadline` on `now`'s clock,
 	/// whichever comes first: a slow root cannot push the walk past the client's timeout. Past the deadline no queued
 	/// node's children are read. A node whose children could not be read, or whose children the budget cut, is
-	/// `truncated`: its subtree is unread, never a leaf.
+	/// `truncated` (its subtree is unread, never a leaf) and, only when its own fields were all read,
+	/// `childrenUnread` (see `LookNode.markChildrenUnread`).
 	func build(root: Element, nodeLimit: Int, timeLimit: TimeInterval, requestDeadline: TimeInterval) -> LookNode {
 		let rootNode = self.rootNode(root)
 		let deadline = min(now() + timeLimit, requestDeadline)
@@ -230,22 +283,22 @@ struct LookOutlineWorld<Element: AnyObject> {
 			let (element, node) = queue[index]
 			index += 1
 			if expired() {
-				node.truncated = true
+				node.markChildrenUnread()
 				continue
 			}
 			guard let elements = children(element) else {
-				node.truncated = true
+				node.markChildrenUnread()
 				continue
 			}
 			if elements.isEmpty { continue }
 			if walked >= nodeLimit {
-				node.truncated = true
+				node.markChildrenUnread()
 				continue
 			}
 			let childNode = childNodes(element)
 			for child in elements {
 				if walked >= nodeLimit || expired() {
-					node.truncated = true
+					node.markChildrenUnread()
 					break
 				}
 				if !seen.insert(ObjectIdentifier(child)).inserted { continue }
@@ -887,6 +940,16 @@ final class AXRefStore {
 		lock.lock()
 		defer { lock.unlock() }
 		return snapshots[ref]
+	}
+
+	/// Whether two live element refs, e.g. minted by two looks, name one AX element (`CFEqual`): the native identity an
+	/// exact absence needs to know the successor's scope node is the element the wait read (#1310). A ref this store
+	/// no longer holds (its look aged out, another helper process) never matches.
+	func refsNameOneElement(_ ref: String, _ otherRef: String) -> Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		guard let element = elements[ref], let other = elements[otherRef] else { return false }
+		return CFEqual(element, other)
 	}
 }
 
@@ -1671,11 +1734,16 @@ final class LookNode {
 	var offscreen: Bool
 	var pictureOnly: Bool
 	var truncated: Bool
+	/// Every own-field read succeeded or was authoritatively absent (`LookOwnFields.complete`).
+	let ownFieldsRead: Bool
+	/// Set with `truncated` when only the descendants are unread: every own-field read succeeded or was
+	/// authoritatively absent.
+	var childrenUnread: Bool
 	var scrollExtent: [String: Int]?
 	var text: [[String: Any]]
 	var children: [LookNode]
 
-	init(element: AXUIElement?, ref: String, role: String, subrole: String, identifier: String, title: String, description: String, value: String, actions: [String], canPress: Bool, canFocus: Bool, canSetValue: Bool, canScroll: Bool, canIncrement: Bool, canDecrement: Bool, isTextInput: Bool, rect: CGRect, focused: Bool = false, offscreen: Bool = false, pictureOnly: Bool = false) {
+	init(element: AXUIElement?, ref: String, role: String, subrole: String, identifier: String, title: String, description: String, value: String, actions: [String], canPress: Bool, canFocus: Bool, canSetValue: Bool, canScroll: Bool, canIncrement: Bool, canDecrement: Bool, isTextInput: Bool, rect: CGRect, focused: Bool = false, offscreen: Bool = false, pictureOnly: Bool = false, ownFieldsRead: Bool = true) {
 		self.element = element
 		self.ref = ref
 		self.role = role
@@ -1696,7 +1764,9 @@ final class LookNode {
 		self.focused = focused
 		self.offscreen = offscreen
 		self.pictureOnly = pictureOnly
-		self.truncated = false
+		self.ownFieldsRead = ownFieldsRead
+		self.truncated = !ownFieldsRead
+		self.childrenUnread = false
 		self.text = []
 		self.children = []
 	}
@@ -1725,11 +1795,18 @@ final class LookNode {
 		if offscreen { output["offscreen"] = true }
 		if pictureOnly { output["pictureOnly"] = true }
 		if truncated { output["truncated"] = true }
+		if truncated && childrenUnread { output["childrenUnread"] = true }
 		if let scrollExtent { output["scrollExtent"] = scrollExtent }
 		if !text.isEmpty { output["text"] = text }
 		return output
 	}
 
+	/// Mark the descendants unread (`truncated`), and `childrenUnread` only when the node's own fields were all read:
+	/// a failed own-field read leaves the bare `truncated`, which also covers the node itself.
+	func markChildrenUnread() {
+		truncated = true
+		childrenUnread = ownFieldsRead
+	}
 }
 
 final class Box<T> {
@@ -2206,6 +2283,8 @@ final class Bridge {
 			return try hitTest(request)
 		case "axWaitFor":
 			return try axWaitFor(request)
+		case "axSameElement":
+			return try ["same": refStore.refsNameOneElement(stringArg(request, "ref"), stringArg(request, "otherRef"))]
 		case "focusedElement":
 			return try focusedElement(request)
 		case "axReadText":
@@ -3105,29 +3184,29 @@ final class Bridge {
 
 	/// `owner` is the look whose lifetime bounds the element ref; nil for one-off element queries.
 	private func lookNode(element: AXUIElement, transform: (CGRect) -> CGRect, offscreen: Bool, owner: String? = nil) -> LookNode {
-		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
-		let subrole = stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
+		let fields = LookOwnFields(read: { self.stringRead(element, attribute: $0) }, secure: { self.isSecureTextElement(role: $0, subrole: $1) })
+		let role = fields.role
 		let actions = actionNames(element)
 		var valueSettable = DarwinBoolean(false)
 		let valueStatus = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &valueSettable)
 		var focusedSettable = DarwinBoolean(false)
 		let focusedStatus = AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &focusedSettable)
 		let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
-		let title = stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? ""
-		let description = stringAttribute(element, attribute: kAXDescriptionAttribute as CFString) ?? ""
-		let value = displayValue(element, role: role, subrole: subrole)
+		let title = fields.title
+		let description = fields.description
+		let value = fields.value
 		let screenRect = frameForElement(element) ?? .zero
 		let node = LookNode(
 			element: element,
 			ref: refStore.storeElement(element, snapshot: AXRefStore.Snapshot(
 				role: role,
-				identifier: stringAttribute(element, attribute: "AXIdentifier" as CFString) ?? "",
+				identifier: fields.identifier,
 				label: normalizedLabel([title, description, value].joined(separator: " ")),
 				rect: screenRect
 			), owner: owner),
 			role: role,
-			subrole: subrole,
-			identifier: stringAttribute(element, attribute: "AXIdentifier" as CFString) ?? "",
+			subrole: fields.subrole,
+			identifier: fields.identifier,
 			title: title,
 			description: description,
 			value: value,
@@ -3141,7 +3220,8 @@ final class Bridge {
 			isTextInput: textRoles.contains(role),
 			rect: transform(screenRect),
 			focused: boolAttribute(element, attribute: kAXFocusedAttribute as CFString) == true,
-			offscreen: offscreen
+			offscreen: offscreen,
+			ownFieldsRead: fields.complete
 		)
 		if node.canScroll {
 			let rows = axElementArray(element, attribute: kAXRowsAttribute as CFString)
@@ -5892,6 +5972,7 @@ An advertised AX action is a delivery capability, not proof of an application-le
 
 - An empty outline usually indicates missing Accessibility trust, an inaccessible target, or an app that exposes no useful AX hierarchy.
 - `truncated` means the bounded walk did not retrieve the complete descendant tree.
+- `childrenUnread` comes with `truncated` only when the node's own matchable fields (role, subrole, identifier, title, description, value) all read or were authoritatively absent and only its descendants are unread. It never proves an absence by itself: `wait_for` and `act_ui` `expect` ignore it only on an exact `ref` scope that `axSameElement` proved is the element the wait read, because a public ref carried over structurally may name a lookalike.
 - `pictureOnly` means the element came from visual evidence and cannot be targeted by AX ref.
 - A supported action describes what the element reports, not whether the app will honor it.
 - AX frames and Core Graphics windows are paired heuristically; low-confidence pairing must not be treated as exact identity.

@@ -134,6 +134,18 @@ func runRefLookAssertions() {
   let destination = store.storeElement(equivalent, snapshot: snapshot, owner: "destination")
   let unrelated = store.storeElement(element, owner: "unrelated")
   check(source != destination && source != window, "element refs are fresh even for equal handles")
+  let distinctElement = store.storeElement(distinct, owner: "identity")
+  check(
+    store.refsNameOneElement(source, destination) && store.refsNameOneElement(source, source),
+    "refs from two looks for equal handles name one element")
+  check(
+    !store.refsNameOneElement(source, distinctElement) && !store.refsNameOneElement(source, window)
+      && !store.refsNameOneElement("missing", source) && !store.refsNameOneElement(source, "missing"),
+    "an unequal handle, a window ref or an unknown ref never names the element")
+  store.dropElements(owner: "identity")
+  check(
+    !store.refsNameOneElement(distinctElement, distinctElement),
+    "a ref whose look aged out names no element, not even itself")
   check(
     store.window(for: source) == nil && store.element(for: window) == nil,
     "window and element namespaces do not cross-resolve")
@@ -292,7 +304,8 @@ func runRefLookAssertions() {
 }
 
 /// The production look walk (`LookOutlineWorld.build`) over injected AX reads: a failed children read, the node
-/// budget and the deadline mark the node `truncated`; only an authoritative empty list is a leaf (#1287).
+/// budget and the deadline mark the node `truncated` and `childrenUnread`; only an authoritative empty list is a leaf
+/// (#1287, #1310).
 private func runLookOutlineAssertions() {
   final class Node {
     let name: String
@@ -308,7 +321,16 @@ private func runLookOutlineAssertions() {
     LookNode(
       element: nil, ref: name, role: "AXGroup", subrole: "", identifier: "", title: name, description: "", value: "",
       actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false,
-      canDecrement: false, isTextInput: false, rect: .zero)
+      canDecrement: false, isTextInput: false, rect: .zero, ownFieldsRead: true)
+  }
+  /// A node built like `lookNode` from `LookOwnFields` over `reads` (attribute -> result; unlisted is absent).
+  func fieldNode(_ name: String, reads: [String: AXStringRead]) -> LookNode {
+    let fields = LookOwnFields(read: { reads[$0 as String] ?? .absent }, secure: { $0 == "AXSecureTextField" || $1 == "AXSecureTextField" })
+    return LookNode(
+      element: nil, ref: name, role: fields.role, subrole: fields.subrole, identifier: fields.identifier, title: fields.title,
+      description: fields.description, value: fields.value, actions: [], canPress: false, canFocus: false,
+      canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: .zero,
+      ownFieldsRead: fields.complete)
   }
   /// The clock reads 0 when the walk sets its deadline and one second more at each later reading, so the walk
   /// expires at its `expiresAfter + 1`-th budget check.
@@ -365,6 +387,12 @@ private func runLookOutlineAssertions() {
   check(find("unread", in: outline).map { $0.truncated && $0.children.isEmpty } == true, "a failed children read marks the node truncated, never a leaf")
   check(find("unread", in: outline)?.payload()["truncated"] as? Bool == true, "the unread node's payload carries the marker")
   check(
+    find("unread", in: outline)?.payload()["childrenUnread"] as? Bool == true,
+    "a failed children read leaves the node's own fields read (childrenUnread, #1310)")
+  check(
+    find("leaf", in: outline)?.childrenUnread == false && find("leaf", in: outline)?.payload()["childrenUnread"] == nil,
+    "a complete leaf carries no childrenUnread")
+  check(
     !outline.truncated && find("leaf", in: outline)?.truncated == false && find("grandchild", in: outline)?.truncated == false,
     "a readable empty child list is a complete leaf")
   check(find("parent", in: outline)?.children.map(\.ref) == ["grandchild"], "the walk continues below a sibling of the unread node")
@@ -373,10 +401,73 @@ private func runLookOutlineAssertions() {
 
   let budget = build(root, children: tree, nodeLimit: 3)
   check(budget.truncated && budget.children.map(\.ref) == ["unread", "leaf"], "the node budget cuts the children and marks the parent")
+  check(budget.childrenUnread, "the node budget's cut leaves only the descendants unread")
   check(find("parent", in: build(root, children: tree, nodeLimit: 4))?.truncated == true, "a parent reached at the budget is truncated")
+  check(
+    find("parent", in: build(root, children: tree, nodeLimit: 4))?.payload()["childrenUnread"] as? Bool == true,
+    "a parent reached at the budget leaves only its descendants unread")
   check(build(root, children: tree, expiresAfter: 0).truncated, "an expired deadline marks the node it stops at")
   let late = build(root, children: tree, expiresAfter: 2)
   check(late.truncated && late.children.map(\.ref) == ["unread"], "a deadline during the children marks the parent")
+  check(
+    late.childrenUnread && build(root, children: tree, expiresAfter: 0).childrenUnread,
+    "the deadline leaves only the descendants unread")
+  // A failed own-field read beside the failed children read: the node keeps only the bare marker (#1310).
+  func walkedFieldNode(_ reads: [String: AXStringRead], children: [Node]? = nil) -> LookNode {
+    LookOutlineWorld<Node>(
+      children: { _ in children }, rootNode: { _ in fieldNode("own", reads: reads) }, childNodes: { _ in { node($0.name) } },
+      now: { 0 }
+    ).build(root: root, nodeLimit: 2000, timeLimit: 20, requestDeadline: .infinity)
+  }
+  let readable: [String: AXStringRead] = [
+    kAXRoleAttribute: .value("AXButton"), kAXTitleAttribute: .value("Go"), kAXValueAttribute: .value("Stop"),
+  ]
+  let readOwn = walkedFieldNode(readable)
+  check(
+    readOwn.payload()["truncated"] as? Bool == true && readOwn.payload()["childrenUnread"] as? Bool == true
+      && readOwn.value == "Stop",
+    "failed children with every own field read carry childrenUnread")
+  for attribute in [kAXRoleAttribute, kAXSubroleAttribute, "AXIdentifier", kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
+    for childList in [nil, [Node]()] {
+      var reads = readable
+      reads[attribute] = .failed
+      let failed = walkedFieldNode(reads, children: childList).payload()
+      check(
+        failed["truncated"] as? Bool == true && failed["childrenUnread"] == nil,
+        "a failed \(attribute) read with children \(String(describing: childList)) sends only the bare truncated")
+    }
+  }
+  // If role or subrole cannot be read, the element may be a secure field: emit an empty classification and never read
+  // value or other text attributes.
+  for classification in [kAXRoleAttribute, kAXSubroleAttribute] {
+    var asked: [String] = []
+    let unclassified = LookOwnFields(
+      read: { attribute in
+        let name = attribute as String
+        asked.append(name)
+        if name == classification { return .failed }
+        return .value(name == kAXRoleAttribute ? "AXTextField" : "secret")
+      },
+      secure: { $0 == "AXSecureTextField" || $1 == "AXSecureTextField" })
+    check(
+      !unclassified.complete && unclassified.role.isEmpty && unclassified.subrole.isEmpty
+        && unclassified.identifier.isEmpty && unclassified.title.isEmpty && unclassified.description.isEmpty
+        && unclassified.value.isEmpty && !asked.contains(kAXValueAttribute),
+      "a failed \(classification) read fails closed without reading value or text fields")
+  }
+  var secureReads = readable
+  secureReads[kAXRoleAttribute] = .value("AXSecureTextField")
+  secureReads[kAXValueAttribute] = .failed
+  let secure = walkedFieldNode(secureReads)
+  check(secure.value.isEmpty && secure.childrenUnread, "a secure field's value is never read, so it cannot fail")
+  let bare = node("bare")
+  bare.childrenUnread = true
+  check(bare.payload()["childrenUnread"] == nil, "childrenUnread is never sent without truncated")
+  bare.truncated = true
+  bare.childrenUnread = false
+  check(
+    bare.payload()["truncated"] as? Bool == true && bare.payload()["childrenUnread"] == nil,
+    "a bare truncated node does not claim its own fields read")
   let slowRoot = timed(root, children: ["root": [parent], "parent": [grandchild]], rootCost: 19, childCost: 2).outline
   check(
     !slowRoot.truncated && find("parent", in: slowRoot)?.truncated == false && find("grandchild", in: slowRoot) != nil,

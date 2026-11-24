@@ -19,6 +19,7 @@ const macosPlatformBackend: ComputerUsePlatformBackend = {
 	actBatch: macosBackend.actBatch,
 	readText: macosBackend.readText,
 	waitFor: macosBackend.waitFor,
+	sameElement: macosBackend.sameElement,
 	isBrowserApp,
 	isChromeFamilyApp,
 	openBrowserLocation: openBrowserLocationWithAppleScript,

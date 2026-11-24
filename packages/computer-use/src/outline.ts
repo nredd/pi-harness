@@ -43,6 +43,14 @@ export interface OutlineNode {
 	offscreen: boolean;
 	pictureOnly: boolean;
 	truncated: boolean;
+	/**
+	 * Set only on a `truncated` node whose helper read every own matchable field and left only its descendants unread
+	 * (the macOS walk's failed children read or budget cut). A bare `truncated` (Linux unread fields, Windows, older
+	 * helpers, a failed macOS own-field read) may also mean the node's own fields are unread. Absence corroboration
+	 * ignores it only on an exact scope (with no `truncated` ancestor) the helper proved is the waited element, since a
+	 * structurally carried ref may name a lookalike (#1310).
+	 */
+	childrenUnread?: true;
 	scrollExtent?: OutlineScrollExtent;
 	text: OutlineText[];
 	/**
@@ -450,6 +458,7 @@ function parseNode(raw: unknown, options: ParseLookOptions, parent?: OutlineNode
 		parent,
 	};
 	if (!node.rect) delete node.rect;
+	if (record.truncated === true && record.childrenUnread === true) node.childrenUnread = true;
 	node.children = (Array.isArray(record.children) ? record.children : []).map((child) =>
 		parseNode(child, options, node),
 	);
@@ -967,6 +976,7 @@ function normalizeRestored(raw: SerializedOutlineNode, parent?: OutlineNode): Ou
 		parent,
 	};
 	if (!node.rect) delete node.rect;
+	if (record.childrenUnread !== true || record.truncated !== true) delete node.childrenUnread;
 	if (record.unconfirmed === true) redactRetained(node);
 	else delete node.unconfirmed;
 	return node;
@@ -1032,6 +1042,8 @@ function copyNodeFields(target: OutlineNode, source: OutlineNode, preserveWireRe
 	target.pictureOnly = source.pictureOnly;
 	// A scoped look that still could not read the subtree leaves the node unread.
 	target.truncated = source.truncated;
+	if (source.childrenUnread) target.childrenUnread = true;
+	else delete target.childrenUnread;
 	target.scrollExtent = source.scrollExtent ? { ...source.scrollExtent } : undefined;
 	target.text = source.text.map((text) => ({ ...text, rect: text.rect ? { ...text.rect } : undefined }));
 	// The source is a fresh look, so its classification is current.
