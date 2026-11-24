@@ -6,7 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -55,6 +55,17 @@ pub struct RecordingSink {
     pointer_map: Option<Vec<u8>>,
     /// Sleep inside every post, as a slow server round trip would.
     post_delay: Duration,
+    /// Zero-based attempts `post_delay` applies to; every attempt when empty.
+    delay_posts: Vec<usize>,
+    /// Admissions from this zero-based one on return only once the instant passed, as a
+    /// target check stalled on the X server would.
+    stall_admissions: Option<(usize, Instant)>,
+    /// From this zero-based admission on, `now` reads past every request deadline, as if
+    /// that target check had outlasted it, with no real-time window to race.
+    expire_at_admission: Option<usize>,
+    /// The same from these zero-based post attempts on, as if the post had stalled.
+    expire_posts: Vec<usize>,
+    expired: Cell<bool>,
     /// Announce each post attempt as it begins, so a test waits for that instead of
     /// sleeping: on `Stderr`, a `linux-bridge testing: posting <id> <attempt>` line.
     announce: Option<Announce>,
@@ -71,7 +82,9 @@ enum Announce {
 }
 impl RecordingSink {
     /// Build a sink from a JSON script, for process-level tests that drive the real
-    /// binary: `{"delayMs": 20, "failPosts": [1], "held": [[false, 8]], "announce": "id"}`.
+    /// binary: `{"delayMs": 20, "delayPosts": [0], "expirePosts": [0], "failPosts": [1],
+    /// "held": [[false, 8]], "announce": "id"}`. `delayPosts` limits `delayMs` to those
+    /// attempts; `expirePosts` expires every deadline from those attempts on.
     pub fn scripted(script: &Value) -> Self {
         let numbers = |key: &str| {
             script
@@ -85,6 +98,8 @@ impl RecordingSink {
         };
         let mut sink = Self {
             fail_posts: numbers("failPosts"),
+            delay_posts: numbers("delayPosts"),
+            expire_posts: numbers("expirePosts"),
             post_delay: Duration::from_millis(
                 script.get("delayMs").and_then(Value::as_u64).unwrap_or(0),
             ),
@@ -171,6 +186,16 @@ impl RecordingSink {
         self.hold_open = Some(release);
         self
     }
+    /// Hold every admission from the zero-based `from` on until `until` passed.
+    pub fn stall_admissions_until(mut self, from: usize, until: Instant) -> Self {
+        self.stall_admissions = Some((from, until));
+        self
+    }
+    /// Expire every request deadline from the zero-based admission `at` on.
+    pub fn expire_at_admission(mut self, at: usize) -> Self {
+        self.expire_at_admission = Some(at);
+        self
+    }
     /// Fail every key and button state query.
     pub fn query_fails(mut self) -> Self {
         self.query_fails = true;
@@ -211,8 +236,18 @@ impl RecordingSink {
     }
 }
 impl InputSink for RecordingSink {
+    fn now(&self) -> Instant {
+        // A year past now is past every deadline a test sets.
+        let ahead = if self.expired.get() { 31_536_000 } else { 0 };
+        Instant::now() + Duration::from_secs(ahead)
+    }
     fn admit(&self) -> Result<(), ProtocolError> {
         let admissions = self.admissions.get();
+        if let Some((from, until)) = self.stall_admissions {
+            if admissions >= from {
+                std::thread::sleep(until.saturating_duration_since(Instant::now()));
+            }
+        }
         if self
             .refuse_admission_after
             .is_some_and(|limit| admissions >= limit)
@@ -221,6 +256,9 @@ impl InputSink for RecordingSink {
                 "Recorded target is no longer active",
                 ErrorCode::ForegroundRequired,
             ));
+        }
+        if self.expire_at_admission == Some(admissions) {
+            self.expired.set(true);
         }
         self.admissions.set(admissions + 1);
         self.pending_admission.set(true);
@@ -282,6 +320,9 @@ impl InputSink for RecordingSink {
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure> {
         let admitted = self.pending_admission.replace(false);
         let attempt = self.attempts.replace(self.attempts.get() + 1);
+        if self.expire_posts.contains(&attempt) {
+            self.expired.set(true);
+        }
         match &self.announce {
             Some(Announce::Stderr(id)) => eprintln!("linux-bridge testing: posting {id} {attempt}"),
             Some(Announce::Channel(posts)) => {
@@ -292,7 +333,9 @@ impl InputSink for RecordingSink {
         if let Some(release) = &self.hold_open {
             let _ = release.recv();
         }
-        if !self.post_delay.is_zero() {
+        if !self.post_delay.is_zero()
+            && (self.delay_posts.is_empty() || self.delay_posts.contains(&attempt))
+        {
             std::thread::sleep(self.post_delay);
         }
         if self.panic_posts.contains(&attempt) {
