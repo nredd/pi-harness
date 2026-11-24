@@ -88,14 +88,29 @@ describe("parseAntigravity", () => {
 		});
 	});
 
-	it("leaves the reset unknown when resetTime is absent or unparseable", () => {
+	it("leaves the reset unknown when resetTime is absent, unparseable, offsetless or not a string", () => {
 		const reading = parseAntigravity({
-			groups: [{ buckets: [bucket("gemini-5h", "5h", 0.5), bucket("gemini-weekly", "weekly", 0.5, "soon")] }],
+			groups: [
+				{
+					buckets: [
+						bucket("gemini-5h", "5h", 0.5),
+						bucket("gemini-weekly", "weekly", 0.5, "soon"),
+						bucket("3p-5h", "5h", 0.5, "2026-11-30T21:10:54"),
+						{ ...bucket("3p-weekly", "weekly", 0.5), resetTime: T0 },
+					],
+				},
+			],
 		});
 		expect(reading?.windows.map(({ name, usedPercent, resetAt }) => ({ name, usedPercent, resetAt }))).toEqual([
 			{ name: "5h", usedPercent: 50, resetAt: undefined },
 			{ name: "7d", usedPercent: 50, resetAt: undefined },
+			{ name: "3p-5h", usedPercent: 50, resetAt: undefined },
+			{ name: "3p-7d", usedPercent: 50, resetAt: undefined },
 		]);
+		const offset = parseAntigravity({
+			groups: [{ buckets: [bucket("gemini-5h", "5h", 0, "2026-11-30T13:10:54-08:00")] }],
+		});
+		expect(offset?.windows[0]?.resetAt).toBe(Date.parse("2026-11-30T21:10:54Z"));
 	});
 
 	it("clamps out-of-range fractions and skips non-finite ones", () => {
@@ -195,7 +210,7 @@ describe("antigravity collector", () => {
 		["an empty token", JSON.stringify({ token: "" }), false],
 		["a non-string token", JSON.stringify({ token: 42 }), false],
 		["the pi-antigravity credential", CREDENTIAL, true],
-	])("acceptsCredential for %s is %s", (_label, credential, accepted) => {
+	])("acceptsCredential for %s", (_label, credential, accepted) => {
 		expect(antigravity?.acceptsCredential?.(credential)).toBe(accepted);
 	});
 });

@@ -453,8 +453,9 @@ The built-in `antigravity` collector reads quota for Pi's `antigravity` provider
 `pi-antigravity` package). It ships no OAuth client: Pi hands it that provider's credential, the
 `{"token","projectId"}` JSON string `pi-antigravity` returns from `getApiKey`, and core owns login
 and refresh. Only a non-empty string `token` is read; `projectId` is unused. A credential that is
-not a JSON object with such a `token` reads as `unavailable` (no subscription usage window),
-without a request and without echoing the credential. The read is one `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+not a JSON object with such a `token` reads as `unavailable` (no subscription usage window) on a
+cold cache, without a request and without echoing the credential; after an earlier good read the
+cached windows are kept as `stale`, like any other failed read. The read is one `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
 with body `{}`, a bearer token and the Antigravity CLI `User-Agent`. There is no fallback: the
 `cloudcode-pa.googleapis.com` host is never tried, so a failure on the daily host is an ordinary
 failed read with the usual backoff.
@@ -468,7 +469,7 @@ Each `groups[].buckets[]` entry becomes a model-scoped window with a `reported` 
 
 `usedPercent` is `(1 - remainingFraction) * 100` with the fraction clamped to 0..1; a bucket without
 a finite fraction is skipped. `resetTime` is absent while a bucket is untouched, so the reset stays
-unknown. An exhausted Gemini 5h window blocks only `gemini` models of the provider; Claude and GPT
+unknown, as does one without an explicit UTC offset. An exhausted Gemini 5h window blocks only `gemini` models of the provider; Claude and GPT
 models served through Antigravity keep their own `3p-*` windows. The footer display is `Gemini`
 (`Gem`) with the `5h` and `7d` windows. The payload is an undocumented internal endpoint verified
 against a live account, not a published contract; a shape change reads as an unsupported shape.

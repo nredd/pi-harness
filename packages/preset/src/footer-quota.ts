@@ -39,14 +39,15 @@ const LEGACY_DISPLAY = {
  * V1 rows beyond the legacy pair, with the router's built-in display. Each renders as a generic row,
  * and only for a snapshot that is not `unavailable` or an active block: a session without that
  * credential gets no placeholder row.
- * Their windows are model-scoped, but the row label names the models, so the selected windows are
- * shown whatever the current model (v1, or a v2 view that keeps this selection).
+ * Their windows for the `pin` families are model-scoped, but the row label names those models, so
+ * they are shown whatever the current model (v1, or a v2 view that keeps this selection).
  */
 const V1_DISPLAY = {
 	antigravity: {
 		full: "Gemini",
 		compact: "Gem",
 		footer: { show: [{ name: "5h" }, { name: "7d" }], placeholder: true },
+		pin: ["gemini"],
 	},
 };
 
@@ -84,7 +85,7 @@ interface PercentCell extends WindowLabel {
 	resetAt: number | undefined;
 	unidentified: boolean;
 	placeholder: boolean;
-	/** Selected for a `V1_DISPLAY` row: shown whatever the model, like a provider-wide window. */
+	/** Scoped to a `V1_DISPLAY` row's `pin` family: shown whatever the model, like a provider-wide window. */
 	pinned: boolean;
 }
 
@@ -236,7 +237,7 @@ function selectorLabel(selector: Selector): WindowLabel {
 	return { name: labelOf(selector.name) ?? "quota", durationMs, calendar: false };
 }
 
-function chooseWindows(raw: unknown, display: Display, legacy: boolean, pinned: boolean): PercentCell[] {
+function chooseWindows(raw: unknown, display: Display, legacy: boolean, pin: readonly string[]): PercentCell[] {
 	const windows = buckets(raw).filter(
 		({ raw, families }) => (raw.basis === undefined || raw.basis === "reported") && (!legacy || families.length === 0),
 	);
@@ -256,7 +257,7 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean, pinned: 
 		resetAt: epoch(raw.resetAt),
 		unidentified: label.span === "assumed",
 		placeholder: false,
-		pinned,
+		pinned: families.some((family) => pin.includes(family)),
 	});
 	const show = display.footer?.show;
 	// Keys use the full name: two long names sharing a bounded label stay distinct readings.
@@ -423,7 +424,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 			Object.hasOwn(LEGACY_DISPLAY, id) &&
 			JSON.stringify(display.footer) === JSON.stringify(LEGACY_DISPLAY[id as keyof typeof LEGACY_DISPLAY].footer);
 		const v1Display = Object.hasOwn(V1_DISPLAY, id) ? V1_DISPLAY[id as keyof typeof V1_DISPLAY] : undefined;
-		const pinned = JSON.stringify(display.footer) === JSON.stringify(v1Display?.footer);
+		const pin = v1Display && JSON.stringify(display.footer) === JSON.stringify(v1Display.footer) ? v1Display.pin : [];
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
@@ -435,7 +436,7 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 			expiresAt !== undefined &&
 			expiresAt > now &&
 			(!legacy || (Array.isArray(windows) && windows.length > 0) || aux.some((cell) => cell.kind !== "mark"));
-		const seen = chooseWindows(windows, display, legacy, pinned);
+		const seen = chooseWindows(windows, display, legacy, pin);
 		const cells: QuotaFields["cells"] = [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...aux];
 		const status = snapshot?.status;
 		// Legacy rows keep their pinned placeholders, so only generic rows report a failure as text.

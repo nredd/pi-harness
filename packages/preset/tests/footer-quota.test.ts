@@ -2122,6 +2122,22 @@ test("v1 replies show the antigravity Gemini 5h and 7d row whatever the model", 
 		footer.formatQuotaRow(state, "full", plain, { ...fixed, model: { provider: "antigravity", id: "gemini-4-neon" } }),
 		"Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly -- | Gemini 5h 99% (resets 14:00) weekly 97% (resets Jan 13 12:00)",
 	);
+	// A collector override reporting a Claude-only `5h` never reads as Gemini quota on another model.
+	const claude5h = { ...win("5h", 40, "model"), durationMs: 5 * hour, families: ["claude"] };
+	const override = present(
+		footer.parseUsageReply(v1([snap("antigravity", [claude5h], { expiresAt: CLOCK + hour })]), CLOCK),
+	);
+	assert.equal(
+		footer.formatQuotaRow(override, "compact", plain, sonnet),
+		"Left: Anth (stale) 7d -- | OAI (stale) 7d -- | Gem 7d --",
+	);
+	assert.equal(
+		footer.formatQuotaRow(override, "compact", plain, {
+			...fixed,
+			model: { provider: "antigravity", id: "claude-sonnet-4-6" },
+		}),
+		"Left: Anth (stale) 7d -- | OAI (stale) 7d -- | Gem 5h 60% 7d --",
+	);
 });
 
 test("v1 antigravity rows need a read or a block, and say when the read failed", () => {

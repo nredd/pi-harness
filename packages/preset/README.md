@@ -145,9 +145,11 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   model and for models with active blocks. No Google collector or credentials are needed by the footer.
   V1 replies also get a `Gemini` (`Gem`) row with the router's `antigravity` 5h and 7d windows when
   the reply carries an `antigravity` snapshot that is not `unavailable` (the router returns only
-  cached readings, fresh or stale) or an active block for it; no credential, or an unreadable one,
-  adds no row. Those windows are Gemini-scoped but the row name says so, so they show whatever the
-  current model, as does a v2 view that keeps that selection.
+  cached readings, fresh or stale) or an active block for it. The footer never reads credentials:
+  Gemini percentages need a cached router reading, so a cold cache without a readable credential
+  adds no row, while an active block still does. Windows scoped to the `gemini` family show
+  whatever the current model, since the row name says so, as in a v2 view that keeps that
+  selection; other windows on the row keep the ordinary model-bucket rule.
   Every active block is shown, legacy rows included: v1 `blocks` attach to their provider (a block
   for a provider without a row gets its own), and a confirmed Opus block appears beside healthy
   provider-wide quota, e.g. `| opus blocked->Jan 18 12:00 read`. The pre-view footer ignored
