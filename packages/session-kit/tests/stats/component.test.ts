@@ -429,7 +429,8 @@ describe("StatsView", () => {
 	});
 
 	it("hourly ranges chart models under a filter and report an empty window without the heatmap", () => {
-		const now = Date.parse("2026-10-13T12:30:00Z");
+		// The hourly window is local, so `now` must fall on the local `TODAY` the view is given.
+		const now = at(TODAY, 12) + 30 * 60000;
 		const recent = [
 			call(TODAY, "anthropic", "opus", 100, 0, { ms: now - 30 * 60000 }),
 			call(TODAY, "openai-codex", "sol", 50, 0, { ms: now - 90 * 60000 }),
