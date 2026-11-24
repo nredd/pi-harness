@@ -225,9 +225,20 @@ issue is named:
   disk view contains only fields used by `/stats`; the v1 RPC is unchanged. An oversized
   provider reading is dropped without dropping its active blocks that fit. Both provider rows
   and the complete file have byte limits. Gemini appears when an `antigravity` collector supplies
-  usage. A cold process leaves the file alone until it has data to publish; after that, processes
-  sharing an agent directory are last writer wins. The first scheduled publication also prunes
-  abandoned write temps older than 24 hours.
+  usage.
+
+  Limits:
+  - Pi processes sharing an agent directory are last-writer-wins. A cold process preserves the
+    previous file until it has data to publish. After the original publisher exits, `/stats`
+    ages its readings to stale and shows blocks until their actual provider `until` deadlines.
+    #1440 tracks a lease design with writer-owned views and retrieval-time selection.
+  - When the file budget runs out, later providers or blocks can be dropped without a
+    reader-visible truncation indicator (#1440).
+  - Labels, families and `display.full` come from trusted in-process collectors. Built-ins are
+    fixed, but a custom collector returning account text as a label will persist it. #1440
+    tracks persisting only router-owned public labels.
+  - An interrupted write can leave a harmless `.view-*.tmp` orphan. Delete it by hand once the
+    writer is known to have exited.
 - Not built yet: live v2 `router:rpc:usage` views and applied `label`
   (#1403), applied `quotaGroup` and the access-flip rule (#1405), an end-to-end third-party
   collector proof (#1404)

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExhaustionMark, ExhaustionTracker } from "./exhaustion.ts";
 import type { UsageMeter, UsageService, UsageSnapshot, UsageSpanSource, UsageWindow } from "./usage.ts";
@@ -7,26 +7,10 @@ import type { UsageMeter, UsageService, UsageSnapshot, UsageSpanSource, UsageWin
 // The boundary test exercises this limit against the real /stats reader.
 export const MAX_VIEW_BYTES = 1024 * 1024;
 const MAX_PROVIDER_BYTES = MAX_VIEW_BYTES / 4;
-const TEMP_MAX_AGE_MS = 24 * 60 * 60_000;
-const TEMP_NAME = /^\.view-[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}\.tmp$/;
 
 async function ensureDirectory(path: string): Promise<void> {
 	await mkdir(path, { recursive: true, mode: 0o700 });
 	if (!(await lstat(path)).isDirectory()) throw new Error("Expected a router state directory");
-}
-
-/** Sweep old regular temps once at startup. Fresh temps may belong to another writer. */
-async function pruneTemps(dir: string): Promise<void> {
-	const cutoff = Date.now() - TEMP_MAX_AGE_MS;
-	const entries = await readdir(dir, { withFileTypes: true });
-	await Promise.allSettled(
-		entries
-			.filter((entry) => entry.isFile() && TEMP_NAME.test(entry.name))
-			.map(async ({ name }) => {
-				const path = join(dir, name);
-				if ((await lstat(path)).mtimeMs < cutoff) await rm(path, { force: true });
-			}),
-	);
 }
 
 /** Publish only a complete view. Never follow a symlink at the destination. */
@@ -100,7 +84,10 @@ function encodeView(usage: UsageService, snapshots: UsageSnapshot[], marks: Exha
 				.map(({ window, families, until, evidence }) => ({ window, families, until, evidence })),
 		};
 		let row = JSON.stringify(reading ? { ...base, ...snapshotFields(reading) } : base);
-		if (Buffer.byteLength(row) > MAX_PROVIDER_BYTES) row = JSON.stringify(base);
+		if (Buffer.byteLength(row) > MAX_PROVIDER_BYTES) {
+			if (base.marks.length === 0) continue;
+			row = JSON.stringify(base);
+		}
 		const size = Buffer.byteLength(row);
 		const cost = size + Number(rows.length > 0);
 		if (size > MAX_PROVIDER_BYTES || bytes + cost > MAX_VIEW_BYTES) continue;
@@ -122,7 +109,6 @@ export interface ViewStore {
 export function bindViewStore(agentDir: string, usage: UsageService, tracker: ExhaustionTracker): ViewStore {
 	const root = join(agentDir, "router-state");
 	const dir = join(root, "v1");
-	let swept = false;
 	let published = false;
 	let dirty = false;
 	let pending: Promise<void> | undefined;
@@ -132,10 +118,6 @@ export function bindViewStore(agentDir: string, usage: UsageService, tracker: Ex
 			try {
 				await ensureDirectory(root);
 				await ensureDirectory(dir);
-				if (!swept) {
-					await pruneTemps(dir);
-					swept = true;
-				}
 				const json = encodeView(usage, usage.cachedSnapshots(), tracker.active());
 				// A cold process must not erase another process's view. After writing real
 				// data, this process can clear its last row (e.g. after /router reset).

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readdir, readFile, rmdir, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rmdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
@@ -137,11 +137,19 @@ it("cold publisher preserves live rows", async ({ onTestFinished }) => {
 	const root = makeTestTempDir("router-quota-", onTestFinished);
 	const liveTracker = new ExhaustionTracker(() => NOW);
 	const live = bindViewStore(root, makeUsage(), liveTracker);
+	const families = Array.from({ length: 4 }, (_, i) => String(i).padEnd(256, "界"));
 	onTestFinished(
 		registerCollector({
 			provider: model.provider,
 			kind: "custom",
-			read: async () => undefined,
+			read: async () => ({
+				windows: Array.from({ length: 128 }, (_, i) => ({
+					name: `window-${i}`,
+					usedPercent: 50,
+					scope: "model",
+					families,
+				})),
+			}),
 		}),
 	);
 	liveTracker.mark(model, decision);
@@ -153,8 +161,11 @@ it("cold publisher preserves live rows", async ({ onTestFinished }) => {
 	const cold = bindViewStore(root, coldUsage, new ExhaustionTracker());
 	await cold.flush();
 	await cold.schedule();
-	await coldUsage.get(ctx, model.provider);
-	await cold.schedule();
+	expect(await readRouterQuota(root, NOW)).toEqual(rows);
+	const oversized = await coldUsage.get(ctx, model.provider);
+	expect(oversized.status).toBe("available");
+	expect(Buffer.byteLength(JSON.stringify(oversized))).toBeGreaterThan(MAX_VIEW_BYTES / 4);
+	await cold.flush();
 	expect(await readRouterQuota(root, NOW)).toEqual(rows);
 });
 
@@ -272,27 +283,6 @@ it("omits unused Codex balance text and stale diagnostic messages", async ({ onT
 	await store.flush();
 	expect(await readFile(path, "utf8")).not.toContain('"message"');
 	expect((await readRouterQuota(root, now)).map(({ label }) => label)).toEqual(["OpenAI 5h (assumed span) (stale)"]);
-});
-
-it("prunes abandoned view temps while keeping recent and unrelated files", async ({ onTestFinished }) => {
-	const root = makeTestTempDir("router-quota-", onTestFinished);
-	const dir = statePath(root);
-	await mkdir(dir, { recursive: true });
-	vi.spyOn(Date, "now").mockReturnValue(NOW);
-	const stale = ".view-00000000-0000-4000-8000-000000000001.tmp";
-	const recent = ".view-00000000-0000-4000-8000-000000000002.tmp";
-	const link = ".view-00000000-0000-4000-8000-000000000003.tmp";
-	const unrelated = ".view-unrelated.tmp";
-	for (const file of [stale, recent, unrelated]) {
-		const path = join(dir, file);
-		await writeFile(path, "partial");
-		const age = file === recent ? 60_000 : 25 * 60 * 60_000;
-		await utimes(path, new Date(NOW - age), new Date(NOW - age));
-	}
-	await symlink(stale, join(dir, link));
-	const store = bindViewStore(root, makeUsage(), new ExhaustionTracker());
-	await store.schedule();
-	expect((await readdir(dir)).sort()).toEqual([recent, link, unrelated]);
 });
 
 it("caps the total view and still admits later small rows", async ({ onTestFinished }) => {
