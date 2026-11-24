@@ -242,6 +242,7 @@ export class UsageService {
 	private readonly revoked = new Set<string>();
 	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration | undefined>();
 	private readonly cache = new Map<string, UsageSnapshot>();
+	private readonly listeners = new Set<() => void>();
 	private readonly generations = new Map<string, number>();
 	private readonly lastManualRefreshAt = new Map<string, number>();
 	private readonly inFlight = new Map<string, UsageRead>();
@@ -351,9 +352,30 @@ export class UsageService {
 	/** Discard only this provider's cached evidence and prior read ownership after verified server mutation. */
 	invalidate(provider: string): void {
 		this.generations.set(provider, (this.generations.get(provider) ?? 0) + 1);
-		this.cache.delete(provider);
+		const changed = this.cache.delete(provider);
 		this.inFlight.delete(provider);
 		this.backoff.delete(provider);
+		if (changed) this.notify();
+	}
+
+	/** Subscribe to changes in cached readings. */
+	subscribe(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => void this.listeners.delete(listener);
+	}
+
+	/** Read the current cache without refreshing credentials or making requests. */
+	cachedSnapshots(): UsageSnapshot[] {
+		return [...this.cache.values()];
+	}
+
+	/** Display metadata from the binding that produced this exact cached reading. */
+	displayForSnapshot(snapshot: UsageSnapshot) {
+		return this.evidence.get(snapshot)?.collector.display;
+	}
+
+	private notify(): void {
+		for (const listener of this.listeners) listener();
 	}
 
 	/** Cached snapshot without any network read; expired data is reported `stale`. */
@@ -520,6 +542,7 @@ export class UsageService {
 				}
 				if (outcome.snapshot.status === "available") {
 					this.cache.set(provider, outcome.snapshot);
+					this.notify();
 					this.backoff.delete(provider);
 				} else if (outcome.failed) {
 					this.recordFailure(provider, outcome.retryAfterMs);
@@ -528,6 +551,7 @@ export class UsageService {
 				if (outcome.snapshot.status !== "available" && cached) {
 					const stale = this.stale(cached, this.transport.now(), outcome.snapshot.message);
 					this.cache.set(provider, stale);
+					this.notify();
 					return stale;
 				}
 				return outcome.snapshot;

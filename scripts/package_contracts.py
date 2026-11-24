@@ -572,6 +572,7 @@ CONTRACTS = (
             "src/router.ts",
             "src/selection.ts",
             "src/usage.ts",
+            "src/view-store.ts",
             "src/view.ts",
         ),
         required=(
