@@ -84,7 +84,7 @@ describe("stats CLI", () => {
 		utimesSync(lock, old, old);
 		const diagnostic =
 			`Suspected stale export lock ${JSON.stringify(lock)} (age 7200s); ` +
-			"verify no export is running before removing the lock directory, then retry";
+			"verify no export, restore or cleanup is running before removing the lock directory, then retry";
 		for (let attempt = 1; attempt <= 2; attempt++) {
 			process.exitCode = 0;
 			await run();
@@ -416,6 +416,90 @@ describe("stats CLI", () => {
 				"corrupt, denied or missing and no recorded watermark survives either, it publishes by the wall clock with a " +
 				"warning (a first export does not warn)",
 		);
+	});
+
+	it("restores an outbox only on its own command with explicit --agent-dir, --input and --output", async () => {
+		seed(source);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const backup = join(dir, "backup");
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", backup];
+		await main();
+		process.argv = ["node", "pi-stats-export", "export", "--agent-dir", source, "--output", output];
+		await main();
+		const { snapshotDir } = JSON.parse(log.mock.lastCall?.[0] as string);
+		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
+
+		const restore = [
+			"node",
+			"pi-stats-export",
+			"restore",
+			"--agent-dir",
+			source,
+			"--input",
+			backup,
+			"--output",
+			output,
+		];
+		log.mockClear();
+		process.argv = restore;
+		await main();
+		expect(log).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(log.mock.lastCall?.[0] as string)).toMatchObject({
+			snapshotDir,
+			restored: ["manifest.json"],
+		});
+
+		for (const invalid of [
+			["node", "pi-stats-export", "restore", "--input", backup, "--output", output],
+			["node", "pi-stats-export", "restore", "--agent-dir", source, "--output", output],
+			["node", "pi-stats-export", "restore", "--agent-dir", source, "--input", backup],
+			[...restore, "--harness", "pi"],
+			[...restore, "--replace-harnesses"],
+		]) {
+			process.argv = invalid;
+			await expect(main()).rejects.toThrow("restore --agent-dir DIR --input SRC --output OUT");
+		}
+	});
+
+	it("prints restore warnings and still exits 0", async () => {
+		process.exitCode = 0;
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const warning = 'could not release export lock "/out/.export.lock"';
+		vi.resetModules();
+		vi.doMock("../../src/stats/snapshot.ts", () => ({
+			cleanRecovery: async () => ({}),
+			exportStats: async () => ({}),
+			importStats: async () => ({}),
+			restoreSnapshot: async () => ({
+				machineId: "m",
+				snapshotDir: "d",
+				exportedAt: 1,
+				restored: ["manifest.json"],
+				warnings: [warning],
+			}),
+		}));
+		try {
+			const cli = await import("../../src/stats/cli.ts");
+			process.argv = [
+				"node",
+				"pi-stats-export",
+				"restore",
+				"--agent-dir",
+				source,
+				"--input",
+				join(dir, "backup"),
+				"--output",
+				output,
+			];
+			await cli.run();
+		} finally {
+			vi.doUnmock("../../src/stats/snapshot.ts");
+			vi.resetModules();
+		}
+		expect(JSON.parse(log.mock.calls[0]?.[0] as string).restored).toEqual(["manifest.json"]);
+		expect(error).toHaveBeenCalledExactlyOnceWith(warning);
+		expect(process.exitCode ?? 0).toBe(0);
 	});
 
 	it("cleans recovery only on its own command with only its own flags", async () => {

@@ -11,6 +11,11 @@ export function outboxStatePath(agent: string, snapshotDir: string): string {
 	return join(agent, "pi-session-kit", "outboxes", `${key}.json`);
 }
 
+/** UTC instant for `YYYY-MM-DD` at `hour`: snapshot shards, seals and quota windows key on UTC months. */
+export function utcAt(day: string, hour = 12): number {
+	return Date.parse(`${day}T${String(hour).padStart(2, "0")}:00:00Z`);
+}
+
 /** Where an export records one outbox's publication watermark, beside its bookkeeping. */
 export function outboxWatermarkPath(agent: string, snapshotDir: string): string {
 	return outboxStatePath(agent, snapshotDir).replace(/\.json$/, ".published.json");
@@ -34,7 +39,7 @@ export function denyPathOnRead(actualReadFile: typeof readFile, deniedPath: stri
 	}) as typeof readFile;
 }
 
-/** Local-time instant for `YYYY-MM-DD` at `hour`. */
+/** Local-time instant for `YYYY-MM-DD` at `hour`: day and hour views bucket in local time. */
 export function at(day: string, hour = 12): number {
 	const [y, m, d] = day.split("-").map(Number);
 	return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1, hour).getTime();

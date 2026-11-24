@@ -7,7 +7,13 @@ import * as fs from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { claimTranscript, openClaimed, type TranscriptClaim, WRITER_CLAIM_SUFFIX } from "../src/transcript-claim.ts";
+import {
+	claimTranscript,
+	openClaimed,
+	TAKEOVER_SUFFIX,
+	type TranscriptClaim,
+	WRITER_CLAIM_SUFFIX,
+} from "../src/transcript-claim.ts";
 import { EXITED_PID, holderBody, stubExited, stubVerifiedDomain } from "./fixtures/writer-claim.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -18,9 +24,21 @@ vi.mock("node:fs", async (importOriginal) => {
 	const statSync = vi.fn(actual.statSync);
 	const realpathSync = vi.fn(actual.realpathSync);
 	const lstatSync = vi.fn(actual.lstatSync);
+	const unlinkSync = vi.fn(actual.unlinkSync);
+	const renameSync = vi.fn(actual.renameSync);
 	// A copy a test can strip a flag from, as a platform without it would.
 	const constants = { ...actual.constants };
-	const spies = { openSync, linkSync, writeFileSync, statSync, realpathSync, lstatSync, constants };
+	const spies = {
+		openSync,
+		linkSync,
+		writeFileSync,
+		statSync,
+		realpathSync,
+		lstatSync,
+		unlinkSync,
+		renameSync,
+		constants,
+	};
 	return { ...actual, default: { ...actual, ...spies }, ...spies };
 });
 
@@ -33,6 +51,8 @@ function spies() {
 		[vi.mocked(fs.statSync), actual.statSync],
 		[vi.mocked(fs.realpathSync), actual.realpathSync],
 		[vi.mocked(fs.lstatSync), actual.lstatSync],
+		[vi.mocked(fs.unlinkSync), actual.unlinkSync],
+		[vi.mocked(fs.renameSync), actual.renameSync],
 	] as const;
 }
 
@@ -87,16 +107,50 @@ it("refuses a takeover when the stale claim changes before it is replaced", () =
 	expect(actual.existsSync(`${claimPath}.takeover`)).toBe(false);
 });
 
-it("refuses a takeover another process wins between the unlink and the create", () => {
-	const { file, claimPath } = setup(true);
-	// The first publish meets the stale claim for real; the one after the unlink loses.
-	let publishes = 0;
-	vi.mocked(fs.linkSync).mockImplementation((existing, target) => {
-		if (target === claimPath && ++publishes === 2) throw failure("EEXIST");
-		return actual.linkSync(existing, target);
+it("lets the taker win against a fresh publisher that already passed the lock probe", () => {
+	const { dir, file, claimPath } = setup(true);
+	const lockPath = `${claimPath}${TAKEOVER_SUFFIX}`;
+	const rival = join(dir, "rival-stage");
+	actual.writeFileSync(rival, holderBody(process.ppid));
+	let attempted = false;
+	let rivalPublished = false;
+	vi.mocked(fs.openSync).mockImplementation(((path: fs.PathLike, flags: fs.OpenMode) => {
+		// The rival passed its lock probe before the taker acquired the lock.
+		// Resume its exclusive publish just as the taker starts staging its claim.
+		if (flags === "wx" && String(path).startsWith(`${claimPath}.`) && actual.existsSync(lockPath) && !attempted) {
+			attempted = true;
+			try {
+				actual.linkSync(rival, claimPath);
+				rivalPublished = true;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
+		}
+		return actual.openSync(path, flags);
+	}) as never);
+	vi.mocked(fs.unlinkSync).mockImplementation((path) => {
+		// A rival that got in sees the lock and drops its claim before the taker unlocks.
+		if (path === lockPath && rivalPublished) actual.unlinkSync(claimPath);
+		actual.unlinkSync(path);
 	});
-	expect(() => claimTranscript(file)).toThrow(`child session was claimed by another process during takeover: ${file}`);
-	expect(actual.existsSync(`${claimPath}.takeover`)).toBe(false);
+	const claim = claimTranscript(file);
+	expect(attempted).toBe(true);
+	expect(rivalPublished).toBe(false);
+	expect(JSON.parse(actual.readFileSync(claimPath, "utf8")).pid).toBe(process.pid);
+	claim.release();
+});
+
+it("keeps the stale claim and clears the lock and staging file when replacement fails", () => {
+	const { dir, file, claimPath } = setup(true);
+	vi.mocked(fs.renameSync).mockImplementationOnce(() => {
+		throw failure("EIO");
+	});
+	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "EIO" }));
+	expect(actual.readFileSync(claimPath, "utf8")).toBe(holderBody(EXITED_PID));
+	expect(actual.readdirSync(dir).sort()).toEqual(["child.jsonl", "child.jsonl.writer"]);
+	const claim = claimTranscript(file);
+	expect(JSON.parse(actual.readFileSync(claimPath, "utf8")).pid).toBe(process.pid);
+	claim.release();
 });
 
 it("refuses a takeover another process locks after the lock check", () => {
@@ -179,6 +233,15 @@ it("passes a stat error other than a missing file through the claim and the reop
 	const claims: TranscriptClaim[] = [];
 	expect(() => openClaimed(file, claims, () => "never")).toThrow(expect.objectContaining({ code: "EACCES" }));
 	for (const claim of claims) claim.release();
+});
+
+it("passes a link I/O error through and removes the staging file", () => {
+	const { dir, file } = setup(false);
+	vi.mocked(fs.linkSync).mockImplementationOnce(() => {
+		throw failure("EIO");
+	});
+	expect(() => claimTranscript(file)).toThrow(expect.objectContaining({ code: "EIO" }));
+	expect(actual.readdirSync(dir)).toEqual(["child.jsonl"]);
 });
 
 it("passes a claim read error other than a missing file or a link through", () => {

@@ -13,12 +13,12 @@ import {
 	type SnapshotEvent,
 	STALE_AFTER_MS,
 } from "../../src/stats/snapshot.ts";
-import { assistantLine, at, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, sessionFile, utcAt } from "../fixtures/stats/fixtures.ts";
 import { CANARY } from "../fixtures/stats/harness/fixtures.ts";
 import { CODEX_RESET_S, seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
 const REMOTE = "33333333-3333-4333-8333-333333333333";
-const OCT = at("2026-10-01");
+const OCT = utcAt("2026-10-01");
 const ALL = ["claude", "codex", "opencode"] as const;
 
 let dir: string;

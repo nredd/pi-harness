@@ -1323,6 +1323,27 @@ it("preserves equal-timestamp call order and totals across compaction", async ()
 	expect(after).toEqual(before);
 });
 
+it("publishes a matching pre-lineage shard unchanged at the machine expansion limit", async () => {
+	const path = join(agent, "sessions", "legacy.jsonl");
+	const id = createHash("sha256").update(`session:${path}`).digest("hex");
+	const row = event(8, id);
+	const { before, snapshotDir } = await sealedFixture([{ events: [row], sessions: [{ ...session(1), id }] }]);
+	const { id: _, ...legacy } = JSON.parse(assistantLine({ ...row }));
+	sessionFile(path, { startMs: row.ms, lines: [JSON.stringify(legacy)] });
+	const [ref] = before.shards as [Manifest["shards"][number]];
+	const expanded = gunzipSync(readFileSync(join(snapshotDir, ref.file))).toString("utf8");
+	const measure = Buffer.byteLength;
+	const padding = 128 * 1024 * 1024 - measure(expanded);
+	// Model an outbox that fits exactly before an origin slot and retirement table are added.
+	vi.spyOn(Buffer, "byteLength").mockImplementation(
+		(value, encoding) =>
+			measure(value, encoding) + (typeof value === "string" && /^\{"v":[34],/.test(value) ? padding : 0),
+	);
+	await exportStats(agent, out);
+	expect(manifest(snapshotDir).shards).toEqual(before.shards);
+	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
+});
+
 it("compaction respects machine expansion budget", async () => {
 	const dense = session(100);
 	const events = Array.from({ length: 8000 }, (_, i) => event(i + 1, dense.id));
@@ -1515,7 +1536,7 @@ it("surfaces a lock inspection failure other than a release race", async () => {
 		code: "EACCES",
 		path: lock,
 		cause: denied,
-		message: `Export lock exists at ${JSON.stringify(lock)} but could not be inspected (EACCES); verify no export is running before removing the lock directory`,
+		message: `Export lock exists at ${JSON.stringify(lock)} but could not be inspected (EACCES); verify no export, restore or cleanup is running before removing the lock directory`,
 	});
 });
 
@@ -1560,7 +1581,7 @@ it.each(["published", "failed", "refused"])("keeps the %s export outcome when un
 		expect(error).toBeInstanceOf(AggregateError);
 		expect(error).toMatchObject({ errors: [failure, denied], cause: failure });
 		expect((error as Error).message).toBe(
-			`Error: manifest rename failed\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
+			`Error: manifest rename failed\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export, restore or cleanup is running`,
 		);
 	} else if (outcome === "refused") {
 		const state = join(agent, "pi-session-kit", "export-state.json");
@@ -1573,7 +1594,7 @@ it.each(["published", "failed", "refused"])("keeps the %s export outcome when un
 		const refused = `Invalid export state in ${JSON.stringify(state)}: not valid JSON`;
 		expect(error).toMatchObject({
 			refusal: "export-state-invalid",
-			message: `${refused}\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export is running`,
+			message: `${refused}\ncould not release export lock ${JSON.stringify(lock)}; check permissions and remove it only after verifying no export, restore or cleanup is running`,
 		});
 		const cause = (error as Error).cause;
 		expect(cause).toBeInstanceOf(AggregateError);
