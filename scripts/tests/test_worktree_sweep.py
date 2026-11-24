@@ -499,7 +499,7 @@ def test_dirty_or_ignored(wt: Worktrees, name: str) -> None:
     code, (result,) = run(wt, borrower_gitdirs=None)
     assert code == 0
     assert result["verdict"] == "keep"
-    expected = "tracked content differs from index: b'tracked'" if name == "tracked" else name
+    expected = "tracked content or mode differs from index: b'tracked'" if name == "tracked" else name
     assert expected in str(result["reasons"])
 
 
@@ -560,7 +560,7 @@ def test_disabled_trustctime_same_size_edit_with_restored_mtime(wt: Worktrees, e
     result = closed_scope(wt)
     if edited:
         assert result["verdict"] == "keep"
-        assert result["reasons"] == ["tracked content differs from index: b'tracked'"]
+        assert result["reasons"] == ["tracked content or mode differs from index: b'tracked'"]
     else:
         assert result["verdict"] == "eligible", result
 
@@ -581,7 +581,7 @@ def test_tracked_mode_or_link_change_keeps(wt: Worktrees, change: str) -> None:
     quiet(wt)
     result = closed_scope(wt)
     assert result["verdict"] == "keep"
-    assert result["reasons"] == [f"tracked content differs from index: b'{name}'"]
+    assert result["reasons"] == [f"tracked content or mode differs from index: b'{name}'"]
 
 
 @pytest.mark.parametrize("change", ["symlink to copy", "fifo", "deleted", "symlinked parent"])
@@ -594,7 +594,7 @@ def test_content_check_alone_keeps_replaced_entries(
     copy.mkdir()
     (copy / "tracked").write_bytes(target.read_bytes())
     target.unlink()
-    expected = "tracked content differs from index: b'tracked'"
+    expected = "tracked content or mode differs from index: b'tracked'"
     if change == "symlink to copy":
         target.symlink_to(copy / "tracked")
     elif change == "fifo":
@@ -608,8 +608,12 @@ def test_content_check_alone_keeps_replaced_entries(
         git(wt.path, "update-index", "--add", "--cacheinfo", f"100644,{blob},dir/tracked")
         (wt.path / "dir").symlink_to(copy)
     monkeypatch.setattr(os, "environ", git_env())
-    with pytest.raises((GUARD_MODULE["KeepError"], OSError), match=expected):
+    with pytest.raises((GUARD_MODULE["KeepError"], OSError), match=expected) as caught:
         GUARD_MODULE["check_content"](wt.path.resolve())
+    if change == "symlinked parent":
+        cause = caught.value.__cause__
+        assert isinstance(cause, OSError)
+        assert str(caught.value).endswith(f": {cause}")
 
 
 def test_unchanged_tracked_symlink_and_executable_are_clean(wt: Worktrees) -> None:
@@ -633,7 +637,7 @@ def test_sha256_content_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(os, "environ", git_env())
     GUARD_MODULE["check_content"](repo.resolve())
     (repo / "tracked").write_text("other\n")
-    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked content differs from index"):
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked content or mode differs from index"):
         GUARD_MODULE["check_content"](repo.resolve())
 
 
@@ -1578,7 +1582,7 @@ def test_filter_activated_after_attribute_scan_is_not_run(wt: Worktrees) -> None
     assert not marker.exists()
     assert code == 0
     assert result["verdict"] == "keep"
-    assert "tracked content differs from index: b'tracked'" in str(result["reasons"])
+    assert "tracked content or mode differs from index: b'tracked'" in str(result["reasons"])
 
 
 @pytest.mark.parametrize("attr", ["text eol=lf", "text=auto"])

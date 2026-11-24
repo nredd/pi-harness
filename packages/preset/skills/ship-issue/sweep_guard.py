@@ -529,7 +529,7 @@ def check_content(path: Path) -> None:
         if match is None or len(match[2]) != width:
             raise KeepError(f"unsupported index entry: {record!r}")
         if blob(path, match[3], algorithm) != (match[1], match[2].decode()):
-            raise KeepError(f"tracked content differs from index: {match[3]!r}")
+            raise KeepError(f"tracked content or mode differs from index: {match[3]!r}")
 
 
 def entry_mode(info: os.stat_result) -> bytes:
@@ -595,7 +595,7 @@ def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
                 walked.append((part, parent_fd, descriptor))
         except OSError as exc:
             raise KeepError(
-                f"cannot open tracked parent without following links: {name!r}"
+                f"cannot open tracked parent without following links: {name!r}: {exc}"
             ) from exc
         result = leaf_blob(walked[-1][2], leaf, algorithm)
         for part, parent, descriptor in reversed(walked):

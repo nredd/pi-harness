@@ -337,10 +337,12 @@ After the earlier holds pass, the guard hashes tracked entries in process as raw
 bytes, or a symlink's target string, with no filters or stat cache) and compares each with its
 index object ID and mode, stopping at the first entry that keeps. A same-size edit with a restored
 mtime under `core.trustctime=false` therefore keeps. Parent directories are opened without
-following symlinks and the leaf is read relative to them; a symlinked parent, a parent or file
-replaced or rewritten while it is hashed, unmerged or unexpected index entries, and missing entries
-or entries that are neither regular files nor symlinks also keep. A tracked symlink compares by its
-target string only and passes when that matches.
+following symlinks and the leaf is read relative to them. A symlinked parent, unmerged or
+unexpected index entries, and missing entries or entries that are neither regular files nor
+symlinks also keep, as does a parent or file whose replacement or rewrite during the hash the
+guard's rechecks detect. The rechecks are not atomic: a same-content replacement between the path
+stat and the open can pass. A tracked symlink compares by its target string only and passes when
+that matches.
 Limits:
 - Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
   Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
@@ -359,9 +361,10 @@ Limits:
   but does not close, the race window. Any future deletion must separately exclude writers through
   removal. Its total cost is unbounded: chunked reads bound per-file memory only and there is no time
   budget yet (#1388); measure it before any deletion is enabled.
-- Non-goals here: the raw comparison does not detect a case-only rename under `core.ignorecase` or
-  an intent-to-add entry whose file is still empty; the index-vs-`HEAD` check in #1369 covers
-  intent-to-add. The CLI stays keep-only until #1220.
+- Non-goals here: a case-only rename can pass the raw comparison when the indexed spelling still
+  resolves to the renamed file (e.g. on a case-insensitive filesystem), and so can an intent-to-add
+  entry whose file is still empty; the index-vs-`HEAD` check in #1369 covers intent-to-add. The
+  CLI stays keep-only until #1220.
 - The guard does not check `core.ignorecase` or `core.symlinks`; the CLI authorizes nothing.
   A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
   older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.
