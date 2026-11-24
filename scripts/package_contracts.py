@@ -4342,13 +4342,23 @@ def macos_helper_build(tarball: Path) -> str:
         str: Expected `<version>+<sha256>` identity.
 
     Raises:
-        ContractError: If the version, the source list or a source is missing or unreadable.
+        ContractError: If `package.json` is not a UTF-8 JSON object, or the version, the source list
+            or a source is missing or unreadable.
     """
-    version = json.loads(read_member(tarball, "package.json")).get("version")
+    try:
+        manifest = json.loads(read_member(tarball, "package.json").decode())
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ContractError(f"'{tarball.name}:package.json' is not valid UTF-8 JSON: {e}") from e
+    require(isinstance(manifest, dict), f"'{tarball.name}:package.json' is not an object")
+    version = manifest.get("version")
     require(isinstance(version, str) and bool(version), f"'{tarball.name}' package.json has no version")
     script = "src/platform/macos/helper-build.mjs"
+    try:
+        source_list = read_member(tarball, script).decode()
+    except UnicodeDecodeError as e:
+        raise ContractError(f"'{tarball.name}:{script}' is not UTF-8: {e}") from e
     digest = hashlib.sha256()
-    for name in parse_helper_source_list(script, read_member(tarball, script).decode()):
+    for name in parse_helper_source_list(script, source_list):
         try:
             text = read_member(tarball, f"native/macos/{name}").decode()
         except UnicodeDecodeError as e:
@@ -4362,8 +4372,8 @@ def macos_helper_build(tarball: Path) -> str:
 def check_macos_helper_build(tarball: Path, arch: MACHO_ARCH, expected: str) -> str:
     """Require a packed helper's compiled build identity to equal the packed sources' identity.
 
-    The identity is a string literal compiled into the binary and returned by its `diagnostics`
-    reply, so it is read from the bytes without running, installing or contacting any helper.
+    Read the identity literal from the bytes without running, installing or contacting a helper.
+    This does not establish what its `diagnostics` reply reports or whether it can reply.
 
     Parameters:
         tarball (Path): Packed tarball.

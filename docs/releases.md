@@ -350,9 +350,12 @@ Attestations remain in GitHub's attestation service; the release `.tgz` is the a
 `native-helper.yml` exercises the same build-and-pack staging path on affected PRs without tags,
 attestation write access, npm publication, setup, or a live desktop. A staging pass is compilation
 and packed Mach-O evidence only, not TCC/AX/HID acceptance. Its `native-check` also requires each packed
-helper to hold exactly one compiled build identity, equal to the one `helper-build.mjs` computes from the
-packed `package.json` and Swift sources, read from the binary bytes without running, installing or
-contacting any helper; the release `verify` stage does not run that comparison yet. Native local compilation and live desktop
+helper to hold exactly one distinct compiled build identity, equal to the one `helper-build.mjs` computes from the
+packed `package.json` and Swift sources. It scans the binary bytes for that string literal without running,
+installing or contacting any helper, and does NOT verify the identity the helper reports at runtime: a helper
+embedding the expected literal can report another identity or fail to answer `diagnostics`. Fat binaries are rejected by the earlier
+thin Mach-O check. Re-signing or repacking a binary with the same literal proves nothing about provenance.
+The release `verify` stage does not run the comparison yet. Native local compilation and live desktop
 acceptance were NOT RUN for this pipeline change; hosted run evidence belongs in its PR receipt.
 
 Only after both cryptographic verification and source/subject binding pass can `release` create the

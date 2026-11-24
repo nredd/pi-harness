@@ -46,13 +46,12 @@ def node_helper_build(package: Path) -> str:
         "process.stdout.write(macosHelperBuild(root));"
     )
     module = (package / HELPER_BUILD).as_uri()
-    return subprocess.run(
+    return subprocess.check_output(
         [node, "--input-type=module", "-e", script, module, str(package)],
-        check=True,
-        capture_output=True,
         text=True,
+        stderr=subprocess.PIPE,
         timeout=60,
-    ).stdout
+    )
 
 
 def helper(arch: str, *literals: bytes) -> bytes:
@@ -216,6 +215,49 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
             pc.ContractError, match=r"arm64/bridge reports build .*, expected '0\.0\.1\+0{64}'"
         ):
             nr.native_check(ROOT, tmp_path / "stale")
+    original_read = pc.read_member
+    seen: list[str] = []
+    original_check = pc.check_macos_helper_build
+
+    def check_with_stale_x64(tarball: Path, arch: pc.MACHO_ARCH, expected: str) -> str:
+        """Check each architecture with only the x64 identity changed in its packed bytes.
+
+        Parameters:
+            tarball (Path): Packed tarball.
+            arch (pc.MACHO_ARCH): Architecture under check.
+            expected (str): Packed sources' identity.
+
+        Returns:
+            str: The real check's summary.
+        """
+        seen.append(arch)
+        if arch == "x64":
+            with monkeypatch.context() as patch:
+
+                def stale_read(path: Path, name: str) -> bytes:
+                    """Replace only x64's identity with a different valid identity.
+
+                    Parameters:
+                        path (Path): Packed tarball.
+                        name (str): Member path.
+
+                    Returns:
+                        bytes: Member bytes, with the x64 helper's identity replaced.
+                    """
+                    data = original_read(path, name)
+                    if name == "prebuilt/macos/x64/bridge":
+                        return data.replace(expected.encode(), ("0.0.1+" + "0" * 64).encode())
+                    return data
+
+                patch.setattr(pc, "read_member", stale_read)
+                return original_check(tarball, arch, expected)
+        return original_check(tarball, arch, expected)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pc, "check_macos_helper_build", check_with_stale_x64)
+        with pytest.raises(pc.ContractError, match=r"x64/bridge reports build '0\.0\.1\+0{64}'"):
+            nr.native_check(ROOT, tmp_path / "stale-x64")
+    assert seen == ["arm64", "x64"]
     assert len(list(output.glob("nredd-pi-computer-use-*.tgz"))) == 1
     with pytest.raises(nr.ReleaseError, match="must be new and outside the checkout"):
         nr.native_check(ROOT, output)
@@ -365,6 +407,22 @@ def test_packed_build_refuses_unreadable_inputs(tmp_path: Path) -> None:
         None: Both inputs raise `ContractError`.
     """
     members = package_members(COMPUTER_USE)
+    for content in (b"{", b"\xff"):
+        broken = write_tarball(tmp_path / "bad.tgz", members | {"package.json": content})
+        with pytest.raises(
+            pc.ContractError, match=r"'bad\.tgz:package\.json' is not valid UTF-8 JSON"
+        ) as exc:
+            pc.macos_helper_build(broken)
+        assert isinstance(exc.value.__cause__, (UnicodeDecodeError, json.JSONDecodeError))
+    broken = write_tarball(tmp_path / "bad.tgz", members | {"package.json": b"[]"})
+    with pytest.raises(pc.ContractError, match=r"'bad\.tgz:package\.json' is not an object"):
+        pc.macos_helper_build(broken)
+    broken = write_tarball(tmp_path / "bad.tgz", members | {HELPER_BUILD: b"\xff"})
+    with pytest.raises(
+        pc.ContractError, match=r"bad\.tgz:src/platform/macos/helper-build\.mjs.*UTF-8"
+    ) as exc:
+        pc.macos_helper_build(broken)
+    assert isinstance(exc.value.__cause__, UnicodeDecodeError)
     for version in ({}, {"version": ""}, {"version": 7}):
         broken = write_tarball(tmp_path / "v.tgz", members | {"package.json": json.dumps(version).encode()})
         with pytest.raises(pc.ContractError, match=r"package\.json has no version"):
