@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { abortable } from "./abortable.ts";
+import { type RefManager, refRecord, resolveChildRef } from "./agent-ref.ts";
 import type { AgentRoster } from "./agent-roster.ts";
 import {
 	buildAgentRegistry,
@@ -104,7 +105,7 @@ interface NestedSpawnOptions {
 	rootSessionId?: string;
 }
 
-export interface NestedAgentManager {
+export interface NestedAgentManager extends RefManager {
 	/** Optional on hosts without root-scoped discovery; callers fail closed. */
 	readonly roster?: AgentRoster;
 	spawn(pi: ExtensionAPI, ctx: ExtensionContext, type: string, prompt: string, options: NestedSpawnOptions): string;
@@ -117,7 +118,6 @@ export interface NestedAgentManager {
 		prompt: string,
 		options: Omit<NestedSpawnOptions, "isBackground">,
 	): Promise<{ id: string; record: AgentRecord }>;
-	getRecord(id: string): AgentRecord | undefined;
 	resume(
 		id: string,
 		prompt: string,
@@ -151,10 +151,6 @@ export interface NestedToolContext {
 
 function textResult(text: string, isError = false) {
 	return { content: [{ type: "text" as const, text }], isError, details: {} };
-}
-
-function ownsRecord(record: AgentRecord | undefined, parentAgentId: string): record is AgentRecord {
-	return record?.parentAgentId === parentAgentId;
 }
 
 /**
@@ -243,6 +239,8 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 	const loadRegistry = () => loadNestedRegistry(context);
 	const allowedTypesIn = (registry: Map<string, AgentConfig>) => allowedTypeSet(registry, context.allowedSubagents);
 	const availableIn = (registry: Map<string, AgentConfig>) => availableNestedTypes(registry, context.allowedSubagents);
+	// One lookup for resume, result, steer and stop: this parent's own children only.
+	const childRef = (input: string) => resolveChildRef(input, context.parentAgentId, context.manager);
 	// Never the literal "none": a model reads it as a type name and calls it (#331, #333).
 	const listAvailable = (registry: Map<string, AgentConfig>): string => {
 		const names = availableIn(registry);
@@ -283,22 +281,24 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 		execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
 			if (params.run_in_background === true) return textResult(NESTED_BACKGROUND_ERROR, true);
 			if (params.resume) {
-				const existing = context.manager.getRecord(params.resume);
-				if (!ownsRecord(existing, context.parentAgentId)) {
-					return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
-				}
+				const ref = childRef(params.resume);
 				// Two resumes of one child in the same turn (parallel tool calls) would
 				// run two prompts on one session; the manager refuses the second, and
 				// this says why instead of a generic failure.
-				if (existing.status === "running" || existing.status === "queued") {
+				if (ref.state === "live" || ref.state === "queued") {
 					return textResult(
-						`Nested agent "${params.resume}" is still ${existing.status}; it can only be resumed once its current run finishes.`,
+						`Nested agent "${params.resume}" is still ${ref.record.status}; it can only be resumed once its current run finishes.`,
 						true,
 					);
 				}
+				if (ref.state !== "retained") {
+					return textResult(`Nested agent not found or not owned by this parent: "${params.resume}".`, true);
+				}
+				if (ref.resume.mode === "none") return textResult(`Failed to resume nested agent "${params.resume}".`, true);
+				const existing = ref.record;
 				// The lower of the request (else the limit the child was spawned with)
 				// and the definition cap, as on the top-level resume path.
-				const resumed = await context.manager.resume(params.resume, params.prompt, signal, {
+				const resumed = await context.manager.resume(existing.id, params.prompt, signal, {
 					maxTurns: resolveTurnCap(
 						params.max_turns ?? existing.invocation?.maxTurns,
 						getAgentConfigIn(loadRegistry(), existing.type)?.maxTurns,
@@ -469,8 +469,8 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 			wait: Type.Optional(Type.Boolean()),
 		}),
 		execute: async (_toolCallId, params, signal) => {
-			const record = context.manager.getRecord(params.agent_id);
-			if (!ownsRecord(record, context.parentAgentId)) {
+			const record = refRecord(childRef(params.agent_id));
+			if (!record) {
 				return textResult(`Nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
 			}
 			// Wait for completion if requested. Cancellation (e.g. the parent's tool
@@ -496,10 +496,11 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 			message: Type.String(),
 		}),
 		execute: async (_toolCallId, params) => {
-			const record = context.manager.getRecord(params.agent_id);
-			if (!ownsRecord(record, context.parentAgentId) || record.status !== "running") {
+			const ref = childRef(params.agent_id);
+			if (ref.state !== "live") {
 				return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
 			}
+			const { record } = ref;
 			// Session not ready yet — queue the steer. The manager flushes pending
 			// steers when the session is created (same contract as the top-level tool).
 			if (!record.session) {
@@ -525,11 +526,11 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
 			agent_id: Type.String(),
 		}),
 		execute: async (_toolCallId, params) => {
-			const record = context.manager.getRecord(params.agent_id);
-			if (!ownsRecord(record, context.parentAgentId) || (record.status !== "running" && record.status !== "queued")) {
+			const ref = childRef(params.agent_id);
+			if (ref.state !== "live" && ref.state !== "queued") {
 				return textResult(`Running nested agent not found or not owned by this parent: "${params.agent_id}".`, true);
 			}
-			context.manager.abort(record.id, "parent");
+			context.manager.abort(ref.record.id, "parent");
 			return textResult(`Nested agent ${params.agent_id} stopped.`);
 		},
 	});
