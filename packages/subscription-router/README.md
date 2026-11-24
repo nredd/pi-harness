@@ -460,8 +460,10 @@ with body `{}`, a bearer token and the Antigravity CLI `User-Agent`. There is no
 `cloudcode-pa.googleapis.com` host is never tried, so a failure on the daily host is an ordinary
 failed read with the usual backoff.
 
-Each `groups[].buckets[]` entry becomes a model-scoped window with a `reported` span from its
-`window` (`5h` or `weekly`; others are skipped):
+Each usable `groups[].buckets[]` entry becomes a model-scoped window with a `reported` span from
+its `window` (`5h` or `weekly`; others are skipped). The first usable bucket for a window name
+wins; later ones with the same name are ignored. A payload with no usable bucket reads as an
+unsupported shape, while a malformed bucket beside usable ones is just skipped:
 
 - `gemini-*` buckets gate the `gemini` family as `5h` and `7d`, e.g. `antigravity/gemini-4-neon`
 - `3p-*` buckets gate the `claude` and `gpt` families as `3p-5h` and `3p-7d`

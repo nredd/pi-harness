@@ -284,11 +284,17 @@ describe("antigravity usage", () => {
 	});
 
 	it("scores Gemini models by their windows and Claude models by the 3p windows", async () => {
-		const { usage } = service({ [URL]: summary(0.5, 0.9) });
+		const payload = summary(0.5, 0.9);
+		payload.groups[1] = {
+			displayName: "Claude and GPT models",
+			buckets: [bucket("3p-weekly", "weekly", 0.2, RESET_WEEK)],
+		};
+		const { usage } = service({ [URL]: payload });
 		const snapshot = await usage.get(ctx, "antigravity");
 		expect(scoreQuota(GEMINI, snapshot, T0)).toMatchObject({ kind: "measured", window: "5h" });
 		expect(scoreQuota({ provider: "antigravity", id: "claude-sonnet-4-6" }, snapshot, T0)).toMatchObject({
 			kind: "measured",
+			window: "3p-7d",
 		});
 	});
 
