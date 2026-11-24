@@ -978,16 +978,7 @@ impl InputState {
             }
         }
     }
-    fn load_restart_debt(&self, journal: &Journal) {
-        // The write could have preceded a press that never ran. Observe up only:
-        // a down key could now be held by somebody else.
-        self.owing().debt = journal
-            .releases()
-            .iter()
-            .copied()
-            .map(Owed::unknown)
-            .collect();
-    }
+
     fn journal_slot(&self) -> std::sync::MutexGuard<'_, Option<Journal>> {
         self.journal.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1130,7 +1121,7 @@ impl Input<XtestSink> {
                 let home = std::env::var_os("HOME").ok_or_else(|| {
                     journal_error("No HOME for the X11 release-debt journal".to_owned())
                 })?;
-                Journal::open(std::path::Path::new(&home)).map_err(journal_error)?
+                Journal::open_fresh(std::path::Path::new(&home)).map_err(journal_error)?
             }
         };
         let opened = (|| {
@@ -1144,11 +1135,6 @@ impl Input<XtestSink> {
                     }
                 })?;
             journal.bind(&binding).map_err(journal_error)?;
-            if !continuing && !journal.releases().is_empty() && binding.session_id.is_none() {
-                return Err(journal_error(journal.recovery(
-                    "Cannot verify the original login session: XDG_SESSION_ID is absent.",
-                )));
-            }
             Ok::<_, ProtocolError>((conn, root, binding))
         })();
         let (conn, root, binding) = match opened {
@@ -1165,9 +1151,6 @@ impl Input<XtestSink> {
                 return Err(error);
             }
         };
-        if !continuing {
-            state.load_restart_debt(&journal);
-        }
         let input = Self::with_state(
             XtestSink {
                 conn,
@@ -1885,7 +1868,7 @@ fn live_binding(conn: &RustConnection) -> Result<Binding, ProtocolError> {
     })
 }
 
-/// Read or initialize under the journal lock the per-X-server-instance token on screen 0's root window.
+/// Read or initialize the per-X-server-instance token on screen 0's root window.
 fn server_id_of(conn: &RustConnection) -> Result<String, ProtocolError> {
     let root0 = conn
         .setup()
@@ -1898,20 +1881,30 @@ fn server_id_of(conn: &RustConnection) -> Result<String, ProtocolError> {
     if let Some(existing) = read_server_id(conn, root0, atom, utf8)? {
         return Ok(existing);
     }
-    let fresh = random_hex_128();
-    conn.change_property(
-        PropMode::REPLACE,
-        root0,
-        atom,
-        utf8,
-        8,
-        fresh.len() as u32,
-        fresh.as_bytes(),
-    )
-    .map_err(xerr)?
-    .check()
-    .map_err(xerr)?;
-    Ok(fresh)
+    // Only grab during first initialization. Different home directories do not
+    // share the filesystem lock but must agree on the server token.
+    conn.grab_server().map_err(xerr)?.check().map_err(xerr)?;
+    let result = (|| {
+        if let Some(existing) = read_server_id(conn, root0, atom, utf8)? {
+            return Ok(existing);
+        }
+        let fresh = random_hex_128();
+        conn.change_property(
+            PropMode::REPLACE,
+            root0,
+            atom,
+            utf8,
+            8,
+            fresh.len() as u32,
+            fresh.as_bytes(),
+        )
+        .map_err(xerr)?
+        .check()
+        .map_err(xerr)?;
+        Ok(fresh)
+    })();
+    conn.ungrab_server().map_err(xerr)?.check().map_err(xerr)?;
+    result
 }
 fn read_server_id(
     conn: &impl Connection,
@@ -2740,26 +2733,14 @@ mod tests {
         reader.join().unwrap();
         entered.unwrap();
         assert!(locked, "the live helper holds the cross-process lock");
+        let error = Journal::open_fresh(home.path()).unwrap_err();
+        assert!(
+            error.contains("keycode 37") && error.contains("remove only"),
+            "{error}"
+        );
         let recovered = Journal::open(home.path()).unwrap();
         recovered.bind(&binding).unwrap();
-        let state = Arc::new(InputState::default());
-        state.load_restart_debt(&recovered);
-        let down = Input::with_state(RecordingSink::default().held(false, 37), Arc::clone(&state));
-        assert_eq!(down.settle().unwrap_err().code, ErrorCode::InputUnsafe);
-        assert!(down.sink().events().is_empty());
-        let up = Input::with_state(RecordingSink::default(), state);
-        assert!(!recovered.releases().is_empty());
-        *up.journal.borrow_mut() = Some((recovered, binding));
-        up.settle().unwrap();
-        assert!(up.sink().events().is_empty());
-        assert!(up
-            .journal
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .0
-            .releases()
-            .is_empty());
+        assert_eq!(recovered.releases().len(), 1);
     }
 
     #[test]

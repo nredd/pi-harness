@@ -114,6 +114,18 @@ impl Journal {
         })
     }
 
+    /// Refuse restart debt before even connecting to X11. The old connection's
+    /// requests may still be pending, so an up observation cannot settle it.
+    pub(super) fn open_fresh(home: &Path) -> Result<Self, String> {
+        let journal = Self::open(home)?;
+        if !journal.releases().is_empty() {
+            return Err(journal.recovery(
+                "A previous helper may still have queued X11 input. Manual recovery required.",
+            ));
+        }
+        Ok(journal)
+    }
+
     /// Refuse a record from another desktop before any XTEST or state query.
     pub(super) fn bind(&self, live: &Binding) -> Result<(), String> {
         if self
@@ -139,7 +151,7 @@ impl Journal {
             .map(|entry| entry.describe())
             .collect::<Vec<_>>()
             .join(", ");
-        format!("Refusing physical input: the release of {names} is unconfirmed. {cause} Release the inputs by hand on the original desktop. Stop all helpers using this journal, then remove '{}' if a retry still cannot confirm the releases. Do not remove the lock file.", self.path.display())
+        format!("Refusing physical input: the release of {names} is unconfirmed. {cause} Release the inputs by hand on the original desktop. If physical input remains refused, stop all helpers using this journal, verify that no input remains held, and remove only '{}'. Do not remove the lock file.", self.path.display())
     }
 
     /// Atomically replace the debt, or clear it once all releases are confirmed.
