@@ -337,8 +337,8 @@ Limits:
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate has no other hold. Report only the guard's evidence; delete nothing.
 - With no PR, the keep reason ends with local upstream evidence: whether the branch's already-fetched
-  `refs/remotes/` upstream contains `HEAD`. Only config and refs are read, so no transport,
-  `core.sshCommand`, credential helper or askpass runs. The fetched ref can be stale or locally
+  `refs/remotes/` upstream contains `HEAD`. Only local config, refs and commit objects are read,
+  so no transport, `core.sshCommand`, credential helper or askpass runs. The fetched ref can be stale or locally
   rewritten; it is a reason, never removal authority.
 - The guard does not probe upstream transports. If no PR exists, it reports `no PR; upstream not checked`.
 - The guard omits `git status` and does not compare tracked content or staged changes. Attributes

@@ -744,8 +744,8 @@ def check_attributes(attrs: bytes) -> None:
 def check_upstream(path: Path, branch: str) -> str:
     """Compare HEAD with the already-fetched upstream ref; never contact the remote.
 
-    Only local config and refs are read, so no transport, `core.sshCommand`,
-    credential helper or askpass can run. The fetched ref may be stale.
+    Only local config, refs and commit objects are read, so no transport,
+    `core.sshCommand`, credential helper or askpass can run. The fetched ref may be stale.
 
     Parameters:
         path: Path, Candidate checkout.
@@ -815,7 +815,7 @@ def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
         try:
             fetched = check_upstream(path, branch)
         except KeepError as exc:
-            fetched = str(exc)
+            raise KeepError(f"no PR; upstream not checked; {exc}") from exc
         raise KeepError(f"no PR; upstream not checked; {fetched}")
     merged = [pr["number"] for pr in prs if pr["state"] == "MERGED"]
     if len(merged) != 1:

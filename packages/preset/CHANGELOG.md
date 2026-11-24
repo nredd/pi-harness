@@ -15,7 +15,7 @@
 - Restore the `architect` routing hint, cost-ranked survey cards, `shortcut:` decisions, large-repo scoping, grill format and survey length limit. Keep the preset's intentional `codebase-design` preload (the local definition had `skills: false`). ([#1025](https://github.com/nredd/pi-harness/issues/1025))
 - Document the cutover order for shared agents and skills: local copies shadow the widened selection until retired, so widen first and retire copies in the same activation. ([#1011](https://github.com/nredd/pi-harness/issues/1011))
 - Document that `general-purpose` no longer runs critics; the parent owns the final critic review. ([#1025](https://github.com/nredd/pi-harness/issues/1025))
-- Report whether the already-fetched upstream contains `HEAD` when the sweep guard finds no PR. The guard reads only local config and refs, runs no transport and still keeps. ([#1223](https://github.com/nredd/pi-harness/issues/1223))
+- Report whether the already-fetched upstream contains `HEAD` when the sweep guard finds no PR. The guard reads only local config, refs and commit objects, runs no transport and still keeps. ([#1223](https://github.com/nredd/pi-harness/issues/1223))
 
 ### Fixed
 

@@ -947,7 +947,33 @@ def test_no_pr_with_fetched_upstream_stays_keep_under_closed_scope(wt: Worktrees
     assert "contains HEAD" in str(result["reasons"])
 
 
+@pytest.mark.parametrize("upstream_ahead", [True, False])
+def test_fetched_upstream_containment_follows_descendant_direction(
+    wt: Worktrees, upstream_ahead: bool
+) -> None:
+    """Upstream descending from HEAD contains it; HEAD descending from upstream does not."""
+    track_upstream(wt)
+    head = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    tree = git(wt.path, "rev-parse", "HEAD^{tree}").decode().strip()
+    child = git(wt.path, "commit-tree", tree, "-p", head, "-m", "Descendant").decode().strip()
+    if upstream_ahead:
+        git(wt.repo, "update-ref", "refs/remotes/origin/merged", child)
+        reason = "fetched `refs/remotes/origin/merged` contains HEAD"
+    else:
+        git(wt.repo, "update-ref", "refs/remotes/origin/merged", head)
+        git(wt.path, "update-ref", "refs/heads/merged", child)
+        reason = "HEAD has commits outside fetched `refs/remotes/origin/merged`"
+    quiet(wt)
+    keep(wt, f"no PR; upstream not checked; {reason}", SWEEP_LIST="[]")
+
+
 def test_fetched_upstream_check_runs_no_configured_transport(wt: Worktrees) -> None:
+    """No configured transport, helper or askpass runs while reading fetched evidence.
+
+    Note: every marker adapter only touches its file and speaks no Git protocol, so the
+    positive-control `git ls-remote` fails by design. Only `core.sshCommand` is proven live
+    there; the other keys guard against future code paths, not this control.
+    """
     git(wt.path, "remote", "set-url", "origin", "ssh://git@forge.example/source/project.git")
     track_upstream(wt)
     git(wt.repo, "update-ref", "refs/remotes/origin/merged", "HEAD")
