@@ -327,56 +327,48 @@ describe("row lineage", () => {
 		expect(counted()).toEqual(published);
 	});
 
-	it("backfills origins into a sealed version 3 shard once and retires a later correction", async () => {
-		await seal();
-		stripLineage();
-		await exportStats(agent, out);
-		const [backfilled] = shards();
-		expect(backfilled?.version).toBe(4);
-		expect(backfilled?.events.map((e) => e.origin)).toEqual([0, 1, 2, 3, 4]);
-		expect(backfilled?.retired).toEqual([]);
-		const ref = outbox().manifest.shards.find((r) => r.month === "2026-10");
-		// One-time churn: a second export with no retirement keeps the lineage shard reference untouched.
-		await exportStats(agent, out);
-		expect(outbox().manifest.shards.find((r) => r.month === "2026-10")).toEqual(ref);
-		transcript("a.jsonl", "a", october(1));
-		await exportStats(agent, out);
-		expect(retired().map((e) => e.output)).toEqual([10]);
-		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 11, 10, 10]);
-	});
-
-	it("keeps an existing pre-lineage double count counted while backfilling matched rows for later revisions", async () => {
+	it("leaves rows published before lineage counted beside a correction", async () => {
 		await seal();
 		stripLineage();
 		transcript("a.jsonl", "a", october(1));
 		await exportStats(agent, out);
-		// Both the original shard and the appended correction were published before lineage: neither has origins.
-		stripLineage();
-		await exportStats(agent, out);
-		expect(shards().map((s) => s.events.map((e) => e.origin))).toEqual([[0, 1, null, 3, 4], [2]]);
 		expect(retired()).toEqual([]);
 		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 10, 11, 10, 10]);
-		// A further correction retires the backfilled correction row; the unproven old row stays counted.
-		transcript("a.jsonl", "a", october(2));
-		await exportStats(agent, out);
-		expect(retired().map((e) => e.output)).toEqual([11]);
-		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 10, 12, 10, 10]);
 	});
 
-	it("does not backfill or rewrite a sealed version 3 shard without a same-session unique-origin match", async () => {
-		await seal([{ ms: utc("2026-10-05") }]);
+	it("publishes no origin for a fingerprint shared by two positions before dedup", async () => {
+		const [duplicate, unique] = october() as [Row, Row, ...Row[]];
+		const rows = [duplicate, duplicate, unique];
+		await seal(rows);
+		expect(counted().map((e) => e.origin)).toEqual([null, 2]);
 		stripLineage();
-		const [before] = outbox().manifest.shards.filter((r) => r.month === "2026-10");
-		// Same fingerprint under another session, then under the same session with a shared origin.
-		transcript("a.jsonl", "renamed", [{ ms: utc("2026-10-05") }]);
+		const before = outbox().manifest.shards;
 		await exportStats(agent, out);
-		expect(outbox().manifest.shards[0]).toEqual(before);
-		expect(shards().map((s) => s.version)).toEqual([3, 3]);
-		transcript("a.jsonl", "a", [{ ms: utc("2026-10-05") }]);
-		transcript("b.jsonl", "a", [{ ms: utc("2026-10-06"), input: 7 }]);
+		expect(outbox().manifest.shards).toEqual(before);
+		expect(counted().map((e) => e.origin)).toEqual([undefined, undefined]);
+	});
+
+	it("does not use a pre-lineage match to retire rows from another transcript reusing the session id", async () => {
+		const x = { ms: utc("2026-09-05"), input: 1 };
+		const q = { ms: utc("2026-10-05"), input: 2 };
+		const r = { ms: utc("2026-10-05", 1), input: 3 };
+		const n = { ...r, input: 4 };
+		transcript("x.jsonl", "a", [x]);
 		await exportStats(agent, out);
-		expect(outbox().manifest.shards[0]).toEqual(before);
-		expect(shards().map((s) => s.version)).toEqual([3, 3, 3]);
+		stripLineage("2026-09");
+		forget("x.jsonl");
+		await seal([q, r]);
+		forget("a.jsonl");
+		transcript("x.jsonl", "a", [x, n]);
+		for (let pass = 0; pass < 2; pass++) {
+			await exportStats(agent, out);
+			expect(retired()).toEqual([]);
+			expect(
+				counted()
+					.map((e) => e.input)
+					.sort(),
+			).toEqual([2, 3, 4]);
+		}
 	});
 
 	it("carries retired rows through a month an identified correction regenerates", async () => {

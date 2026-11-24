@@ -1226,24 +1226,6 @@ function detectRevisions(previous: MachineSnapshot, next: MachineSnapshot): Revi
 }
 
 /**
- * `shard` rewritten as a lineage shard when it is a version 3 shard and any of its legacy rows matches a scanned
- * row with the same fingerprint, session and a unique origin; `undefined` when it already carries lineage or no
- * row establishes an origin.
- */
-function backfillOrigins(shard: CompactShard, next: MachineSnapshot): CompactShard | undefined {
-	if (shard.version !== 3) return undefined;
-	const scanned = new Map(next.shards.flatMap((s) => s.events.map((e) => [e.id, e] as const)));
-	let matched = false;
-	const events = shard.events.map((e) => {
-		const kept = scanned.get(e.id);
-		if (kept?.sessionId !== e.sessionId || typeof kept.origin !== "number") return e;
-		matched = true;
-		return { ...e, origin: kept.origin };
-	});
-	return matched ? withLineage({ ...shard, events }) : undefined;
-}
-
-/**
  * Sealed legacy pi rows a clean scan revises, each mapped to the event id that replaces it. Lineage is the
  * persisted transcript origin (`SnapshotEvent.origin`): a sealed row with one is revised only when all hold:
  * the scan no longer holds it; the scan still holds another sealed row of its session, under that session and at
@@ -1926,13 +1908,11 @@ async function publishStats(
 		: { months: new Set(), supersededEventIds: new Set(), supersededSessions: new Map() };
 	// Legacy rows a correction revised are retired in place first: every sealed row stays in its shard.
 	const sealedShards = (sealed?.shards ?? []) as CompactShard[];
-	const backfilled = sealedShards.map((shard) => backfillOrigins(shard, snapshot));
-	const backfilledShards = sealedShards.map((shard, i) => backfilled[i] ?? shard);
 	const successors = lineageRetirements(
-		backfilledShards.filter((shard) => shard.month < current),
+		sealedShards.filter((shard) => shard.month < current),
 		snapshot,
 	);
-	const lineaged = backfilledShards.map((shard, i) => backfilled[i] ?? retireRows(shard, successors));
+	const lineaged = sealedShards.map((shard) => retireRows(shard, successors));
 	const lineagedShards = sealedShards.map((shard, i) => lineaged[i] ?? shard);
 	const retiredIds = new Set(lineagedShards.flatMap((shard) => shard.retired?.map((e) => e.id) ?? []));
 	/** A sealed shard to keep: its published reference, or none when lineage rewrote it. */
