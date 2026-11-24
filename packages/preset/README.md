@@ -142,7 +142,15 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   reported percentages, metered counts and balances, and active blocks with their evidence.
   Counts such as `37/250 req obs` describe locally observed usage, not account-wide quota;
   unknown limits have no denominator. Model buckets appear for the routed or directly selected
-  model and for models with active blocks. No Google collector or credentials are needed by the footer.
+  model and for models with active blocks.
+  V1 replies also get a `Gemini` (`Gem`) row with the router's `antigravity` 5h and 7d windows when
+  the reply carries an `antigravity` snapshot that is not `unavailable` (the router returns only
+  cached readings, fresh or stale) or an active block for it. The footer never reads credentials
+  directly: Gemini percentages and `--` placeholders need a cached router reading, so a cold cache
+  without a readable credential adds no row, while an active block adds a block-only `Gemini` row
+  until that block expires. Windows scoped to the `gemini` family show
+  whatever the current model, since the row name says so, as in a v2 view that keeps that
+  selection; other windows on the row keep the ordinary model-bucket rule.
   Every active block is shown, legacy rows included: v1 `blocks` attach to their provider (a block
   for a provider without a row gets its own), and a confirmed Opus block appears beside healthy
   provider-wide quota, e.g. `| opus blocked->Jan 18 12:00 read`. The pre-view footer ignored

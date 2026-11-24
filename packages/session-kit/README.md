@@ -508,6 +508,7 @@ node ARTIFACT export --agent-dir DIR --output OUT [--sessions-dir ROOT]
   [--harness pi,claude,codex,opencode] [--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE]
   [--replace-harnesses]
 node ARTIFACT import --agent-dir DIR --input REPO
+node ARTIFACT restore --agent-dir DIR --input SRC --output OUT
 node ARTIFACT clean-recovery --agent-dir DIR --output OUT
 ```
 
@@ -539,11 +540,12 @@ refused unless `--replace-harnesses` is given; with a recorded set it still guar
 (If both the state and the snapshot have gone bad, a stale state can understate a widening that
 was never recorded; that double fault is not defended.)
 
-Exports lock the machine outbox from reading the previous manifest through pruning and recording
-export state. A concurrent export fails without publishing; the CLI exits 1 and prints the lock
-path and age. At one hour it reports a *suspected* stale lock, not proof that the writer stopped.
-A crash can leave `.export.lock` behind. Stop scheduled writers, verify no export is running,
-then run `rmdir` on the reported lock directory and retry the export. No export reclaims a lock
+Exports, `restore` and `clean-recovery` lock the machine outbox with `.export.lock` (exports hold it
+from reading the previous manifest through pruning and recording export state). A concurrent
+operation fails without modifying the outbox; the CLI exits 1 and prints the lock path and age. At
+one hour it reports a *suspected* stale lock, not proof that the writer stopped. A crash can leave
+`.export.lock` behind. Stop scheduled writers, verify no export, restore or cleanup is running,
+then run `rmdir` on the reported lock directory and retry. No operation reclaims a lock
 by age, and readers can still import the last published snapshot. If releasing the lock fails after publication, export still succeeds and reports a warning
 with the lock path. A failed publication still reports the original error; if releasing the lock
 also fails, it is an `AggregateError` whose message is the original error followed by the same lock
@@ -652,6 +654,18 @@ CLI results:
   stdout. `stale` lists `{machineId, harness, lastGoodAt}` for every cached machine harness whose
   `lastGoodAt` is more than 2 days behind its manifest `exportedAt` (data carried through failures);
   each is also a stderr line, and none changes the exit code.
+- Restore: `{ "machineId", "snapshotDir", "exportedAt", "restored": [..] }` on stdout, plus `warnings`
+  if releasing the export lock failed. Requires `--agent-dir`, `--input SRC` and `--output OUT` (rejecting
+  export-only flags). `SRC` may be a sync root (`<SRC>/machines/<UUID>`) or a direct machine snapshot
+  directory (`<SRC>`) distinct from the target outbox, holding `manifest.json` and its referenced shards
+  (or only `manifest.json` when the shards are already in the outbox, or only the missing/damaged shards
+  when `manifest.json` is already in the outbox). Under the outbox's `.export.lock` it validates the
+  manifest as this machine's and refuses to replace a readable newer manifest for the same machine,
+  even if its shards are damaged. It authenticates all referenced shards within a 128 MiB cumulative
+  expansion budget and separately limits the source shard bytes retained for writing to 128 MiB.
+  After validating the whole snapshot, it atomically writes missing, damaged, denied or symlinked
+  shards first and `manifest.json` last, without pruning or changing outbox bookkeeping. A validation
+  failure publishes nothing, but taking the lock may leave a newly created machine directory empty.
 - Clean-recovery: `{ "machineId", "snapshotDir", "removed": [..], "failed": [..], "kept": [{ "file", "reason" }] }`
   on stdout, plus `warnings` when an unlink failed or cleanup stopped (see recovery cleanup below), each
   escaped to one line. It exits 0 whatever it kept, except 1 (with no refusal line) when it stopped on a
@@ -730,8 +744,10 @@ Installation state, never synced:
   cache or any bookkeeping is written, keeping every shard: `Published usage manifest is missing
   from "<dir>", but this outbox published before (its bookkeeping or shard files remain); restore
   manifest.json from the sync checkout, or pass --replace-harnesses to publish without that
-  history`. A crash between the first export's shard writes and its manifest is refused the same
-  way; nothing was published, so `--replace-harnesses` loses nothing there.
+  history`. To repair it, stage the sync checkout outside the outbox and run
+  `pi-stats-export restore --agent-dir DIR --input SRC --output OUT`. A crash between the first
+  export's shard writes and its manifest is refused the same way; nothing was published, so
+  `--replace-harnesses` loses nothing there.
 - `DIR/pi-session-kit/stats-global.json`: one atomically replaced document containing validated
   last-good machine snapshots, last successful import time and coverage problems. Imports do not
   mutate local usage or installation identity. A wholly failed import does not advance the sync
@@ -752,9 +768,11 @@ Manifest exact keys:
 - `version`: `3` (`1`/`2` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
-- `exportedAt`: positive UTC Unix milliseconds. Monotonic per outbox: `max(now, published
-  exportedAt + 1)` against the readable published manifest (including one whose shards are
-  unreadable), so it can run ahead of a clock that is behind.
+- `exportedAt`: positive UTC Unix milliseconds. Export uses `max(now, bound + 1)`, where `bound`
+  is the greater of the readable published manifest timestamp (even if its shards are unreadable)
+  and the recorded watermark when supported (see [#1414](https://github.com/nredd/pi-harness/pull/1414)).
+  `restore` preserves the backup's `exportedAt`; viewers holding a newer snapshot keep their copy
+  until a later export passes it.
 - `lastGoodAt` (v2+): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
@@ -809,7 +827,8 @@ bytes at an existing filename are repaired through an atomic rename. A readable 
 shards are missing, corrupt or inconsistent with each other is kept: export fails before writing,
 naming every unreadable shard file (`Published usage history is unreadable (...)`), because
 publishing the scan alone would evict the intact archived months from the active snapshot. Restore
-the files from the sync checkout and export again, or pass `--replace-harnesses` to publish
+the files with `pi-stats-export restore --agent-dir DIR --input SRC --output OUT` from a sync
+checkout staged outside the outbox, then export again. Or pass `--replace-harnesses` to publish
 without that history. Authenticated shards that together exceed the 128 MiB expanded machine budget
 are not damage: that export fails with `Published usage history exceeds the 128 MiB expanded machine
 budget (from <file>)`, where restoring files will not help, and only `--replace-harnesses` publishes
@@ -857,9 +876,11 @@ still protected. Right before each unlink the active manifest is authenticated a
 after that shard pass, and the candidate is authenticated again (regular file, bytes matching its
 name); on any change cleanup stops, lists that file and the rest in `kept` as `changed` (still
 protected), warns `recovery cleanup stopped: the active manifest changed; N redundant files left in
-place` and exits 1 with no refusal code (any error during the recheck counts as a change). That recheck narrows the window, it does not eliminate it: checkout and restore
-writers do not take the export lock yet ([#1331](https://github.com/nredd/pi-harness/issues/1331)), so a writer that skips it (e.g. a
-manual restore into the outbox) must be quiescent while cleanup runs. Coverage is judged against
+place` and exits 1 with no refusal code (any error during the recheck counts as a change). Stage any
+git checkout or backup copy outside the outbox and run `pi-stats-export restore` (`restoreSnapshot`).
+Locked restore needs no quiescence. Do not run a raw checkout or manual copy into the outbox alongside
+`clean-recovery`: those writes bypass the lock and can still lose a frozen shard they reference if
+they land between the recheck and `unlink`. Coverage is judged against
 the active snapshot as it is now: once removed, those rows are as protected as any other published
 history, no more. Shard files outside the frozen set are left to export pruning.
 
@@ -912,8 +933,11 @@ an origin is retired only when all of these hold, else it stays counted:
 A retired row is never deleted: its shard is rewritten with the row moved from `events` to `retired`,
 naming its `successor` and `reason` (`revised`), and the successor is published beside it. A retired
 row survives every later export, lossless packing past 32 shards and month regeneration; a scanned row
-identical to a retired one is not counted again. Rows published before lineage have no origin, so a
-correction of one still appends beside it (no backfill), and so does a correction with no anchor (above). Lineage relies on append-only transcripts: a
+identical to a retired one is not counted again. A legacy row gets no origin when its fingerprint
+occurs more than once in its session or more than one transcript occupies its position, even if the
+scan deduplicates those calls. Legacy rows sealed earlier in version 3 shards have no origin to backfill
+from the published history. Revisions of those rows still append beside them. Lineage relies on
+append-only transcripts: a
 rewritten transcript that puts a new call at a published call's origin, same month and model, retires
 the old row (kept in `retired`, so the double count turns into a recorded replacement, never a loss).
 `--replace-harnesses` rebuilds from the scan and drops retired rows with the rest of the history.
@@ -1207,7 +1231,8 @@ Harness API:
 
 - `src/stats/library.ts` is a Pi-independent barrel for parser, aggregation and snapshot APIs.
 - `parseSession`, `flatten`, `dedupCalls`, `hourlySeries`, `makeSnapshot`, `validateManifest`,
-  `validateShard`, `validateSnapshot`, `exportStats`, `importStats`, `loadCombined`, `coverageLabel`.
+  `validateShard`, `validateSnapshot`, `exportStats`, `importStats`, `restoreSnapshot`,
+  `cleanRecovery`, `loadCombined`, `coverageLabel`.
 - `hourlySeries(calls, "5h" | "24h", now, keyOf?)` is deterministic, zero-filled, filters exact
   rolling boundaries and labels partial edges. UTC buckets keep repeated DST hours separate;
   viewer-local labels carry UTC offsets, including fractional-offset zones.

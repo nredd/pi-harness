@@ -109,6 +109,7 @@ import { toFiniteNumber, toOptionalBoolean } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import { LINUX_X11_CHECKED } from "./platform/linux/backend.ts";
 import type {
+	BrowserAppIdentity,
 	FramePoints,
 	PlatformFrontmostResult as FrontmostResult,
 	HelperActPerformed,
@@ -700,7 +701,7 @@ function imageFallbackReason(
 			message: "Most outline nodes are unlabeled, so the look image is attached for context.",
 		};
 	}
-	if (tool === "wait" && currentPlatformBackend.isBrowserApp(result.target.appName, result.target.bundleId)) {
+	if (tool === "wait" && currentPlatformBackend.isBrowserApp(result.target)) {
 		return {
 			reason: "browser_wait_verification",
 			message: "Browser content may have changed visually during wait, so an image is attached for fallback.",
@@ -805,8 +806,8 @@ async function getFrontmost(signal?: AbortSignal): Promise<FrontmostResult> {
 	return await currentPlatformBackend.getFrontmost(signal);
 }
 
-function assertBrowserUseAllowed(target: { appName: string; bundleId?: string }): void {
-	if (!isBrowserUseEnabled() && currentPlatformBackend.isBrowserApp(target.appName, target.bundleId)) {
+function assertBrowserUseAllowed(target: BrowserAppIdentity): void {
+	if (!isBrowserUseEnabled() && currentPlatformBackend.isBrowserApp(target)) {
 		throw new Error(
 			`Browser use is disabled by pi-computer-use config, so '${target.appName}' cannot be controlled. Enable browser_use in ~/.pi/agent/extensions/pi-computer-use.json or .pi/computer-use.json to allow browser windows.`,
 		);
@@ -1233,7 +1234,7 @@ async function resolveFrontmostTarget(signal?: AbortSignal): Promise<ResolvedTar
 		throw new Error("No frontmost controllable root was found. Open an app window and call observe_ui again.");
 	}
 
-	if (currentPlatformBackend.isBrowserApp(app.appName, app.bundleId)) {
+	if (currentPlatformBackend.isBrowserApp(app)) {
 		assertBrowserUseAllowed(app);
 	}
 
@@ -1458,7 +1459,7 @@ async function buildToolResult(
 	// Console piggyback: when a CDP connection is active for this browser
 	// window, surface console output collected since the last tool result.
 	let consoleText = "";
-	if (currentPlatformBackend.isChromeFamilyApp(result.target.appName, result.target.bundleId)) {
+	if (currentPlatformBackend.isChromeFamilyApp(result.target)) {
 		const tab = await cdpTabForWindow(result.target.windowTitle, result.target.framePoints);
 		const entries = tab?.drainConsole() ?? [];
 		if (entries.length > 0) {
@@ -1688,7 +1689,7 @@ function windowDetails(
 		subrole: window.subrole,
 		pairing: platformRootPairing(window),
 		zOrder: window.zOrder,
-		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(app.appName, app.bundleId),
+		browserUseAllowed: config.browser_use || !currentPlatformBackend.isBrowserApp(storedRef),
 		blocked: blockReason !== undefined,
 		...(typeof blockReason === "object" ? blockReason : {}),
 		...(window.instanceUnavailable ? { instanceUnavailable: true as const } : {}),

@@ -1,3 +1,4 @@
+import { BUILTIN_COLLECTORS } from "./builtin-collectors.ts";
 import type { ExhaustionMark } from "./exhaustion.ts";
 import type { CreditPool, UsageMeter, UsageSnapshot, UsageSpanSource } from "./usage.ts";
 
@@ -30,18 +31,12 @@ export interface UsageReplyV2 {
 }
 
 function defaultDisplay(provider: string): ProviderDisplay {
-	switch (provider) {
-		case "anthropic":
-			return {
-				full: "Anthropic",
-				compact: "Anth",
-				footer: { show: [{ name: "five_hour" }, { name: "seven_day" }], placeholder: true },
-			};
-		case "openai-codex":
-			return { full: "OpenAI", compact: "OAI", footer: { show: [{ durationMs: 604_800_000 }], placeholder: true } };
-		default:
-			return { full: provider, compact: provider };
-	}
+	return (
+		BUILTIN_COLLECTORS.find((collector) => collector.provider === provider)?.display ?? {
+			full: provider,
+			compact: provider,
+		}
+	);
 }
 
 /**
