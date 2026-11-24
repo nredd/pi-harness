@@ -14,7 +14,9 @@ protocol AgentCursorSurface: AnyObject {
 final class AgentCursor {
     typealias IdleHideScheduler = @MainActor (@escaping @MainActor () -> Void) -> Task<Void, Never>
 
-    static let shared = AgentCursor(scheduleIdleHide: scheduleDefaultIdleHide)
+    /// Idle time after the last action before the overlay hides and releases its view tree.
+    static let idleHideDelay: Duration = .seconds(8)
+    static let shared = AgentCursor(scheduleIdleHide: idleHideScheduler(after: idleHideDelay))
 
     private var overlay: (any AgentCursorSurface)?
     private var idleHideTask: Task<Void, Never>?
@@ -67,11 +69,18 @@ final class AgentCursor {
         }
     }
 
-    private static func scheduleDefaultIdleHide(_ hide: @escaping @MainActor () -> Void) -> Task<Void, Never> {
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(8))
-            guard !Task.isCancelled else { return }
-            hide()
+    /// Run `hide` after `sleep(delay)` returns unless the returned task is cancelled first. `sleep` is
+    /// `Task.sleep` in production; tests inject one they control.
+    static func idleHideScheduler(
+        after delay: Duration,
+        sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) -> IdleHideScheduler {
+        { hide in
+            Task { @MainActor in
+                try? await sleep(delay)
+                guard !Task.isCancelled else { return }
+                hide()
+            }
         }
     }
 
@@ -89,7 +98,7 @@ final class AgentCursor {
             backing: .buffered,
             defer: false
         )
-        window.contentView = NSHostingView(rootView: AgentCursorView())
+        window.contentView = NSHostingView(rootView: AgentCursorView(renderer: .shared))
         return window
     }
 }
@@ -117,9 +126,14 @@ private final class AgentCursorOverlayWindow: NSWindow, AgentCursorSurface {
     }
 }
 
+/// Draws the renderer's cursor; the overlay window hosts it with the shared renderer.
 @MainActor
-private struct AgentCursorView: View {
-    @Bindable private var renderer = AgentCursorRenderer.shared
+struct AgentCursorView: View {
+    @Bindable private var renderer: AgentCursorRenderer
+
+    init(renderer: AgentCursorRenderer) {
+        self.renderer = renderer
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 120.0, paused: !renderer.isAnimating)) { context in
@@ -148,28 +162,7 @@ private struct AgentCursorView: View {
             )
         )
 
-        let points = [
-            CGPoint(x: 14, y: 0),
-            CGPoint(x: -8, y: -9),
-            CGPoint(x: -3, y: 0),
-            CGPoint(x: -8, y: 9),
-        ]
-        var shape = Path()
-        for index in points.indices {
-            let previous = points[(index + points.count - 1) % points.count]
-            let current = points[index]
-            let next = points[(index + 1) % points.count]
-            let entry = CGPoint(x: current.x + (previous.x - current.x) * 0.16, y: current.y + (previous.y - current.y) * 0.16)
-            let exit = CGPoint(x: current.x + (next.x - current.x) * 0.16, y: current.y + (next.y - current.y) * 0.16)
-            if index == points.startIndex { shape.move(to: entry) } else { shape.addLine(to: entry) }
-            shape.addQuadCurve(to: exit, control: current)
-        }
-        shape.closeSubpath()
-
-        let transformed = shape.applying(
-            CGAffineTransform(translationX: point.x, y: point.y)
-                .rotated(by: CGFloat(renderer.heading + .pi))
-        )
+        let transformed = agentCursorShape(at: point, heading: renderer.heading)
         graphics.fill(
             transformed,
             with: .linearGradient(
@@ -184,4 +177,29 @@ private struct AgentCursorView: View {
         )
         graphics.stroke(transformed, with: .color(.white), lineWidth: 2)
     }
+}
+
+/// Rounded dart at `point`, rotated so its tip points along `heading + .pi`.
+func agentCursorShape(at point: CGPoint, heading: Double) -> Path {
+    let points = [
+        CGPoint(x: 14, y: 0),
+        CGPoint(x: -8, y: -9),
+        CGPoint(x: -3, y: 0),
+        CGPoint(x: -8, y: 9),
+    ]
+    var shape = Path()
+    for index in points.indices {
+        let previous = points[(index + points.count - 1) % points.count]
+        let current = points[index]
+        let next = points[(index + 1) % points.count]
+        let entry = CGPoint(x: current.x + (previous.x - current.x) * 0.16, y: current.y + (previous.y - current.y) * 0.16)
+        let exit = CGPoint(x: current.x + (next.x - current.x) * 0.16, y: current.y + (next.y - current.y) * 0.16)
+        if index == points.startIndex { shape.move(to: entry) } else { shape.addLine(to: entry) }
+        shape.addQuadCurve(to: exit, control: current)
+    }
+    shape.closeSubpath()
+    return shape.applying(
+        CGAffineTransform(translationX: point.x, y: point.y)
+            .rotated(by: CGFloat(heading + .pi))
+    )
 }
