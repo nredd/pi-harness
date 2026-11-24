@@ -110,9 +110,13 @@ make help                    # every target
   `const re = /x/; expect(a).toMatchObject({ message: re })`, and a name reused per test
   (`const expected = ...` in each) resolves per scope. A `let`/`const`/`using` statement and the names
   it destructures bind exactly their scope, a `catch` binding its clause, and a `let`/`const`/`using`
-  `for` header its statement. Every other binding (`var`, parameters, exported namespace members,
-  function, class, import, enum and namespace names) counts as visible throughout its enclosing
-  function or the file, a superset of its real scope (exact regions for these are #1356), and any such
+  `for` header its statement, a function or class expression name the expression, and a class, enum,
+  enum member or namespace declaration its statement's scope (as `tsc` scopes them, unexported and
+  non-ambient inside a namespace). A function declaration gets its statement's scope only in an ES
+  module (strict; not `.cjs`/`.cts`), since a sloppy block function is also hoisted to its function.
+  Every other binding (`var`, parameters, imports, exported namespace members, sloppy-mode function
+  declarations) counts as visible throughout its enclosing function or the file, a superset of its
+  real scope (exported namespace members are #1356), and any such
   binding inside the chosen `const`'s scope that may be visible at the use blocks following, so
   shadowing can only cause a miss. `let`/`var`/`using`, destructured names, exported namespace members
   (visible in every merged block), helper calls, `new RegExp(...)`, imports and `arguments` (implicitly
