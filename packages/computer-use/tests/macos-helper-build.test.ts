@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRecordingPi } from "@nredd/pi-test-lib/pi";
@@ -57,15 +57,18 @@ async function rig(
 		return { ...real, default: { ...real.default, homedir: () => home } };
 	});
 	const executable = path.join(app, "Contents", "MacOS", "bridge");
+	let executableId: string | undefined;
 	if (installed) {
 		mkdirSync(path.dirname(executable), { recursive: true });
 		writeFileSync(executable, "not executed\n", { mode: 0o755 });
+		const stats = statSync(executable, { bigint: true });
+		executableId = `${BigInt.asUintN(64, stats.dev)}:${BigInt.asUintN(64, stats.ino)}`;
 	}
 	const socketPath = shortSocketPath();
 	const fake = await startFakeHelper({
 		socketPath,
-		// The installed helper as `ensureProtocol` expects it: its protocol and executable.
-		diagnostics: { protocolVersion: 8, pid: 0, executablePath: executable, buildIdentity },
+		// The installed helper as `ensureProtocol` expects it: its protocol, executable path and mapped vnode.
+		diagnostics: { protocolVersion: 8, pid: 0, executablePath: executable, executableId, buildIdentity },
 		handlers: { listApps: ok([]), setActivityGlow: ok({}) },
 	});
 	onTestFinished(() => fake.stop());
@@ -195,6 +198,7 @@ test("a default socket pathname that links to the override is managed", async ()
 test.each([
 	["protocol", { protocolVersion: 7 }, "reports protocol 7 (expected 8)"],
 	["executable", { executablePath: "/elsewhere/bridge" }, "runs /elsewhere/bridge (expected "],
+	["executable identity", { executableId: "0:1" }, "runs executable 0:1 (expected "],
 ])(
 	"rejects %s on managed alias: ensureProtocol follows the connection's classification",
 	async (_name, diagnostics, reason) => {

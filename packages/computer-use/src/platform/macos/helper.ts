@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { constants as fsConstants, realpathSync, statSync } from "node:fs";
+import { type BigIntStats, constants as fsConstants, realpathSync, statSync } from "node:fs";
 import { access, lstat, mkdir, realpath, stat } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -97,7 +97,24 @@ function connectHelper(onConnect: (managed: boolean) => void): net.Socket {
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
+const EXECUTABLE_ID_PATTERN = /^(?:0|[1-9]\d{0,19}):[1-9]\d{0,19}$/;
+const MAX_UINT64 = 0xffff_ffff_ffff_ffffn;
 let expectedBuild: string | undefined;
+
+/**
+ * Format a `stat(..., { bigint: true })` `(dev, ino)` pair the same way the Swift helper formats its mapped
+ * vnode: unsigned 64-bit decimal `<dev>:<ino>`, preserving 64-bit APFS inodes and sign-extended Darwin `dev_t`.
+ */
+export function formatExecutableId(dev: bigint, ino: bigint): string {
+	return `${BigInt.asUintN(64, dev)}:${BigInt.asUintN(64, ino)}`;
+}
+
+/** Validate a helper-reported `executableId`; anything absent, non-canonical, zero-inode or > uint64 is `undefined`. */
+function parseExecutableId(value: unknown): string | undefined {
+	if (typeof value !== "string" || !EXECUTABLE_ID_PATTERN.test(value)) return undefined;
+	const [dev, ino] = value.split(":");
+	return BigInt(dev) <= MAX_UINT64 && BigInt(ino) <= MAX_UINT64 ? value : undefined;
+}
 
 /** A reported build safe to display: a well-formed build ID, `none` when absent, otherwise `unrecognized`. */
 function displayBuild(value: unknown): string {
@@ -225,10 +242,30 @@ async function isResolvedHelperExecutable(filePath: string): Promise<boolean> {
 	return actualPath === expectedPath;
 }
 
+async function installedExecutableMismatch(reportedId: string | undefined): Promise<string | undefined> {
+	let installed: BigIntStats;
+	try {
+		installed = await stat(HELPER_APP_EXECUTABLE_PATH, { bigint: true });
+	} catch (error) {
+		return `cannot inspect installed executable ${HELPER_APP_EXECUTABLE_PATH} (${String((error as NodeJS.ErrnoException).code)})`;
+	}
+	if (!installed.isFile()) {
+		return `installed executable ${HELPER_APP_EXECUTABLE_PATH} is not a regular file`;
+	}
+	const expectedId = formatExecutableId(installed.dev, installed.ino);
+	if (!reportedId) {
+		return `reports no executable identity (expected ${expectedId} at ${HELPER_APP_EXECUTABLE_PATH})`;
+	}
+	if (reportedId !== expectedId) {
+		return `runs executable ${reportedId} (expected ${expectedId} at ${HELPER_APP_EXECUTABLE_PATH})`;
+	}
+	return undefined;
+}
+
 /**
  * Why a managed daemon whose build already matched is still not the installed helper, or `undefined` when it is.
- * Missing evidence is a mismatch, never a match. Its start time is not compared with the installed binary: the
- * build check already refuses stale code.
+ * Missing evidence is a mismatch, never a match: protocol, executable path and the mapped executable's `dev:ino`
+ * must all match `HELPER_APP_EXECUTABLE_PATH`. Neither side reads timestamps.
  */
 async function residentMismatch(diagnostics: PlatformDiagnostics): Promise<string | undefined> {
 	if (diagnostics.protocolVersion !== HELPER_PROTOCOL_VERSION) {
@@ -238,7 +275,7 @@ async function residentMismatch(diagnostics: PlatformDiagnostics): Promise<strin
 	if (!(await isResolvedHelperExecutable(diagnostics.executablePath))) {
 		return `runs ${diagnostics.executablePath} (expected ${HELPER_APP_EXECUTABLE_PATH})`;
 	}
-	return undefined;
+	return await installedExecutableMismatch(diagnostics.executableId);
 }
 
 export async function runProcess(
@@ -663,7 +700,8 @@ export class MacosHelperClient {
 	/** @param connection Receives the classification of the connection that answered (see `daemonCommand`). */
 	async diagnosticsCommand(signal?: AbortSignal, connection?: ConnectionClass): Promise<PlatformDiagnostics> {
 		const result = await this.command<any>("diagnostics", {}, { signal, connection });
-		const diagnostics = {
+		const executableId = parseExecutableId(result?.executableId);
+		const diagnostics: PlatformDiagnostics = {
 			protocolVersion: Math.trunc(toFiniteNumber(result?.protocolVersion, 0)),
 			architectureVersion: Math.trunc(toFiniteNumber(result?.architectureVersion, 0)),
 			invariants: Array.isArray(result?.invariants)
@@ -675,6 +713,7 @@ export class MacosHelperClient {
 			parentBundleId: toOptionalString(result?.parentBundleId),
 			parentPath: toOptionalString(result?.parentPath),
 			executablePath: toOptionalString(result?.executablePath),
+			...(executableId ? { executableId } : {}),
 			os: toOptionalString(result?.macOS),
 			arch: toOptionalString(result?.arch),
 			accessibility: toBoolean(result?.accessibility),
@@ -685,9 +724,9 @@ export class MacosHelperClient {
 	}
 
 	/**
-	 * Check that a managed daemon whose build matched is the installed helper: expected protocol and executable path.
-	 * A mismatch, or a missing path, is refused with `helper_mismatch`; the daemon is never shut down, relaunched or
-	 * stopped here.
+	 * Check that a managed daemon whose build matched is the installed helper: expected protocol, executable path and
+	 * mapped executable `dev:ino`. A mismatch, or missing evidence, is refused with `helper_mismatch`; the daemon is
+	 * never shut down, relaunched or stopped here.
 	 */
 	async ensureProtocol(signal?: AbortSignal): Promise<PlatformDiagnostics> {
 		// `verifyBuild` already refused a wrong build (managed) or protocol (external) on this connection. The

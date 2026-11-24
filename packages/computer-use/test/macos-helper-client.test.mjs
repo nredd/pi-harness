@@ -2,7 +2,7 @@
 // unix socket and NDJSON framing, faked `spawn` (ps, open, setup script). No Swift helper runs.
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -389,6 +389,7 @@ describe("diagnostics", () => {
 				parentBundleId: "com.mitchellh.ghostty",
 				parentPath: "/Applications/Ghostty.app",
 				executablePath: "/x/bridge",
+				executableId: "18446744071562067969:1152921500312611962",
 				macOS: "15.1",
 				arch: "arm64",
 				accessibility: true,
@@ -409,6 +410,7 @@ describe("diagnostics", () => {
 			parentBundleId: "com.mitchellh.ghostty",
 			parentPath: "/Applications/Ghostty.app",
 			executablePath: "/x/bridge",
+			executableId: "18446744071562067969:1152921500312611962",
 			os: "15.1",
 			arch: "arm64",
 			accessibility: true,
@@ -429,7 +431,18 @@ describe("diagnostics", () => {
 		assert.deepEqual(diagnostics.invariants, []);
 		assert.equal(diagnostics.parentPid, undefined);
 		assert.equal(diagnostics.accessibility, false);
+		assert.equal("executableId" in diagnostics, false);
 	});
+
+	test.each(["", "01:2", "1:0", "-1:2", "1:2\ninjected", "18446744073709551616:1", "1:18446744073709551616", 42, null])(
+		"drops malformed executableId %j from diagnostics",
+		async (executableId) => {
+			const fake = await fakeOn({ diagnostics: { executableId } });
+			const { MacosHelperClient } = await load({ external: true, fake });
+			const diagnostics = await new MacosHelperClient().diagnosticsCommand();
+			assert.equal(diagnostics.executableId, undefined);
+		},
+	);
 });
 
 test.each([8, 6])("external daemon from another executable with protocol %s is never restarted", async (protocol) => {
@@ -448,9 +461,15 @@ test.each([8, 6])("external daemon from another executable with protocol %s is n
 });
 
 describe("ensureProtocol", () => {
+	function statExecutableId(filePath = executable) {
+		const stats = statSync(filePath, { bigint: true });
+		return `${BigInt.asUintN(64, stats.dev)}:${BigInt.asUintN(64, stats.ino)}`;
+	}
+
 	async function protocolRig({ diagnostics = {}, install = true } = {}) {
 		if (install) installExecutable();
-		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...diagnostics } });
+		const defaultId = install ? { executableId: statExecutableId() } : {};
+		const fake = await fakeOn({ diagnostics: { executablePath: executable, ...defaultId, ...diagnostics } });
 		const spawn = createFakeSpawn({});
 		const mod = await load({ external: false, fake, spawn });
 		return { fake, spawn, ...mod, client: new mod.MacosHelperClient() };
@@ -519,6 +538,72 @@ describe("ensureProtocol", () => {
 		const elsewhere = path.join(tmp, "elsewhere", "bridge");
 		const rig = await protocolRig({ install: false, diagnostics: { executablePath: elsewhere } });
 		await assertRefused(rig, `runs ${elsewhere} (expected ${rig.HELPER_APP_EXECUTABLE_PATH})`);
+	});
+
+	test("refuses a matching-build daemon whose mapped executable predates a replaced binary, then accepts the new binary regardless of timestamps", async () => {
+		const rig = await protocolRig();
+		const oldId = statExecutableId();
+		// Keep the old inode allocated (as a running process mapping it does) while installing the replacement.
+		renameSync(executable, `${executable}.running`);
+		installExecutable();
+		const newId = statExecutableId();
+		assert.notEqual(oldId, newId);
+		await assertRefused(rig, `runs executable ${oldId} (expected ${newId} at ${rig.HELPER_APP_EXECUTABLE_PATH})`);
+		assert.equal(
+			rig.formatExecutableId(-2147483647n, 1152921500312611962n),
+			"18446744071562067969:1152921500312611962",
+		);
+
+		// Even if the binary carries a future timestamp (clock rollback or restored archive), matching dev:ino passes.
+		const future = new Date(Date.now() + 86_400_000);
+		utimesSync(executable, future, future);
+		rig.fake.diagnostics.executableId = newId;
+		assert.equal((await rig.client.ensureProtocol()).executableId, newId);
+	});
+
+	test("refuses a daemon whose executableId differs only in device", async () => {
+		const rig = await protocolRig();
+		const stats = statSync(executable, { bigint: true });
+		const expectedId = statExecutableId();
+		const wrongDevId = `${BigInt.asUintN(64, stats.dev) + 1n}:${BigInt.asUintN(64, stats.ino)}`;
+		rig.fake.diagnostics.executableId = wrongDevId;
+		await assertRefused(
+			rig,
+			`runs executable ${wrongDevId} (expected ${expectedId} at ${rig.HELPER_APP_EXECUTABLE_PATH})`,
+		);
+	});
+
+	test.each([undefined, "", "01:2", "1:0", "bad\ninjected", "18446744073709551616:1"])(
+		"refuses a daemon with missing or invalid executableId %j without echoing untrusted text",
+		async (executableId) => {
+			const rig = await protocolRig({ diagnostics: { executableId } });
+			const expectedId = statExecutableId();
+			await assertRefused(
+				rig,
+				`reports no executable identity (expected ${expectedId} at ${rig.HELPER_APP_EXECUTABLE_PATH})`,
+			);
+			await assert.rejects(rig.client.ensureProtocol(), (error) => {
+				assert.equal(error.message.includes("bad"), false);
+				assert.equal(error.message.includes("injected"), false);
+				return true;
+			});
+		},
+	);
+
+	test.each([
+		["removed", () => rmSync(executable), (exe) => `cannot inspect installed executable ${exe} (ENOENT)`],
+		[
+			"a directory",
+			() => {
+				rmSync(executable);
+				mkdirSync(executable);
+			},
+			(exe) => `installed executable ${exe} is not a regular file`,
+		],
+	])("refuses a resident when the installed executable is %s", async (_label, mutate, expected) => {
+		const rig = await protocolRig();
+		mutate();
+		await assertRefused(rig, expected(rig.HELPER_APP_EXECUTABLE_PATH));
 	});
 });
 
