@@ -449,7 +449,9 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 			expiresAt > now &&
 			(!legacy || (Array.isArray(windows) && windows.length > 0) || aux.some((cell) => cell.kind !== "mark"));
 		const seen = chooseWindows(windows, display, legacy, pin);
-		const cells: QuotaFields["cells"] = [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...aux];
+		// A v1 `V1_DISPLAY` entry without a cached reading is block-only (or failed) and drops old percents.
+		const retain = !Array.isArray(views) && v1Display ? status === "available" || status === "stale" : true;
+		const cells: QuotaFields["cells"] = [...(fresh || !retain ? seen : mergePercents(seen, prior, legacy)), ...aux];
 		// Legacy rows keep their pinned placeholders, so only generic rows report a failure as text.
 		const failed =
 			!legacy && (status === "error" || status === "unavailable" || status === "stale") ? status : undefined;

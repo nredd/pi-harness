@@ -2161,17 +2161,20 @@ test("v1 antigravity rows need a read or a block, and say when the read failed",
 test("drops an expired block-only Gemini row", () => {
 	const legacyOnly = "Left: Anth (stale) 7d -- | OAI (stale) 7d --";
 	const block = { provider: "antigravity", window: "5h", until: CLOCK + hour, scope: "model", families: ["gemini"] };
-	for (const snapshots of [[], [snap("antigravity", [], { status: "unavailable", expiresAt: CLOCK })]]) {
-		const state = present(footer.parseUsageReply(v1(snapshots, [block]), CLOCK));
-		assert.equal(
-			footer.formatQuotaRow(state, "compact", plain, fixed),
-			`${legacyOnly} | Gem gemini blocked->13:00 read`,
-		);
-		assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...fixed, now: CLOCK + hour }), legacyOnly);
+	const cached = present(footer.parseUsageReply(v1([gemini()]), CLOCK));
+	for (const previous of [undefined, cached]) {
+		for (const snapshots of [[], [snap("antigravity", [], { status: "unavailable", expiresAt: CLOCK })]]) {
+			const state = present(footer.parseUsageReply(v1(snapshots, [block]), CLOCK, previous));
+			assert.equal(
+				footer.formatQuotaRow(state, "compact", plain, fixed),
+				`${legacyOnly} | Gem gemini blocked->13:00 read`,
+			);
+			assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...fixed, now: CLOCK + hour }), legacyOnly);
+		}
 	}
-	// A row backed by a cached reading (fresh or already stale) keeps its quota once the block expires.
-	for (const status of ["available", "stale"] as const) {
-		const withReading = present(footer.parseUsageReply(v1([gemini({ status })], [block]), CLOCK));
+	// A row backed by a cached reading (fresh or already stale, including when its expiry has passed) keeps its quota once the block expires.
+	for (const extra of [{ status: "available" }, { status: "available", expiresAt: CLOCK - 1 }, { status: "stale" }]) {
+		const withReading = present(footer.parseUsageReply(v1([gemini(extra)], [block]), CLOCK, cached));
 		assert.equal(
 			footer.formatQuotaRow(withReading, "compact", plain, { ...fixed, now: CLOCK + hour }),
 			`${legacyOnly} | Gem (stale) 5h 99% @14:00 7d 97% @Jan 13 12:00`,

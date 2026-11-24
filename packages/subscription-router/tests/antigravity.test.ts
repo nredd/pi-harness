@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
@@ -300,23 +302,46 @@ describe("antigravity usage", () => {
 	});
 
 	it("disables redirects", async () => {
-		const requests: Array<{ url: string; init: RequestInit }> = [];
-		const usage = new UsageService({
-			fetch: async (url, init) => {
-				requests.push({ url, init });
-				if (init.redirect === "error") throw new TypeError("fetch failed");
-				return Response.json({ five_hour: { utilization: 10, resets_at: RESET_5H } });
-			},
-			now: () => T0,
-			getAccessToken: async (_ctx, provider) => (provider === "antigravity" ? CREDENTIAL : "anthropic-token"),
+		const marker = "redirect-marker-synthetic";
+		const hits: string[] = [];
+		const server = createServer((req, res) => {
+			hits.push(req.url ?? "");
+			if (req.url === "/quota") {
+				res.writeHead(307, { Location: `/target?leak=${marker}` });
+				res.end();
+				return;
+			}
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end("{}");
 		});
-		const antigravitySnap = await usage.get(ctx, "antigravity");
-		expect(antigravitySnap).toMatchObject({ status: "error", message: "Usage request failed." });
-		const anthropicSnap = await usage.get(ctx, "anthropic");
-		expect(anthropicSnap.status).toBe("available");
-		expect(requests).toHaveLength(2);
-		expect(requests[0]?.init.redirect).toBe("error");
-		expect(requests[1]?.init).not.toHaveProperty("redirect");
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const { port } = server.address() as AddressInfo;
+			const loopback = `http://127.0.0.1:${port}`;
+			const requests: Array<{ url: string; init: RequestInit }> = [];
+			const usage = new UsageService({
+				fetch: async (url, init) => {
+					requests.push({ url, init });
+					if (url === URL) return fetch(`${loopback}/quota`, init);
+					return Response.json({ five_hour: { utilization: 10, resets_at: RESET_5H } });
+				},
+				now: () => T0,
+				getAccessToken: async (_ctx, provider) => (provider === "antigravity" ? CREDENTIAL : "anthropic-token"),
+			});
+			const antigravitySnap = await usage.get(ctx, "antigravity");
+			expect(antigravitySnap).toMatchObject({ status: "error", message: "Usage request failed." });
+			expect(hits).toEqual(["/quota"]);
+			const serialized = JSON.stringify(antigravitySnap);
+			expect(serialized).not.toContain("ya29.synthetic");
+			expect(serialized).not.toContain(marker);
+			const anthropicSnap = await usage.get(ctx, "anthropic");
+			expect(anthropicSnap.status).toBe("available");
+			expect(requests).toHaveLength(2);
+			expect(requests[0]?.init.redirect).toBe("error");
+			expect(requests[1]?.init).not.toHaveProperty("redirect");
+		} finally {
+			await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+		}
 	});
 
 	it("reports an unreadable credential as having no usage source without a request", async () => {
