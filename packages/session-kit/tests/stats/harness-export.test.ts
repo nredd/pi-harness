@@ -22,13 +22,13 @@ import {
 	validateShard,
 	validateSnapshot,
 } from "../../src/stats/snapshot.ts";
-import { assistantLine, at, call, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, call, outboxStatePath, sessionFile, utcAt } from "../fixtures/stats/fixtures.ts";
 import { CANARY, claudeRow } from "../fixtures/stats/harness/fixtures.ts";
 import { bumpOpenCode, CODEX_RESET_S, seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
 const OLD_MACHINE = "11111111-1111-4111-8111-111111111111";
 const NEW_MACHINE = "22222222-2222-4222-8222-222222222222";
-const OCT = at("2026-10-01");
+const OCT = utcAt("2026-10-01");
 
 let dir: string;
 let repo: string;
@@ -57,7 +57,7 @@ const quota = (extra: Partial<QuotaObservation> = {}): QuotaObservation => ({
 	limitId: "codex",
 	window: "7d",
 	usedPercent: 10,
-	resetAt: at("2026-10-08"),
+	resetAt: utcAt("2026-10-08"),
 	durationMs: 604_800_000,
 	observedAt: OCT,
 	planType: "pro",
@@ -179,7 +179,7 @@ describe("snapshot v2 schema", () => {
 			{ ...shard([good], [{ ...quota(), usedPercent: -1 }]) },
 			{ ...shard([good], [{ ...quota(), resetAt: 0 }]) },
 			{ ...shard([good], [{ ...quota(), durationMs: 0 }]) },
-			{ ...shard([good], [{ ...quota(), observedAt: at("2026-08-01") }]) },
+			{ ...shard([good], [{ ...quota(), observedAt: utcAt("2026-08-01") }]) },
 			{ ...shard([good], [{ ...quota(), planType: 5 as unknown as string }]) },
 			{ ...shard([good], [{ ...quota(), account: CANARY } as QuotaObservation]) },
 			{ ...shard([good]), version: 1 },
@@ -204,14 +204,14 @@ describe("snapshot v2 schema", () => {
 
 	it("rejects a snapshot that reports one quota window twice", () => {
 		const a = shard([], [quota()]);
-		const b = { ...shard([], [quota({ observedAt: at("2026-10-02") })]), sessions: [] };
+		const b = { ...shard([], [quota({ observedAt: utcAt("2026-10-02") })]), sessions: [] };
 		expect(() => validateSnapshot({ manifest: manifest2, shards: [a, b] })).toThrow("Duplicate quota window");
 		expect(() => validateSnapshot({ manifest: manifest2, shards: [a] })).not.toThrow();
 	});
 });
 
 describe("quota merge", () => {
-	const NOW = at("2026-10-05");
+	const NOW = utcAt("2026-10-05");
 	const live = (extra: Partial<QuotaObservation> = {}) => quota({ resetAt: NOW + 1000, ...extra });
 
 	it("keeps the freshest reading per (provider, limitId, window), never summing", () => {
@@ -273,8 +273,8 @@ describe("quota merge", () => {
 	it("is stored in the month the reading was observed", () => {
 		const loaded = { calls: [], sessions: [], errors: 0, badLines: 0 };
 		const snap = makeSnapshot(loaded, { machineId: NEW_MACHINE, label: "m" }, OCT, [
-			quota({ observedAt: at("2026-11-02") }),
-			quota({ window: "5h", observedAt: at("2026-10-02") }),
+			quota({ observedAt: utcAt("2026-11-02") }),
+			quota({ window: "5h", observedAt: utcAt("2026-10-02") }),
 		]);
 		expect(snap.shards.map((s) => [s.month, s.quota?.length])).toEqual([
 			["2026-10", 1],
@@ -382,7 +382,7 @@ describe("exportStats with harnesses", () => {
 	}
 
 	it("carries a failed harness after sealed-month deltas without duplicating session metadata", async () => {
-		const clock = vi.spyOn(Date, "now").mockReturnValue(at("2026-11-02"));
+		const clock = vi.spyOn(Date, "now").mockReturnValue(utcAt("2026-11-02"));
 		try {
 			const roots = seedHarnessHome(home);
 			const options = { harnesses: ["claude"] as const, roots, env: env(), home };
