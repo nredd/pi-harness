@@ -124,6 +124,30 @@ func runRequestFramingAssertions() {
     let diagnosticsReply = routed.last.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     let diagnostics = diagnosticsReply?["result"] as? [String: Any]
     check(diagnostics?["buildIdentity"] as? String == helperBuildIdentity, "wire diagnostics reports the compiled build identity")
+    var selfStat = stat()
+    let selfFd = open(CommandLine.arguments[0], O_RDONLY)
+    defer { if selfFd >= 0 { close(selfFd) } }
+    check(selfFd >= 0 && fstat(selfFd, &selfStat) == 0, "stat running test binary")
+    let expectedExecutableId = "\(UInt64(bitPattern: Int64(selfStat.st_dev))):\(selfStat.st_ino)"
+    check(diagnostics?["executableId"] as? String == expectedExecutableId, "wire diagnostics reports the mapped executable dev:ino")
+    check(mappedExecutableId() == expectedExecutableId, "mappedExecutableId matches stat of the mapped executable")
+    check(mappedExecutableId { _, _, _ in 0 } == nil && mappedExecutableId { _, _, _ in -1 } == nil, "mappedExecutableId rejects short or failed proc_pidinfo")
+    check(mappedExecutableId { _, info, size in
+        info.pointee.prp_vip.vip_vi.vi_stat.vst_dev = 7
+        info.pointee.prp_vip.vip_vi.vi_stat.vst_ino = 0
+        return size
+    } == nil, "mappedExecutableId rejects an anonymous region with zero inode")
+    check(mappedExecutableId { _, info, size in
+        info.pointee.prp_vip.vip_vi.vi_stat.vst_dev = 0x8000_0001
+        info.pointee.prp_vip.vip_vi.vi_stat.vst_ino = .max
+        return size
+    } == "18446744071562067969:18446744073709551615", "mappedExecutableId preserves high-bit dev_t sign extension and 64-bit inode")
+    var missingIdFrames: [Data] = []
+    Bridge(activityGlow: nil, readSession: { [:] }, writeOutput: { missingIdFrames.append($0) }, executableId: nil)
+        .handleLine("{\"id\":\"no-id\",\"cmd\":\"diagnostics\"}")
+    let missingIdResult = missingIdFrames.last
+        .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["result"] as? [String: Any]
+    check(missingIdResult?["buildIdentity"] as? String == helperBuildIdentity && missingIdResult?["executableId"] == nil, "wire diagnostics omits executableId when unavailable")
     // No live input, capture, or shutdown is invoked here.
     for invalid: Any in [NSNull(), true, 7, 1.5, [], [:]] {
         failure("invalid_args", "Missing string argument 'value'") { try actual.stringArg(["value": invalid], "value") }
