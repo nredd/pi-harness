@@ -1,6 +1,7 @@
 // Drives `MacosHelperClient` and the activity-glow connection against `support/fake-helper.mjs`: real
 // unix socket and NDJSON framing, faked `spawn` (ps, open, setup script). No Swift helper runs.
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -599,17 +600,30 @@ describe("install, launch and runProcess", () => {
 
 	// #1235: `open -n` starts a new instance on every call, so concurrent callers must share one launch.
 	describe("concurrent ensureDaemon callers", () => {
-		/** A stopped fake; `open` runs each route in turn (`undefined` brings the fake up after `delayMs`). */
+		/**
+		 * A stopped fake; `open` runs each route in turn. Past the routes, the first `open` brings the fake up after
+		 * `delayMs` and later ones are only counted: one startup per rig, settled before the fake stops.
+		 */
 		async function launchRig(routes = [], delayMs = 150) {
 			const fake = await fakeOn();
 			await fake.stop();
+			let timer;
+			let startup;
 			const spawn = createFakeSpawn({
 				open: () => {
 					const route = routes.shift();
 					if (route) return route;
-					setTimeout(() => void fake.start(), delayMs);
+					timer ??= setTimeout(() => {
+						startup = fake.start();
+						// Surfaced by the cleanup's await; handled here so a failure is not unhandled meanwhile.
+						startup.catch(() => undefined);
+					}, delayMs);
 					return { exitCode: 0 };
 				},
+			});
+			cleanups.push(async () => {
+				clearTimeout(timer);
+				await startup;
 			});
 			const { MacosHelperClient } = await load({ external: false, fake, spawn });
 			const opens = () => spawn.calls.filter(({ command }) => command === "open").length;
@@ -624,8 +638,35 @@ describe("install, launch and runProcess", () => {
 				true,
 			]);
 			assert.equal(opens(), 1);
-			assert.equal(await client.ensureDaemon(), true, "the finished start is not reused: availability answers");
-			assert.equal(opens(), 1);
+		});
+
+		test(
+			"a later caller after a failed start launches afresh",
+			async () => {
+				// The first `open` exits without bringing the helper up, so the probe loop gives up.
+				const { client, opens } = await launchRig([{ exitCode: 0 }]);
+				assert.equal(await client.ensureDaemon(), false);
+				assert.equal(opens(), 1);
+				assert.equal(await client.ensureDaemon(), true, "the failed start is not joined");
+				assert.equal(opens(), 2);
+			},
+			SLOW_MS,
+		);
+
+		test("poll sleeps remove abort listeners", async () => {
+			const { client, opens } = await launchRig([{ exitCode: 0 }]);
+			const controller = new AbortController();
+			const pending = client.ensureDaemon(controller.signal);
+			await vi.waitFor(() => assert.equal(opens(), 1));
+			const shared = client.pendingStart.controller.signal;
+			let most = 0;
+			for (let sample = 0; sample < 15; sample += 1) {
+				most = Math.max(most, getEventListeners(shared, "abort").length);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			assert.ok(most <= 1, `at most one listener per probe or sleep, saw ${most}`);
+			controller.abort();
+			await assert.rejects(pending, /Operation aborted\./);
 		});
 
 		test("one caller's abort ends only its own wait", async () => {
@@ -654,6 +695,21 @@ describe("install, launch and runProcess", () => {
 			await vi.waitFor(() => assert.equal(opens(), 2));
 			const joined = client.ensureDaemon();
 			assert.deepEqual(await Promise.all([later, joined]), [true, true], "neither inherits the abort");
+			assert.equal(opens(), 2);
+		});
+
+		test("a caller arriving in the same turn as the last abort starts afresh", async () => {
+			const hung = createFakeChild({ hang: true });
+			const { client, opens } = await launchRig([hung]);
+			const controllers = [new AbortController(), new AbortController()];
+			const waits = controllers.map((controller) => client.ensureDaemon(controller.signal));
+			await vi.waitFor(() => assert.equal(opens(), 1));
+			// No await between the aborts and the newcomer: the start must already count as abandoned.
+			for (const controller of controllers) controller.abort();
+			const fresh = client.ensureDaemon();
+			assert.deepEqual(hung.signals, ["SIGTERM"], "the abandoned launch is killed");
+			for (const wait of waits) await assert.rejects(wait, /Operation aborted\./);
+			assert.equal(await fresh, true);
 			assert.equal(opens(), 2);
 		});
 	});

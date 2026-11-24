@@ -180,14 +180,18 @@ function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) throw new Error("Operation aborted.");
 }
 
+/** Wait `ms` unless `signal` aborts first; the abort listener is removed either way, so a long poll does not pile them up. */
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	throwIfAborted(signal);
 	await new Promise<void>((resolve, reject) => {
-		const timer = setTimeout(resolve, ms);
 		const onAbort = () => {
 			clearTimeout(timer);
 			reject(new Error("Operation aborted."));
 		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
 		signal?.addEventListener("abort", onAbort, { once: true });
 	}).finally(() => signal?.throwIfAborted?.());
 }
@@ -312,13 +316,20 @@ interface PendingStart {
 	waiters: number;
 }
 
-/** Wait for `promise` unless `signal` aborts first; the promise itself keeps running. */
-async function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-	if (!signal) return await promise;
-	return await new Promise<T>((resolve, reject) => {
-		const onAbort = () => reject(new Error("Operation aborted."));
-		signal.addEventListener("abort", onAbort, { once: true });
-		void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+/**
+ * Wait for `start` as one of its waiters. An abort ends only this wait, and drops this waiter synchronously: the
+ * last one to leave aborts the start in the same turn, so a caller arriving right after never joins it.
+ */
+async function awaitSharedStart(start: PendingStart, signal?: AbortSignal): Promise<boolean> {
+	start.waiters += 1;
+	return await new Promise<boolean>((resolve, reject) => {
+		const onAbort = () => {
+			start.waiters -= 1;
+			if (start.waiters === 0) start.controller.abort();
+			reject(new Error("Operation aborted."));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		void start.promise.then(resolve, reject).finally(() => signal?.removeEventListener("abort", onAbort));
 	});
 }
 
@@ -582,14 +593,7 @@ export class MacosHelperClient {
 	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
 		if (this.daemonAvailable) return true;
 		throwIfAborted(signal);
-		const start = this.joinStart();
-		start.waiters += 1;
-		try {
-			return await untilAborted(start.promise, signal);
-		} finally {
-			start.waiters -= 1;
-			if (start.waiters === 0 && signal?.aborted) start.controller.abort();
-		}
+		return await awaitSharedStart(this.joinStart(), signal);
 	}
 
 	/**
