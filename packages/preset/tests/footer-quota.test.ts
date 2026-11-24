@@ -2151,10 +2151,32 @@ test("v1 antigravity rows need a read or a block, and say when the read failed",
 		`${legacyOnly} | Gem quota error`,
 	);
 	const block = { provider: "antigravity", window: "5h", until: CLOCK + hour, scope: "model", families: ["gemini"] };
+	assert.equal(rowOf([], [block]), `${legacyOnly} | Gem gemini blocked->13:00 read`);
 	assert.equal(
 		rowOf([snap("antigravity", [], { status: "unavailable", expiresAt: CLOCK })], [block]),
-		`${legacyOnly} | Gem quota unavailable | gemini blocked->13:00 read`,
+		`${legacyOnly} | Gem gemini blocked->13:00 read`,
 	);
+});
+
+test("drops an expired block-only Gemini row", () => {
+	const legacyOnly = "Left: Anth (stale) 7d -- | OAI (stale) 7d --";
+	const block = { provider: "antigravity", window: "5h", until: CLOCK + hour, scope: "model", families: ["gemini"] };
+	for (const snapshots of [[], [snap("antigravity", [], { status: "unavailable", expiresAt: CLOCK })]]) {
+		const state = present(footer.parseUsageReply(v1(snapshots, [block]), CLOCK));
+		assert.equal(
+			footer.formatQuotaRow(state, "compact", plain, fixed),
+			`${legacyOnly} | Gem gemini blocked->13:00 read`,
+		);
+		assert.equal(footer.formatQuotaRow(state, "compact", plain, { ...fixed, now: CLOCK + hour }), legacyOnly);
+	}
+	// A row backed by a cached reading (fresh or already stale) keeps its quota once the block expires.
+	for (const status of ["available", "stale"] as const) {
+		const withReading = present(footer.parseUsageReply(v1([gemini({ status })], [block]), CLOCK));
+		assert.equal(
+			footer.formatQuotaRow(withReading, "compact", plain, { ...fixed, now: CLOCK + hour }),
+			`${legacyOnly} | Gem (stale) 5h 99% @14:00 7d 97% @Jan 13 12:00`,
+		);
+	}
 });
 
 test("a v2 view with the collector's Gemini display pins its model-scoped windows", () => {

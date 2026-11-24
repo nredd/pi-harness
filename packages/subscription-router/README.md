@@ -444,7 +444,8 @@ The router reads each declared own reading field once into plain records and den
 `length` from 0 to 128) without calling adapter methods such as `map`, then validates and uses only that copy. A
 throwing getter is an adapter error. An external reset later than `MAX_EXTERNAL_RESET_MS` (31 days)
 after the read started is implausible and becomes unknown, so it blocks only while the reading is
-fresh instead of for its stated lifetime. Built-in collector resets are not bounded. Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
+fresh instead of for its stated lifetime. The legacy Anthropic and Codex collectors do not bound
+resets; Antigravity bounds each window against its reported span (see below). Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
 reported basis; extensions cannot set snapshot metadata.
 
 ### Antigravity collector
@@ -456,8 +457,9 @@ and refresh. Only a non-empty string `token` is read; `projectId` is unused. A c
 not a JSON object with such a `token` reads as `unavailable` (no subscription usage window) on a
 cold cache, without a request and without echoing the credential; after an earlier good read the
 cached windows are kept as `stale`, like any other failed read. The read is one `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
-with body `{}`, a bearer token and the Antigravity CLI `User-Agent`. There is no fallback: the
-`cloudcode-pa.googleapis.com` host is never tried, so a failure on the daily host is an ordinary
+with body `{}`, a bearer token, the Antigravity CLI `User-Agent`, and `redirect: "error"` so HTTP
+redirects are refused rather than followed with the credential. The collector does not retry
+against `cloudcode-pa.googleapis.com`, so a failure or redirect on the daily host is an ordinary
 failed read with the usual backoff.
 
 Each usable `groups[].buckets[]` entry becomes a model-scoped window with a `reported` span from
@@ -471,7 +473,10 @@ unsupported shape, while a malformed bucket beside usable ones is just skipped:
 
 `usedPercent` is `(1 - remainingFraction) * 100` with the fraction clamped to 0..1; a bucket without
 a finite fraction is skipped. `resetTime` is absent while a bucket is untouched, so the reset stays
-unknown, as does one without an explicit UTC offset. An exhausted Gemini 5h window blocks only `gemini` models of the provider; Claude and GPT
+unknown, as does one without a valid RFC 3339 timestamp and explicit UTC offset, or one later than
+the read start plus the bucket's reported span (`5h` or `7d`) and five minutes of clock-skew
+tolerance (the exhaustion percentage is kept, so a fresh reading still blocks without parking
+admission on an implausible deadline, and a stale one fails open). An exhausted Gemini 5h window blocks only `gemini` models of the provider; Claude and GPT
 models served through Antigravity keep their own `3p-*` windows. The footer display is `Gemini`
 (`Gem`) with the `5h` and `7d` windows. The payload is an undocumented internal endpoint verified
 against a live account, not a published contract; a shape change reads as an unsupported shape.

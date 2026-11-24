@@ -214,6 +214,7 @@ describe("antigravity collector", () => {
 		expect(antigravity.request(CREDENTIAL)).toEqual({
 			url: URL,
 			method: "POST",
+			redirect: "error",
 			headers: {
 				Authorization: "Bearer ya29.synthetic",
 				"Content-Type": "application/json",
@@ -266,7 +267,7 @@ describe("antigravity usage", () => {
 		expect(requests).toEqual([
 			{
 				url: URL,
-				init: expect.objectContaining({ method: "POST", body: "{}" }),
+				init: expect.objectContaining({ method: "POST", redirect: "error", body: "{}" }),
 			},
 		]);
 		expect(usage.decisionFor(GEMINI)).toMatchObject({
@@ -296,6 +297,26 @@ describe("antigravity usage", () => {
 			kind: "measured",
 			window: "3p-7d",
 		});
+	});
+
+	it("disables redirects", async () => {
+		const requests: Array<{ url: string; init: RequestInit }> = [];
+		const usage = new UsageService({
+			fetch: async (url, init) => {
+				requests.push({ url, init });
+				if (init.redirect === "error") throw new TypeError("fetch failed");
+				return Response.json({ five_hour: { utilization: 10, resets_at: RESET_5H } });
+			},
+			now: () => T0,
+			getAccessToken: async (_ctx, provider) => (provider === "antigravity" ? CREDENTIAL : "anthropic-token"),
+		});
+		const antigravitySnap = await usage.get(ctx, "antigravity");
+		expect(antigravitySnap).toMatchObject({ status: "error", message: "Usage request failed." });
+		const anthropicSnap = await usage.get(ctx, "anthropic");
+		expect(anthropicSnap.status).toBe("available");
+		expect(requests).toHaveLength(2);
+		expect(requests[0]?.init.redirect).toBe("error");
+		expect(requests[1]?.init).not.toHaveProperty("redirect");
 	});
 
 	it("reports an unreadable credential as having no usage source without a request", async () => {
@@ -369,5 +390,88 @@ describe("antigravity balanced routing", () => {
 			resolvedModel: "antigravity/claude-sonnet-4-6",
 		});
 		expect(router.admit("router/balanced", profiles, env)).toEqual({ ok: true, resolvedModel: refKey(SONNET) });
+	});
+
+	it("bounds implausible resets", async () => {
+		const skew = 5 * 60_000;
+		const edge5h = T0 + 5 * HOUR + skew;
+		const edgeWeek = T0 + 168 * HOUR + skew;
+		let fail = false;
+		let body: unknown = {
+			groups: [
+				{
+					buckets: [
+						bucket("gemini-5h", "5h", 0, new Date(edge5h).toISOString()),
+						bucket("gemini-weekly", "weekly", 0.5, new Date(edgeWeek).toISOString()),
+						bucket("3p-5h", "5h", 0, new Date(edge5h + 1).toISOString()),
+						bucket("3p-weekly", "weekly", 0, new Date(edgeWeek + 1).toISOString()),
+					],
+				},
+			],
+		};
+		const clock = { now: T0 };
+		const usage = new UsageService({
+			fetch: async () => (fail ? new Response("unavailable", { status: 503 }) : Response.json(body)),
+			now: () => clock.now,
+			getAccessToken: async () => CREDENTIAL,
+		});
+		const bounded = await usage.get(ctx, "antigravity");
+		expect(bounded.windows.map(({ name, resetAt }) => [name, resetAt])).toEqual([
+			["5h", edge5h],
+			["7d", edgeWeek],
+			["3p-5h", undefined],
+			["3p-7d", undefined],
+		]);
+
+		// Now test an exhausted Gemini 5h window with a 2099 reset: fresh admission refuses without wait:true,
+		// confirmation falls back to bounded backoff instead of copying 2099, and a failed refresh lifts the block.
+		usage.invalidate("antigravity");
+		body = {
+			groups: [{ buckets: [bucket("gemini-5h", "5h", 0, "2099-01-01T00:00:00Z")] }],
+		};
+		const fresh = await usage.get(ctx, "antigravity");
+		expect(fresh).toMatchObject({
+			status: "available",
+			windows: [{ name: "5h", usedPercent: 100, resetAt: undefined }],
+		});
+		const tracker = new ExhaustionTracker(() => clock.now);
+		const router = new Router(usage, tracker, () => clock.now);
+		const env: RouteEnv = {
+			resolve: model,
+			refresh: async (target) => usage.decisionFor(target, await usage.get(ctx, target.provider, { fresh: true })),
+		};
+		const geminiOnly: Profile = { id: "gemini-only", name: "Gemini", strategy: "balanced", chain: [GEMINI] };
+		const profiles = new Map([[geminiOnly.id, geminiOnly]]);
+		expect(router.admit("antigravity/gemini-4-neon", profiles, env)).toEqual({
+			ok: false,
+			resetAt: undefined,
+			wait: false,
+		});
+		expect(router.admit("router/gemini-only", profiles, env)).toEqual({
+			ok: false,
+			resetAt: undefined,
+			wait: false,
+		});
+		expect(await router.confirm(model(GEMINI), env, undefined, T0)).toBe(true);
+		expect(tracker.blocking(GEMINI)).toMatchObject({ resetKnown: false, until: T0 + 5 * 60_000 });
+		tracker.clear();
+
+		// After the cache TTL expires and a refresh fails, the stale reading has no future reset and fails open.
+		fail = true;
+		clock.now = T0 + 5 * 60_000 + 1;
+		const stale = await usage.get(ctx, "antigravity");
+		expect(stale).toMatchObject({
+			status: "stale",
+			windows: [{ name: "5h", usedPercent: 100, resetAt: undefined }],
+		});
+		expect(usage.decisionFor(GEMINI)).toEqual({ block: false });
+		expect(router.admit("antigravity/gemini-4-neon", profiles, env)).toEqual({
+			ok: true,
+			resolvedModel: "antigravity/gemini-4-neon",
+		});
+		expect(router.admit("router/gemini-only", profiles, env)).toEqual({
+			ok: true,
+			resolvedModel: "antigravity/gemini-4-neon",
+		});
 	});
 });

@@ -289,6 +289,7 @@ export const BUILTIN_COLLECTORS: readonly Readonly<Collector>[] = Object.freeze(
 				request: (credential) => ({
 					url: ANTIGRAVITY_QUOTA_URL,
 					method: "POST",
+					redirect: "error",
 					headers: {
 						Authorization: `Bearer ${antigravityToken(credential) ?? ""}`,
 						"Content-Type": "application/json",

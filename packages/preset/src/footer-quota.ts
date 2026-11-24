@@ -406,8 +406,19 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		: Object.entries({ ...LEGACY_DISPLAY, ...V1_DISPLAY }).flatMap(([provider, display]) => {
 				const snapshot = records(snapshots).find((snapshot) => snapshot.provider === provider);
 				const read = snapshot !== undefined && snapshot.status !== "unavailable";
-				return Object.hasOwn(LEGACY_DISPLAY, provider) || read || blocks.has(provider)
-					? [{ provider, display, snapshot, marks: blocks.get(provider) }]
+				if (Object.hasOwn(LEGACY_DISPLAY, provider)) {
+					return [{ provider, display, snapshot, marks: blocks.get(provider) }];
+				}
+				const cached = snapshot?.status === "available" || snapshot?.status === "stale";
+				return read || blocks.has(provider)
+					? [
+							{
+								provider,
+								display: cached ? display : { full: display.full, compact: display.compact },
+								...(read && { snapshot }),
+								marks: blocks.get(provider),
+							},
+						]
 					: [];
 			});
 	// A block for a provider without a row (not shown by v1, or omitted from the views) still gets one.
@@ -429,16 +440,16 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
 		const aux = auxiliaryCells(view);
+		const status = snapshot?.status;
 		// Freshness is the snapshot's status and expiry against the clock. Only a legacy row with no
 		// counts or pools also needs a percentage window, which keeps its pinned retained readings.
 		const fresh =
-			snapshot?.status === "available" &&
+			status === "available" &&
 			expiresAt !== undefined &&
 			expiresAt > now &&
 			(!legacy || (Array.isArray(windows) && windows.length > 0) || aux.some((cell) => cell.kind !== "mark"));
 		const seen = chooseWindows(windows, display, legacy, pin);
 		const cells: QuotaFields["cells"] = [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...aux];
-		const status = snapshot?.status;
 		// Legacy rows keep their pinned placeholders, so only generic rows report a failure as text.
 		const failed =
 			!legacy && (status === "error" || status === "unavailable" || status === "stale") ? status : undefined;
