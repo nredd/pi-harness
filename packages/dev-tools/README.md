@@ -93,7 +93,9 @@ name a state (`not a git repository`, `unknown revision`, `path not tracked`, `n
   merge commit. Only `pre-commit`, `prepare-commit-msg` and `commit-msg` always start the
   checking runtime. `post-commit`, `reference-transaction` and the hooks present at approval are
   proxied too, and each starts the runtime only if its real hook exists when Git calls it. A hook
-  created mid-commit under any other name is not proxied, so it does not run. Absolute paths are matched after resolving symlinks in their parent directory,
+  created mid-commit under any other name is not proxied, so it does not run. The shims probe the startup runtime by running it; if it is gone or no longer loads
+  (e.g. a package upgrade), they fall back to a working `node` on `PATH`, and otherwise fail
+  naming the stale path. Absolute paths are matched after resolving symlinks in their parent directory,
   so `/var` and `/private/var` spellings agree and an escaping symlink is rejected. A rejected
   merge leaves the named paths staged and `MERGE_HEAD` in place. Only a "not a git repository"
   answer from the merge probe falls through to an ordinary commit's `stage: "add"`; any other probe

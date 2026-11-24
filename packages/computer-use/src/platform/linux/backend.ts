@@ -2,6 +2,7 @@ import { type LookResponse, parseLookResponse } from "../../outline.ts";
 import { assertPlatformArchitecture } from "../architecture.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
+	BrowserAppIdentity,
 	ComputerUsePlatformBackend,
 	FramePoints,
 	HelperActResult,
@@ -29,30 +30,30 @@ import {
 } from "./helper.ts";
 import { wslNoWindowsHint } from "./wsl.ts";
 
-function normalizedProcessName(appName: string): string {
-	return appName
-		.toLowerCase()
-		.split("/")
-		.pop()!
-		.replace(/\.desktop$/i, "");
-}
-
-function classifyBrowser(appName: string): false | "chromium" | "firefox" {
-	switch (normalizedProcessName(appName)) {
+/**
+ * Classifies a root by its executable basename (`appId`), never the app-controlled accessible app name, so a renamed
+ * app neither escapes `browser_use: false` nor turns into a browser. An unidentified root (no `appId`) is no browser
+ * here; app policy already refuses it (#1295).
+ */
+function classifyBrowser(appId: string | undefined): false | "chromium" | "firefox" {
+	switch (appId?.toLowerCase()) {
 		case "chrome":
 		case "google-chrome":
 		case "google-chrome-stable":
 		case "chromium":
 		case "chromium-browser":
+		case "msedge":
 		case "microsoft-edge":
 		case "microsoft-edge-stable":
 		case "brave":
 		case "brave-browser":
 		case "vivaldi":
+		case "vivaldi-bin":
 		case "vivaldi-stable":
 		case "opera":
 			return "chromium";
 		case "firefox":
+		case "firefox-bin":
 		case "firefox-esr":
 			return "firefox";
 		default:
@@ -287,11 +288,11 @@ export const linuxBackend: ComputerUsePlatformBackend = {
 	): Promise<PlatformWaitForResponse> {
 		return await linuxHelper.command("atspiWaitFor", { ...args }, options);
 	},
-	isBrowserApp(appName: string): boolean {
-		return classifyBrowser(appName) !== false;
+	isBrowserApp(app: BrowserAppIdentity): boolean {
+		return classifyBrowser(app.appId) !== false;
 	},
-	isChromeFamilyApp(appName: string): boolean {
-		return classifyBrowser(appName) === "chromium";
+	isChromeFamilyApp(app: BrowserAppIdentity): boolean {
+		return classifyBrowser(app.appId) === "chromium";
 	},
 	async openBrowserLocation(
 		target: { appName: string; bundleId?: string },
