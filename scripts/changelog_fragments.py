@@ -25,6 +25,8 @@ PACKAGES = (
     "packages/todo",
     "packages/plan-mode",
     "packages/resource-sampler",
+    "packages/preset",
+    "packages/subscription-router",
 )
 CATEGORIES = ("added", "changed", "fixed", "refactored", "removed", "deprecated", "security")
 FRAGMENT_NAME = re.compile(r"([1-9][0-9]*)\.(added|changed|fixed|refactored|removed|deprecated|security)\.md")
