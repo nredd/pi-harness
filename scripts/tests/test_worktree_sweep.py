@@ -270,6 +270,8 @@ def run(
             "globals_ = main.__globals__; "
             "limit = 'MAX_TREE_ENTRIES'; "
             "globals_[limit] = int(os.getenv('SWEEP_ENTRY_LIMIT', globals_[limit])); "
+            "byte_limit = 'MAX_CONTENT_BYTES'; "
+            "globals_[byte_limit] = int(os.getenv('SWEEP_CONTENT_BYTE_LIMIT', globals_[byte_limit])); "
             "suffix = bytes.fromhex(os.getenv('SWEEP_INVENTORY_SUFFIX', '')); "
             "main.__globals__['parse_inventory'] = "
             "lambda raw, width: parse(raw[:-1] + suffix if suffix else raw, width); "
@@ -692,7 +694,8 @@ def hash_with(
     monkeypatch.setitem(blob.__globals__, "CHUNK", 4)
     for attr, wrap in hooks.items():
         monkeypatch.setattr(os, attr, wrap(getattr(os, attr)))
-    return blob(root, name, "sha1")
+    mode, oid, _ = blob(root, name, "sha1")
+    return mode, oid
 
 
 def test_fifo_swapped_in_after_stat_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -852,6 +855,131 @@ def test_directory_cleanup_continues_after_close_error(
     with pytest.raises(OSError, match="injected close failure"):
         hash_with(tmp_path.resolve(), b"dir/tracked", monkeypatch, open=record_open, close=fail_close)
     assert closed[-2:] == list(reversed(opened))
+
+
+@pytest.mark.parametrize(
+    "overrun",
+    [
+        "entry limit",
+        "symlink bytes",
+        "file size before read",
+        "cumulative bytes across files",
+        "grown file during read",
+    ],
+)
+def test_content_scan_entry_or_byte_overrun_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrun: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--template=")
+    (repo / "a").write_bytes(b"01234567")
+    (repo / "b").write_bytes(b"89abcdef")
+    (repo / "link").symlink_to("target")
+    git(repo, "add", "a", "b", "link")
+    monkeypatch.setattr(os, "environ", git_env())
+    check = GUARD_MODULE["check_content"]
+    globals_ = check.__globals__
+    monkeypatch.setitem(globals_, "CHUNK", 4)
+    if overrun == "entry limit":
+        monkeypatch.setitem(globals_, "MAX_TREE_ENTRIES", 2)
+    elif overrun == "symlink bytes":
+        (repo / "a").unlink()
+        (repo / "b").unlink()
+        git(repo, "rm", "--quiet", "a", "b")
+        monkeypatch.setitem(globals_, "MAX_CONTENT_BYTES", 5)
+    elif overrun == "file size before read":
+        monkeypatch.setitem(globals_, "MAX_CONTENT_BYTES", 7)
+        real_read = os.read
+        monkeypatch.setattr(
+            os,
+            "read",
+            lambda fd, size: (
+                (_ for _ in ()).throw(AssertionError("read called past preflight size budget"))
+                if size == 4
+                else real_read(fd, size)
+            ),
+        )
+    elif overrun == "cumulative bytes across files":
+        monkeypatch.setitem(globals_, "MAX_CONTENT_BYTES", 12)
+    else:
+        monkeypatch.setitem(globals_, "MAX_CONTENT_BYTES", 8)
+        real_read = os.read
+        calls = {"read": 0}
+
+        def grow_on_first_chunk(descriptor: int, size: int) -> bytes:
+            calls["read"] += 1
+            if calls["read"] == 1:
+                with (repo / "a").open("ab") as handle:
+                    handle.write(b"extra")
+            return real_read(descriptor, size)
+
+        monkeypatch.setattr(os, "read", grow_on_first_chunk)
+    with pytest.raises(GUARD_MODULE["KeepError"], match=r"^incomplete tracked content scan$"):
+        check(repo.resolve())
+
+
+@pytest.mark.parametrize(
+    ("overrun", "ticks"),
+    [
+        ("entry deadline", (10.0, 41.0)),
+        ("symlink deadline", (10.0, 20.0, 41.0)),
+        ("file deadline before read", (10.0, 20.0, 41.0)),
+        ("chunk deadline during read", (10.0, 20.0, 25.0, 41.0)),
+    ],
+)
+def test_content_scan_deadline_overrun_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, overrun: str, ticks: tuple[float, ...]
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--template=")
+    if overrun == "symlink deadline":
+        (repo / "link").symlink_to("target")
+        git(repo, "add", "link")
+    else:
+        (repo / "a").write_bytes(b"01234567")
+        git(repo, "add", "a")
+    if overrun == "file deadline before read":
+        real_read = os.read
+        monkeypatch.setattr(
+            os,
+            "read",
+            lambda fd, size: (
+                (_ for _ in ()).throw(AssertionError("read called past preflight deadline"))
+                if size == 4
+                else real_read(fd, size)
+            ),
+        )
+    monkeypatch.setattr(os, "environ", git_env())
+    check = GUARD_MODULE["check_content"]
+    globals_ = check.__globals__
+    monkeypatch.setitem(globals_, "CHUNK", 4)
+    clock = iter(ticks)
+    monkeypatch.setattr(globals_["time"], "monotonic", lambda: next(clock))
+    with pytest.raises(GUARD_MODULE["KeepError"], match=r"^incomplete tracked content scan$"):
+        check(repo.resolve())
+
+
+def test_content_scan_exact_byte_budget_allows_clean_worktree(wt: Worktrees) -> None:
+    (wt.path / "link").symlink_to("tracked")
+    git(wt.path, "add", "link")
+    git(wt.path, "commit", "-m", "Add link")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    exact_bytes = sum(
+        len(os.fsencode(entry.readlink())) if entry.is_symlink() else entry.stat().st_size
+        for entry in (wt.path / ".gitignore", wt.path / "tracked", wt.path / "link")
+    )
+    quiet(wt)
+    code, (result,) = run(wt, borrower_gitdirs=(), variables={"SWEEP_CONTENT_BYTE_LIMIT": str(exact_bytes)})
+    assert code == 0
+    assert result["verdict"] == "eligible", result
+    code, (result,) = run(
+        wt, borrower_gitdirs=(), variables={"SWEEP_CONTENT_BYTE_LIMIT": str(exact_bytes - 1)}
+    )
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert result["reasons"] == ["incomplete tracked content scan"]
 
 
 @pytest.mark.parametrize("kind", ["modified", "deleted", "intent-to-add"])

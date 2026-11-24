@@ -54,9 +54,11 @@ CHILD_OVERRIDES = {
 GIT_BINARY: ContextVar[Path | None] = ContextVar("GIT_BINARY", default=None)
 TIMEOUT = 30
 MAX_TREE_ENTRIES = 100_000
+MAX_CONTENT_BYTES = 1 << 29
 QUIET_SECONDS = 3600
 UNKNOWN_SCOPE = "cannot establish a complete external borrower scope"
 STATUS_NOT_COLLECTED = "status not collected: `git status` was not run"
+INCOMPLETE_CONTENT_SCAN = "incomplete tracked content scan"
 CHUNK = 1 << 20
 HASHES = {b"sha1": ("sha1", 40), b"sha256": ("sha256", 64)}
 STAGE = re.compile(rb"(100644|100755|120000) ([a-f0-9]+) 0\t(.+)", re.DOTALL)
@@ -509,26 +511,34 @@ def check_content(path: Path) -> None:
     Object IDs are computed in process from unfollowed directory descriptors,
     `lstat`, `readlink` and raw reads, so no clean filter, textconv or stat cache
     (`core.trustctime`) is consulted. Unmerged, gitlink or other unexpected index
-    entries keep. The scan stops at the first entry that keeps.
+    entries keep, as does any entry or chunk that exceeds the content time or byte
+    budget. The scan stops at the first entry that keeps.
 
     Parameters:
         path: Path, Resolved candidate checkout.
     Returns:
         None.
     Raises:
-        KeepError: An entry is unsupported, changed during the scan, or its raw
-            content or mode differs.
+        KeepError: An entry is unsupported, changed during the scan, exceeds the
+            content scan budget, or its raw content or mode differs.
         OSError: A tracked entry cannot be read.
     """
     algorithm, width = object_format(path)
     records = git(path, "ls-files", "--stage", "-z").split(b"\0")
     if records[-1]:
         raise KeepError("incomplete index inventory")
-    for record in records[:-1]:
+    remaining = MAX_CONTENT_BYTES
+    deadline = time.monotonic() + TIMEOUT
+    for index, record in enumerate(records[:-1], start=1):
+        if index > MAX_TREE_ENTRIES or time.monotonic() > deadline:
+            raise KeepError(INCOMPLETE_CONTENT_SCAN)
         match = STAGE.fullmatch(record)
         if match is None or len(match[2]) != width:
             raise KeepError(f"unsupported index entry: {record!r}")
-        if blob(path, match[3], algorithm) != (match[1], match[2].decode()):
+        mode, oid, remaining = blob(
+            path, match[3], algorithm, remaining=remaining, deadline=deadline
+        )
+        if (mode, oid) != (match[1], match[2].decode()):
             raise KeepError(f"tracked content or mode differs from index: {match[3]!r}")
 
 
@@ -562,7 +572,14 @@ def identity(info: os.stat_result) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
-def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
+def blob(
+    root: Path,
+    name: bytes,
+    algorithm: str,
+    *,
+    remaining: int = MAX_CONTENT_BYTES,
+    deadline: float | None = None,
+) -> tuple[bytes, str, int]:
     """Hash one worktree entry as a Git blob through unfollowed parent descriptors.
 
     Every parent component is opened with `O_DIRECTORY | O_NOFOLLOW` relative
@@ -573,12 +590,16 @@ def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
         root: Path, Resolved candidate checkout.
         name: bytes, Index path relative to the checkout.
         algorithm: str, Repository object hash algorithm.
+        remaining: int, Remaining tracked byte budget across the scan.
+        deadline: float | None, Monotonic scan deadline in seconds.
     Returns:
-        tuple[bytes, str]: Git mode and raw blob object ID
+        tuple[bytes, str, int]: Git mode, raw blob object ID and remaining byte budget
     Raises:
-        KeepError: A component is unsafe, or the entry changed while hashed.
+        KeepError: A component is unsafe, the entry changed while hashed, or the
+            content scan budget is exceeded.
         OSError: The entry cannot be read without following a symlink.
     """
+    limit = time.monotonic() + TIMEOUT if deadline is None else deadline
     *parents, leaf = name.split(b"/")
     if any(part in (b"", b".", b"..") for part in (*parents, leaf)):
         raise KeepError(f"unsupported index path: {name!r}")
@@ -597,7 +618,9 @@ def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
             raise KeepError(
                 f"cannot open tracked parent without following links: {name!r}: {exc}"
             ) from exc
-        result = leaf_blob(walked[-1][2], leaf, algorithm)
+        result = leaf_blob(
+            walked[-1][2], leaf, algorithm, remaining=remaining, deadline=limit
+        )
         for part, parent, descriptor in reversed(walked):
             current = os.stat(
                 part, dir_fd=None if parent < 0 else parent, follow_symlinks=False
@@ -607,30 +630,42 @@ def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
         return result
 
 
-def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
+def leaf_blob(
+    directory: int,
+    leaf: bytes,
+    algorithm: str,
+    *,
+    remaining: int,
+    deadline: float,
+) -> tuple[bytes, str, int]:
     """Hash one entry relative to a verified directory descriptor.
 
     Parameters:
         directory: int, Descriptor of the entry's walked parent.
         leaf: bytes, Final path component.
         algorithm: str, Repository object hash algorithm.
+        remaining: int, Remaining tracked byte budget across the scan.
+        deadline: float, Monotonic scan deadline in seconds.
     Returns:
-        tuple[bytes, str]: Git mode and raw blob object ID
+        tuple[bytes, str, int]: Git mode, raw blob object ID and remaining byte budget
     Raises:
-        KeepError: The opened entry is not regular, or it changed while hashed.
+        KeepError: The opened entry is not regular, changed while hashed, or
+            exceeds the content scan budget.
         OSError: The entry cannot be read without following a symlink.
     """
     initial = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
     mode = entry_mode(initial)
     if mode == b"120000":
         link = os.readlink(leaf, dir_fd=directory)
+        if len(link) > remaining or time.monotonic() > deadline:
+            raise KeepError(INCOMPLETE_CONTENT_SCAN)
         digest = hashlib.new(algorithm, b"blob %d\0%s" % (len(link), link)).hexdigest()
         current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
         if stamp(initial) != stamp(current):
             raise KeepError(f"tracked entry changed during hash: {leaf!r}")
-        return mode, digest
+        return mode, digest, remaining - len(link)
     if mode == b"unsupported":
-        return mode, ""
+        return mode, "", remaining
     # Never block on a FIFO or follow a symlink swapped in after the stat.
     descriptor = os.open(
         leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
@@ -639,10 +674,14 @@ def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise KeepError(f"tracked entry is not a regular file: {leaf!r}")
+        if before.st_size > remaining or time.monotonic() > deadline:
+            raise KeepError(INCOMPLETE_CONTENT_SCAN)
         digest = hashlib.new(algorithm, b"blob %d\0" % before.st_size)
         size = 0
         while chunk := os.read(descriptor, CHUNK):
             size += len(chunk)
+            if size > remaining or time.monotonic() > deadline:
+                raise KeepError(INCOMPLETE_CONTENT_SCAN)
             digest.update(chunk)
         after = os.fstat(descriptor)
         result = digest.hexdigest()
@@ -653,7 +692,7 @@ def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
             or stamp(before) != stamp(current)
         ):
             raise KeepError(f"tracked entry changed during hash: {leaf!r}")
-        return entry_mode(before), result
+        return entry_mode(before), result, remaining - size
     finally:
         os.close(descriptor)
 
