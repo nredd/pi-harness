@@ -34,7 +34,15 @@ export const HELPER_STDERR_LIMIT_BYTES = 8_192;
 export const DISCARDED_EXIT_WAIT_MS = HELPER_TERMINATE_GRACE_MS + 1_000;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
-export const LINUX_HELPER_PROTOCOL_VERSION = 10;
+export const LINUX_HELPER_PROTOCOL_VERSION = 11;
+/**
+ * How far ahead of the client's own timeout the helper's request deadline sits: past it the helper starts no press,
+ * motion, activation or semantic mutation for the request (one already in flight completes). It also covers the time
+ * the line spends in the pipe and the gap between the helper's last check and its post.
+ */
+export const LINUX_REQUEST_DEADLINE_MARGIN_MS = 250;
+/** The longest helper command timeout: Node's timers cannot wait longer. */
+export const LINUX_MAX_TIMEOUT_MS = 2 ** 31 - 1;
 export const LINUX_HELPER_PATH =
 	process.env.PI_COMPUTER_USE_LINUX_HELPER_PATH ||
 	path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge");
@@ -557,9 +565,22 @@ export class LinuxHelperClient {
 		signal?: AbortSignal,
 		physical = false,
 	): Promise<T> {
+		// A timeout Node's timer cannot wait (it fires at once past `2 ** 31 - 1`) would disagree with the deadline the
+		// helper is sent: refused before anything is registered or written.
+		if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > LINUX_MAX_TIMEOUT_MS) {
+			throw new RangeError(`Helper command '${cmd}' timeout ${timeoutMs}ms is outside 0 to ${LINUX_MAX_TIMEOUT_MS}ms.`);
+		}
 		const id = randomUUID();
+		// The helper's deadline as an absolute wall-clock time, as the budget left now and, on Linux, on
+		// `CLOCK_MONOTONIC` (what `process.hrtime` reads there, as the helper does): it takes the earliest. The monotonic
+		// one moves with neither a wall-clock step nor time in the pipe; without it, a wall clock stepped back while the
+		// line waits in the pipe makes the deadline late by the smaller of the two.
+		const budgetMs = Math.max(0, Math.floor(timeoutMs - LINUX_REQUEST_DEADLINE_MARGIN_MS));
+		const deadlineMs = Date.now() + budgetMs;
+		const deadlineMonoMs =
+			process.platform === "linux" ? Number(process.hrtime.bigint() / 1_000_000n) + budgetMs : undefined;
 		// Serialized before anything is registered or written: a request that cannot be encoded never reaches the helper.
-		const line = `${JSON.stringify({ protocolVersion: LINUX_HELPER_PROTOCOL_VERSION, id, cmd, args })}\n`;
+		const line = `${JSON.stringify({ protocolVersion: LINUX_HELPER_PROTOCOL_VERSION, id, cmd, args, deadlineMs, budgetMs, deadlineMonoMs })}\n`;
 		return await new Promise<T>((resolve, reject) => {
 			// The helper protocol has no cancel message: an abort or timeout only stops waiting for the reply.
 			const onAbort = () => {

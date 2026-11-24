@@ -1165,8 +1165,32 @@ func keyboardTargetRefusalPid(frontmostPid: Int32?, focusedPid: Int32?, isBlocke
 	return nil
 }
 
+/// One system-wide AX key-focus probe: the focused app's pid, no focused app at all (`kAXErrorNoValue`), or a
+/// failed or timed-out probe that leaves the focused app unknown.
+enum KeyFocusProbe: Equatable {
+	case focused(Int32)
+	case noFocus
+	case failed
+
+	/// The focused pid, or nil when no app is focused or the probe failed.
+	var pid: Int32? {
+		if case .focused(let pid) = self { return pid }
+		return nil
+	}
+}
+
+/// Classifies a `kAXFocusedApplicationAttribute` read: only `noValue` confirms nothing is focused; any other
+/// error, e.g. `cannotComplete` from the messaging timeout, or a success without an element pid, is a failed probe.
+func keyFocusProbe(_ error: AXError, focused: CFTypeRef?) -> KeyFocusProbe {
+	if error == .noValue { return .noFocus }
+	var pid: pid_t = 0
+	guard error == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID(),
+		AXUIElementGetPid(focused as! AXUIElement, &pid) == .success else { return .failed }
+	return .focused(pid)
+}
+
 /// Probe AX first: it may stall while the frontmost app changes.
-func sampleKeyboardTargets(frontmostPid: () -> Int32?, focusedPid: () -> Int32?) -> (Int32?, Int32?) {
+func sampleKeyboardTargets(frontmostPid: () -> Int32?, focusedPid: () -> KeyFocusProbe) -> (Int32?, KeyFocusProbe) {
 	let focused = focusedPid()
 	return (frontmostPid(), focused)
 }
@@ -1389,10 +1413,10 @@ struct ActScrollRequest {
 	let point: CGPoint?
 }
 
-// True invalidates cached focus after an operation that can stall.
-typealias FocusCheck = (Bool) throws -> Void
-// The second argument marks a real down, not an early check after a layout query.
-typealias BeforeKeyDown = (Bool, Bool) throws -> Void
+/// One keyboard admission: the deadline, the frontmost app and the AX key focus, probed fresh on every call.
+typealias FocusCheck = () throws -> Void
+/// The argument marks a real down, not an early check after a layout query.
+typealias BeforeKeyDown = (Bool) throws -> Void
 
 /// Counts the key pairs one keyboard action posts, so every failure after a posted prefix reports it as
 /// `evidence.postedUnits`: admission refusals through `beforeKeyDown`, anything else through `deliver`.
@@ -1412,11 +1436,11 @@ final class KeyboardPostCounter {
 		return failure
 	}
 
-	/// Admission before each key-down; the second argument marks a real down, which counts once admitted.
+	/// Admission before each key-down; the argument marks a real down, which counts once admitted.
 	var beforeKeyDown: BeforeKeyDown {
-		return { force, posting in
+		return { posting in
 			do {
-				try self.check(force)
+				try self.check()
 			} catch let failure as BridgeFailure {
 				throw self.withPostedUnits(failure)
 			}
@@ -1448,10 +1472,11 @@ func keyboardDeadline(_ request: [String: Any], now: TimeInterval, ceiling: Time
 	return min(ms / 1000, now + ceiling)
 }
 
+/// Admits each key-down against the deadline and a fresh frontmost and AX key-focus sample. Nothing is cached
+/// between calls: a blocked non-activating app can take key focus without changing the frontmost app. A failed
+/// or timed-out probe refuses with `app_blocked` (a hung blocked panel is a likely cause); only a probe that
+/// reports no focused app at all falls back to the frontmost check.
 final class KeyboardAdmission {
-	private var lastProbe: TimeInterval = -.infinity
-	private var probedFrontmost: Int32?
-	private var unitsSinceProbe = 0
 	private let now: () -> TimeInterval
 	private let deadline: TimeInterval
 
@@ -1466,21 +1491,18 @@ final class KeyboardAdmission {
 		}
 	}
 
-	func check(force: Bool, frontmostPid: () -> Int32?, focusedPid: () -> Int32?, refuse: (Int32) throws -> Void) throws {
+	func check(frontmostPid: () -> Int32?, focusProbe: () -> KeyFocusProbe, refuse: (Int32) throws -> Void) throws {
 		try checkDeadline()
-		let frontmost = frontmostPid()
-		if let frontmost { try refuse(frontmost) }
-		if force || frontmost == nil || frontmost != probedFrontmost || unitsSinceProbe >= 8 || now() - lastProbe >= 0.064 {
-			let (freshFrontmost, focused) = sampleKeyboardTargets(frontmostPid: frontmostPid, focusedPid: focusedPid)
-			if let freshFrontmost { try refuse(freshFrontmost) }
-			if let focused, focused != freshFrontmost { try refuse(focused) }
-			// An unknown or disagreeing AX target is not a cache hit on the next unit.
-			probedFrontmost = focused == frontmost && frontmost == freshFrontmost ? freshFrontmost : nil
-			lastProbe = now()
-			unitsSinceProbe = 0
+		if let frontmost = frontmostPid() { try refuse(frontmost) }
+		let (freshFrontmost, probe) = sampleKeyboardTargets(frontmostPid: frontmostPid, focusedPid: focusProbe)
+		if let freshFrontmost { try refuse(freshFrontmost) }
+		switch probe {
+		case .focused(let focused) where focused != freshFrontmost: try refuse(focused)
+		case .failed:
+			throw BridgeFailure(message: "Key focus could not be read, so the key was not sent", code: "app_blocked")
+		case .focused, .noFocus: break
 		}
 		try checkDeadline()
-		if !force { unitsSinceProbe += 1 }
 	}
 }
 
@@ -1884,8 +1906,26 @@ final class InputSuppressionGuard {
 
 }
 
+/// Kernel vnode identity (`"<dev>:<ino>"`) of the executable image mapped at `#dsohandle`.
+/// Reads the active VM mapping rather than resolving a path on disk, so unlinking or replacing
+/// the installed binary leaves a running helper reporting the vnode it launched from.
+func mappedExecutableId(
+	_ regionInfo: (UInt64, UnsafeMutablePointer<proc_regionwithpathinfo>, Int32) -> Int32 = { address, info, size in
+		proc_pidinfo(getpid(), PROC_PIDREGIONPATHINFO, address, info, size)
+	}
+) -> String? {
+	var info = proc_regionwithpathinfo()
+	let size = Int32(MemoryLayout<proc_regionwithpathinfo>.stride)
+	guard regionInfo(UInt64(UInt(bitPattern: #dsohandle)), &info, size) == size else { return nil }
+	let vst = info.prp_vip.vip_vi.vi_stat
+	guard vst.vst_ino != 0 else { return nil }
+	let dev = UInt64(bitPattern: Int64(Int32(bitPattern: vst.vst_dev)))
+	return "\(dev):\(vst.vst_ino)"
+}
+
 final class Bridge {
 	private let protocolVersion = 8
+	private let executableId: String?
 	private let refStore: AXRefStore
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
@@ -1912,8 +1952,10 @@ final class Bridge {
 		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) },
 		inputSink: NativeInputSink = .live,
 		physicalInputLock: NSLocking = NSRecursiveLock(),
-		refStore: AXRefStore = AXRefStore()
+		refStore: AXRefStore = AXRefStore(),
+		executableId: String? = mappedExecutableId()
 	) {
+		self.executableId = executableId
 		self.refStore = refStore
 		self.activityGlow = activityGlow
 		self.inputSink = inputSink
@@ -2337,6 +2379,9 @@ final class Bridge {
 			// The boot-relative clock keyboard deadlines are expressed in (see `keyboardDeadline`).
 			"uptimeMs": ProcessInfo.processInfo.systemUptime * 1000,
 		]
+		if let executableId {
+			output["executableId"] = executableId
+		}
 		if let parentPath {
 			output["parentPath"] = parentPath
 		}
@@ -3633,7 +3678,7 @@ final class Bridge {
 		let keyboard = KeyboardPostCounter(world.keyboardAdmission(delivery == "hid" ? blockedBundleIdList(request) : nil, deadline))
 		let admitKeyboard = keyboard.beforeKeyDown
 		func recheckBlockedKeyboard() throws {
-			try admitKeyboard(true, false)
+			try admitKeyboard(false)
 		}
 
 		/// HID keys reach the focused app: settle focus on the target first, then refuse a blocked focused app.
@@ -3888,7 +3933,7 @@ final class Bridge {
 				guard let vKeyCode = world.pasteKeyCode() else {
 					throw BridgeFailure(message: "The active keyboard layout is unreadable, so cmd+v cannot be sent", code: "layout_unsupported")
 				}
-				try keyboard.deliver { try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, { _, posting in try admitKeyboard(true, posting) }) }
+				try keyboard.deliver { try world.postKeyCode(CGKeyCode(vKeyCode), .maskCommand, pid, delivery, admitKeyboard) }
 				// The target reads the pasteboard asynchronously: restore once the value moved, or at the deadline.
 				for attempt in 0..<10 {
 					world.sleep(30_000)
@@ -4712,12 +4757,12 @@ final class Bridge {
 	// MARK: Whole-desktop control (global coordinates, HID delivery)
 
 	/// Throws `app_blocked` when keyboard input would reach a blocked app: the frontmost one, or the system-wide
-	/// focused one (a non-activating panel can hold key focus). An AX error leaves the frontmost check alone.
+	/// focused one (a non-activating panel can hold key focus), or when the AX focus probe fails or times out.
 	private func keyboardAdmission(blocked: [String]?, deadline: TimeInterval) -> FocusCheck {
 		let gate = KeyboardAdmission(now: { ProcessInfo.processInfo.systemUptime }, deadline: deadline)
-		return { force in
+		return {
 			guard let blocked else { return try gate.checkDeadline() }
-			try gate.check(force: force, frontmostPid: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, focusedPid: self.systemFocusedPid) { pid in
+			try gate.check(frontmostPid: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, focusProbe: self.systemKeyFocus) { pid in
 				let app = NSRunningApplication(processIdentifier: pid)
 				if isBlockedBundleId(app?.bundleIdentifier, blocked: blocked) {
 					throw BridgeFailure(message: appBlockedMessage(app?.localizedName ?? "app", app?.bundleIdentifier), code: "app_blocked")
@@ -4727,16 +4772,14 @@ final class Bridge {
 	}
 
 
-	/// The pid of the system-wide AX focused application, or nil when AX cannot say.
-	private func systemFocusedPid() -> Int32? {
+	/// The system-wide AX focused application: its pid, no focused app, or a failed or timed-out probe.
+	private func systemKeyFocus() -> KeyFocusProbe {
 		var focused: CFTypeRef?
 		let systemWide = AXUIElementCreateSystemWide()
 		// Bound each focus probe: a hung focused app would otherwise block for the default AX messaging timeout.
 		_ = AXUIElementSetMessagingTimeout(systemWide, 0.1)
-		guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
-			let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
-		var pid: pid_t = 0
-		return AXUIElementGetPid(focused as! AXUIElement, &pid) == .success ? pid : nil
+		let error = AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focused)
+		return keyFocusProbe(error, focused: focused)
 	}
 
 	/// One on-screen window list snapshot, front to back, to reuse across the vertices of one action.
@@ -4757,7 +4800,7 @@ final class Bridge {
 	/// settles before the blocked-app check; throws `focus_not_acquired` when it never does.
 	private func requireTargetFocus(pid: Int32) throws {
 		let held = waitForFocus(maxMs: 200, stepMs: 10, holdsFocus: {
-			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemFocusedPid(), targetPid: pid)
+			targetHoldsFocus(frontmostPid: NSWorkspace.shared.frontmostApplication?.processIdentifier, focusedPid: systemKeyFocus().pid, targetPid: pid)
 		}, sleepMs: { usleep(UInt32($0) * 1000) }, nowMs: { Int(clamping: DispatchTime.now().uptimeNanoseconds / 1_000_000) })
 		if !held { throw BridgeFailure(message: "The target app did not take focus, so keyboard input was not sent", code: "focus_not_acquired") }
 	}
@@ -4859,7 +4902,7 @@ final class Bridge {
 		var vertices: [CGPoint] = []
 		switch action {
 		case "type", "key":
-			try refuseBlockedKeyboard(true, false)
+			try refuseBlockedKeyboard(false)
 		case "moveMouse", "click", "scroll":
 			try refuseBlockedWindow(at: try point())
 		case "drag":
@@ -5787,7 +5830,7 @@ final class Bridge {
 		if delivery == "hid" { physicalInputLock.lock() }
 		defer { if delivery == "hid" { physicalInputLock.unlock() } }
 		let inputSource = inputSink.keyboardInputSource()
-		try beforeKeyDown(true, false)
+		try beforeKeyDown(false)
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char, inputSource: inputSource) {
@@ -5815,8 +5858,8 @@ final class Bridge {
 	}
 
 	private func postKeyPair(_ down: CGEvent, _ up: CGEvent, pid: Int32, delivery: String, hold: Bool = false, beforeKeyDown: BeforeKeyDown) throws {
-		let prepared = delivery == "hid" && inputSink.prepareHID(pid)
-		try beforeKeyDown(prepared, true)
+		if delivery == "hid" { _ = inputSink.prepareHID(pid) }
+		try beforeKeyDown(true)
 		postEvent(down, pid: pid, delivery: delivery)
 		// Release directly, without another activation or refusal.
 		if hold { inputSink.sleep(8_000) }
