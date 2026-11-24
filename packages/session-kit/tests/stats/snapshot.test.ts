@@ -28,7 +28,7 @@ import {
 	validateManifest,
 	validateShard,
 } from "../../src/stats/snapshot.ts";
-import { assistantLine, at, call, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, call, sessionFile, utcAt } from "../fixtures/stats/fixtures.ts";
 import { CANARY } from "../fixtures/stats/harness/fixtures.ts";
 import { seedHarnessHome } from "../fixtures/stats/harness/home.ts";
 
@@ -42,14 +42,14 @@ beforeEach(({ onTestFinished }) => {
 	a = join(dir, "a");
 	b = join(dir, "b");
 });
-const usage = (id: string, ms = at("2026-10-01"), input = 10): string => {
+const usage = (id: string, ms = utcAt("2026-10-01"), input = 10): string => {
 	const e = JSON.parse(assistantLine({ ms, provider: "enterprise-raw", model: "wire-model", input }));
 	e.id = id;
 	return JSON.stringify(e);
 };
 const seed = (agent: string, lines = [usage("entry-1")]): string => {
 	const path = join(agent, "sessions", "SECRET-PROJECT", "SECRET-NAME.jsonl");
-	sessionFile(path, { startMs: at("2026-09-30"), name: "SECRET-TITLE", lines });
+	sessionFile(path, { startMs: utcAt("2026-09-30"), name: "SECRET-TITLE", lines });
 	return path;
 };
 
@@ -81,7 +81,7 @@ it("v1 migration reparses available files for IDs, preserves unavailable deleted
 		delete f.modelPairs;
 	}
 	const deleted = join(a, "sessions", "gone.jsonl");
-	doc.files[deleted] = { ...doc.files[path], calls: [[at("2026-08-01"), 0, 99, 0, 0, 0, 0]] };
+	doc.files[deleted] = { ...doc.files[path], calls: [[utcAt("2026-08-01"), 0, 99, 0, 0, 0, 0]] };
 	writeFileSync(cachePath(a), JSON.stringify(doc));
 	const result = await loadUsage({ root: join(a, "sessions"), cache: cachePath(a) });
 	expect(result.calls.map((c) => c.input)).toEqual([99, 10, 10]);
@@ -124,7 +124,7 @@ it("reports malformed identity JSON by path and fixed reason, never quoting its 
 
 it("keeps a scan diagnostic one line when its path holds U+2028 or U+2029", async () => {
 	const path = join(a, "sessions", "bad\u2028line\u2029para.jsonl");
-	sessionFile(path, { startMs: at("2026-09-30"), lines: [`${CANARY}{broken`] });
+	sessionFile(path, { startMs: utcAt("2026-09-30"), lines: [`${CANARY}{broken`] });
 	const error = await exportStats(a, repo).catch((cause: unknown) => cause);
 	const lines = (error as Error).message.split(/\r\n|[\n\r\u2028\u2029]/);
 	expect(lines).toHaveLength(2);
@@ -144,7 +144,7 @@ it("cleans temporary output when atomic publication cannot replace a directory",
 });
 
 it("exports only allowlisted metadata in monthly shards and persistent agent-local UUID", async () => {
-	seed(a, [usage("entry-1", at("2026-09-30")), usage("entry-2", at("2026-10-01"))]);
+	seed(a, [usage("entry-1", utcAt("2026-09-30")), usage("entry-2", utcAt("2026-10-01"))]);
 	const result = await exportStats(a, repo);
 	const identity = await machineIdentity(a);
 	expect(result).toEqual({ machineId: identity.machineId, snapshotDir: join(repo, "machines", identity.machineId) });
@@ -162,7 +162,7 @@ it("exports only allowlisted metadata in monthly shards and persistent agent-loc
 });
 
 it("exports a session with all-NUL crash-padding lines mid-file and at EOF, but still fails closed on mixed garbage", async () => {
-	const path = seed(a, [usage("entry-1"), "\0".repeat(174), usage("entry-2", at("2026-10-02"))]);
+	const path = seed(a, [usage("entry-1"), "\0".repeat(174), usage("entry-2", utcAt("2026-10-02"))]);
 	writeFileSync(path, `${readFileSync(path, "utf8")}${"\0".repeat(2079)}`);
 	const result = await exportStats(a, repo);
 	expect(readdirSync(result.snapshotDir)).toContain("manifest.json");
@@ -177,20 +177,20 @@ it("copies/forks across machines count once, while fresh local calls and childre
 	await exportStats(a, repo);
 	await exportStats(b, repo);
 	const viewer = join(dir, "viewer");
-	seed(viewer, [usage("entry-2", at("2026-10-02"), 20)]);
+	seed(viewer, [usage("entry-2", utcAt("2026-10-02"), 20)]);
 	const childPath = join(viewer, "sessions", "child.jsonl");
 	sessionFile(childPath, {
-		startMs: at("2026-10-02"),
+		startMs: utcAt("2026-10-02"),
 		parentSession: "secret-parent",
 		name: "Explore#1234abcd",
-		lines: [usage("entry-3", at("2026-10-02"), 30)],
+		lines: [usage("entry-3", utcAt("2026-10-02"), 30)],
 	});
 	expect((await importStats(viewer, repo)).problems).toEqual([]);
 	const result = await loadCombined(viewer);
 	expect(result.calls.map((c) => c.input)).toEqual([10, 20, 30]);
 	expect(result.sessions).toHaveLength(2);
 	expect(result.coverage.machines).toBe(3);
-	seed(viewer, [usage("entry-2", at("2026-10-02"), 20), usage("fresh-local", at("2026-10-03"), 40)]);
+	seed(viewer, [usage("entry-2", utcAt("2026-10-02"), 20), usage("fresh-local", utcAt("2026-10-03"), 40)]);
 	expect((await loadCombined(viewer)).calls.map((c) => c.input)).toEqual([10, 20, 30, 40]);
 	expect(coverageLabel(result.coverage)).toContain("viewer last import");
 	const own = await exportStats(viewer, repo);
@@ -219,10 +219,10 @@ it("credits the oldest original across machines, not a fresh local fork that was
 	seed(a);
 	const fork = join(b, "sessions", "fork.jsonl");
 	sessionFile(fork, {
-		startMs: at("2026-10-02"),
+		startMs: utcAt("2026-10-02"),
 		parentSession: "secret-original",
 		name: "my fork",
-		lines: [usage("entry-1"), usage("fork-new", at("2026-10-02"), 20)],
+		lines: [usage("entry-1"), usage("fork-new", utcAt("2026-10-02"), 20)],
 	});
 	await exportStats(a, repo);
 	await importStats(b, repo);
@@ -244,7 +244,7 @@ it("preserves deleted history on repeated exports, independent of output checkou
 
 it("rejects a machine transaction as a whole, retains prior data and still imports valid machines", async () => {
 	seed(a);
-	seed(b, [usage("other", at("2026-10-02"), 20)]);
+	seed(b, [usage("other", utcAt("2026-10-02"), 20)]);
 	const exported = await exportStats(a, repo);
 	const viewer = join(dir, "viewer");
 	await importStats(viewer, repo);
@@ -283,7 +283,7 @@ it("validates schemas with strict keys, digest, counters, month, IDs and travers
 		{ ...shard, text: "secret" },
 		{ ...shard, machineId: "wrong" },
 		{ ...shard, events: [{ ...event, input: -1 }] },
-		{ ...shard, events: [{ ...event, ms: at("2026-08-01") }] },
+		{ ...shard, events: [{ ...event, ms: utcAt("2026-08-01") }] },
 		{ ...shard, events: [{ ...event, entryId: "not-opaque" }] },
 		{ ...shard, events: [{ ...event, cost: Infinity }] },
 		{ ...shard, events: [{ ...event, args: "secret" }] },
@@ -518,10 +518,10 @@ describe("actual portable bundled CLI", () => {
 	});
 
 	it("respects the sessions environment override and explicit option precedence", () => {
-		seed(a, [usage("excluded", at("2026-10-01"), 99)]);
+		seed(a, [usage("excluded", utcAt("2026-10-01"), 99)]);
 		const artifact = packedArtifact(join(dir, "packed"));
 		const external = join(dir, "external");
-		seed(external, [usage("included", at("2026-10-01"), 7)]);
+		seed(external, [usage("included", utcAt("2026-10-01"), 7)]);
 		const result = run(artifact, ["export", "--agent-dir", a, "--output", repo], {
 			PI_CODING_AGENT_SESSION_DIR: join(external, "sessions"),
 		});
@@ -581,7 +581,7 @@ describe("actual portable bundled CLI", () => {
 	it("neutralizes every Unicode Bidi_Control in real filename diagnostics", () => {
 		const controls = "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069";
 		const path = join(a, "sessions", `bad${controls}\u009b\n.jsonl`);
-		sessionFile(path, { startMs: at("2026-09-30"), lines: [`${CANARY}{broken`] });
+		sessionFile(path, { startMs: utcAt("2026-09-30"), lines: [`${CANARY}{broken`] });
 		const artifact = packedArtifact(join(dir, "packed"));
 		const failed = run(artifact, ["export", "--agent-dir", a, "--output", repo]);
 		expect(failed.status).toBe(1);
