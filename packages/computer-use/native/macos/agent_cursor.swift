@@ -69,11 +69,15 @@ final class AgentCursor {
         }
     }
 
-    /// Run `hide` after `delay` unless the returned task is cancelled first.
-    static func idleHideScheduler(after delay: Duration) -> IdleHideScheduler {
+    /// Run `hide` after `sleep(delay)` returns unless the returned task is cancelled first. `sleep` is
+    /// `Task.sleep` in production; tests inject one they control.
+    static func idleHideScheduler(
+        after delay: Duration,
+        sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) -> IdleHideScheduler {
         { hide in
             Task { @MainActor in
-                try? await Task.sleep(for: delay)
+                try? await sleep(delay)
                 guard !Task.isCancelled else { return }
                 hide()
             }

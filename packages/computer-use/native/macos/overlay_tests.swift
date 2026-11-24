@@ -171,18 +171,38 @@ private final class HideCount {
     var value = 0
 }
 
-/// The production scheduler fires once after its delay and never after cancellation.
+/// The production scheduler passes its delay to an injected sleep, fires once after it returns and never
+/// after cancellation; the default sleep is exercised with a zero delay only.
 @MainActor
 func runCursorIdleHideAssertions() async {
     expect(AgentCursor.idleHideDelay == .seconds(8), "the overlay hides 8 s after the last action")
     let hides = HideCount()
-    let fired = AgentCursor.idleHideScheduler(after: .milliseconds(1))({ hides.value += 1 })
+    var release: CheckedContinuation<Void, Never>?
+    var receivedDelay: Duration?
+    let scheduler = AgentCursor.idleHideScheduler(after: .seconds(8), sleep: { delay in
+        receivedDelay = delay
+        await withCheckedContinuation { release = $0 }
+    })
+    let fired = scheduler { hides.value += 1 }
+    for _ in 0..<100 where release == nil { await Task.yield() }
+    expect(receivedDelay == .seconds(8) && release != nil && hides.value == 0,
+           "idle hide waits for the requested delay before firing")
+    release?.resume()
     await fired.value
     expect(hides.value == 1, "an uncancelled idle timeout hides the overlay once")
-    let cancelled = AgentCursor.idleHideScheduler(after: .seconds(60))({ hides.value += 1 })
+    release = nil
+    receivedDelay = nil
+    let cancelled = scheduler { hides.value += 1 }
+    for _ in 0..<100 where release == nil { await Task.yield() }
+    expect(receivedDelay == .seconds(8) && release != nil && hides.value == 1,
+           "the next timeout is also pending before cancellation")
     cancelled.cancel()
+    release?.resume()
     await cancelled.value
     expect(hides.value == 1, "a cancelled idle timeout never hides the overlay")
+    let defaultSleep = AgentCursor.idleHideScheduler(after: .zero)({ hides.value += 1 })
+    await defaultSleep.value
+    expect(hides.value == 2, "the default sleep completes a zero-duration timeout")
 }
 
 /// Cursor geometry on exact paths, then one offscreen render of the overlay view; no window is created.
@@ -200,7 +220,10 @@ func runCursorRenderAssertions() {
            "the dart stays inside its rounded control points")
     let diagonal = agentCursorShape(at: origin, heading: .pi / 4)
     let tip = CGPoint(x: 100 - 6 / 2.0.squareRoot(), y: 100 - 6 / 2.0.squareRoot())
-    expect(diagonal.contains(tip) && !east.contains(CGPoint(x: 100, y: 94)),
+    // 10 pt along the expected tip axis: inside this dart, behind the notch of one pointing the other way.
+    let diagonalProbe = CGPoint(x: 100 - 10 / 2.0.squareRoot(), y: 100 - 10 / 2.0.squareRoot())
+    let reversed = agentCursorShape(at: origin, heading: .pi / 4 - .pi)
+    expect(diagonal.contains(diagonalProbe) && !reversed.contains(diagonalProbe),
            "the dart tip follows heading + pi")
     expect(!diagonal.contains(CGPoint(x: 100 + 6 / 2.0.squareRoot(), y: 100 + 6 / 2.0.squareRoot())),
            "the rotated notch stays open")
