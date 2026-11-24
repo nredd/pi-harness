@@ -32,22 +32,24 @@ The integration core Gitlink's exact-tag lookup uses a minimal explicit Git envi
 
 ## Changelog fragments
 
-`packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler}` use fragments;
-the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the unchanged
-closed filename and one-bullet grammar. `preset`, `subscription-router` and `computer-use`
-are not enrolled. For enrolled packages, add a fragment for new changes
-rather than editing the shared Unreleased block. `make check-changelog-fragments` is read-only
-and part of `make check-scripts`.
+`packages/{subagents,session-kit,dev-tools,todo,plan-mode,resource-sampler,preset,subscription-router}`
+use fragments; the [subagents README](../packages/subagents/README.md#changelog-fragments) defines the
+unchanged closed filename and one-bullet grammar. `computer-use` is not enrolled yet (several open
+PRs edit its Unreleased block). For enrolled packages, add a fragment for new changes rather than
+editing the shared Unreleased block. Legacy bullets that carry no matching issue link stay in the
+Unreleased block (`preset` has seven, `subscription-router` all of its bullets), so only edits to
+those bullets can still conflict. `make check-changelog-fragments` is read-only and part of
+`make check-scripts`.
 `make fold-changelog` is an explicit source-maintenance command, never an automatic release step.
-Of the five newly enrolled packages, only `todo` and `session-kit` ship `CHANGELOG.md`;
-none packs `changes/`. A release cut from `main` without folding ships a changelog missing
-its pending fragments. Run `make fold-changelog` during release prep and commit the result
-before tagging. `todo` currently has six pending fragments: #292, #414, #444, #448, #522 and #918.
+Every enrolled package other than `subagents` ships `CHANGELOG.md` and none packs `changes/`.
+A release cut from `main` without folding ships a changelog missing its pending fragments. Run `make fold-changelog` during release prep and commit the result
+before tagging. `todo` currently has six pending fragments: #292, #414, #444, #448, #522 and #918;
+`preset` has four: #1024, #1050, #1057 and #1126.
 
 The fold appends missing categories in Added, Changed, Fixed, Refactored, Removed, Deprecated,
 Security order and orders new bullets numerically by issue within each category. Existing
 entries, warning text, links and released sections remain byte-for-byte intact, including unbracketed release headings.
-Only the five newly enrolled packages permit uncategorized bullets, wrapped bullets and prose
+Only the packages enrolled after `subagents` permit uncategorized bullets, wrapped bullets and prose
 as legacy source, not new fragment syntax. In legacy mode, an unrecognized level-one or
 level-two ATX heading, or a setext underline immediately after a non-blank line, inside
 `[Unreleased]` blocks the fold. `subagents` retains its strict validation. Repeated legacy

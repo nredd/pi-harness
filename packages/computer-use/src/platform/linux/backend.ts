@@ -70,12 +70,12 @@ function parseRootKind(raw: unknown): PlatformRootKind {
 		: "window";
 }
 
-/** Block-only names: the helper's ambiguous `exe` link names plus the app-settable X11 `WM_CLASS` pair. */
 /** A process id the helper can report: a positive safe integer. */
 function isPid(value: unknown): value is number {
 	return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
+/** Block-only names: the helper's ambiguous `exe` link and interpreter script names plus the X11 `WM_CLASS` pair. */
 function parseBlockAliases(raw: any): { blockAliases?: string[] } {
 	const wmClass = raw?.metadata?.wmClass;
 	const aliases = [...(Array.isArray(raw?.blockAliases) ? raw.blockAliases : []), wmClass?.instance, wmClass?.class]
