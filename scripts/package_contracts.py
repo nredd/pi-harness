@@ -691,8 +691,9 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "native/linux/bridge-rs/src/tests.rs",
         "native/linux/bridge-rs/src/wayland.rs",
         "native/linux/bridge-rs/src/x11.rs",
+        "native/linux/bridge-rs/src/x11/release_journal.rs",
     ),
-    # macOS ships prebuilts; Linux ships only the locked Rust source (`Cargo.toml`, `Cargo.lock`, `src/*.rs`,
+    # macOS ships prebuilts; Linux ships only the locked Rust source (`Cargo.toml`, `Cargo.lock`, `src/`,
     # no `target/` or `tests/`) that `setup-helper.mjs` builds on opt-in. No `prebuilt/linux` or
     # `prebuilt/windows` pattern exists and no Windows crate or doc is packed. The
     # `src/platform` pattern is source the TypeScript backends reference. `scenario_computer_use`
@@ -707,7 +708,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         re.compile(
             r"^native/macos/(?:bridge|activity_glow|agent_cursor|agent_cursor_motion|helper_entry)\.swift$"
         ),
-        re.compile(r"^native/linux/bridge-rs/(?:Cargo\.(?:toml|lock)|src/[a-z0-9_]+\.rs)$"),
+        re.compile(r"^native/linux/bridge-rs/(?:Cargo\.(?:toml|lock)|src/(?:[a-z0-9_]+|x11/release_journal)\.rs)$"),
         re.compile(r"^prebuilt/macos/(?:arm64|x64)/bridge$"),
     ),
     exposes_tools=frozenset(
@@ -744,6 +745,7 @@ COMPUTER_USE_CONTRACT = PackageContract(
         "native/linux/bridge-rs/src/tests.rs",
         "native/linux/bridge-rs/src/wayland.rs",
         "native/linux/bridge-rs/src/x11.rs",
+        "native/linux/bridge-rs/src/x11/release_journal.rs",
         "native/macos/activity_glow.swift",
         "native/macos/agent_cursor.swift",
         "native/macos/agent_cursor_motion.swift",

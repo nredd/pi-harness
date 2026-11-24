@@ -1,7 +1,11 @@
 //! X11/EWMH enrichment, capture, focus, and guarded XTEST physical input.
+mod release_journal;
+
+use self::release_journal::{random_hex_128, Binding, Journal};
 use crate::atspi::{Rect, RootSnapshot};
 use crate::{ErrorCode, ProtocolError};
 use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -12,13 +16,14 @@ use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ButtonIndex, ClientMessageData, ClientMessageEvent, ConnectionExt as _,
-    Drawable, EventMask, GetImageReply, ImageFormat, ImageOrder, Keycode, MapState, Window,
-    BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, CLIENT_MESSAGE_EVENT, KEY_PRESS_EVENT,
+    Drawable, EventMask, GetImageReply, ImageFormat, ImageOrder, Keycode, MapState, PropMode,
+    Window, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, CLIENT_MESSAGE_EVENT, KEY_PRESS_EVENT,
     KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
 };
 use x11rb::protocol::{composite, xtest};
 use x11rb::rust_connection::RustConnection;
 
+const SERVER_ID_ATOM: &str = "_PI_COMPUTER_USE_SERVER_ID";
 const MAX_CAPTURE_PIXELS: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -764,7 +769,8 @@ impl InputSink for XtestSink {
 }
 
 /// A release still owed for a key or button this helper pressed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Owed {
     /// `KEY_RELEASE_EVENT` or `BUTTON_RELEASE_EVENT`.
     event: u8,
@@ -775,6 +781,16 @@ struct Owed {
     ambiguous: bool,
 }
 impl Owed {
+    fn valid(self) -> bool {
+        match self.event {
+            KEY_RELEASE_EVENT => self.detail >= 8,
+            BUTTON_RELEASE_EVENT => self.detail != 0,
+            _ => false,
+        }
+    }
+    fn same_input(self, other: Self) -> bool {
+        self.event == other.event && self.detail == other.detail
+    }
     fn button(self) -> bool {
         self.event == BUTTON_RELEASE_EVENT
     }
@@ -852,6 +868,12 @@ impl Owing {
 pub struct InputState {
     owing: Mutex<Owing>,
     cancelled: AtomicBool,
+    // Kept across requests only while this helper still has debt or a failed write.
+    journal: Mutex<Option<Journal>>,
+}
+
+fn journal_error(message: String) -> ProtocolError {
+    err(message, ErrorCode::InputUnsafe)
 }
 impl InputState {
     /// The process-wide state live delivery uses.
@@ -956,6 +978,9 @@ impl InputState {
             }
         }
     }
+    fn journal_slot(&self) -> std::sync::MutexGuard<'_, Option<Journal>> {
+        self.journal.lock().unwrap_or_else(PoisonError::into_inner)
+    }
     fn owing(&self) -> std::sync::MutexGuard<'_, Owing> {
         // Plain data: a panic elsewhere cannot leave it inconsistent.
         self.owing.lock().unwrap_or_else(PoisonError::into_inner)
@@ -966,7 +991,21 @@ impl InputState {
 /// with no target window, waiting at most `limit`. Returns what stays owed, named for
 /// stderr. See [`settle_for_exit`].
 pub fn exit_settlement(state: Arc<InputState>, limit: Duration) -> Vec<String> {
-    settle_for_exit(state, open_root_sink, limit)
+    let started = std::time::Instant::now();
+    run_exit_settlement(
+        state,
+        move |worker| {
+            if SessionKind::detect() == SessionKind::X11 {
+                if let Ok(mut input) = Input::open_journaled(0, worker, true) {
+                    input.exit_limit = Some((started, limit));
+                    let _ = input.settle();
+                }
+            }
+        },
+        |finished| {
+            let _ = finished.recv_timeout(limit);
+        },
+    )
 }
 
 /// Settle owed releases through [`Input::settle`] on a sink from `open`, waiting at
@@ -993,36 +1032,33 @@ where
     S: InputSink + 'static,
     F: FnOnce() -> Result<S, ProtocolError> + Send + 'static,
 {
+    run_exit_settlement(
+        state,
+        move |worker| {
+            if let Ok(sink) = open() {
+                let _ = Input::with_state(sink, worker).settle();
+            }
+        },
+        wait,
+    )
+}
+
+fn run_exit_settlement(
+    state: Arc<InputState>,
+    settle: impl FnOnce(Arc<InputState>) + Send + 'static,
+    wait: impl FnOnce(&std::sync::mpsc::Receiver<()>),
+) -> Vec<String> {
     if state.owing().debt.is_empty() {
         return Vec::new();
     }
     let (done, finished) = std::sync::mpsc::channel();
     let worker = Arc::clone(&state);
     std::thread::spawn(move || {
-        let _ = catch_unwind(AssertUnwindSafe(|| {
-            if let Ok(sink) = open() {
-                let _ = Input::with_state(sink, worker).settle();
-            }
-        }));
+        let _ = catch_unwind(AssertUnwindSafe(|| settle(worker)));
         let _ = done.send(());
     });
     wait(&finished);
     state.exit_report()
-}
-
-fn open_root_sink() -> Result<XtestSink, ProtocolError> {
-    if SessionKind::detect() != SessionKind::X11 {
-        return Err(err(
-            "No X11 session to settle owed releases on",
-            ErrorCode::CapabilityDeferred,
-        ));
-    }
-    let (conn, root) = connect_xtest()?;
-    Ok(XtestSink {
-        conn,
-        root,
-        target: root,
-    })
 }
 
 /// Check `policy` against `session`, then open the input connection with `open`. A
@@ -1046,6 +1082,8 @@ fn open_physical<T>(
 pub struct Input<S: InputSink = XtestSink> {
     sink: S,
     state: Arc<InputState>,
+    journal: std::cell::RefCell<Option<(Journal, Binding)>>,
+    exit_limit: Option<(std::time::Instant, Duration)>,
     delivered: Cell<usize>,
     uncertain: Cell<bool>,
 }
@@ -1054,12 +1092,91 @@ impl Input<XtestSink> {
     /// a release reaches the window its press did when nothing has changed since.
     pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
         let state = InputState::shared();
-        let (conn, root) = open_physical(policy, SessionKind::detect(), &state, connect_xtest)?;
-        let input = Self::with_state(XtestSink { conn, root, target }, state);
+        open_physical(policy, SessionKind::detect(), &state, || Ok(()))?;
+        let input = Self::open_journaled(target, state, false)?;
+        let root = input.sink.root;
         input.settle()?;
         validate_target(&input.sink.conn, root, target)?;
         prepare_focus(&input.sink.conn, root, target, policy, &input.state)?;
         Ok(input)
+    }
+
+    fn open_journaled(
+        target: Window,
+        state: Arc<InputState>,
+        exiting: bool,
+    ) -> Result<Self, ProtocolError> {
+        let previous = state.journal_slot().take();
+        let continuing = previous.is_some();
+        let journal = match previous {
+            Some(journal) => journal,
+            None if exiting => {
+                return Err(journal_error(
+                    "No bound X11 release-debt journal to settle at exit".into(),
+                ))
+            }
+            None => {
+                let home = std::env::var_os("HOME").ok_or_else(|| {
+                    journal_error("No HOME for the X11 release-debt journal".to_owned())
+                })?;
+                Journal::open(std::path::Path::new(&home)).map_err(journal_error)?
+            }
+        };
+        let opened = (|| {
+            let (conn, root) = connect_xtest()?;
+            let binding = live_binding(&conn)?;
+            journal.bind(&binding).map_err(journal_error)?;
+            if !continuing && !journal.releases().is_empty() && binding.session_id.is_none() {
+                return Err(journal_error(journal.recovery(
+                    "Cannot verify the original login session: XDG_SESSION_ID is absent.",
+                )));
+            }
+            Ok::<_, ProtocolError>((conn, root, binding))
+        })();
+        let (conn, root, binding) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                let error = if journal.releases().is_empty() || error.code == ErrorCode::InputUnsafe
+                {
+                    state.with_owed(error)
+                } else {
+                    journal_error(journal.recovery(&error.message))
+                };
+                if continuing {
+                    *state.journal_slot() = Some(journal);
+                }
+                return Err(error);
+            }
+        };
+        if !continuing {
+            // Across a restart the write could have preceded a press that never ran.
+            // Observe up only: a down key could now be held by somebody else.
+            state.owing().debt = journal
+                .releases()
+                .iter()
+                .copied()
+                .map(Owed::unknown)
+                .collect();
+        }
+        let input = Self::with_state(
+            XtestSink {
+                conn,
+                root,
+                target: if exiting { root } else { target },
+            },
+            state,
+        );
+        *input.journal.borrow_mut() = Some((journal, binding));
+        Ok(input)
+    }
+}
+impl<S: InputSink> Drop for Input<S> {
+    fn drop(&mut self) {
+        if let Some((journal, _)) = self.journal.get_mut().take() {
+            if !journal.releases().is_empty() || !self.state.owing().debt.is_empty() {
+                *self.state.journal_slot() = Some(journal);
+            }
+        }
     }
 }
 impl<S: InputSink> Input<S> {
@@ -1071,8 +1188,46 @@ impl<S: InputSink> Input<S> {
         Self {
             sink,
             state,
+            journal: std::cell::RefCell::new(None),
+            exit_limit: None,
             delivered: Cell::new(0),
             uncertain: Cell::new(false),
+        }
+    }
+    /// Store the full snapshot outside the state mutex so shutdown can still report
+    /// held inputs if the filesystem stalls. Override one entry before a release.
+    fn sync_journal(&self, unknown: Option<Owed>) -> Result<(), ProtocolError> {
+        let mut active = self.journal.borrow_mut();
+        let Some((journal, binding)) = active.as_mut() else {
+            return Ok(());
+        };
+        let mut releases = {
+            let owing = self.state.owing();
+            owing
+                .debt
+                .iter()
+                .chain(&owing.held)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        if let Some(unknown) = unknown {
+            for entry in &mut releases {
+                if entry.same_input(unknown) {
+                    *entry = unknown.unknown();
+                }
+            }
+        }
+        journal.sync(binding, releases).map_err(journal_error)
+    }
+    fn mark_held_unknown(&self, owed: Owed) {
+        if let Some(entry) = self
+            .state
+            .owing()
+            .held
+            .iter_mut()
+            .rfind(|entry| entry.same_input(owed))
+        {
+            *entry = owed.unknown();
         }
     }
     pub fn sink(&self) -> &S {
@@ -1097,15 +1252,30 @@ impl<S: InputSink> Input<S> {
     /// counted.
     pub fn settle(&self) -> Result<(), ProtocolError> {
         let pending = self.state.owing().debt.clone();
+        if pending.is_empty()
+            && self
+                .journal
+                .borrow()
+                .as_ref()
+                .is_some_and(|(journal, _)| !journal.releases().is_empty())
+        {
+            self.sync_journal(None)?;
+        }
         for owed in pending.into_iter().rev() {
             let left = catch_unwind(AssertUnwindSafe(|| self.settle_one(owed)))
                 // A panic mid-post leaves its delivery unknown.
-                .unwrap_or(Some(owed.unknown()));
+                .unwrap_or(Ok(Some(owed.unknown())))?;
             self.state.resolve(owed, left);
+            self.sync_journal(None)?;
         }
         let names = self.state.unconfirmed_releases();
         if names.is_empty() {
             return Ok(());
+        }
+        if let Some((journal, _)) = self.journal.borrow().as_ref() {
+            return Err(journal_error(
+                journal.recovery("Release delivery could not be confirmed."),
+            ));
         }
         Err(err(
             format!(
@@ -1116,18 +1286,32 @@ impl<S: InputSink> Input<S> {
         ))
     }
     /// Settle one owed release; returns it again while it stays owed.
-    fn settle_one(&self, owed: Owed) -> Option<Owed> {
-        match self.sink.is_down(owed.button(), owed.detail) {
+    fn settle_one(&self, owed: Owed) -> Result<Option<Owed>, ProtocolError> {
+        Ok(match self.sink.is_down(owed.button(), owed.detail) {
             Ok(Some(false)) => None,
             // Down, or unobservable: only a confirmed release post settles it.
             Ok(Some(true) | None) if !owed.ambiguous => {
                 // Delivery-unknown in the shared debt from submission on: a caller that
                 // stops waiting now, e.g. an exit, must never see it as resendable.
+                self.sync_journal(Some(owed))?;
                 self.state.resolve(owed, Some(owed.unknown()));
-                owed.after_post(&self.sink.post(owed.event, owed.detail, 0, 0))
+                if self
+                    .exit_limit
+                    .is_some_and(|(start, limit)| start.elapsed() >= limit)
+                {
+                    return Ok(Some(owed.unknown()));
+                }
+                let left = owed.after_post(&self.sink.post(owed.event, owed.detail, 0, 0));
+                // Don't restore resend eligibility on a journaled settlement: the
+                // exit waiter may have timed out before the post returned.
+                if self.journal.borrow().is_some() {
+                    left.map(Owed::unknown)
+                } else {
+                    left
+                }
             }
             Ok(Some(true) | None) | Err(_) => Some(owed),
-        }
+        })
     }
     /// Pointer actions check their point up front, then recheck it before the motion
     /// and before every button press: a point can become covered while the same
@@ -1273,6 +1457,11 @@ impl<S: InputSink> Input<S> {
                 Ok(Some(true) | None) | Err(_) => Some(owed),
             };
         }
+        if self.sync_journal(Some(owed)).is_err() {
+            return Some(owed);
+        }
+        // Another held release may sync the full snapshot before hand_over runs.
+        self.mark_held_unknown(owed);
         owed.after_post(&self.post_checked(owed.event, owed.detail, 0, 0))
     }
 }
@@ -1315,7 +1504,7 @@ impl<'a, S: InputSink> Held<'a, S> {
         press: u8,
         release: u8,
         detail: u8,
-        admit: impl FnOnce() -> Result<(), ProtocolError>,
+        admit: impl Fn() -> Result<(), ProtocolError>,
     ) -> Result<(), ProtocolError> {
         let button = release == BUTTON_RELEASE_EVENT;
         if self.input.sink.is_down(button, detail)? == Some(true) {
@@ -1336,14 +1525,35 @@ impl<'a, S: InputSink> Held<'a, S> {
             detail,
             ambiguous: false,
         };
-        self.owed.push(owed);
-        // Visible to an exit before submission: the server may execute the press even
-        // if its reply never comes back.
         self.input.state.hold(owed);
+        if let Err(error) = self.input.sync_journal(None) {
+            self.input.state.unhold(owed);
+            return Err(error);
+        }
+        // Re-admit after the disk write, which may have blocked across shutdown or
+        // a focus or occlusion change. No press has run if this check fails.
+        if self.input.journal.borrow().is_some() {
+            let readmit = || {
+                if self.input.sink.is_down(button, detail)? == Some(true) {
+                    return Err(journal_error(format!(
+                        "Refusing to press {}: it is already held",
+                        owed.describe()
+                    )));
+                }
+                admit()
+            };
+            if let Err(error) = readmit() {
+                self.input.state.unhold(owed);
+                self.input.sync_journal(None)?;
+                return Err(error);
+            }
+        }
+        self.owed.push(owed);
         match self.input.post_checked(press, detail, 0, 0) {
             Err(PostFailure::Rejected(error)) => {
                 self.owed.pop();
                 self.input.state.unhold(owed);
+                self.input.sync_journal(None)?;
                 Err(error)
             }
             result => result.map_err(PostFailure::into_error),
@@ -1358,16 +1568,21 @@ impl<'a, S: InputSink> Held<'a, S> {
             return Ok(());
         };
         self.input.admit()?;
+        self.input.sync_journal(Some(owed))?;
+        if self.input.journal.borrow().is_some() {
+            self.input.admit()?;
+        }
         // Ambiguous from submission on: a panic inside the sink must not leave it
         // looking unsent, or cleanup would release it a second time.
         if let Some(last) = self.owed.last_mut() {
             last.ambiguous = true;
         }
+        self.input.mark_held_unknown(owed);
         match self.input.post_checked(owed.event, owed.detail, 0, 0) {
             Ok(()) => {
                 self.owed.pop();
                 self.input.state.unhold(owed);
-                Ok(())
+                self.input.sync_journal(None)
             }
             Err(PostFailure::Rejected(error)) => {
                 // A definite rejection had no effect: the release may be sent again.
@@ -1402,6 +1617,7 @@ impl<S: InputSink> Drop for Held<'_, S> {
         }
         unconfirmed.reverse();
         self.input.state.hand_over(unconfirmed, released);
+        let _ = self.input.sync_journal(None);
     }
 }
 
@@ -1620,6 +1836,78 @@ fn connect_xtest() -> Result<(RustConnection, Window), ProtocolError> {
             )
         })?;
     Ok((conn, root))
+}
+fn live_binding(conn: &RustConnection) -> Result<Binding, ProtocolError> {
+    Ok(Binding {
+        server_id: server_id_of(conn)?,
+        session_id: std::env::var("XDG_SESSION_ID")
+            .ok()
+            .filter(|id| !id.is_empty()),
+        boot_id: release_journal::read_boot_id_from(std::path::Path::new("/proc"))
+            .map_err(journal_error)?,
+    })
+}
+
+/// Read or initialize under the journal lock the per-X-server-instance token on screen 0's root window.
+fn server_id_of(conn: &RustConnection) -> Result<String, ProtocolError> {
+    let root0 = conn
+        .setup()
+        .roots
+        .first()
+        .ok_or_else(|| err("X11 screen 0 is missing", ErrorCode::CapabilityDeferred))?
+        .root;
+    let atom = intern(conn, SERVER_ID_ATOM)?;
+    let utf8 = intern(conn, "UTF8_STRING")?;
+    if let Some(existing) = read_server_id(conn, root0, atom, utf8)? {
+        return Ok(existing);
+    }
+    let fresh = random_hex_128();
+    conn.change_property(
+        PropMode::REPLACE,
+        root0,
+        atom,
+        utf8,
+        8,
+        fresh.len() as u32,
+        fresh.as_bytes(),
+    )
+    .map_err(xerr)?
+    .check()
+    .map_err(xerr)?;
+    Ok(fresh)
+}
+fn read_server_id(
+    conn: &impl Connection,
+    root0: Window,
+    atom: Atom,
+    utf8: Atom,
+) -> Result<Option<String>, ProtocolError> {
+    let reply = conn
+        .get_property(false, root0, atom, utf8, 0, 64)
+        .map_err(xerr)?
+        .reply()
+        .map_err(xerr)?;
+    if reply.type_ == x11rb::NONE {
+        return Ok(None);
+    }
+    if reply.type_ != utf8 || reply.format != 8 || reply.bytes_after != 0 {
+        return Err(err(
+            "X11 _PI_COMPUTER_USE_SERVER_ID on root window is malformed",
+            ErrorCode::InternalError,
+        ));
+    }
+    let id = std::str::from_utf8(&reply.value)
+        .ok()
+        .filter(|text| {
+            !text.is_empty() && text.len() <= 128 && text.chars().all(|ch| ch.is_ascii_graphic())
+        })
+        .ok_or_else(|| {
+            err(
+                "X11 _PI_COMPUTER_USE_SERVER_ID on root window is invalid",
+                ErrorCode::InternalError,
+            )
+        })?;
+    Ok(Some(id.to_owned()))
 }
 fn connect() -> Result<(RustConnection, usize), ProtocolError> {
     x11rb::connect(None).map_err(|e| {
@@ -2344,6 +2632,145 @@ mod tests {
         assert_eq!(snapshot, ["keycode 8 (held by a running action)"]);
         worker.expect("spawned").join().expect("transfer");
         assert_eq!(state.possibly_held(), ["keycode 8"]);
+    }
+
+    fn journal_fixture() -> (tempfile::TempDir, Binding, Journal) {
+        let home = tempfile::tempdir().unwrap();
+        let binding = Binding {
+            server_id: "test-server".into(),
+            session_id: Some("test-session".into()),
+            boot_id: "test-boot".into(),
+        };
+        let journal = Journal::open(home.path()).unwrap();
+        (home, binding, journal)
+    }
+
+    #[test]
+    fn journal_survives_helper_killed_during_press() {
+        const CHILD_HOME: &str = "PI_TEST_RELEASE_JOURNAL_CHILD_HOME";
+        let (posts, posting) = std::sync::mpsc::channel();
+        if let Some(home) = std::env::var_os(CHILD_HOME) {
+            let journal = Journal::open(std::path::Path::new(&home)).unwrap();
+            let sink = RecordingSink::default().announce_posts(posts);
+            let (_resume, blocked) = std::sync::mpsc::channel();
+            let input = Input::with_sink(sink.hold_posts_until(blocked));
+            *input.journal.borrow_mut() = Some((
+                journal,
+                Binding {
+                    server_id: "test-server".into(),
+                    session_id: Some("test-session".into()),
+                    boot_id: "test-boot".into(),
+                },
+            ));
+            std::thread::spawn(move || {
+                posting.recv().unwrap();
+                println!("press reached sink");
+            });
+            Held::new(&input)
+                .press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, 37)
+                .unwrap();
+            unreachable!("parent must kill the child while the press is blocked");
+        }
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+        let (home, binding, journal) = journal_fixture();
+        drop(journal);
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "x11::tests::journal_survives_helper_killed_during_press",
+                "--nocapture",
+            ])
+            .env(CHILD_HOME, home.path())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (ready, wait) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            if std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+                .any(|line| line == "press reached sink")
+            {
+                let _ = ready.send(());
+            }
+        });
+        let entered = wait.recv_timeout(Duration::from_secs(10));
+        let locked = Journal::open(home.path()).is_err();
+        child.kill().unwrap();
+        assert!(!child.wait().unwrap().success());
+        reader.join().unwrap();
+        entered.unwrap();
+        assert!(locked, "the live helper holds the cross-process lock");
+        let recovered = Journal::open(home.path()).unwrap();
+        recovered.bind(&binding).unwrap();
+        assert_eq!(
+            recovered.releases(),
+            &[Owed {
+                event: KEY_RELEASE_EVENT,
+                detail: 37,
+                ambiguous: false
+            }]
+        );
+    }
+
+    #[test]
+    fn journal_stores_unknown_before_exit_release_submission() {
+        let (home, binding, mut journal) = journal_fixture();
+        let state = owing(8);
+        journal.sync(&binding, state.owing().debt.clone()).unwrap();
+        let (posts, posting) = std::sync::mpsc::channel();
+        let (resume, blocked) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let left = run_exit_settlement(
+            Arc::clone(&state),
+            move |worker| {
+                let input = Input::with_state(
+                    RecordingSink::default()
+                        .held(false, 8)
+                        .announce_posts(posts)
+                        .hold_posts_until(blocked)
+                        .lose_ack(0, false),
+                    worker,
+                );
+                *input.journal.borrow_mut() = Some((journal, binding));
+                assert_eq!(input.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+                drop(input);
+                done.send(()).unwrap();
+            },
+            |_| {
+                posting.recv_timeout(Duration::from_secs(10)).unwrap();
+            },
+        );
+        assert!(left[0].contains("delivery unknown"));
+        let bytes =
+            std::fs::read(home.path().join(".pi-computer-use-input/release-debt.json")).unwrap();
+        assert!(
+            serde_json::from_slice::<Value>(&bytes).unwrap()["releases"][0]["ambiguous"]
+                .as_bool()
+                .unwrap()
+        );
+        resume.send(()).unwrap();
+        finished.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
+
+    #[test]
+    fn journal_write_failure_refuses_press_without_posting() {
+        let (home, binding, journal) = journal_fixture();
+        // The destination cannot be replaced by rename. Staging and rename are real.
+        std::fs::create_dir(home.path().join(".pi-computer-use-input/release-debt.json")).unwrap();
+        let input = Input::with_sink(RecordingSink::default());
+        *input.journal.borrow_mut() = Some((journal, binding));
+        let error = Held::new(&input)
+            .press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, 37)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+        assert!(error
+            .message
+            .contains("could not update release-debt record"));
+        assert!(input.sink().events().is_empty());
+        assert!(input.state().possibly_held().is_empty());
     }
 
     fn owing(detail: u8) -> Arc<InputState> {

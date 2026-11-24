@@ -231,8 +231,8 @@ async fn main() {
 }
 
 /// Try once, bounded, to confirm owed releases on a fresh X11 connection. Returns the
-/// exit status: nonzero, with the releases named on stderr, while any stay owed. Nothing
-/// records them past this exit, so the client must refuse physical input from then on.
+/// exit status: nonzero, with the releases named on stderr, while any stay owed.
+/// Keep the client refusal as a backstop even when the journal could not be updated.
 async fn settle_before_exit() -> i32 {
     let left = tokio::task::spawn_blocking(|| {
         x11::exit_settlement(InputState::shared(), EXIT_SETTLE_LIMIT)
@@ -253,6 +253,7 @@ fn exit_status(held: Vec<String>) -> i32 {
         "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",
         held.join(", ")
     );
+    eprintln!("linux-bridge: if a fresh helper still refuses, check its journal recovery instructions before removing any record.");
     EXIT_RELEASE_DEBT
 }
 
