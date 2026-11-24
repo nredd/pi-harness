@@ -9,7 +9,12 @@ export function outboxStatePath(agent: string, snapshotDir: string): string {
 	return join(agent, "pi-session-kit", "outboxes", `${key}.json`);
 }
 
-/** Local-time instant for `YYYY-MM-DD` at `hour`. */
+/** UTC instant for `YYYY-MM-DD` at `hour`: snapshot shards, seals and quota windows key on UTC months. */
+export function utcAt(day: string, hour = 12): number {
+	return Date.parse(`${day}T${String(hour).padStart(2, "0")}:00:00Z`);
+}
+
+/** Local-time instant for `YYYY-MM-DD` at `hour`: day and hour views bucket in local time. */
 export function at(day: string, hour = 12): number {
 	const [y, m, d] = day.split("-").map(Number);
 	return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1, hour).getTime();
