@@ -912,8 +912,13 @@ an origin is retired only when all of these hold, else it stays counted:
 A retired row is never deleted: its shard is rewritten with the row moved from `events` to `retired`,
 naming its `successor` and `reason` (`revised`), and the successor is published beside it. A retired
 row survives every later export, lossless packing past 32 shards and month regeneration; a scanned row
-identical to a retired one is not counted again. Rows published before lineage have no origin, so a
-correction of one still appends beside it (no backfill), and so does a correction with no anchor (above). Lineage relies on append-only transcripts: a
+identical to a retired one is not counted again. Legacy rows sealed earlier in version 3 shards have no
+`origin`: an export establishes one only for a row whose fingerprint and session match a scanned row with
+a unique origin, persisting it by rewriting that shard losslessly as a version 4 lineage shard (one-time
+churn per month holding matched legacy rows; older viewers keep last-good until they update). A pre-lineage
+row already revised before backfill (or an existing double count where the old row is no longer in the
+scan) has no exact match, so it stays counted without an origin, and so does a correction with no anchor
+(above). Lineage relies on append-only transcripts: a
 rewritten transcript that puts a new call at a published call's origin, same month and model, retires
 the old row (kept in `retired`, so the double count turns into a recorded replacement, never a loss).
 `--replace-harnesses` rebuilds from the scan and drops retired rows with the rest of the history.

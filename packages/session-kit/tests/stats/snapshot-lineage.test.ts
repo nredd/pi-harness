@@ -97,6 +97,26 @@ function forget(file: string): void {
 	rmSync(join(agent, "sessions", file));
 	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
 }
+/** Rewrite `month`'s published shards as a pre-lineage kit published them: version 3 rows, no origins. */
+function stripLineage(month = "2026-10"): void {
+	const { dir, manifest } = outbox();
+	manifest.shards = manifest.shards.map((ref) => {
+		if (ref.month !== month) return ref;
+		const shard = decodeShard(readFileSync(join(dir, ref.file)), manifest, ref.month);
+		const bytes = encodeShard({
+			version: 3,
+			machineId: shard.machineId,
+			month: shard.month,
+			events: shard.events.map(({ origin: _, ...e }) => e),
+			sessions: shard.sessions,
+			quota: shard.quota,
+		});
+		const sha256 = createHash("sha256").update(bytes).digest("hex");
+		writeFileSync(join(dir, `${ref.month}-${sha256}.json.gz`), bytes);
+		return { month: ref.month, file: `${ref.month}-${sha256}.json.gz`, sha256, bytes: bytes.length };
+	});
+	writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+}
 /** What a viewer on another machine counts. */
 async function viewed(): Promise<{ output: number; ms: number; model: string }[]> {
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
@@ -307,30 +327,56 @@ describe("row lineage", () => {
 		expect(counted()).toEqual(published);
 	});
 
-	it("leaves rows published before lineage counted beside a correction, as before", async () => {
+	it("backfills origins into a sealed version 3 shard once and retires a later correction", async () => {
 		await seal();
-		// Rewrite October as a kit without lineage published it: version 3 rows, no origins.
-		const { dir, manifest } = outbox();
-		manifest.shards = manifest.shards.map((ref) => {
-			if (ref.month !== "2026-10") return ref;
-			const shard = decodeShard(readFileSync(join(dir, ref.file)), manifest, ref.month);
-			const bytes = encodeShard({
-				version: 3,
-				machineId: shard.machineId,
-				month: shard.month,
-				events: shard.events.map(({ origin: _, ...e }) => e),
-				sessions: shard.sessions,
-				quota: shard.quota,
-			});
-			const sha256 = createHash("sha256").update(bytes).digest("hex");
-			writeFileSync(join(dir, `${ref.month}-${sha256}.json.gz`), bytes);
-			return { month: ref.month, file: `${ref.month}-${sha256}.json.gz`, sha256, bytes: bytes.length };
-		});
-		writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+		stripLineage();
+		await exportStats(agent, out);
+		const [backfilled] = shards();
+		expect(backfilled?.version).toBe(4);
+		expect(backfilled?.events.map((e) => e.origin)).toEqual([0, 1, 2, 3, 4]);
+		expect(backfilled?.retired).toEqual([]);
+		const ref = outbox().manifest.shards.find((r) => r.month === "2026-10");
+		// One-time churn: a second export with no retirement keeps the lineage shard reference untouched.
+		await exportStats(agent, out);
+		expect(outbox().manifest.shards.find((r) => r.month === "2026-10")).toEqual(ref);
 		transcript("a.jsonl", "a", october(1));
 		await exportStats(agent, out);
+		expect(retired().map((e) => e.output)).toEqual([10]);
+		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 11, 10, 10]);
+	});
+
+	it("keeps an existing pre-lineage double count counted while backfilling matched rows for later revisions", async () => {
+		await seal();
+		stripLineage();
+		transcript("a.jsonl", "a", october(1));
+		await exportStats(agent, out);
+		// Both the original shard and the appended correction were published before lineage: neither has origins.
+		stripLineage();
+		await exportStats(agent, out);
+		expect(shards().map((s) => s.events.map((e) => e.origin))).toEqual([[0, 1, null, 3, 4], [2]]);
 		expect(retired()).toEqual([]);
 		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 10, 11, 10, 10]);
+		// A further correction retires the backfilled correction row; the unproven old row stays counted.
+		transcript("a.jsonl", "a", october(2));
+		await exportStats(agent, out);
+		expect(retired().map((e) => e.output)).toEqual([11]);
+		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 10, 12, 10, 10]);
+	});
+
+	it("does not backfill or rewrite a sealed version 3 shard without a same-session unique-origin match", async () => {
+		await seal([{ ms: utc("2026-10-05") }]);
+		stripLineage();
+		const [before] = outbox().manifest.shards.filter((r) => r.month === "2026-10");
+		// Same fingerprint under another session, then under the same session with a shared origin.
+		transcript("a.jsonl", "renamed", [{ ms: utc("2026-10-05") }]);
+		await exportStats(agent, out);
+		expect(outbox().manifest.shards[0]).toEqual(before);
+		expect(shards().map((s) => s.version)).toEqual([3, 3]);
+		transcript("a.jsonl", "a", [{ ms: utc("2026-10-05") }]);
+		transcript("b.jsonl", "a", [{ ms: utc("2026-10-06"), input: 7 }]);
+		await exportStats(agent, out);
+		expect(outbox().manifest.shards[0]).toEqual(before);
+		expect(shards().map((s) => s.version)).toEqual([3, 3, 3]);
 	});
 
 	it("carries retired rows through a month an identified correction regenerates", async () => {
