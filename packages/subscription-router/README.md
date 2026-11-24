@@ -263,7 +263,11 @@ Balanced scoring (conditional fairness guarantees and exclusions [here](#quota-f
 
 Eligibility never hits the network. An entry is skipped when a confirmed block covers it, when
 cached usage already shows its window exhausted, or when it has no credentials. Stale or failed
-usage fails open, except stale data whose known reset is still ahead.
+usage fails open, except stale data whose known reset is still ahead. Each fresh read anchors
+accepted reset timestamps to monotonic time. Cached reads (including after failed refreshes)
+and confirmed blocks advertise the remaining wait in the current wall clock without rewriting
+the provider timestamp. A wall-clock step forward can shorten that wait; stepping back cannot
+extend or revive it. A clock already skewed when the read starts can still misstate the initial wait.
 
 Blocks are per `(provider, family)`: the Anthropic `seven_day_sonnet` window blocks Sonnet and
 leaves Opus eligible. Anthropic reports some model caps only in its `limits` list, e.g. Fable as

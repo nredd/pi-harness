@@ -28,6 +28,7 @@ import type { ProviderConfig } from "./config.ts";
 export { parseAnthropic, parseAntigravity, parseCodex } from "./builtin-collectors.ts";
 
 import { type ModelRef, refKey } from "./model-ref.ts";
+import { anchorReset, type ResetDeadline } from "./reset-deadline.ts";
 
 export { COLLECTED_PROVIDERS } from "./collectors.ts";
 
@@ -130,14 +131,19 @@ export type RegistryContext = Pick<ExtensionContext, "modelRegistry">;
 export interface UsageTransport {
 	fetch(input: string, init: RequestInit): Promise<Response>;
 	now(): number;
+	/** Monotonic milliseconds, independent of `now`. Defaults to `performance.now`. */
+	monotonicNow?(): number;
 	getAccessToken(ctx: RegistryContext, provider: string): Promise<string | undefined>;
 }
 
 /** Whether a model must not be dispatched on included quota right now, and why. */
 export const COLLECTOR_EVIDENCE = Symbol.for("pi-subscription-router.collector-evidence");
 
+export const COLLECTOR_RESET = Symbol.for("pi-subscription-router.collector-reset");
+
 export interface UsageDecision {
 	[COLLECTOR_EVIDENCE]?: AbortSignal;
+	[COLLECTOR_RESET]?: ResetDeadline;
 	block: boolean;
 	message?: string;
 	window?: string;
@@ -241,6 +247,9 @@ export class UsageService {
 	/** Aliased providers whose authorized registration retired. Only `configureCollectors` re-authorizes. */
 	private readonly revoked = new Set<string>();
 	private readonly evidence = new WeakMap<UsageSnapshot, CollectorRegistration | undefined>();
+	// Stale snapshots retain the same normalized window objects and their original reset budgets.
+	private readonly resets = new WeakMap<UsageWindow, ResetDeadline>();
+	private readonly monotonicNow = () => this.transport.monotonicNow?.() ?? performance.now();
 	private readonly cache = new Map<string, UsageSnapshot>();
 	private readonly listeners = new Set<() => void>();
 	private readonly generations = new Map<string, number>();
@@ -399,25 +408,29 @@ export class UsageService {
 		const registration = this.evidence.get(snapshot);
 		if (registration?.signal.aborted || snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
-		const exhausted = snapshot.windows.find(
-			(window) =>
-				window.usedPercent >= 100 &&
-				(window.scope === "provider" ||
-					window.families?.some((family) => modelMatchesFamily(model.id, family)) === true) &&
-				(window.resetAt === undefined ? snapshot.status === "available" : window.resetAt > now),
-		);
-		if (!exhausted) return { block: false };
-		const reset = exhausted.resetAt ? new Date(exhausted.resetAt).toISOString() : "an unknown time";
-		const decision: UsageDecision = {
-			block: true,
-			window: exhausted.name,
-			resetAt: exhausted.resetAt,
-			scope: exhausted.scope,
-			families: exhausted.families,
-			message: `${refKey(model)}: ${exhausted.name} is exhausted and resets ${reset}.`,
-		};
-		if (registration) Object.defineProperty(decision, COLLECTOR_EVIDENCE, { value: registration.signal });
-		return decision;
+		for (const window of snapshot.windows) {
+			if (
+				!(window.usedPercent >= 100) ||
+				(window.scope !== "provider" && !window.families?.some((family) => modelMatchesFamily(model.id, family)))
+			)
+				continue;
+			const deadline = this.resets.get(window);
+			const resetAt = deadline?.(now) ?? window.resetAt;
+			if (resetAt === undefined ? snapshot.status !== "available" : resetAt <= now) continue;
+			const reset = resetAt === undefined ? "an unknown time" : new Date(resetAt).toISOString();
+			const decision: UsageDecision = {
+				block: true,
+				window: window.name,
+				resetAt,
+				scope: window.scope,
+				families: window.families,
+				message: `${refKey(model)}: ${window.name} is exhausted and resets ${reset}.`,
+			};
+			if (registration) Object.defineProperty(decision, COLLECTOR_EVIDENCE, { value: registration.signal });
+			if (deadline) Object.defineProperty(decision, COLLECTOR_RESET, { value: deadline });
+			return decision;
+		}
+		return { block: false };
 	}
 
 	/** Human-readable one-liner for UI and tool output. */
@@ -579,6 +592,7 @@ export class UsageService {
 		{ collector, signal: lifetime }: CollectorRegistration,
 		now: number,
 	): Promise<FetchOutcome> {
+		const monotonicAtRead = this.monotonicNow();
 		const unfetched = (status: "error" | "unavailable", message: string): FetchOutcome => ({
 			snapshot: errorSnapshot(provider, status, now, message),
 			failed: false,
@@ -656,6 +670,11 @@ export class UsageService {
 					: () => Infinity;
 			const reading = normalizeReading(parsed, latestReset);
 			if (!reading) return failure("Usage response had an unsupported shape.");
+			for (const window of reading.windows) {
+				if (window.resetAt !== undefined) {
+					this.resets.set(window, anchorReset(window.resetAt, now, monotonicAtRead, this.monotonicNow));
+				}
+			}
 			return {
 				snapshot: { provider, status: "available", retrievedAt: now, expiresAt: now + CACHE_TTL_MS, ...reading },
 				failed: false,

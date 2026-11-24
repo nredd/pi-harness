@@ -25,6 +25,7 @@ function harness(replies: Reply[], token = "token") {
 			return new Response(JSON.stringify(reply.body), { status: reply.status ?? 200, headers: reply.headers });
 		},
 		now: () => clock.now,
+		monotonicNow: () => clock.now - T0,
 		getAccessToken: async (_ctx, provider) => {
 			tokens.push(provider);
 			return token;

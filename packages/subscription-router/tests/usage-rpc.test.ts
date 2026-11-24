@@ -30,8 +30,13 @@ async function harness(startSession = true, profiles: Profile[] = [], config: Co
 			: { rate_limit: { primary_window: { used_percent: 18 }, secondary_window: { used_percent: 37 } } };
 		return new Response(JSON.stringify(body), { status: fail ? 429 : 200 });
 	});
-	const usage = new UsageService({ fetch, now: () => now, getAccessToken: async () => "fake-token" });
-	const tracker = new ExhaustionTracker();
+	const usage = new UsageService({
+		fetch,
+		now: () => now,
+		monotonicNow: () => now - T0,
+		getAccessToken: async () => "fake-token",
+	});
+	const tracker = new ExhaustionTracker(() => now);
 	host[SHARED_KEY] = { usage, tracker };
 	const events = new EventEmitter();
 	const recording = createRecordingPi({
