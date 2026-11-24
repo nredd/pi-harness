@@ -399,29 +399,17 @@ private func runActRefEdgeAssertions() throws {
     expect(set["outcome"] as? String == "worked" && (set["performed"] as? [String: Any])?["refound"] as? Bool == true, "a refused AXValue write is retried once on the refound handle: \(set)")
     expect(rewritten.trace == ["begin:1234", "set:AXValue", "refind:ref:1234:8", "set:AXValue", "finish"], "the retry writes the refound handle once: \(rewritten.trace)")
 
-    // Both writes refused. Only the safe invariants are pinned, for every mode: nothing is posted and the value is
-    // unchanged, whether `act` throws (today) or returns `didnt` (the #1365 fix). Neither the error code nor the
-    // trace is pinned.
-    let posts = ["click:", "move:", "wheel:", "drag:", "key:", "keyCode:", "type:", "atomic:", "clipboard:", "scrollAX:", "bar:"]
+    // Both writes refused: `didnt` with the AX refusal in every mode, and the exact trace proves nothing is posted and
+    // no lock, activation, raise or hit test runs (#1365).
     for policy in ["default", "ax_only", "background"] {
         let refused = ActFixture()
         refused.writeStatuses = [.cannotComplete, .cannotComplete]
-        var outcome: String
-        do {
-            outcome = try refused.act("setText", policy: policy, params: ["text": "new"])["outcome"] as? String ?? "none"
-        } catch let failure as BridgeFailure {
-            outcome = "threw:\(failure.code)"
-        }
-        expect(outcome.hasPrefix("threw:") || outcome == "didnt", "\(policy) twice-refused AXValue write is a refusal or didnt, never a delivery (#1365): \(outcome)")
-        let posted = refused.trace.filter { entry in posts.contains { entry.hasPrefix($0) } }
-        expect(posted.isEmpty && refused.value == "before", "\(policy) twice-refused AXValue write posts nothing and leaves the value (#1365): \(refused.trace)")
-        // A refused write must not lock input, activate, raise or hit-test either. The default HID policy still does
-        // all four before refusing (#1365): its check stays disabled until the fix enables it.
-        let focusInvariantDisabledUntil1365 = policy == "default"
-        if !focusInvariantDisabledUntil1365 {
-            let focus = refused.trace.filter { ["lock", "activate", "raise", "hit"].contains($0) }
-            expect(focus.isEmpty, "\(policy) twice-refused AXValue write takes no lock and steals no focus (#1365): \(refused.trace)")
-        }
+        let result = try refused.act("setText", policy: policy, params: ["text": "new"])
+        let error = result["error"] as? [String: String]
+        let performed = result["performed"] as? [String: Any]
+        expect(result["outcome"] as? String == "didnt" && error?["code"] == "ax_write_failed" && error?["message"] == "The element refused AXValue (AXError -25204)", "\(policy) twice-refused AXValue write is didnt with the AX refusal: \(result)")
+        expect(performed?["delivery"] as? String == "ax" && performed?["grounding"] as? String == "description" && result["evidence"] == nil, "\(policy) twice-refused AXValue write reports AX delivery and no evidence: \(result)")
+        expect(refused.trace == ["begin:1234", "set:AXValue", "refind:ref:1234:8", "set:AXValue", "finish"] && refused.value == "before", "\(policy) twice-refused AXValue write posts nothing, steals no focus and leaves the value: \(refused.trace)")
     }
 }
 

@@ -378,6 +378,8 @@ struct HeadlessTests {
         testMotionLifecycle()
         runCursorMotionAssertions()
         runCursorLifecycleAssertions()
+        runCursorRenderAssertions()
+        await runCursorIdleHideAssertions()
         runGlowLayoutAssertions()
         await runGlowLifecycleAssertions()
     }
