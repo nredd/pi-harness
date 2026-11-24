@@ -350,7 +350,8 @@ unexpected index entries, and missing entries or entries that are neither regula
 symlinks also keep, as does a parent or file whose replacement or rewrite during the hash the
 guard's rechecks detect, or a content scan that exceeds `MAX_TREE_ENTRIES` (`100_000` entries),
 `MAX_CONTENT_BYTES` (512 MiB of tracked file and symlink-target bytes), or the 30-second scan
-deadline (`incomplete tracked content scan`). The rechecks are not atomic: a same-content
+deadline (`incomplete tracked content scan`). The deadline starts after the Git index inventory and
+is checked between operations, so it cannot interrupt a blocked filesystem call. The rechecks are not atomic: a same-content
 replacement between the path stat and the open can pass. A tracked symlink compares by its target
 string only and passes when that matches.
 Limits:

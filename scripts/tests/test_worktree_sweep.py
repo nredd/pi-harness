@@ -675,6 +675,19 @@ def test_malformed_index_inventory_keeps(
         check(tmp_path)
 
 
+def fail_read(message: str) -> bytes:
+    """Fail a test that reads when the scan budget says it must not.
+
+    Parameters:
+        message: str, Assertion text.
+    Returns:
+        bytes: Never returns.
+    Raises:
+        AssertionError: Always.
+    """
+    raise AssertionError(message)
+
+
 def hash_with(
     root: Path, name: bytes, monkeypatch: pytest.MonkeyPatch, **hooks: Callable[[Hook], Hook]
 ) -> tuple[bytes, str]:
@@ -694,7 +707,9 @@ def hash_with(
     monkeypatch.setitem(blob.__globals__, "CHUNK", 4)
     for attr, wrap in hooks.items():
         monkeypatch.setattr(os, attr, wrap(getattr(os, attr)))
-    mode, oid, _ = blob(root, name, "sha1")
+    mode, oid, _ = blob(
+        root, name, "sha1", remaining=GUARD_MODULE["MAX_CONTENT_BYTES"], deadline=float("inf")
+    )
     return mode, oid
 
 
@@ -895,9 +910,7 @@ def test_content_scan_entry_or_byte_overrun_keeps(
             os,
             "read",
             lambda fd, size: (
-                (_ for _ in ()).throw(AssertionError("read called past preflight size budget"))
-                if size == 4
-                else real_read(fd, size)
+                fail_read("read called past preflight size budget") if size == 4 else real_read(fd, size)
             ),
         )
     elif overrun == "cumulative bytes across files":
@@ -922,9 +935,14 @@ def test_content_scan_entry_or_byte_overrun_keeps(
 @pytest.mark.parametrize(
     ("overrun", "ticks"),
     [
+        # Every case starts with the scan-start read (10.0); 41.0 is past the 30s deadline.
+        # start, top-of-loop
         ("entry deadline", (10.0, 41.0)),
+        # start, top-of-loop, symlink check in leaf_blob
         ("symlink deadline", (10.0, 20.0, 41.0)),
+        # start, top-of-loop, size/deadline check before the first read
         ("file deadline before read", (10.0, 20.0, 41.0)),
+        # start, top-of-loop, preflight, first chunk check
         ("chunk deadline during read", (10.0, 20.0, 25.0, 41.0)),
     ],
 )
@@ -946,9 +964,7 @@ def test_content_scan_deadline_overrun_keeps(
             os,
             "read",
             lambda fd, size: (
-                (_ for _ in ()).throw(AssertionError("read called past preflight deadline"))
-                if size == 4
-                else real_read(fd, size)
+                fail_read("read called past preflight deadline") if size == 4 else real_read(fd, size)
             ),
         )
     monkeypatch.setattr(os, "environ", git_env())
@@ -957,6 +973,42 @@ def test_content_scan_deadline_overrun_keeps(
     monkeypatch.setitem(globals_, "CHUNK", 4)
     clock = iter(ticks)
     monkeypatch.setattr(globals_["time"], "monotonic", lambda: next(clock))
+    with pytest.raises(GUARD_MODULE["KeepError"], match=r"^incomplete tracked content scan$"):
+        check(repo.resolve())
+
+
+def test_content_scan_deadline_expiring_in_last_entry_revalidation_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--template=")
+    (repo / "a").write_bytes(b"01234567")
+    git(repo, "add", "a")
+    monkeypatch.setattr(os, "environ", git_env())
+    check = GUARD_MODULE["check_content"]
+    globals_ = check.__globals__
+    monkeypatch.setitem(globals_, "CHUNK", 4)
+    now = [10.0]
+    armed = [False]
+    monkeypatch.setattr(globals_["time"], "monotonic", lambda: now[0])
+    real_blob = globals_["blob"]
+
+    def arm(*args: Any, **kwargs: Any) -> Any:
+        armed[0] = True
+        return real_blob(*args, **kwargs)
+
+    real_stat = os.stat
+
+    def expire_on_revalidation(*args: Any, **kwargs: Any) -> os.stat_result:
+        # Only the root parent revalidation passes no dir_fd; it runs after the
+        # leaf was read, so the clock crosses the deadline with no next entry.
+        if armed[0] and kwargs.get("dir_fd") is None:
+            now[0] = 41.0
+        return real_stat(*args, **kwargs)
+
+    monkeypatch.setitem(globals_, "blob", arm)
+    monkeypatch.setattr(os, "stat", expire_on_revalidation)
     with pytest.raises(GUARD_MODULE["KeepError"], match=r"^incomplete tracked content scan$"):
         check(repo.resolve())
 

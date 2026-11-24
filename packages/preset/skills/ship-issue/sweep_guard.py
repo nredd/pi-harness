@@ -530,6 +530,8 @@ def check_content(path: Path) -> None:
     remaining = MAX_CONTENT_BYTES
     deadline = time.monotonic() + TIMEOUT
     for index, record in enumerate(records[:-1], start=1):
+        # blob() checks the deadline only around reads, so this top check still
+        # bounds the work an unsupported early return or STAGE mismatch would skip.
         if index > MAX_TREE_ENTRIES or time.monotonic() > deadline:
             raise KeepError(INCOMPLETE_CONTENT_SCAN)
         match = STAGE.fullmatch(record)
@@ -540,6 +542,10 @@ def check_content(path: Path) -> None:
         )
         if (mode, oid) != (match[1], match[2].decode()):
             raise KeepError(f"tracked content or mode differs from index: {match[3]!r}")
+        # The last entry has no next iteration; its EOF read or final revalidation
+        # may have crossed the deadline after the last in-blob clock check.
+        if time.monotonic() > deadline:
+            raise KeepError(INCOMPLETE_CONTENT_SCAN)
 
 
 def entry_mode(info: os.stat_result) -> bytes:
@@ -577,8 +583,8 @@ def blob(
     name: bytes,
     algorithm: str,
     *,
-    remaining: int = MAX_CONTENT_BYTES,
-    deadline: float | None = None,
+    remaining: int,
+    deadline: float,
 ) -> tuple[bytes, str, int]:
     """Hash one worktree entry as a Git blob through unfollowed parent descriptors.
 
@@ -591,7 +597,7 @@ def blob(
         name: bytes, Index path relative to the checkout.
         algorithm: str, Repository object hash algorithm.
         remaining: int, Remaining tracked byte budget across the scan.
-        deadline: float | None, Monotonic scan deadline in seconds.
+        deadline: float, Monotonic scan deadline in seconds.
     Returns:
         tuple[bytes, str, int]: Git mode, raw blob object ID and remaining byte budget
     Raises:
@@ -599,7 +605,6 @@ def blob(
             content scan budget is exceeded.
         OSError: The entry cannot be read without following a symlink.
     """
-    limit = time.monotonic() + TIMEOUT if deadline is None else deadline
     *parents, leaf = name.split(b"/")
     if any(part in (b"", b".", b"..") for part in (*parents, leaf)):
         raise KeepError(f"unsupported index path: {name!r}")
@@ -619,7 +624,7 @@ def blob(
                 f"cannot open tracked parent without following links: {name!r}: {exc}"
             ) from exc
         result = leaf_blob(
-            walked[-1][2], leaf, algorithm, remaining=remaining, deadline=limit
+            walked[-1][2], leaf, algorithm, remaining=remaining, deadline=deadline
         )
         for part, parent, descriptor in reversed(walked):
             current = os.stat(
