@@ -201,6 +201,7 @@ function pair(state: Input) {
 	const currentSnapshots = structuredClone(state.snapshots);
 	const oracleSnapshots = structuredClone(state.snapshots);
 	const decider = (usage: UsageService | LegacyUsage, snapshots: Input["snapshots"], calls: string[]) => ({
+		observeResets: () => {},
 		decisionFor: (ref: ModelRef) => {
 			calls.push(`decision ${refKey(ref)}`);
 			return usage.decisionFor(ref, snapshots[ref.provider]);

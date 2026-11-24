@@ -5,9 +5,9 @@
  * read that shows the block, or a failure the provider's thresholds accept. A
  * read-confirmed mark carries no `evidence` field; a failure-inferred one says
  * `inferred`, how it expires and why. A transient per-minute 429 never removes a
- * model from its chain. A mark with a known reset lasts until that reset.
- * Without one it backs off exponentially, 5 minutes doubling up to 60, keyed on
- * how often the same scope was re-confirmed.
+ * model from its chain. A mark with a known collector reset uses a
+ * monotonic-projected deadline. A mark without a reset backs off exponentially,
+ * 5 minutes doubling up to 60, keyed on how often the same scope was re-confirmed.
  */
 
 import { addAbortListener } from "node:events";
@@ -57,9 +57,8 @@ export class ExhaustionTracker {
 	constructor(private readonly now: () => number = Date.now) {}
 
 	/**
-	 * Record confirmed evidence: the mark, or nothing when an inferred deadline (`hinted` or
-	 * `window-reset`) already passed before confirmation finished. Only a decision without a
-	 * deadline backs off, so an elapsed hint is never replaced by a fresh backoff.
+	 * Record confirmed evidence, unless its collector reset or inferred deadline already passed.
+	 * An elapsed collector reset or inferred deadline is never replaced by a fresh backoff.
 	 */
 	record(model: ModelRef, decision: EvidenceDecision): ExhaustionMark | undefined {
 		// One clock sample for the check and the write: crossing the deadline between two samples

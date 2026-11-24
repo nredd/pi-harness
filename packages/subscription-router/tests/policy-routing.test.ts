@@ -48,7 +48,11 @@ it("explain empty sets and registry failures without refreshing, tracing or leak
 	expect(JSON.stringify(result)).not.toMatch(/private-error|private-balance/);
 	expect(decisions).toEqual([]);
 	expect(usage.reads).toEqual([]);
-	const noPeek = new Router({ decisionFor: () => ({ block: true }) }, new ExhaustionTracker(clock.now), clock.now);
+	const noPeek = new Router(
+		{ observeResets: () => {}, decisionFor: () => ({ block: true }) },
+		new ExhaustionTracker(clock.now),
+		clock.now,
+	);
 	expect(
 		noPeek.explain(
 			{ ...profile, policy: undefined },
@@ -75,7 +79,7 @@ it("new traces cover no-data candidates, unknown registry members, and unconfirm
 	};
 	const decisions: RouteDecision[] = [];
 	const router = new Router(
-		{ decisionFor: () => ({ block: false }) },
+		{ observeResets: () => {}, decisionFor: () => ({ block: false }) },
 		new ExhaustionTracker(clock.now),
 		clock.now,
 		(decision) => decisions.push(decision),
@@ -87,7 +91,11 @@ it("new traces cover no-data candidates, unknown registry members, and unconfirm
 		candidates: [{ model: "a/a", quota: { kind: "fallback" } }],
 		blocked: [{ model: "b/b", reason: "not available (unknown model or no credentials)" }],
 	});
-	const silent = new Router({ decisionFor: () => ({ block: false }) }, new ExhaustionTracker(clock.now), clock.now);
+	const silent = new Router(
+		{ observeResets: () => {}, decisionFor: () => ({ block: false }) },
+		new ExhaustionTracker(clock.now),
+		clock.now,
+	);
 	await silent.route(profile, request, env);
 	await router.route(
 		profile,

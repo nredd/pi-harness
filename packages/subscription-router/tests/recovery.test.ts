@@ -16,7 +16,11 @@ function harness(live: Record<string, UsageDecision>, snapshots: Record<string, 
 	const cached: Record<string, UsageDecision> = {};
 	const tracker = new ExhaustionTracker(() => T0);
 	const router = new Router(
-		{ decisionFor: (m) => cached[m.provider] ?? { block: false }, peek: (provider) => snapshots[provider] },
+		{
+			observeResets: () => {},
+			decisionFor: (m) => cached[m.provider] ?? { block: false },
+			peek: (provider) => snapshots[provider],
+		},
 		tracker,
 		() => T0,
 	);

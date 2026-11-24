@@ -818,6 +818,33 @@ describe("Anthropic snapshots without a 5h window", () => {
 		expect(service.decisionFor(SONNET)).toEqual({ block: false });
 	});
 
+	it("keeps an Anthropic reset bounded on rollback using the default elapsed clock", async () => {
+		let wall = T0;
+		let elapsed = 0;
+		const resetAt = T0 + 2 * MINUTE;
+		const usage = new UsageService({
+			fetch: async () => Response.json({ five_hour: { utilization: 100, resets_at: new Date(resetAt).toISOString() } }),
+			now: () => wall,
+			getAccessToken: async () => "synthetic",
+		});
+		const router = new Router(usage, new ExhaustionTracker(() => wall), () => wall);
+		const env: RouteEnv = { resolve: () => undefined, refresh: async () => undefined };
+		const ref = `${SONNET.provider}/${SONNET.id}`;
+		const admit = () => router.admit(ref, new Map(), env);
+		const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+		try {
+			await usage.get(ctx, SONNET.provider);
+			expect(admit()).toEqual({ ok: false, resetAt, wait: true });
+			wall = T0 - 2 * MINUTE;
+			elapsed = MINUTE;
+			expect(admit()).toEqual({ ok: false, resetAt: T0 - MINUTE, wait: true });
+			elapsed = 2 * MINUTE;
+			expect(admit()).toEqual({ ok: true, resolvedModel: ref });
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	it("a fresh read replaces a stale cached exhausted 5h, so admission stops parking", async () => {
 		const { service, clock, requests } = harness([
 			{ body: { five_hour: { utilization: 100, resets_at: FUTURE_RESET }, seven_day: SEVEN_DAY } },

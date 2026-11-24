@@ -8,7 +8,8 @@
  * Fetching is deliberately conservative: successful reads are cached for five
  * minutes, `fresh` reads within a minute share one response, and a failed read
  * backs the provider off (1m, 2m, 5m, then 15m) so a throttled endpoint is not
- * hammered. Credentials are passed only to the registered adapter for the provider.
+ * hammered. Known resets use monotonic-projected deadlines for admission; the
+ * cached provider timestamps stay intact. Credentials go only to the registered adapter.
  */
 
 import { addAbortListener } from "node:events";
@@ -136,11 +137,13 @@ export interface UsageTransport {
 	getAccessToken(ctx: RegistryContext, provider: string): Promise<string | undefined>;
 }
 
-/** Whether a model must not be dispatched on included quota right now, and why. */
+/** Lifetime of the collector registration that produced a decision. */
 export const COLLECTOR_EVIDENCE = Symbol.for("pi-subscription-router.collector-evidence");
 
+/** Projects a known collector reset into the current wall clock for confirmed blocks. */
 export const COLLECTOR_RESET = Symbol.for("pi-subscription-router.collector-reset");
 
+/** Whether a model must not be dispatched on included quota right now, and why. */
 export interface UsageDecision {
 	[COLLECTOR_EVIDENCE]?: AbortSignal;
 	[COLLECTOR_RESET]?: ResetDeadline;
@@ -416,20 +419,20 @@ export class UsageService {
 		const registration = this.evidence.get(snapshot);
 		if (registration?.signal.aborted || snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
-		let decision: UsageDecision | undefined;
-		for (const window of snapshot.windows) {
-			// Record forward steps for every reset, even after choosing the first blocker.
+		// Record forward steps for every reset before choosing the first blocker.
+		const projected = snapshot.windows.map((window) => {
 			const deadline = this.resets.get(window);
-			const resetAt = deadline?.(now) ?? window.resetAt;
+			return { window, deadline, resetAt: deadline?.(now) ?? window.resetAt };
+		});
+		for (const { window, deadline, resetAt } of projected) {
 			if (
-				decision ||
 				!(window.usedPercent >= 100) ||
 				(window.scope !== "provider" && !window.families?.some((family) => modelMatchesFamily(model.id, family)))
 			)
 				continue;
 			if (resetAt === undefined ? snapshot.status !== "available" : resetAt <= now) continue;
 			const reset = resetAt === undefined ? "an unknown time" : new Date(resetAt).toISOString();
-			decision = {
+			const decision: UsageDecision = {
 				block: true,
 				window: window.name,
 				resetAt,
@@ -439,8 +442,9 @@ export class UsageService {
 			};
 			if (registration) Object.defineProperty(decision, COLLECTOR_EVIDENCE, { value: registration.signal });
 			if (deadline) Object.defineProperty(decision, COLLECTOR_RESET, { value: deadline });
+			return decision;
 		}
-		return decision ?? { block: false };
+		return { block: false };
 	}
 
 	/** Human-readable one-liner for UI and tool output. */

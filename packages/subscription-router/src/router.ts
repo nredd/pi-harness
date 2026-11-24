@@ -84,7 +84,7 @@ export interface RouteEnv {
 export interface UsageDecider {
 	decisionFor(model: ModelRef): UsageDecision;
 	/** Observe cached clock corrections without evaluating cached admission. */
-	observeResets?(provider: string): void;
+	observeResets(provider: string): void;
 	/** Cached only. Unknown collectors remain usable fallback candidates. */
 	peek?(provider: string): UsageSnapshot | undefined;
 }
@@ -222,7 +222,7 @@ export class Router {
 				: { outcome: "pass" },
 		};
 		if (mark) {
-			this.usage.observeResets?.(model.provider);
+			this.usage.observeResets(model.provider);
 			return [
 				confirmed,
 				{

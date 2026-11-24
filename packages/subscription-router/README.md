@@ -267,7 +267,20 @@ usage fails open, except stale data whose known reset is still ahead. Each fresh
 accepted reset timestamps to monotonic time. Cached reads (including after failed refreshes)
 and confirmed blocks advertise the remaining wait in the current wall clock without rewriting
 the provider timestamp. A wall-clock step forward can shorten that wait; stepping back cannot
-extend or revive it. A clock already skewed when the read starts can still misstate the initial wait.
+extend or revive it.
+
+Limits:
+
+- A clock already skewed when the read starts can still misstate the initial wait.
+- If the elapsed clock pauses during sleep after a rollback, a known reset can stay blocked past
+  real expiry. `performance.now()` and `process.hrtime()` are not verified suspend-inclusive on
+  macOS ([#1447](https://github.com/nredd/pi-harness/issues/1447)).
+- `subagents` persists quota parks as wall-clock timestamps. A rollback before re-arm adds wait;
+  firing before quota warm-up on restart can fail open
+  ([#1446](https://github.com/nredd/pi-harness/issues/1446)).
+- Without `resetAt`, rollback across the five-minute freshness boundary can revive an exhausted
+  reading, and confirmed backoff is still wall-only
+  ([#1445](https://github.com/nredd/pi-harness/issues/1445)).
 
 Blocks are per `(provider, family)`: the Anthropic `seven_day_sonnet` window blocks Sonnet and
 leaves Opus eligible. Anthropic reports some model caps only in its `limits` list, e.g. Fable as
@@ -277,8 +290,8 @@ leaves Opus eligible. Anthropic reports some model caps only in its `limits` lis
 `scope.surface` or `scope.model.id` narrows the cap), so an
 exhausted Fable cap blocks `claude-fable-*` and leaves Opus and Haiku eligible. An id- or
 surface-scoped cap is not enforced (fail-open): a 429 against it still falls through the normal
-retry path. A block lasts until the reset the provider reported. Without one it backs off
-5 minutes, doubling up to 60.
+retry path. A known collector reset uses the projected deadline above. Without a reset, a
+confirmed block backs off 5 minutes, doubling up to 60.
 
 The `read` adapter ([confirming evidence](#confirming-evidence)) needs live data read after the failure: a cached or in-flight read from before the
 error's timestamp doesn't count, while simultaneous failures still share one request. A failed or
