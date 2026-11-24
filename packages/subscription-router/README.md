@@ -155,7 +155,7 @@ legacy strategies keep their behavior and serialized decisions.
 
 Optional top-level `providers` entries are keyed by Pi provider ID. `collector`, `evidence`,
 `fallbackOnReadError` and `failure` apply now (see [confirming evidence](#confirming-evidence));
-`label`, `quotaGroup` and `windows` are validated and loaded but not applied yet.
+`label`, `quotaGroup` and `windows` are validated and loaded but not applied yet ([design decisions](#design-decisions)).
 
 Merge declarations from [here](examples/providers.json) into an existing config, keeping its
 `profiles`. The example's `profiles: {}` registers nothing. No declarations are installed by default.
@@ -181,13 +181,38 @@ Merge declarations from [here](examples/providers.json) into an existing config,
   infers: the never-mark line stays at 60 seconds, so a collected provider still reads a longer hint. `maxBlockMinutes` only lowers: the 24-hour and 60-minute
   caps and the billing and unknown-shape backoff. `parser` is accepted, but one
   classifier reads both generic and Google RPC bodies. `observed` is skipped until the request
-  ledger lands.
+  ledger lands (#1401).
 
 The [schema](schemas/subscription-router.schema.json) rejects unknown keys inside provider
 settings except inside `collector.options`. The loader also checks that `timeZone` is known
 by `Intl`. Configs that omit `providers` keep their existing behavior. `providers` is now a
 reserved root key: an invalid value such as `null` rejects the whole file, so no profiles
 register. Other unknown root keys are still ignored.
+
+### Design decisions
+
+Owner decisions for the provider-agnostic router (2026-11-21, #1398). Each holds today unless an
+issue is named:
+
+- Evidence chain: a mark needs evidence, and a fresh read is one adapter of several. Decision
+  record 1 is in [confirming evidence](#confirming-evidence)
+- Inferred thresholds (the `failure` adapter): a daily token wall, a 402 or a retry hint of at least
+  `minHintSeconds` (default 60) marks on
+  the first failure, an unknown quota shape on the second failure within 10 minutes, a per-minute
+  limit never. A mark lasts at most 24 hours for a daily limit and 60 minutes otherwise
+- Auth failures (401/403) surface to the caller and never mark
+- Collectors register across extensions through the versioned registry in
+  [collector extensions](#collector-extensions)
+- Credit and overage `pools` are display-only. Only percentage windows block; of `credits`, only
+  `unlimited` affects decisions (it scores as unlimited and never blocks), and a balance never
+  bypasses a window
+- Decision record 2, persistence: inferred marks and the request ledger persist under
+  `<agentDir>/router-state/`, eventually consistent across processes, and bad state fails open.
+  Read-confirmed marks stay in memory only. Not built yet: marks live in memory (#1402) and the
+  ledger does not exist (#1401)
+- Not built yet: live v2 views over `router:rpc:usage` and `view.json` (#1403), applied
+  `quotaGroup` (#1405), an end-to-end third-party collector proof (#1404)
+- Decision records live in this README and in commit bodies, not `docs/adr`
 
 ### Routing with legacy strategies
 
@@ -308,7 +333,7 @@ partial-output mark). A read-confirmed mark is shared provider state and is writ
 display surfaces (`/router status`, `subscription_usage` and `ChainExhaustedError`) say so.
 Admission only honors the mark: it reports eligibility, the mark's reset and wait advice, not its
 provenance. Read-confirmed marks carry none of these fields. A fresh read never clears an inferred mark. `/router reset` clears marks
-and failure counts. Inferred marks live in memory only for now.
+and failure counts. Inferred marks live in memory only for now (#1402).
 
 Mid-run recovery: upstream doesn't retry terminal quota errors (`insufficient_quota`, billing,
 `subscription_sharing_usage_limit_exceeded`), so they end the run. At `agent_before_settle` the
