@@ -10,11 +10,7 @@ import { createFakeChild, createFakeSpawn, createHelperEngine } from "../../test
  */
 export async function linuxHelperClient(script) {
 	const children = [];
-	const engine = createHelperEngine({
-		profile: "envelope",
-		protocolVersion: 10,
-		platform: "Linux",
-	});
+	const engine = createHelperEngine({ profile: "envelope", protocolVersion: 11, platform: "Linux" });
 	Object.assign(engine.handlers, script(children));
 	const spawn = createFakeSpawn({
 		"*": () => {

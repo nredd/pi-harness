@@ -24,7 +24,7 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 vi.mock("../src/platform/linux/helper.ts", async (importOriginal) => ({
 	assertLinuxHelperFeatures: (await importOriginal()).assertLinuxHelperFeatures,
 	LINUX_REQUIRED_HELPER_FEATURES: (await importOriginal()).LINUX_REQUIRED_HELPER_FEATURES,
-	LINUX_HELPER_PROTOCOL_VERSION: 10,
+	LINUX_HELPER_PROTOCOL_VERSION: 11,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
 }));
@@ -48,7 +48,7 @@ const diagnostics = (over = {}) => ({
 });
 /** The Linux helper speaks its own protocol version (#1300). */
 const linuxDiagnostics = (over = {}) =>
-	diagnostics({ protocolVersion: 10, features: [...LINUX_REQUIRED_HELPER_FEATURES], ...over });
+	diagnostics({ protocolVersion: 11, features: [...LINUX_REQUIRED_HELPER_FEATURES], ...over });
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -672,7 +672,7 @@ describe("Linux backend", () => {
 		assert.match(backend.emptyRootsHint(), /WSL2/);
 	});
 
-	test("ensureReady validates protocol, architecture and accessibility", async () => {
+	test("ensureReady validates protocol, architecture, features and accessibility", async () => {
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics());
 		const state = await backend.ensureReady({}, { lastPermissionCheckAt: 0, keep: 1 }, signal);
 		assert.equal(state.keep, 1);
@@ -680,12 +680,12 @@ describe("Linux backend", () => {
 		assert.deepEqual(lastCall(fakes.linux), ["diagnostics", {}, { signal, timeoutMs: 5_000 }]);
 		// A v4 helper neither records owed releases across restarts nor rechecks the drag start, so it must not pass readiness.
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ protocolVersion: 4 }));
-		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 10, got 4/);
+		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /expected 11, got 4/);
 		fakes.linux.command.mockResolvedValue(undefined);
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ invariants: [] }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Linux helper does not satisfy/);
-		// A protocol-10 helper built before the snapshot deadline (#1352) reports no `features`.
+		// Matching protocol and architecture alone are not enough (#1352).
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ features: undefined }));
 		await rejectsWith(
 			backend.ensureReady({}, { lastPermissionCheckAt: 0 }),

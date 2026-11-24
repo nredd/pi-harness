@@ -438,6 +438,13 @@ const CURRENT_TARGET_GONE_ERROR =
 
 const COMMAND_TIMEOUT_MS = 15_000;
 const LOOK_TIMEOUT_MS = 33_000;
+/**
+ * Per-character transport budget for `act_ui` text, shared by the serial and batch paths: 25 ms for the
+ * helper's 8 ms key pacing and posting, plus 30 ms for the macOS AX key-focus probe a key-down may run.
+ * Measured (#1375): a 100 ms-bounded AX round trip to TextEdit while it typed into a 630K-character
+ * document at that pacing averaged 15-22 ms per key over three 2000-key runs (p90 23-58 ms).
+ */
+const TEXT_MS_PER_CHARACTER = 55;
 
 const ACTION_SETTLE_MS = 280;
 
@@ -471,6 +478,7 @@ const savedStates = new SavedStates();
 /** Test seam: lets scripts run bridge internals inside an operation state. */
 export const testing = {
 	assertBrowserTransactionAction,
+	TEXT_MS_PER_CHARACTER,
 	savedState: (stateId: string) => savedStates.get(stateId),
 	storedRootRef: (ref: string) => runtimeState.windowRefs.get(ref),
 	runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn),
@@ -1549,7 +1557,7 @@ async function helperAct(
 		if (failure?.code !== "timeout") throw error;
 		return { outcome: "unknown", error: { code: "timeout", message: failure.message } };
 	};
-	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
+	const textTimeout = "text" in action.params ? action.params.text.length * TEXT_MS_PER_CHARACTER + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	// Only foreground delivery posts real cursor/keyboard events; it alone takes the desktop lock shared with
 	// desktop_input / desktop_screenshot, held to the end of the act_ui transaction once taken.
@@ -2739,7 +2747,7 @@ async function dispatchUiTransaction(
 		try {
 			result = await currentPlatformBackend.actBatch(requests, {
 				signal,
-				timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000),
+				timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * TEXT_MS_PER_CHARACTER + 6_000),
 			});
 		} catch (error) {
 			// Any step may have run, so no step index is known: the whole batch is unknown.

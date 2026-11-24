@@ -53,6 +53,18 @@ afterEach(() => {
 	vi.resetModules();
 });
 
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+/** Run the rest of the test as `platform` with `process.hrtime.bigint()` reading `monoNs`, restored when it finishes. */
+function onPlatform(platform, onTestFinished, monoNs = 5_000_000_000_000n) {
+	Object.defineProperty(process, "platform", { ...realPlatform, value: platform });
+	const hrtime = vi.spyOn(process.hrtime, "bigint").mockReturnValue(monoNs);
+	onTestFinished(() => {
+		Object.defineProperty(process, "platform", realPlatform);
+		hrtime.mockRestore();
+	});
+}
+
 /** Make `helperPath` an executable (or remove its exec bit). */
 function install(executable = true) {
 	writeFileSync(helperPath, "#!/bin/sh\n");
@@ -84,7 +96,7 @@ function realisticChild(children, options, hold) {
 function envelope(platform, handlers = {}, extra = {}) {
 	return createHelperEngine({
 		profile: "envelope",
-		protocolVersion: platform === "Linux" ? 10 : 6,
+		protocolVersion: platform === "Linux" ? 11 : 6,
 		platform,
 		handlers,
 		diagnostics: {
@@ -495,7 +507,7 @@ describe("Linux helper client", () => {
 		vi.resetModules();
 		vi.stubEnv("PI_COMPUTER_USE_LINUX_HELPER_PATH", "");
 		const module = await import("../src/platform/linux/helper.ts");
-		assert.equal(module.LINUX_HELPER_PROTOCOL_VERSION, 10);
+		assert.equal(module.LINUX_HELPER_PROTOCOL_VERSION, 11);
 		assert.equal(
 			module.LINUX_HELPER_PATH,
 			path.join(os.homedir(), ".pi", "agent", "helpers", "pi-computer-use", "linux-bridge"),
@@ -556,11 +568,17 @@ describe("Linux helper client", () => {
 		assert.deepEqual(third.children[0].signals, ["SIGTERM"], "a helper the signal ended is not SIGKILLed");
 	});
 
-	test("an installed, compatible helper is probed once and serves commands with no setup", async () => {
+	test("an installed, compatible helper is probed once and serves commands with no setup", async ({
+		onTestFinished,
+	}) => {
+		onPlatform("linux", onTestFinished);
 		install();
 		const engine = linuxEngine({ look: ok({ roots: [] }) });
-		const { client, spawn } = await linux({ helper: { engine } });
+		const { client, spawn, module } = await linux({ helper: { engine } });
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(1_700_000_000_000);
 		assert.deepEqual(await client.command("look", { app: "x" }), { roots: [] });
+		vi.useRealTimers();
 		assert.deepEqual(await client.command("look"), { roots: [] });
 		assert.equal(setupSpawns(spawn).length, 0);
 		assert.equal(helperSpawns(spawn).length, 1, "the validated probe child stays as the live process");
@@ -568,13 +586,72 @@ describe("Linux helper client", () => {
 			engine.requests.map((request) => request.cmd),
 			["diagnostics", "look", "look"],
 		);
+		// The default 15 s timeout, less the margin, as the budget left, as an absolute wall-clock deadline and, on
+		// Linux, on `CLOCK_MONOTONIC` in milliseconds (`process.hrtime` reads 5_000_000 ms here).
+		assert.equal(module.LINUX_REQUEST_DEADLINE_MARGIN_MS, 250);
 		assert.deepEqual(engine.requests[1].raw, {
-			protocolVersion: 10,
+			protocolVersion: 11,
 			id: engine.requests[1].id,
 			cmd: "look",
 			args: { app: "x" },
+			deadlineMs: 1_700_000_014_750,
+			budgetMs: 14_750,
+			deadlineMonoMs: 5_014_750,
 		});
 		assert.deepEqual(helperSpawns(spawn)[0].options.stdio, ["pipe", "pipe", "pipe"]);
+	});
+
+	test("only a Linux client sends the monotonic deadline, whole milliseconds rounded down", async ({
+		onTestFinished,
+	}) => {
+		onPlatform("darwin", onTestFinished, 5_000_000_999_999n);
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client } = await linux({ helper: { engine } });
+		await client.command("look", {}, { timeoutMs: 1_250 });
+		// Another host's clock is not the helper's: no `deadlineMonoMs`, the helper keeps the earlier of the other two.
+		assert.equal("deadlineMonoMs" in engine.requests[1].raw, false);
+		Object.defineProperty(process, "platform", { ...realPlatform, value: "linux" });
+		await client.command("look", {}, { timeoutMs: 1_250 });
+		assert.equal(engine.requests[2].raw.deadlineMonoMs, 5_001_000);
+	});
+
+	test("a timeout Node's timer cannot wait is refused before anything is written", async () => {
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client, module } = await linux({ helper: { engine } });
+		assert.equal(module.LINUX_MAX_TIMEOUT_MS, 2 ** 31 - 1);
+		// The longest timer Node waits is accepted and sent as that budget.
+		assert.equal(await client.command("look", {}, { timeoutMs: 2 ** 31 - 1 }), 1);
+		assert.equal(engine.requests.at(-1).raw.budgetMs, 2 ** 31 - 1 - 250);
+		const written = engine.requests.length;
+		// Node would fire these at once (2 ** 31) or never: refused, nothing written.
+		for (const timeoutMs of [2 ** 31, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			await assert.rejects(
+				client.command("look", {}, { timeoutMs }),
+				(error) =>
+					error instanceof RangeError &&
+					error.message === `Helper command 'look' timeout ${timeoutMs}ms is outside 0 to ${2 ** 31 - 1}ms.`,
+			);
+		}
+		assert.equal(engine.requests.length, written);
+	});
+
+	test("the request deadline budget is whole milliseconds and never negative", async () => {
+		install();
+		const engine = linuxEngine({ look: ok(1) });
+		const { client } = await linux({ helper: { engine } });
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(1_000);
+		for (const timeoutMs of [100, 1_000.7]) await client.command("look", {}, { timeoutMs });
+		vi.useRealTimers();
+		assert.deepEqual(
+			engine.requests.slice(1).map(({ raw }) => [raw.budgetMs, raw.deadlineMs]),
+			[
+				[0, 1_000],
+				[750, 1_750],
+			],
+		);
 	});
 
 	test("a missing helper runs setup (with the helper path in its env) then probes", async () => {
@@ -620,7 +697,7 @@ describe("Linux helper client", () => {
 		await assert.rejects(client.ensureInstalled(), (error) => {
 			assert.match(
 				error.message,
-				/^Command failed \(2\): .*--platform linux --runtime\nno prebuilt\nInstalled Linux helper .* was rejected: Linux helper protocol mismatch: expected 10, got 4\.$/s,
+				/^Command failed \(2\): .*--platform linux --runtime\nno prebuilt\nInstalled Linux helper .* was rejected: Linux helper protocol mismatch: expected 11, got 4\.$/s,
 			);
 			assert.doesNotMatch(error.message, /Restart Pi/);
 			return true;
@@ -628,12 +705,12 @@ describe("Linux helper client", () => {
 		assert.equal(setupSpawns(spawn).length, 1);
 	});
 
-	test("a protocol 10 helper built before the snapshot deadline is rejected and setup replaces it (#1352)", async () => {
+	test("a protocol 11 helper without the snapshot-deadline marker is rejected and setup replaces it (#1352)", async () => {
 		install();
-		// The #1346 helper: protocol 10, current architecture and invariants, no `features`.
+		// Match the current protocol and architecture to exercise only the feature check.
 		const stale = linuxEngine({
 			diagnostics: ok({
-				protocolVersion: 10,
+				protocolVersion: 11,
 				architectureVersion: 1,
 				invariants: REQUIRED_INVARIANTS,
 				features: undefined,
@@ -650,14 +727,14 @@ describe("Linux helper client", () => {
 		});
 		assert.equal(await client.command("look"), "fresh");
 		assert.equal(setupSpawns(spawn).length, 1);
-		assert.deepEqual(children[0].signals, ["SIGTERM"], "the pre-deadline helper is killed, never reused");
+		assert.deepEqual(children[0].signals, ["SIGTERM"], "the helper without the marker is killed, never reused");
 	});
 
 	test("a helper still lacking a required feature after setup fails validation with the rebuild command", async () => {
 		// A malformed `features` value counts as reporting none.
 		const engine = linuxEngine({
 			diagnostics: ok({
-				protocolVersion: 10,
+				protocolVersion: 11,
 				architectureVersion: 1,
 				invariants: REQUIRED_INVARIANTS,
 				features: LINUX_REQUIRED_HELPER_FEATURES.join(","),
@@ -680,9 +757,9 @@ describe("Linux helper client", () => {
 		});
 	});
 
-	test("a pre-#1352 client's checks (protocol and architecture only) accept a helper that reports `features`", () => {
-		// An older client runs exactly these two checks and ignores unknown `diagnostics` fields.
-		const diagnostics = defaultDiagnostics(10, {
+	test("protocol-11 checks without feature validation accept a helper that reports `features`", () => {
+		// A protocol-11 client that only checks protocol and architecture ignores the new field.
+		const diagnostics = defaultDiagnostics(11, {
 			invariants: REQUIRED_INVARIANTS,
 			features: [...LINUX_REQUIRED_HELPER_FEATURES],
 		});
@@ -692,7 +769,7 @@ describe("Linux helper client", () => {
 
 	test("a rejected helper that setup replaces is re-probed and then used", async () => {
 		install();
-		const stale = linuxEngine({ diagnostics: ok({ protocolVersion: 10, architectureVersion: 0, invariants: [] }) });
+		const stale = linuxEngine({ diagnostics: ok({ protocolVersion: 11, architectureVersion: 0, invariants: [] }) });
 		const fresh = linuxEngine({ look: ok("fresh") });
 		let generation = 0;
 		const { client, spawn, children } = await linux({
@@ -708,7 +785,7 @@ describe("Linux helper client", () => {
 	});
 
 	test("an installed helper that fails validation after setup names the path and the reason", async () => {
-		const engine = linuxEngine({ diagnostics: ok({ protocolVersion: 10, architectureVersion: 9 }) });
+		const engine = linuxEngine({ diagnostics: ok({ protocolVersion: 11, architectureVersion: 9 }) });
 		const { client, children } = await linux({ setup: installing, helper: { engine } });
 		await assert.rejects(client.ensureInstalled(), (error) => {
 			assert.ok(error.message.startsWith(`Linux helper installed at ${helperPath} failed validation: `));
@@ -727,7 +804,7 @@ describe("Linux helper client", () => {
 		const engine = linuxEngine({ diagnostics: ok(null) });
 		const { client } = await linux({ setup: { exitCode: 1 }, helper: { engine } });
 		await assert.rejects(client.ensureInstalled(), (error) =>
-			error.message.includes("was rejected: protocol mismatch: expected 10, got unknown."),
+			error.message.includes("was rejected: protocol mismatch: expected 11, got unknown."),
 		);
 	});
 
@@ -845,7 +922,7 @@ describe("Linux helper client", () => {
 			look: split(ok({ roots: [1, 2, 3] }), 4, 1),
 			noise: (request) =>
 				raw(
-					`\n   \n{not json\n${JSON.stringify({ protocolVersion: 10, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 10, id: request.id, ok: true, result: "after noise" })}\n`,
+					`\n   \n{not json\n${JSON.stringify({ protocolVersion: 11, id: "stranger", ok: true, result: {} })}\n${JSON.stringify({ protocolVersion: 11, id: request.id, ok: true, result: "after noise" })}\n`,
 				),
 		});
 		const { client } = await linux({ helper: { engine } });
@@ -880,9 +957,9 @@ describe("Linux helper client", () => {
 		const { client } = await linux({ helper: { engine } });
 		await assert.rejects(
 			client.command("old"),
-			/Linux helper protocol mismatch: expected 10, got 4\. Restart Pi to use the installed helper\./,
+			/Linux helper protocol mismatch: expected 11, got 4\. Restart Pi to use the installed helper\./,
 		);
-		await assert.rejects(client.command("unversioned"), /expected 10, got unknown\./);
+		await assert.rejects(client.command("unversioned"), /expected 11, got unknown\./);
 	});
 
 	test("a command with no reply times out and a late reply is ignored", async () => {
@@ -891,7 +968,7 @@ describe("Linux helper client", () => {
 		const { client, children } = await linux({ helper: { engine } });
 		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
 		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 10, id: engine.requests.at(-1).id, ok: true, result: {} })}\n`,
+			`${JSON.stringify({ protocolVersion: 11, id: engine.requests.at(-1).id, ok: true, result: {} })}\n`,
 		);
 		engine.script("hang", ok("again"));
 		assert.equal(await client.command("hang"), "again");

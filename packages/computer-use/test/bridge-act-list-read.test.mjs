@@ -161,7 +161,9 @@ describe("act request building", () => {
 			{ action: "press", ref: "@e2" },
 			{ action: "setText", ref: "@e3", text: "x".repeat(10_000) },
 		]);
-		assert.equal(budgets[1], 10_000 * 25 + 4_000);
+		// 55 ms per character covers key pacing plus the measured per-key macOS AX focus probe (#1375).
+		assert.equal(bridge.testing.TEXT_MS_PER_CHARACTER, 55);
+		assert.equal(budgets[1], 10_000 * 55 + 4_000);
 		assert.ok(budgets[0] < budgets[1], "a press uses the plain command timeout");
 	});
 
