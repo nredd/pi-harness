@@ -1123,8 +1123,15 @@ impl Input<XtestSink> {
             }
         };
         let opened = (|| {
-            let (conn, root) = connect_xtest()?;
-            let binding = live_binding(&conn)?;
+            let (conn, root, binding) = connect_xtest()
+                .and_then(|(conn, root)| live_binding(&conn).map(|binding| (conn, root, binding)))
+                .map_err(|error| {
+                    if journal.releases().is_empty() {
+                        error
+                    } else {
+                        journal_error(journal.recovery(&error.message))
+                    }
+                })?;
             journal.bind(&binding).map_err(journal_error)?;
             if !continuing && !journal.releases().is_empty() && binding.session_id.is_none() {
                 return Err(journal_error(journal.recovery(
@@ -1136,11 +1143,10 @@ impl Input<XtestSink> {
         let (conn, root, binding) = match opened {
             Ok(opened) => opened,
             Err(error) => {
-                let error = if journal.releases().is_empty() || error.code == ErrorCode::InputUnsafe
-                {
+                let error = if journal.releases().is_empty() {
                     state.with_owed(error)
                 } else {
-                    journal_error(journal.recovery(&error.message))
+                    error
                 };
                 if continuing {
                     *state.journal_slot() = Some(journal);
@@ -1217,7 +1223,13 @@ impl<S: InputSink> Input<S> {
                 }
             }
         }
-        journal.sync(binding, releases).map_err(journal_error)
+        journal.sync(binding, releases).map_err(|cause| {
+            if journal.releases().is_empty() {
+                journal_error(cause)
+            } else {
+                journal_error(journal.recovery(&cause))
+            }
+        })
     }
     fn mark_held_unknown(&self, owed: Owed) {
         if let Some(entry) = self

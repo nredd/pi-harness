@@ -158,8 +158,7 @@ impl Journal {
     fn write(&self, record: Option<&Record>) -> io::Result<()> {
         let Some(record) = record else {
             return match unlinkat(&self.dir, RECORD, AtFlags::empty()) {
-                Ok(()) => sync_dir(&self.dir),
-                Err(Errno::NOENT) => Ok(()),
+                Ok(()) | Err(Errno::NOENT) => sync_dir(&self.dir),
                 Err(err) => Err(err.into()),
             };
         };
