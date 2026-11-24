@@ -514,9 +514,12 @@ node ARTIFACT clean-recovery --agent-dir DIR --output OUT
 `--replace-harnesses` publishes this scan as a replacement generation. It bypasses the
 narrower-set, unreadable-history, missing-manifest and later-month safeguards below and unfreezes recovery files,
 so it drops published history absent from the scan, sealed months included. It is timestamped after
-the readable published manifest like any export, so viewers holding the manifest it supersedes import
-it. Viewers holding a newer snapshot than the replacement (e.g. when the manifest is unreadable or
-missing, so there is no such bound) keep their copy until this machine exports a later `exportedAt`.
+the later of the readable published manifest and the outbox's recorded watermark
+(`outboxes/<sha256>.published.json`, which can also hold an unpublished instant from a failed
+publication) like any export, so viewers holding a recorded snapshot import it. Viewers holding a
+newer snapshot than the replacement (e.g. when the manifest is unreadable, denied or missing and the
+watermark is lost or predates an older kit's later export) keep their copy until this machine exports
+a later `exportedAt`.
 The usage text says so too.
 
 `--harness` picks what an export reads; the default is `pi` only, so other tools are opt-in. Roots
@@ -579,7 +582,7 @@ An export refused until the owner acts exits 1 and ends stderr with exactly one
 clock-dependent note below). Codes:
 `history-unreadable`, `history-over-budget`, `manifest-missing`,
 `harness-set-narrowed`, `harness-set-unknown` (the safeguards above that only a repair or an explicit
-`--replace-harnesses` gets past), `watermark-ahead` (an implausible published `exportedAt`;
+`--replace-harnesses` gets past), `watermark-ahead` (an implausible published or recorded `exportedAt`;
 `--replace-harnesses` does not bypass it) and `export-state-invalid` (export state or outbox bookkeeping that
 reads but does not validate; reported as `Invalid export state in <path>: <reason>`, never quoting
 the file, which holds the salt, nor attaching its parse error). `clean-recovery` (below) uses the same
@@ -663,7 +666,7 @@ CLI results:
   recorded"]`, when the snapshot is out but the outbox's state file could not be written (the next
   export still derives the set from the snapshot). A nonzero exit means nothing was published: an invalid
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
-  state, a refused narrower harness set, a published `exportedAt` implausibly far ahead (more than
+  state, a refused narrower harness set, a published or recorded `exportedAt` implausibly far ahead (more than
   366 days, or past year 9999), an ordinary export whose next instant falls in a later month than its
   clock, or a readable manifest whose history is not. A clock behind the last published export within
   its month is not one: it publishes just after it and exits 0 with a `warnings` entry. (A harness cache that cannot be written is a failed
@@ -770,9 +773,10 @@ Manifest exact keys:
 - `version`: `3` (`1`/`2` for legacy exports).
 - `machineId`: persistent UUID v4, matching its directory.
 - `label`: installation label, maximum 1024 characters. Not a session name.
-- `exportedAt`: positive UTC Unix milliseconds. Monotonic per outbox: `max(now, published
-  exportedAt + 1)` against the readable published manifest (including one whose shards are
-  unreadable), so it can run ahead of a clock that is behind.
+- `exportedAt`: positive UTC Unix milliseconds. Monotonic per outbox: `max(now, bound + 1)` against
+  the later of the readable published manifest (including one whose shards are unreadable) and the
+  outbox's recorded watermark `outboxes/<sha256>.published.json` (which can also hold an unpublished
+  instant from an earlier failed publication), so it can run ahead of a clock that is behind.
 - `lastGoodAt` (v2+): per harness in the snapshot (`pi`, `claude`, ...), when it was last read
   cleanly: positive, at most `exportedAt`. Equal to `exportedAt` unless the harness failed and its
   previous contents were carried, when it stays at the previous mark (or the previous `exportedAt`
@@ -938,10 +942,11 @@ the old row (kept in `retired`, so the double count turns into a recorded replac
 Sealed event prices are not retroactively repriced. Explicit `--replace-harnesses` starts a new generation.
 Every manifest seals exactly the months before its `exportedAt` month; that is the only record of what
 was sealed. The wall clock is read once, before the published manifest is read; the export publishes at
-`max(now, published exportedAt + 1)`, so viewers holding the published snapshot import it as newer. A
-clock behind the published export within the same UTC month (e.g. a small rollback) therefore still
+`max(now, bound + 1)` against the publication bound below, so viewers holding a recorded snapshot
+import it as newer. A clock behind that bound within the same UTC month (e.g. a small rollback) therefore still
 publishes and exits 0, strictly after it, and nothing sealed reopens. The export warns `clock is behind
-the last published export (<now> < <published>); published at <exportedAt> instead`; exporting twice
+the last published export (<now> < <published>); published at <exportedAt> instead` (kept verbatim when
+the recorded watermark supplies `<published>`, including after a failed publication); exporting twice
 within one millisecond advances by 1 ms without a warning. Until the clock passes it, `exportedAt` stays
 ahead of the wall clock and viewers flag the snapshot as a future clock. Quota expiry and harness reads
 still use the wall clock.
@@ -966,11 +971,11 @@ restored older manifest still publishes strictly after every timestamp the water
 and viewers holding that recorded snapshot import it. Older kits neither read nor advance the file:
 while `manifest.json` stays readable at an older kit's later `B`, the max still follows `B`, but if an
 older kit published `B` after the file recorded `A` and `manifest.json` is then corrupt, denied or
-missing under `--replace-harnesses`, or restored to `A` (or before `B`), the new export is bounded only
-by `A`; while this clock is behind `B` it can publish between `A` and `B`, viewers holding `B` reject
-it (`Older machine snapshot`, reported as `Incomplete snapshot <machine id>`) until an export passes
-`B`, and because `A` is a valid recorded watermark the unbounded warning below does not fire (silent
-mixed-version gap). Only with neither (the watermark deleted, unreadable, invalid or `0`, the checkout
+missing under `--replace-harnesses`, or restored to an instant before `B`, the new export is bounded
+only by the later of `A` and that restored manifest (still before `B`); while this clock is behind `B`
+it can publish before `B`, viewers holding `B` reject it (`Older machine snapshot`, reported as
+`Incomplete snapshot <machine id>`) until an export passes `B`, and because `A` is a valid recorded
+watermark the unbounded warning below does not fire (silent mixed-version gap). Only with neither (the watermark deleted, unreadable, invalid or `0`, the checkout
 moved and so rekeyed without rebinding, or every earlier publication came from an older kit that
 recorded none) does the export use the wall clock rather than guess a watermark. An ordinary
 export over a corrupt manifest (when a recorded harness set survives; with no own or inherited

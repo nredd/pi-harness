@@ -408,8 +408,9 @@ describe("stats CLI", () => {
 				"  A clock behind the last published export in its month still publishes, just after it, with a warning; " +
 				"a corrupt manifest still publishes after the last instant the outbox's watermark recorded, as does a denied " +
 				"or missing one under --replace-harnesses (ordinary exports refuse those: history-unreadable, manifest-missing; " +
-				"older kits do not update that watermark, so a later export by one can leave a silent gap if the manifest is " +
-				"lost or restored); with no recorded watermark, it publishes by the wall clock with a warning",
+				"older kits do not update that watermark, so if one exported later and the manifest is then lost or restored, " +
+				"an export can omit the unbounded warning while viewers holding that later snapshot reject it as older); " +
+				"with no recorded watermark, it publishes by the wall clock with a warning",
 		);
 	});
 

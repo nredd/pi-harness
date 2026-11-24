@@ -1712,18 +1712,18 @@ async function publishStats(
 				? (loadedPrevious.exportedAt ?? 0)
 				: loadedPrevious.manifest.exportedAt;
 	const recordedAt = await recordedWatermark(watermarkPath);
-	const publishedAt = Math.max(manifestAt, recordedAt);
-	const exportedAt = Math.max(now, publishedAt + 1);
+	const publicationBoundAt = Math.max(manifestAt, recordedAt);
+	const exportedAt = Math.max(now, publicationBoundAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
 	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
 	// cache or publication writes. This runs under the outbox lock `exportStats` holds; its release after
 	// the refusal is best effort and can fail. Within
 	// years 0000-9999 a later instant never seals an earlier month.
-	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
+	if (publicationBoundAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
 		throw new ExportRefusal(
 			"watermark-ahead",
 			`${recordedAt > manifestAt ? "Recorded usage publication watermark" : "Published usage manifest"} ` +
-				`exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
+				`exportedAt (${new Date(publicationBoundAt).toISOString()}) is more than 366 days ahead ` +
 				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
 				`it (${JSON.stringify(recordedAt > manifestAt ? watermarkPath : join(snapshotDir, "manifest.json"))}); ` +
 				"there is no supported in-place repair " +
@@ -1739,18 +1739,19 @@ async function publishStats(
 	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
 		throw new Error(
 			`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
-				`published one (${new Date(publishedAt).toISOString()}); publishing would seal months this clock has ` +
+				`published one (${new Date(publicationBoundAt).toISOString()}); publishing would seal months this clock has ` +
 				`not left. Fix the clock or wait until ${monthOf(exportedAt)}, or pass --replace-harnesses to publish ` +
 				"without published history absent from this scan",
 		);
 	// Checked after the watermark, so damage never hides a refusal --replace-harnesses cannot bypass.
 	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
 	// Exporting twice within one millisecond is not a clock problem; only a clock behind it is reported.
+	// The established diagnostic wording stays stable when `publicationBoundAt` comes from `.published.json`.
 	const clockWarning =
-		now < publishedAt
+		now < publicationBoundAt
 			? [
 					`clock is behind the last published export (${new Date(now).toISOString()} < ` +
-						`${new Date(publishedAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
+						`${new Date(publicationBoundAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
 				]
 			: [];
 	const own = await ownOutbox(statePath);

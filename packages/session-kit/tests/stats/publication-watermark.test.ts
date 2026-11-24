@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
@@ -136,13 +136,19 @@ it.each([
 
 it("fails the export with nothing published when the watermark cannot be recorded", async () => {
 	const published = await exportStats(agent, out);
+	const beforeFiles = readdirSync(published.snapshotDir).sort();
 	const path = outboxWatermarkPath(agent, published.snapshotDir);
 	rmSync(path);
 	// A directory in its place: unreadable as a watermark, and no file can be renamed over it.
 	mkdirSync(join(path, "blocked"), { recursive: true });
+	sessionFile(join(agent, "sessions", "fixture.jsonl"), {
+		startMs: WALL,
+		lines: [assistantLine({ ms: WALL, provider: "physical", model: "fixture", input: 2 })],
+	});
 	vi.mocked(Date.now).mockReturnValue(AHEAD + 1000);
-	await expect(exportStats(agent, out)).rejects.toThrow();
+	await expect(exportStats(agent, out)).rejects.toMatchObject({ code: "EISDIR" });
 	expect(manifestOf(published.snapshotDir).exportedAt).toBe(AHEAD);
+	expect(readdirSync(published.snapshotDir).sort()).toEqual(beforeFiles);
 });
 
 it("leaves an unpublished exportedAt recorded if manifest rename fails, refusing watermark-ahead after a jumped clock is fixed", async () => {
