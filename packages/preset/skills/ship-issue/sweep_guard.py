@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
@@ -53,9 +56,10 @@ TIMEOUT = 30
 MAX_TREE_ENTRIES = 100_000
 QUIET_SECONDS = 3600
 UNKNOWN_SCOPE = "cannot establish a complete external borrower scope"
-STATUS_NOT_COLLECTED = (
-    "status not collected: tracked worktree changes were not compared"
-)
+STATUS_NOT_COLLECTED = "status not collected: `git status` was not run"
+CHUNK = 1 << 20
+HASHES = {b"sha1": ("sha1", 40), b"sha256": ("sha256", 64)}
+STAGE = re.compile(rb"(100644|100755|120000) ([a-f0-9]+) 0\t(.+)", re.DOTALL)
 PR_FIELDS = "headRefName,headRepository,headRepositoryOwner,headRefOid,state,url"
 OPERATIONS = (
     "rebase-apply",
@@ -284,11 +288,24 @@ def inventory(repo: Path) -> list[tuple[Path, list[bytes]]]:
         KeepError: Git cannot produce a valid inventory.
     """
     # Git reports the storage format from extensions.objectFormat, defaulting to SHA-1.
-    storage = git(repo, "rev-parse", "--show-object-format").strip()
-    oid_width = {b"sha1": 40, b"sha256": 64}[storage]
+    _, oid_width = object_format(repo)
     return parse_inventory(
         git(repo, "worktree", "list", "--porcelain", "-z"), oid_width
     )
+
+
+def object_format(path: Path) -> tuple[str, int]:
+    """Read the repository object hash algorithm and its hexadecimal width.
+
+    Parameters:
+        path: Path, Repository or checkout.
+    Returns:
+        tuple[str, int]: `hashlib` algorithm name and object ID width
+    Raises:
+        KeepError: Git cannot report the storage format.
+        KeyError: The storage format is not supported.
+    """
+    return HASHES[git(path, "rev-parse", "--show-object-format").strip()]
 
 
 def parse_inventory(data: bytes, oid_width: int) -> list[tuple[Path, list[bytes]]]:
@@ -483,10 +500,181 @@ def check_status(path: Path, admin: Path) -> None:
         raise KeepError(
             "`core.filemode` is disabled; executable-bit changes may be hidden"
         )
-    if config(path, "core.trustctime", "--type=bool") == "false":
-        raise KeepError(
-            "`core.trustctime` is disabled; restored mtimes may hide content changes"
-        )
+    check_content(path)
+
+
+def check_content(path: Path) -> None:
+    """Hash tracked worktree entries raw and compare them with their index blobs.
+
+    Object IDs are computed in process from unfollowed directory descriptors,
+    `lstat`, `readlink` and raw reads, so no clean filter, textconv or stat cache
+    (`core.trustctime`) is consulted. Unmerged, gitlink or other unexpected index
+    entries keep. The scan stops at the first entry that keeps.
+
+    Parameters:
+        path: Path, Resolved candidate checkout.
+    Returns:
+        None.
+    Raises:
+        KeepError: An entry is unsupported, changed during the scan, or its raw
+            content or mode differs.
+        OSError: A tracked entry cannot be read.
+    """
+    algorithm, width = object_format(path)
+    records = git(path, "ls-files", "--stage", "-z").split(b"\0")
+    if records[-1]:
+        raise KeepError("incomplete index inventory")
+    for record in records[:-1]:
+        match = STAGE.fullmatch(record)
+        if match is None or len(match[2]) != width:
+            raise KeepError(f"unsupported index entry: {record!r}")
+        if blob(path, match[3], algorithm) != (match[1], match[2].decode()):
+            raise KeepError(f"tracked content or mode differs from index: {match[3]!r}")
+
+
+def entry_mode(info: os.stat_result) -> bytes:
+    """Map a stat result to the index mode Git would record for it.
+
+    Parameters:
+        info: os.stat_result, Unfollowed or open-file stat result.
+    Returns:
+        bytes: Git mode, or `unsupported` for any other file type
+    Raises:
+        None.
+    """
+    if stat.S_ISLNK(info.st_mode):
+        return b"120000"
+    if stat.S_ISREG(info.st_mode):
+        return b"100755" if info.st_mode & stat.S_IXUSR else b"100644"
+    return b"unsupported"
+
+
+def identity(info: os.stat_result) -> tuple[int, int]:
+    """Return the device and inode that name one filesystem object.
+
+    Parameters:
+        info: os.stat_result, Stat result.
+    Returns:
+        tuple[int, int]: Device and inode
+    Raises:
+        None.
+    """
+    return info.st_dev, info.st_ino
+
+
+def blob(root: Path, name: bytes, algorithm: str) -> tuple[bytes, str]:
+    """Hash one worktree entry as a Git blob through unfollowed parent descriptors.
+
+    Every parent component is opened with `O_DIRECTORY | O_NOFOLLOW` relative
+    to the previous one and the leaf is read relative to the last. After hashing,
+    each component must still name the descriptor that was walked.
+
+    Parameters:
+        root: Path, Resolved candidate checkout.
+        name: bytes, Index path relative to the checkout.
+        algorithm: str, Repository object hash algorithm.
+    Returns:
+        tuple[bytes, str]: Git mode and raw blob object ID
+    Raises:
+        KeepError: A component is unsafe, or the entry changed while hashed.
+        OSError: The entry cannot be read without following a symlink.
+    """
+    *parents, leaf = name.split(b"/")
+    if any(part in (b"", b".", b"..") for part in (*parents, leaf)):
+        raise KeepError(f"unsupported index path: {name!r}")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    with ExitStack() as stack:
+        root_fd = os.open(root, flags)
+        stack.callback(os.close, root_fd)
+        walked = [(bytes(root), -1, root_fd)]
+        try:
+            for part in parents:
+                parent_fd = walked[-1][2]
+                descriptor = os.open(part, flags, dir_fd=parent_fd)
+                stack.callback(os.close, descriptor)
+                walked.append((part, parent_fd, descriptor))
+        except OSError as exc:
+            raise KeepError(
+                f"cannot open tracked parent without following links: {name!r}: {exc}"
+            ) from exc
+        result = leaf_blob(walked[-1][2], leaf, algorithm)
+        for part, parent, descriptor in reversed(walked):
+            current = os.stat(
+                part, dir_fd=None if parent < 0 else parent, follow_symlinks=False
+            )
+            if identity(current) != identity(os.fstat(descriptor)):
+                raise KeepError(f"tracked parent changed during hash: {name!r}")
+        return result
+
+
+def leaf_blob(directory: int, leaf: bytes, algorithm: str) -> tuple[bytes, str]:
+    """Hash one entry relative to a verified directory descriptor.
+
+    Parameters:
+        directory: int, Descriptor of the entry's walked parent.
+        leaf: bytes, Final path component.
+        algorithm: str, Repository object hash algorithm.
+    Returns:
+        tuple[bytes, str]: Git mode and raw blob object ID
+    Raises:
+        KeepError: The opened entry is not regular, or it changed while hashed.
+        OSError: The entry cannot be read without following a symlink.
+    """
+    initial = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+    mode = entry_mode(initial)
+    if mode == b"120000":
+        link = os.readlink(leaf, dir_fd=directory)
+        digest = hashlib.new(algorithm, b"blob %d\0%s" % (len(link), link)).hexdigest()
+        current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+        if stamp(initial) != stamp(current):
+            raise KeepError(f"tracked entry changed during hash: {leaf!r}")
+        return mode, digest
+    if mode == b"unsupported":
+        return mode, ""
+    # Never block on a FIFO or follow a symlink swapped in after the stat.
+    descriptor = os.open(
+        leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+    )
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise KeepError(f"tracked entry is not a regular file: {leaf!r}")
+        digest = hashlib.new(algorithm, b"blob %d\0" % before.st_size)
+        size = 0
+        while chunk := os.read(descriptor, CHUNK):
+            size += len(chunk)
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        result = digest.hexdigest()
+        current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+        if (
+            size != before.st_size
+            or stamp(before) != stamp(after)
+            or stamp(before) != stamp(current)
+        ):
+            raise KeepError(f"tracked entry changed during hash: {leaf!r}")
+        return entry_mode(before), result
+    finally:
+        os.close(descriptor)
+
+
+def stamp(info: os.stat_result) -> tuple[int, ...]:
+    """Return the fields that change when an open file is rewritten.
+
+    Parameters:
+        info: os.stat_result, Open-file stat result.
+    Returns:
+        tuple[int, ...]: Device, inode, mode, size, mtime and ctime in nanoseconds
+    Raises:
+        None.
+    """
+    return (
+        *identity(info),
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
 
 
 def check_staged(path: Path) -> None:

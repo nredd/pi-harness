@@ -221,7 +221,26 @@ issue is named:
   Read-confirmed marks stay in memory only. Not built yet: marks live in memory (#1402, with L8
   reload) and the ledger does not exist (#1401, with declared `windows`, `observed` and L5 early
   clear)
-- Not built yet: live v2 views and applied `label` over `router:rpc:usage` and `view.json`
+- The router atomically writes cached quota readings and active blocks to
+  `<agentDir>/router-state/v1/view.json` for `/stats`, without triggering provider requests. The
+  disk view contains only fields used by `/stats`; the v1 RPC is unchanged. An oversized
+  provider reading is dropped without dropping its active blocks that fit. Both provider rows
+  and the complete file have byte limits. Gemini appears when an `antigravity` collector supplies
+  usage.
+
+  Limits:
+  - Pi processes sharing an agent directory are last-writer-wins. A cold process preserves the
+    previous file until it has data to publish. After the original publisher exits, `/stats`
+    ages its readings to stale and shows blocks until their actual provider `until` deadlines.
+    #1440 tracks a lease design with writer-owned views and retrieval-time selection.
+  - When the file budget runs out, later providers or blocks can be dropped without a
+    reader-visible truncation indicator (#1440).
+  - Labels, families and `display.full` come from trusted in-process collectors. Built-ins are
+    fixed, but a custom collector returning account text as a label will persist it. #1440
+    tracks persisting only router-owned public labels.
+  - An interrupted write can leave a harmless `.view-*.tmp` orphan. Delete it by hand once the
+    writer is known to have exited.
+- Not built yet: live v2 `router:rpc:usage` views and applied `label`
   (#1403), applied `quotaGroup` and the access-flip rule (#1405), an end-to-end third-party
   collector proof (#1404)
 - Decision records live in this README and in commit bodies, not `docs/adr`

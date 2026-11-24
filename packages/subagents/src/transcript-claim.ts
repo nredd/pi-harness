@@ -24,6 +24,7 @@ import {
 	readlinkSync,
 	readSync,
 	realpathSync,
+	renameSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -100,17 +101,8 @@ function fileId(stats: { dev: number; ino: number }): string {
 	return `${stats.dev}:${stats.ino}`;
 }
 
-/**
- * Publish `body` at `path` only if nothing is there yet; false when something
- * is. The body is written to a private staging file first and linked into
- * place, so a failed write (`ENOSPC`) never leaves a partial claim: at worst a
- * stray staging file this attempt created. On a volume without hard links the
- * body is written in place with an exclusive create instead (never an
- * overwriting rename): a partial one reads as unreadable, so it refuses, and
- * a failed write removes it while it is still the file this call created.
- * Other errors pass through.
- */
-function createExclusive(path: string, body: string): boolean {
+/** Publish only after the staging file is fully written and closed. */
+function withStagedClaim<T>(path: string, body: string, publish: (staging: string) => T): T {
 	const staging = `${path}.${randomUUID()}.tmp`;
 	const fd = openSync(staging, "wx");
 	try {
@@ -119,15 +111,28 @@ function createExclusive(path: string, body: string): boolean {
 		} finally {
 			closeSync(fd);
 		}
-		linkSync(staging, path);
-		return true;
-	} catch (error) {
-		if (errorCode(error) === "EEXIST") return false;
-		if (NO_HARD_LINKS.has(errorCode(error) as string)) return createInPlace(path, body);
-		throw error;
+		return publish(staging);
 	} finally {
 		removeQuietly(staging);
 	}
+}
+
+/**
+ * Publish only at a vacant path; false if it is occupied. Without hard links,
+ * create exclusively in place instead: a partial claim reads as unreadable,
+ * and a failed write removes it while it is still the file this call created.
+ */
+function createExclusive(path: string, body: string): boolean {
+	return withStagedClaim(path, body, (staging) => {
+		try {
+			linkSync(staging, path);
+			return true;
+		} catch (error) {
+			if (errorCode(error) === "EEXIST") return false;
+			if (NO_HARD_LINKS.has(errorCode(error) as string)) return createInPlace(path, body);
+			throw error;
+		}
+	});
 }
 
 /** `createExclusive` without a link: an exclusive create of `path` itself. */
@@ -268,10 +273,9 @@ function takeOver(claimPath: string, stale: string, body: string, file: string):
 		if (readClaim(claimPath) !== stale) {
 			throw new Error(`child session's writer claim changed while it was being taken over; retry: ${file}`);
 		}
-		unlinkSync(claimPath);
-		if (!createExclusive(claimPath, body)) {
-			throw new Error(`child session was claimed by another process during takeover: ${file}`);
-		}
+		// Keep the path occupied: a fresh publisher may have passed its lock
+		// probe before we locked, but its exclusive create still cannot win.
+		withStagedClaim(claimPath, body, (staging) => renameSync(staging, claimPath));
 	} finally {
 		// A lock that cannot be removed keeps refusing claims, which is the safe side.
 		removeQuietly(lockPath);
@@ -290,7 +294,7 @@ function releaseOwn(claimPath: string, body: string): void {
 /**
  * A fresh (not takeover) publish of `body` at `claimPath`; false when a claim
  * is already there. A takeover lock that appeared since the caller's probe (a
- * taker that dropped the stale claim, then crashed or is about to publish)
+ * legacy taker that dropped the stale claim, then crashed or is about to publish)
  * means this claim may sit where the taker's belongs: it is dropped again and
  * the run refused.
  */

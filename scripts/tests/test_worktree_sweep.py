@@ -13,10 +13,12 @@ import os
 import runpy
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from shlex import quote
 from textwrap import dedent
-from typing import NamedTuple
+from typing import Any, NamedTuple
+from unittest.mock import Mock
 
 import pytest
 
@@ -29,6 +31,7 @@ BASE = "owner/project"
 GUARD_MODULE = runpy.run_path(str(GUARD))
 GIT = GUARD_MODULE["binary"](GUARD_MODULE["GIT_LOCATIONS"], "git")
 TIMEOUT = 45
+Hook = Callable[..., Any]
 
 
 class Worktrees(NamedTuple):
@@ -373,7 +376,7 @@ def test_unknown_scope_is_keep_only_with_fixture_evidence(wt: Worktrees, case: s
     if case == "clean":
         assert results[-1]["reasons"] == [
             "cannot establish a complete external borrower scope",
-            "status not collected: tracked worktree changes were not compared",
+            "status not collected: `git status` was not run",
         ]
     if case == "borrowed scratch":
         assert "untracked or ignored paths" in str(results[0]["reasons"])
@@ -430,7 +433,7 @@ def test_shipped_cli_is_keep_only(wt: Worktrees) -> None:
         "verdict": "keep",
         "reasons": [
             "cannot establish a complete external borrower scope",
-            "status not collected: tracked worktree changes were not compared",
+            "status not collected: `git status` was not run",
         ],
     }
     assert receipt.read_text().splitlines() == ["list", "view"]
@@ -458,7 +461,7 @@ def test_cli_output_cannot_emit_eligible_when_assess_returns_eligible(wt: Worktr
     assert result["verdict"] == "keep"
     assert result["reasons"] == [
         "cannot establish a complete external borrower scope",
-        "status not collected: tracked worktree changes were not compared",
+        "status not collected: `git status` was not run",
     ]
 
 
@@ -496,7 +499,8 @@ def test_dirty_or_ignored(wt: Worktrees, name: str) -> None:
     code, (result,) = run(wt, borrower_gitdirs=None)
     assert code == 0
     assert result["verdict"] == "keep"
-    assert ("status not collected" if name == "tracked" else name) in str(result["reasons"])
+    expected = "tracked content or mode differs from index: b'tracked'" if name == "tracked" else name
+    assert expected in str(result["reasons"])
 
 
 @pytest.mark.parametrize("flag", ["--assume-unchanged", "--skip-worktree"])
@@ -523,20 +527,331 @@ def test_disabled_filemode_hides_executable_bit_change(wt: Worktrees) -> None:
     keep(wt, "core.filemode")
 
 
-def test_disabled_trustctime_hides_same_size_edit_with_restored_mtime(wt: Worktrees) -> None:
+def closed_scope(wt: Worktrees) -> dict[str, object]:
+    """Return the internal assessment for the candidate under an explicit closed scope.
+
+    Parameters:
+        wt: Worktrees, Candidate and evidence fixture.
+    Returns:
+        dict[str, object]: The single fixture verdict record.
+    Raises:
+        AssertionError: The scan did not produce exactly one record.
+    """
+    code, (result,) = run(wt, borrower_gitdirs=())
+    assert code == 0
+    return result
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_disabled_trustctime_same_size_edit_with_restored_mtime(wt: Worktrees, edited: bool) -> None:
     git(wt.path, "config", "core.trustctime", "false")
     target = wt.path / "tracked"
     os.utime(target, (1, 1))
     git(wt.path, "update-index", "--refresh")
     original = target.stat()
-    target.write_text("other\n")
+    target.write_text("other\n" if edited else "saved\n")
     os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
     assert git(wt.path, "status", "--porcelain") == b""
-    assert git(wt.path, "hash-object", "--no-filters", "tracked") != git(wt.path, "rev-parse", "HEAD:tracked")
+    raw = git(wt.path, "hash-object", "--no-filters", "tracked")
+    assert (raw != git(wt.path, "rev-parse", "HEAD:tracked")) is edited
     quiet(wt)
     os.utime(wt.admin / "index", (10, 10))
     assert git(wt.path, "--no-optional-locks", "status", "--porcelain") == b""
-    keep(wt, "core.trustctime")
+    result = closed_scope(wt)
+    if edited:
+        assert result["verdict"] == "keep"
+        assert result["reasons"] == ["tracked content or mode differs from index: b'tracked'"]
+    else:
+        assert result["verdict"] == "eligible", result
+
+
+@pytest.mark.parametrize("change", ["executable", "link target"])
+def test_tracked_mode_or_link_change_keeps(wt: Worktrees, change: str) -> None:
+    name = "tracked"
+    if change == "executable":
+        (wt.path / name).chmod(0o755)
+    else:
+        name = "link"
+        (wt.path / name).symlink_to("aaaa")
+        git(wt.path, "add", name)
+        git(wt.path, "commit", "-m", "Link")
+        wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+        (wt.path / name).unlink()
+        (wt.path / name).symlink_to("bbbb")
+    quiet(wt)
+    result = closed_scope(wt)
+    assert result["verdict"] == "keep"
+    assert result["reasons"] == [f"tracked content or mode differs from index: b'{name}'"]
+
+
+@pytest.mark.parametrize("change", ["symlink to copy", "fifo", "deleted", "symlinked parent"])
+def test_content_check_alone_keeps_replaced_entries(
+    wt: Worktrees, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    # Earlier line-ending and untracked checks also keep these end to end.
+    target = wt.path / "tracked"
+    copy = wt.repo.parent / "copy"
+    copy.mkdir()
+    (copy / "tracked").write_bytes(target.read_bytes())
+    target.unlink()
+    expected = "tracked content or mode differs from index: b'tracked'"
+    if change == "symlink to copy":
+        target.symlink_to(copy / "tracked")
+    elif change == "fifo":
+        os.mkfifo(target)
+    elif change == "deleted":
+        expected = "No such file"
+    else:
+        expected = "cannot open tracked parent without following links: b'dir/tracked'"
+        git(wt.path, "update-index", "--force-remove", "tracked")
+        blob = git(wt.repo, "rev-parse", "HEAD:tracked").decode().strip()
+        git(wt.path, "update-index", "--add", "--cacheinfo", f"100644,{blob},dir/tracked")
+        (wt.path / "dir").symlink_to(copy)
+    monkeypatch.setattr(os, "environ", git_env())
+    with pytest.raises((GUARD_MODULE["KeepError"], OSError), match=expected) as caught:
+        GUARD_MODULE["check_content"](wt.path.resolve())
+    if change == "symlinked parent":
+        cause = caught.value.__cause__
+        assert isinstance(cause, OSError)
+        assert str(caught.value).endswith(f": {cause}")
+
+
+def test_unchanged_tracked_symlink_and_executable_are_clean(wt: Worktrees) -> None:
+    (wt.path / "link").symlink_to("tracked")
+    (wt.path / "tool").write_text("#!/bin/sh\n")
+    (wt.path / "tool").chmod(0o755)
+    git(wt.path, "add", "link", "tool")
+    git(wt.path, "commit", "-m", "Link and tool")
+    wt.pr["headRefOid"] = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    quiet(wt)
+    result = closed_scope(wt)
+    assert result["verdict"] == "eligible", result
+
+
+def test_sha256_content_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "--template=", "--object-format=sha256")
+    (repo / "tracked").write_text("saved\n")
+    git(repo, "add", "tracked")
+    monkeypatch.setattr(os, "environ", git_env())
+    GUARD_MODULE["check_content"](repo.resolve())
+    (repo / "tracked").write_text("other\n")
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked content or mode differs from index"):
+        GUARD_MODULE["check_content"](repo.resolve())
+
+
+def test_unmerged_index_entry_keeps(wt: Worktrees, monkeypatch: pytest.MonkeyPatch) -> None:
+    git(wt.path, "switch", "-c", "side")
+    (wt.path / "tracked").write_text("side\n")
+    git(wt.path, "commit", "-am", "Side")
+    git(wt.path, "switch", "merged")
+    (wt.path / "tracked").write_text("main\n")
+    git(wt.path, "commit", "-am", "Main")
+    with pytest.raises(subprocess.CalledProcessError):
+        git(wt.path, "merge", "side")
+    monkeypatch.setattr(os, "environ", git_env())
+    with pytest.raises(GUARD_MODULE["KeepError"], match="unsupported index entry"):
+        GUARD_MODULE["check_content"](wt.path.resolve())
+
+
+@pytest.mark.parametrize(
+    ("stage", "reason"),
+    [
+        (b"100644 " + b"a" * 40 + b" 0\ttracked", "incomplete index inventory"),
+        (b"100644 " + b"a" * 64 + b" 0\ttracked\0", "unsupported index entry"),
+        (b"100644 " + b"a" * 40 + b" 0\tdir/../tracked\0", "unsupported index path"),
+    ],
+)
+def test_malformed_index_inventory_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: bytes, reason: str
+) -> None:
+    replies = {"rev-parse": b"sha1\n", "ls-files": stage}
+    check = GUARD_MODULE["check_content"]
+    monkeypatch.setitem(check.__globals__, "git", lambda _path, command, *_args: replies[command])
+    with pytest.raises(GUARD_MODULE["KeepError"], match=reason):
+        check(tmp_path)
+
+
+def hash_with(
+    root: Path, name: bytes, monkeypatch: pytest.MonkeyPatch, **hooks: Callable[[Hook], Hook]
+) -> tuple[bytes, str]:
+    """Hash one entry directly with `os` calls wrapped to inject a concurrent change.
+
+    Parameters:
+        root: Path, Resolved fixture root.
+        name: bytes, Entry path relative to the root.
+        monkeypatch: pytest.MonkeyPatch, Fixture patcher.
+        hooks: Callable[[Hook], Hook], Wrappers keyed by `os` function name; each receives the original.
+    Returns:
+        tuple[bytes, str]: Git mode and raw blob object ID.
+    Raises:
+        KeepError: The guard keeps the entry.
+    """
+    blob = GUARD_MODULE["blob"]
+    monkeypatch.setitem(blob.__globals__, "CHUNK", 4)
+    for attr, wrap in hooks.items():
+        monkeypatch.setattr(os, attr, wrap(getattr(os, attr)))
+    return blob(root, name, "sha1")
+
+
+def test_fifo_swapped_in_after_stat_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "tracked"
+    target.write_text("saved\n")
+
+    def swap(real: Hook) -> Hook:
+        def opened(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            if path == b"tracked":
+                assert flags & os.O_NONBLOCK
+                target.unlink()
+                os.mkfifo(target)
+            return real(path, flags, *args, **kwargs)
+
+        return opened
+
+    read = Mock(side_effect=AssertionError("read called on swapped FIFO"))
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry is not a regular file: b'tracked'"):
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, open=swap, read=lambda _real: read)
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "change", ["rewrite consumed chunk", "replace after read", "rewrite after fstat", "chmod after fstat"]
+)
+def test_edit_consumed_chunk_during_hash_keeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    target = tmp_path / "tracked"
+    target.write_bytes(b"0123456789abcdef")
+    original = target.stat()
+    calls = {"read": 0, "fstat": 0}
+
+    def rewrite(real: Hook) -> Hook:
+        def read(descriptor: int, size: int) -> bytes:
+            calls["read"] += 1
+            if calls["read"] == 2:
+                with target.open("r+b") as handle:
+                    handle.write(b"WXYZ")
+                os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+            return real(descriptor, size)
+
+        return read
+
+    def replace(real: Hook) -> Hook:
+        def fstat(descriptor: int) -> os.stat_result:
+            result = real(descriptor)
+            calls["fstat"] += 1
+            if calls["fstat"] == 2:
+                if change == "replace after read":
+                    copy = tmp_path / "copy"
+                    copy.write_bytes(b"0123456789abcdef")
+                    copy.replace(target)
+                elif change == "rewrite after fstat":
+                    target.write_bytes(b"abcdefghijklmnop")
+                    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns + 1_000_000_000))
+                else:
+                    target.chmod(0o755)
+            return result
+
+        return fstat
+
+    hooks = {"read": rewrite} if change == "rewrite consumed chunk" else {"fstat": replace}
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry changed during hash: b'tracked'"):
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, **hooks)
+    assert calls["read" if change == "rewrite consumed chunk" else "fstat"] >= 2
+
+
+def test_multi_chunk_hash_matches_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "tracked"
+    target.write_bytes(b"0123456789abcdef!")
+    expected = git(tmp_path, "hash-object", "--no-filters", "tracked").decode().strip()
+    assert hash_with(tmp_path.resolve(), b"tracked", monkeypatch) == (b"100644", expected)
+
+
+def test_parent_swap_during_hash_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for parent in (tmp_path / "dir", tmp_path / "outside"):
+        parent.mkdir()
+        (parent / "tracked").write_text("saved\n")
+
+    def swap(real: Hook) -> Hook:
+        def opened(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            if path == b"tracked":
+                (tmp_path / "dir").rename(tmp_path / "moved")
+                (tmp_path / "dir").symlink_to(tmp_path / "outside")
+            return real(path, flags, *args, **kwargs)
+
+        return opened
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked parent changed during hash: b'dir/tracked'"):
+        hash_with(tmp_path.resolve(), b"dir/tracked", monkeypatch, open=swap)
+
+
+def test_symlink_replaced_after_readlink_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "tracked"
+    target.symlink_to("same")
+
+    def replace(real: Hook) -> Hook:
+        def readlink(*args: object, **kwargs: object) -> bytes:
+            result = real(*args, **kwargs)
+            target.unlink()
+            target.symlink_to("same")
+            return result
+
+        return readlink
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked entry changed during hash"):
+        hash_with(tmp_path.resolve(), b"tracked", monkeypatch, readlink=replace)
+
+
+def test_outer_parent_replaced_during_recheck_keeps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    inner = tmp_path / "outer" / "inner"
+    inner.mkdir(parents=True)
+    (inner / "tracked").write_text("saved")
+
+    def swap(real: Hook) -> Hook:
+        def checked(path: object, *args: object, **kwargs: object) -> os.stat_result:
+            result = real(path, *args, **kwargs)
+            if path == b"inner":
+                (tmp_path / "outer").rename(tmp_path / "moved")
+                (tmp_path / "outer").symlink_to(tmp_path / "moved")
+            return result
+
+        return checked
+
+    with pytest.raises(GUARD_MODULE["KeepError"], match="tracked parent changed during hash"):
+        hash_with(tmp_path.resolve(), b"outer/inner/tracked", monkeypatch, stat=swap)
+
+
+def test_directory_cleanup_continues_after_close_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    (directory / "tracked").write_text("saved")
+    opened: list[int] = []
+    closed: list[int] = []
+
+    def record_open(real: Hook) -> Hook:
+        def opened_fd(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            fd = real(path, flags, *args, **kwargs)
+            if flags & os.O_DIRECTORY:
+                opened.append(fd)
+            return fd
+
+        return opened_fd
+
+    def fail_close(real: Hook) -> Hook:
+        def close(fd: int) -> None:
+            closed.append(fd)
+            real(fd)
+            if fd == opened[-1]:
+                raise OSError("injected close failure")
+
+        return close
+
+    with pytest.raises(OSError, match="injected close failure"):
+        hash_with(tmp_path.resolve(), b"dir/tracked", monkeypatch, open=record_open, close=fail_close)
+    assert closed[-2:] == list(reversed(opened))
 
 
 @pytest.mark.parametrize("kind", ["modified", "deleted", "intent-to-add"])
@@ -994,7 +1309,7 @@ def test_command_diagnostics_including_whitespace_keep(wt: Worktrees) -> None:
         (
             "git@github.com:source/project.git",
             '[{"number": 123, "state": "MERGED"}]',
-            "tracked worktree changes were not compared",
+            "`git status` was not run",
         ),
     ],
 )
@@ -1387,7 +1702,7 @@ def test_filter_activated_after_attribute_scan_is_not_run(wt: Worktrees) -> None
     assert not marker.exists()
     assert code == 0
     assert result["verdict"] == "keep"
-    assert "status not collected" in str(result["reasons"])
+    assert "tracked content or mode differs from index: b'tracked'" in str(result["reasons"])
 
 
 @pytest.mark.parametrize("attr", ["text eol=lf", "text=auto"])
