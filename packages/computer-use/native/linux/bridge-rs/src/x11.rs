@@ -1302,9 +1302,9 @@ impl<S: InputSink> Input<S> {
                     return Ok(Some(owed.unknown()));
                 }
                 let left = owed.after_post(&self.sink.post(owed.event, owed.detail, 0, 0));
-                // Don't restore resend eligibility on a journaled settlement: the
+                // Don't restore resend eligibility during exit settlement: the
                 // exit waiter may have timed out before the post returned.
-                if self.journal.borrow().is_some() {
+                if self.exit_limit.is_some() {
                     left.map(Owed::unknown)
                 } else {
                     left
@@ -2753,6 +2753,26 @@ mod tests {
         );
         resume.send(()).unwrap();
         finished.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
+
+    #[test]
+    fn journaled_live_settlement_retries_a_definitely_rejected_release() {
+        let (_home, binding, mut journal) = journal_fixture();
+        let state = Arc::new(InputState::default());
+        let owed = Owed {
+            event: BUTTON_RELEASE_EVENT,
+            detail: 6,
+            ambiguous: false,
+        };
+        state.owing().debt.push(owed);
+        journal.sync(&binding, vec![owed]).unwrap();
+        let input = Input::with_state(RecordingSink::default().fail_post(0), state);
+        *input.journal.borrow_mut() = Some((journal, binding));
+        assert_eq!(input.settle().unwrap_err().code, ErrorCode::InputUnsafe);
+        assert_eq!(input.state.owing().debt, [owed]);
+        input.settle().unwrap();
+        assert!(input.state.owing().debt.is_empty());
+        assert_eq!(input.sink().events().len(), 1);
     }
 
     #[test]

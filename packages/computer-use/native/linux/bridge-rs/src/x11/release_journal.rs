@@ -98,6 +98,10 @@ impl Journal {
         let anchor = open_anchor_dir(home, uid, false)?;
         let dir_path = home.join(DIR);
         let dir = descend_dir(&anchor, DIR, &dir_path, uid, true)?;
+        // Also sync when the directory already exists: an earlier opener may have
+        // created it and exited before its parent entry was durable.
+        sync_dir(&anchor)
+            .map_err(|err| format!("cannot sync journal parent '{}': {err}", home.display()))?;
         let lock_path = dir_path.join(LOCK);
         let lock = acquire_lock(&dir, &lock_path)?;
         let path = dir_path.join(RECORD);
