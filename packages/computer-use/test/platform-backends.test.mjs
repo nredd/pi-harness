@@ -393,8 +393,8 @@ describe("Windows backend", () => {
 			["notepad.exe", false],
 		];
 		for (const [name, kind] of table) {
-			assert.equal(backend.isBrowserApp(name), kind !== false, name);
-			assert.equal(backend.isChromeFamilyApp(name), ["chrome", "edge", "brave"].includes(kind), name);
+			assert.equal(backend.isBrowserApp({ appName: name }), kind !== false, name);
+			assert.equal(backend.isChromeFamilyApp({ appName: name }), ["chrome", "edge", "brave"].includes(kind), name);
 		}
 	});
 
@@ -565,25 +565,28 @@ describe("Linux backend", () => {
 		return () => Object.assign(wslProbe, original);
 	});
 
-	test("classifies browsers from process and desktop names", () => {
-		const chromium = [
-			"chrome",
-			"/usr/bin/google-chrome-stable",
-			"chromium-browser.desktop",
-			"microsoft-edge",
-			"brave",
-			"vivaldi-stable",
-			"opera",
-		];
-		for (const name of chromium) {
-			assert.equal(backend.isBrowserApp(name), true, name);
-			assert.equal(backend.isChromeFamilyApp(name), true, name);
+	test("classifies browsers by executable basename, never the accessible app name (#1295)", () => {
+		const chromium = ["chrome", "Chromium", "chromium-browser", "msedge", "brave", "vivaldi-bin", "opera"];
+		for (const appId of chromium) {
+			assert.equal(backend.isBrowserApp({ appName: "Editor", appId }), true, appId);
+			assert.equal(backend.isChromeFamilyApp({ appName: "Editor", appId }), true, appId);
 		}
-		for (const name of ["firefox", "firefox-esr"]) {
-			assert.equal(backend.isBrowserApp(name), true, name);
-			assert.equal(backend.isChromeFamilyApp(name), false, name);
+		for (const appId of ["firefox", "firefox-bin", "firefox-esr"]) {
+			assert.equal(backend.isBrowserApp({ appName: "Editor", appId }), true, appId);
+			assert.equal(backend.isChromeFamilyApp({ appName: "Editor", appId }), false, appId);
 		}
-		assert.equal(backend.isBrowserApp("gedit"), false);
+		// A renamed accessible name, a path or desktop id, or no executable at all is never a browser.
+		for (const app of [
+			{ appName: "Firefox", appId: "gedit" },
+			{ appName: "Google Chrome", appId: "gedit" },
+			{ appName: "firefox" },
+			{ appName: "chrome", bundleId: "chrome" },
+			{ appName: "Editor", appId: "/usr/bin/firefox" },
+			{ appName: "Editor", appId: "firefox.desktop" },
+		]) {
+			assert.equal(backend.isBrowserApp(app), false, JSON.stringify(app));
+			assert.equal(backend.isChromeFamilyApp(app), false, JSON.stringify(app));
+		}
 	});
 
 	test("listRoots parses payload variants, filters by title and hints on empty", async () => {
@@ -753,9 +756,11 @@ describe("platform facade", () => {
 			fakes.macos.command.mock.calls.map(([command]) => command),
 			["listApps", "listRoots", "getFrontmost", "focusWindow", "look", "act", "actBatch", "axReadText", "axWaitFor"],
 		);
-		assert.equal(backend.isBrowserApp("Safari"), true);
-		assert.equal(backend.isChromeFamilyApp("Safari"), false);
-		assert.equal(backend.isChromeFamilyApp("Google Chrome"), true);
+		assert.equal(backend.isBrowserApp({ appName: "Safari" }), true);
+		assert.equal(backend.isBrowserApp({ appName: "x", bundleId: "com.apple.Safari" }), true);
+		assert.equal(backend.isChromeFamilyApp({ appName: "Safari" }), false);
+		assert.equal(backend.isChromeFamilyApp({ appName: "Google Chrome" }), true);
+		assert.equal(backend.isChromeFamilyApp({ appName: "x", bundleId: "com.google.Chrome" }), true);
 		assert.equal(await backend.openBrowserLocation({ appName: "Firefox" }, "https://x.test"), false);
 	});
 
@@ -777,7 +782,7 @@ describe("platform facade", () => {
 		]) {
 			await rejectsWith(backend[method](), message);
 		}
-		assert.throws(() => backend.isBrowserApp("x"), message);
-		assert.throws(() => backend.isChromeFamilyApp("x"), message);
+		assert.throws(() => backend.isBrowserApp({ appName: "x" }), message);
+		assert.throws(() => backend.isChromeFamilyApp({ appName: "x" }), message);
 	});
 });
