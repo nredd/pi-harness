@@ -1372,7 +1372,7 @@ private func runKeyboardDeadlineAssertions() {
         expect(keyboardDeadline([:], now: now, ceiling: ceiling) == 1_030, "a missing deadline falls back to 30 s")
     }
     expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_031_000], now: now, ceiling: desktopInputKeyboardCeiling) == 1_030, "desktopInput bounds a deadline to its client's fixed 30 s")
-    // act_ui budgets 25 ms per character: 5,000 characters get about 129 s, which a 30 s bound would cut mid-string.
+    // act_ui budgets 55 ms per character (`TEXT_MS_PER_CHARACTER`): about 2,270 characters get 129 s, which a 30 s bound would cut mid-string.
     expect(keyboardDeadline(["keyboardDeadlineUptimeMs": 1_129_000], now: now, ceiling: nil) == 1_129, "act keeps the client's length-based deadline")
 }
 
