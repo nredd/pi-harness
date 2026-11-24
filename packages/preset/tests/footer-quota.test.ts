@@ -2077,3 +2077,88 @@ test("a compact block keeps the expiry day when it lifts on another day", () => 
 	assert.equal(row(CLOCK + hour), "Left: A provider blocked->13:00 inf");
 	assert.equal(row(CLOCK + 25 * hour), "Left: A provider blocked->Jan 11 13:00 inf");
 });
+
+/** Windows as the router's built-in `antigravity` collector reports them. */
+const geminiWindows = (left5h: number, leftWeek: number) => [
+	{
+		name: "7d",
+		usedPercent: 100 - leftWeek,
+		resetAt: CLOCK + 72 * hour,
+		durationMs: WEEK,
+		spanSource: "reported",
+		scope: "model",
+		families: ["gemini"],
+	},
+	{
+		name: "5h",
+		usedPercent: 100 - left5h,
+		resetAt: CLOCK + 2 * hour,
+		durationMs: 5 * hour,
+		spanSource: "reported",
+		scope: "model",
+		families: ["gemini"],
+	},
+	{
+		name: "3p-5h",
+		usedPercent: 0,
+		durationMs: 5 * hour,
+		spanSource: "reported",
+		scope: "model",
+		families: ["claude", "gpt"],
+	},
+];
+const gemini = (extra: Record<string, unknown> = {}) =>
+	snap("antigravity", geminiWindows(99, 97), { expiresAt: CLOCK + hour, ...extra });
+const v1 = (snapshots: unknown[], blocks: unknown[] = []) => ({ success: true, data: { snapshots, blocks } });
+
+test("v1 replies show the antigravity Gemini 5h and 7d row whatever the model", () => {
+	const state = present(footer.parseUsageReply(v1([gemini()]), CLOCK));
+	const sonnet = { ...fixed, model: { provider: "anthropic", id: "claude-sonnet-5-5" } };
+	assert.equal(
+		footer.formatQuotaRow(state, "compact", plain, sonnet),
+		"Left: Anth (stale) 7d -- | OAI (stale) 7d -- | Gem 5h 99% @14:00 7d 97% @Jan 13 12:00",
+	);
+	assert.equal(
+		footer.formatQuotaRow(state, "full", plain, { ...fixed, model: { provider: "antigravity", id: "gemini-4-neon" } }),
+		"Quota left: Anthropic (stale) weekly -- | OpenAI (stale) weekly -- | Gemini 5h 99% (resets 14:00) weekly 97% (resets Jan 13 12:00)",
+	);
+});
+
+test("v1 antigravity rows need a read or a block, and say when the read failed", () => {
+	const rowOf = (snapshots: unknown[], blocks: unknown[] = []) =>
+		footer.formatQuotaRow(present(footer.parseUsageReply(v1(snapshots, blocks), CLOCK)), "compact", plain, fixed);
+	const legacyOnly = "Left: Anth (stale) 7d -- | OAI (stale) 7d --";
+	assert.equal(rowOf([]), legacyOnly);
+	assert.equal(rowOf([snap("antigravity", [], { status: "unavailable", expiresAt: CLOCK })]), legacyOnly);
+	assert.equal(
+		rowOf([snap("antigravity", [], { status: "error", expiresAt: CLOCK })]),
+		`${legacyOnly} | Gem quota error`,
+	);
+	const block = { provider: "antigravity", window: "5h", until: CLOCK + hour, scope: "model", families: ["gemini"] };
+	assert.equal(
+		rowOf([snap("antigravity", [], { status: "unavailable", expiresAt: CLOCK })], [block]),
+		`${legacyOnly} | Gem quota unavailable | gemini blocked->13:00 read`,
+	);
+});
+
+test("a v2 view with the collector's Gemini display pins its model-scoped windows", () => {
+	const display = {
+		full: "Gemini",
+		compact: "Gem",
+		footer: { show: [{ name: "5h" }, { name: "7d" }], placeholder: true },
+	};
+	const state = projected([view("antigravity", { display, snapshot: gemini() })]);
+	assert.equal(footer.formatQuotaRow(state, "compact", plain, fixed), "Left: Gem 5h 99% @14:00 7d 97% @Jan 13 12:00");
+	// Another selection keeps the ordinary model-bucket rule: nothing shows until a Gemini model is current.
+	const custom = projected([
+		view("antigravity", { display: { ...display, footer: { show: [{ name: "5h" }] } }, snapshot: gemini() }),
+	]);
+	assert.equal(footer.formatQuotaRow(custom, "compact", plain, fixed), "");
+	assert.equal(
+		footer.formatQuotaRow(custom, "compact", plain, {
+			...fixed,
+			model: { provider: "antigravity", id: "gemini-4-neon" },
+		}),
+		"Left: Gem 5h 99% @14:00",
+	);
+});

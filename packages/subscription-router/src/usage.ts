@@ -25,7 +25,7 @@ import {
 
 import type { ProviderConfig } from "./config.ts";
 
-export { parseAnthropic, parseCodex } from "./builtin-collectors.ts";
+export { parseAnthropic, parseAntigravity, parseCodex } from "./builtin-collectors.ts";
 
 import { type ModelRef, refKey } from "./model-ref.ts";
 
