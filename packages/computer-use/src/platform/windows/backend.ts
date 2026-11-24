@@ -2,6 +2,7 @@ import { type LookResponse, parseLookResponse } from "../../outline.ts";
 import { assertPlatformArchitecture } from "../architecture.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type {
+	BrowserAppIdentity,
 	ComputerUsePlatformBackend,
 	FramePoints,
 	HelperActResult,
@@ -199,10 +200,10 @@ export const windowsBackend: ComputerUsePlatformBackend = {
 	): Promise<PlatformWaitForResponse> {
 		return await windowsHelper.command("uiaWaitFor", { ...args }, options);
 	},
-	isBrowserApp(appName: string): boolean {
+	isBrowserApp({ appName }: BrowserAppIdentity): boolean {
 		return classifyBrowser(appName) !== false;
 	},
-	isChromeFamilyApp(appName: string): boolean {
+	isChromeFamilyApp({ appName }: BrowserAppIdentity): boolean {
 		return (
 			classifyBrowser(appName) === "chrome" ||
 			classifyBrowser(appName) === "edge" ||
