@@ -143,12 +143,15 @@ export class ExhaustionTracker {
 	/** The live mark covering `model`, if any. Expired marks are kept so a quick re-confirmation grows the backoff. */
 	blocking(model: ModelRef): ExhaustionMark | undefined {
 		const now = this.now();
+		let first: ExhaustionMark | undefined;
 		for (const stored of this.marks.values()) {
+			if (stored.mark.provider !== model.provider) continue;
+			// Project overlapping marks too, so a later clock rollback cannot revive them.
 			const mark = this.project(stored, now);
-			if (mark.until <= now || mark.provider !== model.provider) continue;
-			if (!mark.families || mark.families.some((family) => modelMatchesFamily(model.id, family))) return mark;
+			if (first || mark.until <= now) continue;
+			if (!mark.families || mark.families.some((family) => modelMatchesFamily(model.id, family))) first = mark;
 		}
-		return undefined;
+		return first;
 	}
 
 	/** Live marks, for status output. */

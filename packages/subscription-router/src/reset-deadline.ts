@@ -8,11 +8,11 @@ export function anchorReset(
 	monotonicAtRead: number,
 	monotonicNow: () => number,
 ): ResetDeadline {
-	let expires = resetAt - wallAtRead;
+	let resetBudgetMs = resetAt - wallAtRead;
 	return (wallNow) => {
 		const elapsed = Math.floor(monotonicNow() - monotonicAtRead);
 		// A forward step may shorten or expire the block. A later rollback cannot undo that.
-		expires = Math.min(expires, elapsed + (resetAt - wallNow));
-		return wallNow + (expires - elapsed);
+		resetBudgetMs = Math.min(resetBudgetMs, elapsed + (resetAt - wallNow));
+		return wallNow + (resetBudgetMs - elapsed);
 	};
 }

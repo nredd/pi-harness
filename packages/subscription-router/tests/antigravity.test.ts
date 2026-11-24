@@ -482,6 +482,49 @@ describe("antigravity balanced routing", () => {
 		expect(admit()).toEqual({ ok: true, resolvedModel: refKey(GEMINI) });
 	});
 
+	it.each(["cached", "confirmed", "both"] as const)(
+		"expires overlapping %s resets hidden behind an earlier block",
+		async (source) => {
+			let wall = T0;
+			let elapsed = 0;
+			let utilization = 100;
+			const usage = new UsageService({
+				fetch: async () =>
+					Response.json({
+						five_hour: { utilization, resets_at: new Date(T0 + 4 * HOUR).toISOString() },
+						seven_day_sonnet: { utilization: 100, resets_at: RESET_5H },
+					}),
+				now: () => wall,
+				monotonicNow: () => elapsed,
+				getAccessToken: async () => "synthetic",
+			});
+			const router = new Router(usage, new ExhaustionTracker(() => wall), () => wall);
+			const env: RouteEnv = {
+				resolve: model,
+				refresh: async (target, signal, notBefore) =>
+					usage.decisionFor(target, await usage.get(ctx, target.provider, { fresh: true, signal, notBefore })),
+			};
+			const admit = () => router.admit(refKey(SONNET), new Map(), env);
+			await usage.get(ctx, SONNET.provider);
+			if (source !== "cached") {
+				expect(await router.confirm(model(SONNET), env, undefined, T0)).toBe(true);
+				wall += 1;
+				elapsed += 1;
+				utilization = 50;
+				await usage.get(ctx, SONNET.provider, { force: true });
+				if (source === "confirmed") {
+					expect(await router.confirm(model(SONNET), env, undefined, wall)).toBe(true);
+					usage.invalidate(SONNET.provider);
+				}
+			}
+			wall = T0 + 3 * HOUR;
+			expect(admit()).toEqual({ ok: false, resetAt: T0 + 4 * HOUR, wait: true });
+			wall = T0;
+			elapsed += HOUR;
+			expect(admit()).toEqual({ ok: true, resolvedModel: refKey(SONNET) });
+		},
+	);
+
 	it("bounds implausible resets", async () => {
 		const skew = 5 * 60_000;
 		const edge5h = T0 + 5 * HOUR + skew;

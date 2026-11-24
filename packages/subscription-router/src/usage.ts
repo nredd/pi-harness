@@ -396,6 +396,14 @@ export class UsageService {
 		return cached.expiresAt > now ? cached : this.withStale(cached, provider, now, "Cached usage data is stale.");
 	}
 
+	/** Observe cached reset budgets even when a confirmed mark takes precedence. */
+	observeResets(provider: string): void {
+		const cached = this.cache.get(provider);
+		if (!cached) return;
+		const now = this.transport.now();
+		for (const window of cached.windows) this.resets.get(window)?.(now);
+	}
+
 	/**
 	 * Whether `model` is blocked on included quota, from cached data only. Blocks
 	 * when a matching window is exhausted in fresh data, or in stale data whose
@@ -408,17 +416,20 @@ export class UsageService {
 		const registration = this.evidence.get(snapshot);
 		if (registration?.signal.aborted || snapshot.credits?.unlimited === true) return { block: false };
 		const now = this.transport.now();
+		let decision: UsageDecision | undefined;
 		for (const window of snapshot.windows) {
+			// Record forward steps for every reset, even after choosing the first blocker.
+			const deadline = this.resets.get(window);
+			const resetAt = deadline?.(now) ?? window.resetAt;
 			if (
+				decision ||
 				!(window.usedPercent >= 100) ||
 				(window.scope !== "provider" && !window.families?.some((family) => modelMatchesFamily(model.id, family)))
 			)
 				continue;
-			const deadline = this.resets.get(window);
-			const resetAt = deadline?.(now) ?? window.resetAt;
 			if (resetAt === undefined ? snapshot.status !== "available" : resetAt <= now) continue;
 			const reset = resetAt === undefined ? "an unknown time" : new Date(resetAt).toISOString();
-			const decision: UsageDecision = {
+			decision = {
 				block: true,
 				window: window.name,
 				resetAt,
@@ -428,9 +439,8 @@ export class UsageService {
 			};
 			if (registration) Object.defineProperty(decision, COLLECTOR_EVIDENCE, { value: registration.signal });
 			if (deadline) Object.defineProperty(decision, COLLECTOR_RESET, { value: deadline });
-			return decision;
 		}
-		return { block: false };
+		return decision ?? { block: false };
 	}
 
 	/** Human-readable one-liner for UI and tool output. */
