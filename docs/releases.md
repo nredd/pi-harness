@@ -349,10 +349,18 @@ That step and `promote-stack.yml`'s two snapshot checks call `gh` directly, so t
 the init retry: the privileged jobs keep single allowlisted `gh` commands and a stdlib-only
 `publish_gate`. A transient init failure there is a failed-jobs rerun; both workflows resume.
 Attestations remain in GitHub's attestation service; the release `.tgz` is the attested subject.
-`native-helper.yml` exercises the same build-and-pack staging path on affected PRs without tags,
-attestation write access, npm publication, setup, or a live desktop. A staging pass is compilation
-and packed Mach-O evidence only, not TCC/AX/HID acceptance. Native local compilation and live desktop
-acceptance were NOT RUN for this pipeline change; hosted run evidence belongs in its PR receipt.
+`native-helper.yml` exercises the same build-and-pack staging path on matching pushes to `main` and on
+manual dispatch, without tags, attestation write access, npm publication, setup, or a live desktop. Its macOS
+job is skipped on `pull_request`, so a PR gets no hosted macOS staging run. A staging pass is compilation
+and packed Mach-O evidence only, not TCC/AX/HID acceptance. Its `native-check` also requires each packed
+helper to contain exactly one distinct compiled build identity, equal to the one `helper-build.mjs` computes from the
+packed `package.json` and Swift sources. It scans the binary bytes for that string literal without running,
+installing or contacting any helper, and does NOT verify the identity the helper reports at runtime: a helper
+embedding the expected literal can report another identity or fail to answer `diagnostics`. Fat binaries are rejected by the earlier
+thin Mach-O check. Re-signing or repacking a binary with the same literal proves nothing about provenance.
+The release `verify` stage does not run the comparison yet. Compilation and the packed-literal check are
+staging evidence; live desktop acceptance was NOT RUN for this pipeline change. Run-specific evidence
+belongs in the PR receipt.
 
 Only after both cryptographic verification and source/subject binding pass can `release` create the
 GitHub release with `gh release create <tag> --verify-tag` and attach those same four files.

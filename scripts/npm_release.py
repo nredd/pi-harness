@@ -577,7 +577,7 @@ def native_check(repo: Path, output: Path) -> None:
         output (Path): New external artifact directory.
 
     Returns:
-        None: Both built payloads passed the packed Mach-O contract.
+        None: Both built payloads passed the packed Mach-O contract and embed the packed build identity.
     """
     if output.exists() or output.is_relative_to(repo):
         raise ReleaseError(f"Artifact directory must be new and outside the checkout: '{output}'")
@@ -592,8 +592,10 @@ def native_check(repo: Path, output: Path) -> None:
         artifact = pc.pack(descriptor.contract, output, sandbox, workspace)
         validate_native_tarball(artifact.path, descriptor)
         check_built_payloads(workspace, artifact.path, descriptor)
+        build = pc.macos_helper_build(artifact.path)
         for arch in ("arm64", "x64"):
             LOGGER.info(pc.check_macos_helper(artifact.path, arch))
+            LOGGER.info(pc.check_macos_helper_build(artifact.path, arch, build))
 
 
 def verify(repo: Path, target: Target, output: Path) -> Identity:
