@@ -341,6 +341,13 @@ window metadata. It does not connect to X11 or AT-SPI.
 `npm run coverage:swift` runs real-source headless motion and native assertions with one Swift
 compiler worker. It covers analytic geometry, clock/lifecycle checks and the clamp mutation control.
 This does not run the live overlay suite or prove physical pointer behavior.
+`native/macos/overlay_tests.swift` also checks the agent cursor dart on exact `agentCursorShape`
+paths (axis, open notch, rounded tip, rotation by heading), renders `AgentCursorView` offscreen
+through `ImageRenderer` (opaque orange body, translucent bloom, nothing past it or for an offscreen
+renderer), pins the 8 s idle-hide delay and checks the idle-hide scheduler through an injected sleep
+(receives the delay, fires once, never after cancellation); the default `Task.sleep` runs only with a
+zero delay. These checks create no window: the cursor overlay window, its hosting view and
+`AgentCursor.shared` stay live-only.
 `native/macos/headless_tests.swift` directly asserts complete `appBlockedMessage` literals for a
 named bundle, nil (`unknown bundle id`), an empty bundle and a quoted Unicode application name.
 These pure string checks do not discover applications or exercise live refusal callers, UI,
