@@ -19,11 +19,15 @@
  * in every merged block, so it is not followed), and no other binding of the name inside that scope could be
  * visible at the use. A `let`, `const` or `using` statement there binds exactly that scope, and so does a name
  * it destructures. A `catch` binding counts as visible in its clause and a `let`/`const`/`using` `for` header
- * (destructured or not) in its statement. Every other binding (`var`, parameter, exported namespace member,
- * function, class, import, enum, namespace) counts as visible throughout its nearest enclosing function or the
- * file, a superset of its real scope (exact regions are #1356), so a binding the resolver does not model
- * precisely can only cause a miss, never a finding. A reused name (`const expected` in each test) resolves per
- * scope; `let`, `var`, `using`, destructured names and free globals are not followed. `arguments` is never
+ * (destructured or not) in its statement, a function or class expression name in the expression, and a class,
+ * enum, enum member or namespace declaration in its statement's scope (as `tsc` scopes them; unexported and
+ * not ambient inside a namespace block). A function declaration binds its statement's scope only in an ES
+ * module (strict, not `.cjs`/`.cts`): a sloppy block function is also hoisted to its function (Annex B). Every
+ * other binding (`var`, parameter, import, exported namespace member, sloppy function declaration) counts as
+ * visible throughout its nearest enclosing function or the file, a superset of its real scope (exported members
+ * are #1356), so a binding the resolver does not model precisely can only cause a miss, never a finding. A
+ * reused name (`const expected` in each test) resolves per scope; `let`, `var`, `using`, destructured names and
+ * free globals are not followed. `arguments` is never
  * followed: every ordinary function binds it implicitly. A `const` fixes the binding, not its contents: it is
  * not followed when its scope holds a write target naming it under any binding (assignment, `++`/`--`,
  * `delete`, a `for...in`/`for...of` target, the first argument of `Object.assign`, `defineProperty`,
@@ -46,8 +50,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+	ClassDeclaration,
+	EnumDeclaration,
 	Expression,
+	FunctionDeclaration,
 	Identifier,
+	ModuleDeclaration,
 	Node,
 	SourceFile,
 	VariableDeclaration,
@@ -164,12 +172,15 @@ interface Lexical {
 	constant: boolean;
 }
 
+/** A statement that binds its name in the scope holding it. */
+type Declaring = VariableStatement | FunctionDeclaration | ClassDeclaration | EnumDeclaration | ModuleDeclaration;
+
 /**
- * The exact scope a `let`, `const` or `using` statement binds in: the file, a block, a `switch` case block or a
+ * The exact scope a lexical declaration statement binds in: the file, a block, a `switch` case block or a
  * namespace block. An exported (or ambient, hence implicitly exported) namespace member is also visible in every
  * merged block of that namespace, so it has no single scope here.
  */
-function statementScope(statement: VariableStatement): Node | undefined {
+function statementScope(statement: Declaring): Node | undefined {
 	const parent = statement.parent;
 	const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
 	if (isSourceFile(scope) || isBlock(scope) || isCaseBlock(scope)) return scope;
@@ -190,12 +201,26 @@ function lexical(binding: Node): Lexical | undefined {
 
 /**
  * A node containing every place a binding other than a followed lexical statement may be visible. Exact for a
- * `catch` binding (its clause), a `let`/`const`/`using` `for` header (its statement) and a name destructured
- * from either or from a `let`/`const`/`using` statement (that statement's scope). Anything else gets its nearest
- * enclosing function (starting above the binding, so a function's own name counts outside it) or the file.
+ * `catch` binding (its clause), a `let`/`const`/`using` `for` header (its statement), a name destructured
+ * from either or from a `let`/`const`/`using` statement (that statement's scope), a function or class expression
+ * name (the expression), and a class, enum, enum member or namespace declaration (the scope of its statement, as
+ * `tsc` block-scopes enums and namespaces; merged enum and namespace blocks share that scope). A function
+ * declaration gets its statement's scope only in `strict` code: a sloppy block function is also hoisted to its
+ * function (Annex B). Anything else gets its nearest enclosing function (starting above the binding, so a
+ * function's own name counts outside it) or the file.
  */
-function visibleRegion(binding: Node): Node {
-	let declaration = binding;
+function visibleRegion(binding: Node, strict: boolean): Node {
+	if (isFunctionExpression(binding) || isClassExpression(binding)) return binding;
+	let declaration = isEnumMember(binding) ? binding.parent : binding;
+	if (
+		isClassDeclaration(declaration) ||
+		isEnumDeclaration(declaration) ||
+		isModuleDeclaration(declaration) ||
+		(strict && isFunctionDeclaration(declaration))
+	) {
+		const scope = statementScope(declaration);
+		if (scope !== undefined) return scope;
+	}
 	while (isBindingElement(declaration) || isObjectBindingPattern(declaration) || isArrayBindingPattern(declaration)) {
 		declaration = declaration.parent;
 	}
@@ -271,6 +296,8 @@ function namesOf(file: SourceFile): FileNames {
 	const scoped = new Map<Node, Map<string, Lexical[]>>();
 	const loose = new Map<string, Loose[]>();
 	const written = new Map<string, Node[]>();
+	// ES module code is strict. A `.cjs`/`.cts` file counts as a module to `tsgo` but runs as sloppy CommonJS.
+	const strict = file.externalModuleIndicator !== undefined && !/\.c[jt]s$/.test(file.fileName);
 
 	/** Mark the base name of `target` (`a` in `(a.b[c]!) as T`), or every name inside a destructuring pattern. */
 	function write(target: Node): void {
@@ -294,7 +321,7 @@ function namesOf(file: SourceFile): FileNames {
 		const bound = BINDS.some((binds) => binds(node)) ? (node as Node & { name?: Node }).name : undefined;
 		if (bound !== undefined && isIdentifier(bound)) {
 			const exact = lexical(node);
-			if (exact === undefined) append(loose, bound.text, { binding: node, region: visibleRegion(node) });
+			if (exact === undefined) append(loose, bound.text, { binding: node, region: visibleRegion(node, strict) });
 			else {
 				const byName = scoped.get(exact.scope) ?? new Map<string, Lexical[]>();
 				scoped.set(exact.scope, byName);
