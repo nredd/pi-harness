@@ -382,9 +382,8 @@ never requests `readText: always`, so Vision OCR stays unexecuted.
 `native/macos/act_tests.swift` also drives `act` through its edge branches on the injected `ActWorld`:
 stale look ids, a missing or half target, missing keys, text, start or action name, a refound cached
 handle, a frameless ref, AX value, range and action refusals with their single refind retry, ref paste
-focus evidence and the sheet-count window change. A twice-refused `setText` is pinned only to post
-nothing and leave the value under every policy (refusal or `didnt` both pass); its HID focus steal and
-misleading error code are #1365.
+focus evidence and the sheet-count window change. A twice-refused `setText` is `didnt` with
+`ax_write_failed` under every policy, and its exact trace pins no post, lock, activation or hit test.
 Successful AX reads, observer registration and real captures stay live-only.
 Unexecuted live code stays in the denominator; this slice does not claim whole-file coverage. Upstream pulls are manual; the sync ledger and its mutation runner are retired.
 The behavior suites they invoked remain under `test/`, including the async EPERM refusal regression.
@@ -2656,7 +2655,7 @@ The resulting outline preserves native semantics where they are available. It do
 The helper prefers AX operations before synthesized input:
 
 - press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
-- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field);
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back; on the non-web path an accepted `AXValue` write that the readback does not confirm is `unknown`, and the bridge does not automatically resend it (a later explicit action may still write the field); a write refused on the cached and the refound handle is `didnt` with `ax_write_failed` and the `AXError`, with no coordinate fallback, input lock, activation or hit test;
 - semantic scrolling walks the target and its ancestors for supported AX scroll actions;
 - foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
 
@@ -2725,7 +2724,7 @@ These are synthesized events, not physical hardware input. Before foreground coo
 
 `headless: true` is a strict prohibition, not a preference. It maps the transaction to the native `ax_only` policy. The helper fails these actions with `foreground_required` before it posts events or activates the target:
 
-- coordinate delivery: raw `x`/`y` targets, `moveMouse`, `drag`, and press, click, `setText`, or scroll requests whose Accessibility operation is unavailable or fails;
+- coordinate delivery: raw `x`/`y` targets, `moveMouse`, `drag`, and press, click or scroll requests whose Accessibility operation is unavailable or fails;
 - `typeText`, `paste` and `keypress`, including ref-targeted requests;
 - `setText` inside web content, which needs synthesized keyboard input.
 
