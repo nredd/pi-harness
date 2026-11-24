@@ -37,6 +37,8 @@ pub enum ErrorCode {
     InputUnsafe,
     #[serde(rename = "cancelled")]
     Cancelled,
+    #[serde(rename = "input_deadline_expired")]
+    InputDeadlineExpired,
 }
 
 impl fmt::Display for ErrorCode {

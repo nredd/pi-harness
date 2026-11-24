@@ -23,6 +23,8 @@ export interface PlatformDiagnostics {
 	parentBundleId?: string;
 	parentPath?: string;
 	executablePath?: string;
+	/** macOS kernel vnode identity (`"<dev>:<ino>"`) of the helper's mapped executable image. */
+	executableId?: string;
 	os?: string;
 	arch?: string;
 	accessibility?: boolean;

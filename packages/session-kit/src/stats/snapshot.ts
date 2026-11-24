@@ -357,6 +357,25 @@ async function privateOutboxes(dir: string): Promise<void> {
 		);
 	if ((info.mode & 0o777) !== 0o700) await chmod(dir, 0o700);
 }
+/**
+ * The last publication instant this outbox key recorded, beside its bookkeeping and never synced, so a
+ * corrupt, denied or missing `manifest.json` still has the recorded watermark to follow. A separate file,
+ * because older kits refuse any extra bookkeeping field.
+ */
+const watermarkFile = (statePath: string): string => statePath.replace(/\.json$/, ".published.json");
+/**
+ * The recorded watermark, `0` when there is none. A read or validation failure supplies no bound (the
+ * manifest alone bounds `exportedAt`), though publishing still requires replacing this file atomically.
+ */
+async function recordedWatermark(path: string): Promise<number> {
+	try {
+		const value = await jsonFile(path);
+		exact(value, ["version", "exportedAt"]);
+		return value.version === 1 && count(value.exportedAt) && value.exportedAt <= LAST_ISO_MS ? value.exportedAt : 0;
+	} catch {
+		return 0;
+	}
+}
 /** Written 0600 through an atomic rename into the directory `privateOutboxes` checked. */
 async function recordOutbox(path: string, state: OutboxState): Promise<void> {
 	await atomicJson(path, { version: 1, ...state });
@@ -1678,30 +1697,42 @@ async function publishStats(
 	// The wall clock is read once, first, so the manifest read cannot move it.
 	const now = Date.now();
 	const loadedPrevious = await loadPrevious(snapshotDir);
-	// The publication instant is monotonic over the readable manifest: strictly after the last published
-	// export, even when this clock is behind it, so viewers holding the published snapshot accept this one
-	// as newer. Without a readable manifest there is nothing to follow.
-	const publishedAt =
+	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
+	// stale recovery state over this one's. Its directory is checked before the watermark beside it is read.
+	const statePath = await outboxStateFile(dir, snapshotDir);
+	await privateOutboxes(dirname(statePath));
+	const watermarkPath = watermarkFile(statePath);
+	// The publication instant is monotonic over the readable manifest and what this outbox's watermark
+	// actually recorded: strictly after the later of the two, even when this clock is behind it. Older kits
+	// neither read nor advance the watermark, so a later export by one is reflected only in `manifest.json`.
+	const manifestAt =
 		loadedPrevious === null || loadedPrevious === "unreadable"
 			? 0
 			: "damaged" in loadedPrevious
 				? (loadedPrevious.exportedAt ?? 0)
 				: loadedPrevious.manifest.exportedAt;
-	const exportedAt = Math.max(now, publishedAt + 1);
+	const recordedAt = await recordedWatermark(watermarkPath);
+	const publicationBoundAt = Math.max(manifestAt, recordedAt);
+	const exportedAt = Math.max(now, publicationBoundAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
 	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
 	// cache or publication writes. This runs under the outbox lock `exportStats` holds; its release after
 	// the refusal is best effort and can fail. Within
 	// years 0000-9999 a later instant never seals an earlier month.
-	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
+	if (publicationBoundAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS) {
+		const [boundLabel, boundPath] =
+			recordedAt > manifestAt
+				? ["Recorded usage publication watermark", watermarkPath]
+				: ["Published usage manifest", join(snapshotDir, "manifest.json")];
 		throw new ExportRefusal(
 			"watermark-ahead",
-			`Published usage manifest exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
+			`${boundLabel} exportedAt (${new Date(publicationBoundAt).toISOString()}) is more than 366 days ahead ` +
 				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
-				`it (${JSON.stringify(join(snapshotDir, "manifest.json"))}); there is no supported in-place repair ` +
+				`it (${JSON.stringify(boundPath)}); there is no supported in-place repair ` +
 				"(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one. " +
 				"--replace-harnesses does not bypass this",
 		);
+	}
 	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
 	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
 	// later export could not tell them from months a clock-ahead export sealed: refuse (no cache or
@@ -1711,24 +1742,21 @@ async function publishStats(
 	if (!options.replaceHarnesses && monthOf(exportedAt) > monthOf(now))
 		throw new Error(
 			`Clock (${new Date(now).toISOString()}) is in an earlier month than the next export after the last ` +
-				`published one (${new Date(publishedAt).toISOString()}); publishing would seal months this clock has ` +
+				`published one (${new Date(publicationBoundAt).toISOString()}); publishing would seal months this clock has ` +
 				`not left. Fix the clock or wait until ${monthOf(exportedAt)}, or pass --replace-harnesses to publish ` +
 				"without published history absent from this scan",
 		);
 	// Checked after the watermark, so damage never hides a refusal --replace-harnesses cannot bypass.
 	const previous = intactPrevious(loadedPrevious, options.replaceHarnesses === true);
 	// Exporting twice within one millisecond is not a clock problem; only a clock behind it is reported.
+	// The established diagnostic wording stays stable when `publicationBoundAt` comes from `.published.json`.
 	const clockWarning =
-		now < publishedAt
+		now < publicationBoundAt
 			? [
 					`clock is behind the last published export (${new Date(now).toISOString()} < ` +
-						`${new Date(publishedAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
+						`${new Date(publicationBoundAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
 				]
 			: [];
-	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
-	// stale recovery state over this one's.
-	const statePath = await outboxStateFile(dir, snapshotDir);
-	await privateOutboxes(dirname(statePath));
 	const own = await ownOutbox(statePath);
 	// A missing manifest is a first export only if nothing says this outbox published before. Otherwise
 	// publishing the scan would replace its sealed history and prune the shards that hold it.
@@ -1745,9 +1773,11 @@ async function publishStats(
 				"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 				"or pass --replace-harnesses to publish without that history",
 		);
-	// Nothing records the last published instant but the manifest, so without it there is no watermark to
-	// follow: publish by the wall clock rather than guess one, and say so.
-	const unbounded = unboundedBy(loadedPrevious, publishedBefore);
+	// Without the manifest and any recorded watermark (deleted, or the checkout moved and so rekeyed) there
+	// is no watermark to follow: publish by the wall clock rather than guess one, and say so. An older kit
+	// that published after a recorded watermark leaves that earlier watermark valid, so this warning does
+	// not fire even when `manifest.json` is lost or restored to the earlier export.
+	const unbounded = recordedAt > 0 ? undefined : unboundedBy(loadedPrevious, publishedBefore);
 	const unboundedWarning =
 		unbounded === undefined
 			? []
@@ -2007,6 +2037,12 @@ async function publishStats(
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	validateManifest(snapshot.manifest);
+	// Written before any shard or manifest write so this publication cannot complete without recording its own
+	// `exportedAt` first; failing to write it fails the export with nothing published. Tradeoff: a later failed
+	// shard write or manifest rename leaves this unpublished `exportedAt` recorded, bounding later exports (and
+	// refusing with the later-month check or `watermark-ahead` if this run's clock had jumped forward and was
+	// then corrected).
+	await atomicJson(watermarkPath, { version: 1, exportedAt });
 	for (const { file, bytes } of writes) {
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {
