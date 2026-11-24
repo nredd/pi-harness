@@ -127,7 +127,8 @@ function useLinuxRoots(onTestFinished: (fn: () => void) => void, initial: Root[]
 	>[4];
 	const find = async (params: Parameters<typeof executeFind>[1] = {}) =>
 		(await executeFind("t", params, undefined, undefined, ctx)).details.windows;
-	const observe = async (root: string) =>
+	// Without `root`, observe the frontmost (focused) root.
+	const observe = async (root?: string) =>
 		await executeObserve("t", { root, mode: "semantic" }, undefined, undefined, ctx);
 	const calls = (wanted: string) => command.mock.calls.filter(([name]) => name === wanted).length;
 	const looks = () => calls("look");
@@ -229,6 +230,57 @@ test("Linux refuses a known blocked root before readiness or any helper command 
 	await expect(readText(stateId, ref)).rejects.toMatchObject({ code: "app_blocked" });
 	await expect(waitFor(stateId)).rejects.toMatchObject({ code: "app_blocked" });
 	expect(helperLog()).toEqual(before);
+});
+
+test("Linux browser_use classifies roots by executable basename, never the accessible app name (#1295)", async ({
+	onTestFinished,
+}) => {
+	const { state, find, observe, looks } = useLinuxRoots(onTestFinished, [
+		linuxRoot(101, "Firefox", "fixture-editor"),
+		linuxRoot(102, "Editor", "firefox"),
+		linuxRoot(103, "Editor", "chrome"),
+		linuxRoot(104, "Firefox"),
+	]);
+	vi.stubEnv("PI_COMPUTER_USE_BROWSER_USE", "0");
+	const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected CDP discovery"));
+	const byPid = async () =>
+		Object.fromEntries(
+			(await find()).map((root) => [
+				root.pid,
+				{ ref: root.windowRef, browserUseAllowed: root.browserUseAllowed, blocked: root.blocked },
+			]),
+		);
+	const disabled = { message: expect.stringMatching(/Browser use is disabled/) };
+
+	let roots = await byPid();
+	expect(roots).toMatchObject({
+		101: { browserUseAllowed: true, blocked: false },
+		102: { browserUseAllowed: false, blocked: false },
+		103: { browserUseAllowed: false, blocked: false },
+		104: { blocked: true },
+	});
+	await expect(observe(roots[102].ref)).rejects.toMatchObject(disabled);
+	await expect(observe(roots[103].ref)).rejects.toMatchObject(disabled);
+	// An unidentified root is never admitted, whatever it calls itself.
+	await expect(observe(roots[104].ref)).rejects.toMatchObject({
+		code: "app_blocked",
+		message: expect.stringMatching(/identity could not be determined/),
+	});
+	expect(looks()).toBe(0);
+	await observe(roots[101].ref);
+	expect(looks()).toBe(1);
+
+	// Swapping the accessible names changes nothing; the executable alone decides, for the frontmost root too.
+	state.roots = [linuxRoot(101, "Editor", "fixture-editor"), linuxRoot(102, "Firefox", "firefox")];
+	roots = await byPid();
+	expect(roots).toMatchObject({ 101: { browserUseAllowed: true }, 102: { browserUseAllowed: false } });
+	await expect(observe(roots[102].ref)).rejects.toMatchObject(disabled);
+	state.roots = [linuxRoot(101, "Editor", "firefox")];
+	await expect(observe()).rejects.toMatchObject(disabled);
+	state.roots = [linuxRoot(101, "Firefox", "fixture-editor")];
+	await observe();
+	expect(looks()).toBe(2);
+	expect(fetch).not.toHaveBeenCalled();
 });
 
 test("A saved Linux identity never stands in for a live lookup that failed", async ({ onTestFinished }) => {

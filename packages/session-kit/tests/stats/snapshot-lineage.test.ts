@@ -97,6 +97,26 @@ function forget(file: string): void {
 	rmSync(join(agent, "sessions", file));
 	rmSync(join(agent, "pi-session-kit", "stats-cache.json"));
 }
+/** Rewrite `month`'s published shards as a pre-lineage kit published them: version 3 rows, no origins. */
+function stripLineage(month = "2026-10"): void {
+	const { dir, manifest } = outbox();
+	manifest.shards = manifest.shards.map((ref) => {
+		if (ref.month !== month) return ref;
+		const shard = decodeShard(readFileSync(join(dir, ref.file)), manifest, ref.month);
+		const bytes = encodeShard({
+			version: 3,
+			machineId: shard.machineId,
+			month: shard.month,
+			events: shard.events.map(({ origin: _, ...e }) => e),
+			sessions: shard.sessions,
+			quota: shard.quota,
+		});
+		const sha256 = createHash("sha256").update(bytes).digest("hex");
+		writeFileSync(join(dir, `${ref.month}-${sha256}.json.gz`), bytes);
+		return { month: ref.month, file: `${ref.month}-${sha256}.json.gz`, sha256, bytes: bytes.length };
+	});
+	writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+}
 /** What a viewer on another machine counts. */
 async function viewed(): Promise<{ output: number; ms: number; model: string }[]> {
 	expect(await importStats(viewer, out)).toMatchObject({ imported: 1, problems: [] });
@@ -307,30 +327,48 @@ describe("row lineage", () => {
 		expect(counted()).toEqual(published);
 	});
 
-	it("leaves rows published before lineage counted beside a correction, as before", async () => {
+	it("leaves rows published before lineage counted beside a correction", async () => {
 		await seal();
-		// Rewrite October as a kit without lineage published it: version 3 rows, no origins.
-		const { dir, manifest } = outbox();
-		manifest.shards = manifest.shards.map((ref) => {
-			if (ref.month !== "2026-10") return ref;
-			const shard = decodeShard(readFileSync(join(dir, ref.file)), manifest, ref.month);
-			const bytes = encodeShard({
-				version: 3,
-				machineId: shard.machineId,
-				month: shard.month,
-				events: shard.events.map(({ origin: _, ...e }) => e),
-				sessions: shard.sessions,
-				quota: shard.quota,
-			});
-			const sha256 = createHash("sha256").update(bytes).digest("hex");
-			writeFileSync(join(dir, `${ref.month}-${sha256}.json.gz`), bytes);
-			return { month: ref.month, file: `${ref.month}-${sha256}.json.gz`, sha256, bytes: bytes.length };
-		});
-		writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
+		stripLineage();
 		transcript("a.jsonl", "a", october(1));
 		await exportStats(agent, out);
 		expect(retired()).toEqual([]);
 		expect((await viewed()).map((c) => c.output)).toEqual([10, 10, 10, 11, 10, 10]);
+	});
+
+	it("publishes no origin for a fingerprint shared by two positions before dedup", async () => {
+		const [duplicate, unique] = october() as [Row, Row, ...Row[]];
+		const rows = [duplicate, duplicate, unique];
+		await seal(rows);
+		expect(counted().map((e) => e.origin)).toEqual([null, 2]);
+		stripLineage();
+		const before = outbox().manifest.shards;
+		await exportStats(agent, out);
+		expect(outbox().manifest.shards).toEqual(before);
+		expect(counted().map((e) => e.origin)).toEqual([undefined, undefined]);
+	});
+
+	it("does not use a pre-lineage match to retire rows from another transcript reusing the session id", async () => {
+		const x = { ms: utc("2026-09-05"), input: 1 };
+		const q = { ms: utc("2026-10-05"), input: 2 };
+		const r = { ms: utc("2026-10-05", 1), input: 3 };
+		const n = { ...r, input: 4 };
+		transcript("x.jsonl", "a", [x]);
+		await exportStats(agent, out);
+		stripLineage("2026-09");
+		forget("x.jsonl");
+		await seal([q, r]);
+		forget("a.jsonl");
+		transcript("x.jsonl", "a", [x, n]);
+		for (let pass = 0; pass < 2; pass++) {
+			await exportStats(agent, out);
+			expect(retired()).toEqual([]);
+			expect(
+				counted()
+					.map((e) => e.input)
+					.sort(),
+			).toEqual([2, 3, 4]);
+		}
 	});
 
 	it("carries retired rows through a month an identified correction regenerates", async () => {

@@ -70,9 +70,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 		"openBrowserLocation",
 	])
 		assert.equal(typeof linux[method], "function", method);
-	assert.equal(linux.isBrowserApp("firefox-esr"), true);
-	assert.equal(linux.isChromeFamilyApp("google-chrome-stable.desktop"), true);
-	assert.equal(linux.isBrowserApp("gnome-text-editor"), false);
+	assert.equal(linux.isBrowserApp({ appName: "Editor", appId: "firefox-esr" }), true);
+	assert.equal(linux.isChromeFamilyApp({ appName: "Editor", appId: "google-chrome-stable" }), true);
+	assert.equal(linux.isBrowserApp({ appName: "firefox", appId: "gnome-text-editor" }), false);
 
 	const ready = await linux.ensureReady({}, { lastPermissionCheckAt: 0 });
 	assert.equal(ready.helperDiagnostics?.protocolVersion, 11);

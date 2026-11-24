@@ -35,6 +35,22 @@ const LEGACY_DISPLAY = {
 	},
 };
 
+/**
+ * V1 rows beyond the legacy pair, with the router's built-in display. Each renders as a generic row,
+ * and only for a snapshot that is not `unavailable` or an active block: a session without that
+ * credential gets no placeholder row.
+ * Their windows for the `pin` families are model-scoped, but the row label names those models, so
+ * they are shown whatever the current model (v1, or a v2 view that keeps this selection).
+ */
+const V1_DISPLAY = {
+	antigravity: {
+		full: "Gemini",
+		compact: "Gem",
+		footer: { show: [{ name: "5h" }, { name: "7d" }], placeholder: true },
+		pin: ["gemini"],
+	},
+};
+
 type Selector = { name: string } | { durationMs: number };
 interface Display {
 	full: string;
@@ -69,6 +85,8 @@ interface PercentCell extends WindowLabel {
 	resetAt: number | undefined;
 	unidentified: boolean;
 	placeholder: boolean;
+	/** Scoped to a `V1_DISPLAY` row's `pin` family: shown whatever the model, like a provider-wide window. */
+	pinned: boolean;
 }
 
 type Cell =
@@ -219,7 +237,7 @@ function selectorLabel(selector: Selector): WindowLabel {
 	return { name: labelOf(selector.name) ?? "quota", durationMs, calendar: false };
 }
 
-function chooseWindows(raw: unknown, display: Display, legacy: boolean): PercentCell[] {
+function chooseWindows(raw: unknown, display: Display, legacy: boolean, pin: readonly string[]): PercentCell[] {
 	const windows = buckets(raw).filter(
 		({ raw, families }) => (raw.basis === undefined || raw.basis === "reported") && (!legacy || families.length === 0),
 	);
@@ -239,6 +257,7 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 		resetAt: epoch(raw.resetAt),
 		unidentified: label.span === "assumed",
 		placeholder: false,
+		pinned: families.some((family) => pin.includes(family)),
 	});
 	const show = display.footer?.show;
 	// Keys use the full name: two long names sharing a bounded label stay distinct readings.
@@ -284,6 +303,7 @@ function chooseWindows(raw: unknown, display: Display, legacy: boolean): Percent
 						resetAt: undefined,
 						unidentified: false,
 						placeholder: true,
+						pinned: false,
 					},
 				]
 			: [];
@@ -383,12 +403,24 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 	}
 	const entries: Record<string, unknown>[] = Array.isArray(views)
 		? records(views)
-		: Object.entries(LEGACY_DISPLAY).map(([provider, display]) => ({
-				provider,
-				display,
-				snapshot: records(snapshots).find((snapshot) => snapshot.provider === provider),
-				marks: blocks.get(provider),
-			}));
+		: Object.entries({ ...LEGACY_DISPLAY, ...V1_DISPLAY }).flatMap(([provider, display]) => {
+				const snapshot = records(snapshots).find((snapshot) => snapshot.provider === provider);
+				const read = snapshot !== undefined && snapshot.status !== "unavailable";
+				if (Object.hasOwn(LEGACY_DISPLAY, provider)) {
+					return [{ provider, display, snapshot, marks: blocks.get(provider) }];
+				}
+				const cached = snapshot?.status === "available" || snapshot?.status === "stale";
+				return read || blocks.has(provider)
+					? [
+							{
+								provider,
+								display: cached ? display : { full: display.full, compact: display.compact },
+								...(read && { snapshot }),
+								marks: blocks.get(provider),
+							},
+						]
+					: [];
+			});
 	// A block for a provider without a row (not shown by v1, or omitted from the views) still gets one.
 	const listed = new Set(entries.map((view) => view.provider));
 	for (const [provider, marks] of blocks) if (!listed.has(provider)) entries.push({ provider, marks });
@@ -402,20 +434,24 @@ export function parseUsageReply(reply: unknown, now: number, previous?: QuotaSta
 		const legacy =
 			Object.hasOwn(LEGACY_DISPLAY, id) &&
 			JSON.stringify(display.footer) === JSON.stringify(LEGACY_DISPLAY[id as keyof typeof LEGACY_DISPLAY].footer);
+		const v1Display = Object.hasOwn(V1_DISPLAY, id) ? V1_DISPLAY[id as keyof typeof V1_DISPLAY] : undefined;
+		const pin = v1Display && JSON.stringify(display.footer) === JSON.stringify(v1Display.footer) ? v1Display.pin : [];
 		const snapshot = asRecord(view.snapshot);
 		const expiresAt = epoch(snapshot?.expiresAt);
 		const windows = snapshot?.windows;
 		const aux = auxiliaryCells(view);
+		const status = snapshot?.status;
 		// Freshness is the snapshot's status and expiry against the clock. Only a legacy row with no
 		// counts or pools also needs a percentage window, which keeps its pinned retained readings.
 		const fresh =
-			snapshot?.status === "available" &&
+			status === "available" &&
 			expiresAt !== undefined &&
 			expiresAt > now &&
 			(!legacy || (Array.isArray(windows) && windows.length > 0) || aux.some((cell) => cell.kind !== "mark"));
-		const seen = chooseWindows(windows, display, legacy);
-		const cells: QuotaFields["cells"] = [...(fresh ? seen : mergePercents(seen, prior, legacy)), ...aux];
-		const status = snapshot?.status;
+		const seen = chooseWindows(windows, display, legacy, pin);
+		// A v1 `V1_DISPLAY` entry without a cached reading is block-only (or failed) and drops old percents.
+		const retain = !Array.isArray(views) && v1Display ? status === "available" || status === "stale" : true;
+		const cells: QuotaFields["cells"] = [...(fresh || !retain ? seen : mergePercents(seen, prior, legacy)), ...aux];
 		// Legacy rows keep their pinned placeholders, so only generic rows report a failure as text.
 		const failed =
 			!legacy && (status === "error" || status === "unavailable" || status === "stale") ? status : undefined;
@@ -574,7 +610,8 @@ function activeCells(id: string, quota: ProviderQuota, opts: ResolvedOptions): Q
 	return quota.cells.filter((cell) => {
 		if (cell.kind === "mark") return cell.until > opts.now;
 		if (cell.kind === "pool") return true;
-		return !cell.families.length || cell.families.some((family) => models.some((model) => matchesModel(model, family)));
+		if (!cell.families.length || (cell.kind === "percent" && cell.pinned)) return true;
+		return cell.families.some((family) => models.some((model) => matchesModel(model, family)));
 	});
 }
 

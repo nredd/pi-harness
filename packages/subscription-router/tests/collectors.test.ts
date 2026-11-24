@@ -59,8 +59,8 @@ it("shares the registry with an extension that does not import the router", asyn
 	expect(collectorFor(provider)).toEqual(fake);
 	expect(registry.collectorFor(provider)).toBe(collectorFor(provider));
 	expect(Object.isFrozen(collectorFor(provider))).toBe(true);
-	expect(COLLECTED_PROVIDERS).toEqual(["anthropic", "openai-codex", provider]);
-	expect(Object.keys(COLLECTED_PROVIDERS)).toEqual(["0", "1", "2"]);
+	expect(COLLECTED_PROVIDERS).toEqual(["anthropic", "openai-codex", "antigravity", provider]);
+	expect(Object.keys(COLLECTED_PROVIDERS)).toEqual(["0", "1", "2", "3"]);
 	expect(COLLECTED_PROVIDERS.map((id) => id)).toEqual(collectedProviders());
 	expect(Array.isArray(COLLECTED_PROVIDERS)).toBe(true);
 	expect(Reflect.set(COLLECTED_PROVIDERS, "0", provider)).toBe(false);

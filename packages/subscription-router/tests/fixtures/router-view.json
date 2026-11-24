@@ -1,0 +1,55 @@
+[
+	{
+		"provider": "antigravity",
+		"display": { "full": "Gemini" },
+		"marks": [],
+		"snapshot": {
+			"status": "available",
+			"retrievedAt": 1800000000000,
+			"expiresAt": 1800000300000,
+			"windows": [{ "name": "5h", "resetAt": 1800000060000, "usedPercent": 35 }]
+		}
+	},
+	{
+		"provider": "anthropic",
+		"display": { "full": "Anthropic" },
+		"marks": [],
+		"snapshot": {
+			"status": "available",
+			"retrievedAt": 1800000000000,
+			"expiresAt": 1800000300000,
+			"windows": [{ "name": "five_hour", "spanSource": "reported", "resetAt": 1800000060000, "usedPercent": 25 }]
+		}
+	},
+	{
+		"provider": "openai-codex",
+		"display": { "full": "OpenAI" },
+		"marks": [],
+		"snapshot": {
+			"status": "available",
+			"retrievedAt": 1800000000000,
+			"expiresAt": 1800000300000,
+			"windows": [{ "name": "5h", "spanSource": "assumed", "resetAt": 1800000060000, "usedPercent": 15 }]
+		}
+	},
+	{
+		"provider": "alias",
+		"display": { "full": "Producing collector" },
+		"marks": [{ "window": "daily", "until": 1800000060000, "evidence": "observed" }],
+		"snapshot": {
+			"status": "stale",
+			"retrievedAt": 1800000000000,
+			"expiresAt": 1800000000000,
+			"windows": [{ "name": "weekly", "usedPercent": 40 }]
+		},
+		"meters": [
+			{
+				"name": "daily",
+				"resetAt": 1800000060000,
+				"resetRule": { "timeZone": "UTC" },
+				"quantity": { "unit": "requests", "used": 1, "limit": 5 }
+			}
+		],
+		"pools": [{ "name": "paid", "unit": "credits", "balance": 10 }]
+	}
+]
