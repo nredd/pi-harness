@@ -101,16 +101,21 @@ test.for([
 	},
 );
 
-test.for([{ first: true }, { first: false }])(
-	"a reply lost after submission is unknown and ends the transaction (first step: $first)",
-	async ({ first }, { onTestFinished }) => {
+test.for([
+	{ first: true, count: 3 },
+	{ first: false, count: 3 },
+	{ first: false, count: 2 },
+])(
+	"a reply lost after submission is unknown and ends the transaction (first step: $first, actions: $count)",
+	async ({ first, count }, { onTestFinished }) => {
 		const { fake, act } = await observed(onTestFinished);
 		currentPlatformBackend.act = async (request) => {
 			fake.actCalls.push(request);
 			if (!first && fake.actCalls.length === 1) return { outcome: "worked", performed: { delivery: "hid" } };
 			throw Object.assign(new Error("Helper command 'act' timed out after 15000ms."), { code: "reply_lost" });
 		};
-		const result = await act([press, press, press]);
+		// `count: 2` loses the reply of the last action: there is nothing after it to skip, the stop is still recorded.
+		const result = await act(Array(count).fill(press));
 		const { execution } = result.details;
 		const at = first ? 0 : 1;
 		assert.equal(fake.actCalls.length, at + 1, "nothing after the lost reply is dispatched");
@@ -278,6 +283,22 @@ test("a strict-headless batch with no checked steps is an error", async ({ onTes
 			/Native action transaction returned no checked steps\./,
 		);
 	}
+});
+
+test("a strict-headless batch widens its transport budget by the shared per-character text budget", async ({
+	onTestFinished,
+}) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const { fake, act } = await observed(onTestFinished);
+	const budgets = [];
+	currentPlatformBackend.actBatch = async (requests, options) => {
+		budgets.push(options.timeoutMs);
+		fake.actBatchCalls.push(requests);
+		return fake.actBatchResult;
+	};
+	await act([press, { action: "setText", ref: "@e2", text: "x".repeat(10_000) }]);
+	assert.equal(fake.actBatchCalls.length, 1);
+	assert.deepEqual(budgets, [10_000 * fake.bridge.testing.TEXT_MS_PER_CHARACTER + 6_000]);
 });
 
 test("a strict-headless batch aggregates its checked steps and the batch root delta", async ({ onTestFinished }) => {
