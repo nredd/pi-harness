@@ -1719,17 +1719,20 @@ async function publishStats(
 	// cache or publication writes. This runs under the outbox lock `exportStats` holds; its release after
 	// the refusal is best effort and can fail. Within
 	// years 0000-9999 a later instant never seals an earlier month.
-	if (publicationBoundAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
+	if (publicationBoundAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS) {
+		const [boundLabel, boundPath] =
+			recordedAt > manifestAt
+				? ["Recorded usage publication watermark", watermarkPath]
+				: ["Published usage manifest", join(snapshotDir, "manifest.json")];
 		throw new ExportRefusal(
 			"watermark-ahead",
-			`${recordedAt > manifestAt ? "Recorded usage publication watermark" : "Published usage manifest"} ` +
-				`exportedAt (${new Date(publicationBoundAt).toISOString()}) is more than 366 days ahead ` +
+			`${boundLabel} exportedAt (${new Date(publicationBoundAt).toISOString()}) is more than 366 days ahead ` +
 				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
-				`it (${JSON.stringify(recordedAt > manifestAt ? watermarkPath : join(snapshotDir, "manifest.json"))}); ` +
-				"there is no supported in-place repair " +
+				`it (${JSON.stringify(boundPath)}); there is no supported in-place repair ` +
 				"(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one. " +
 				"--replace-harnesses does not bypass this",
 		);
+	}
 	// Every manifest seals exactly the months before its `exportedAt` month: that is the only record of what
 	// was sealed. Publishing in a later month than this clock's would seal months it has not left, and a
 	// later export could not tell them from months a clock-ahead export sealed: refuse (no cache or
@@ -2034,10 +2037,11 @@ async function publishStats(
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	validateManifest(snapshot.manifest);
-	// Recorded before anything is published, so it is never behind a published `exportedAt`; failing to
-	// record it fails the export with nothing published. Tradeoff: a later failed shard write or manifest
-	// rename leaves this unpublished `exportedAt` recorded, bounding later exports (and refusing with the
-	// later-month check or `watermark-ahead` if this run's clock had jumped forward and was then corrected).
+	// Written before any shard or manifest write so this publication cannot complete without recording its own
+	// `exportedAt` first; failing to write it fails the export with nothing published. Tradeoff: a later failed
+	// shard write or manifest rename leaves this unpublished `exportedAt` recorded, bounding later exports (and
+	// refusing with the later-month check or `watermark-ahead` if this run's clock had jumped forward and was
+	// then corrected).
 	await atomicJson(watermarkPath, { version: 1, exportedAt });
 	for (const { file, bytes } of writes) {
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.

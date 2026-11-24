@@ -412,8 +412,9 @@ describe("stats CLI", () => {
 				"bounds refuse watermark-ahead, and cross-month rollbacks refuse without --replace-harnesses), a same-month " +
 				"clock behind that bound publishes just after it with a warning; older kits do not update the watermark, " +
 				"so if one exported later and the manifest is then lost or restored, an export can omit the unbounded " +
-				"warning while viewers holding that later snapshot reject it as older; when neither source supplies a " +
-				"bound, it publishes by the wall clock with a warning",
+				"warning while viewers holding that later snapshot reject it as older; when an earlier export's manifest is " +
+				"corrupt, denied or missing and no recorded watermark survives either, it publishes by the wall clock with a " +
+				"warning (a first export does not warn)",
 		);
 	});
 

@@ -744,9 +744,11 @@ Installation state, never synced:
   integer millisecond instant before year 10000 (`0`, or a read or validation failure on the file,
   supplies no bound and leaves the manifest alone to bound `exportedAt`; successful publication still
   requires writing the replacement atomically, so e.g. a directory at its path aborts the export with
-  nothing published). Every export writes it (0600, atomic rename) under the outbox lock after its
-  refusals and before any shard or manifest write, so it is never behind a published `exportedAt`
-  that this kit wrote; failing to write it fails the export with nothing published. Tradeoff: a later
+  nothing published). Every export writes its own chosen `exportedAt` there (0600, atomic rename)
+  under the outbox lock after its refusals and before any shard or manifest write, so that publication
+  cannot complete without recording its timestamp first; failing to write it fails the export with
+  nothing published, and later exports can follow only the manifest and watermark bounds still readable
+  on disk. Tradeoff: a later
   failed shard write or manifest rename leaves that unpublished `exportedAt` recorded and still bounds
   subsequent exports (including the later-month refusal or, if the failed run's clock had jumped more
   than 366 days ahead and was then corrected, `watermark-ahead`, even though `manifest.json` never
