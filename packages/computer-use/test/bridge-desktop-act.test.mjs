@@ -285,6 +285,22 @@ test("a strict-headless batch with no checked steps is an error", async ({ onTes
 	}
 });
 
+test("a strict-headless batch widens its transport budget by the shared per-character text budget", async ({
+	onTestFinished,
+}) => {
+	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
+	const { fake, act } = await observed(onTestFinished);
+	const budgets = [];
+	currentPlatformBackend.actBatch = async (requests, options) => {
+		budgets.push(options.timeoutMs);
+		fake.actBatchCalls.push(requests);
+		return fake.actBatchResult;
+	};
+	await act([press, { action: "setText", ref: "@e2", text: "x".repeat(10_000) }]);
+	assert.equal(fake.actBatchCalls.length, 1);
+	assert.deepEqual(budgets, [10_000 * fake.bridge.testing.TEXT_MS_PER_CHARACTER + 6_000]);
+});
+
 test("a strict-headless batch aggregates its checked steps and the batch root delta", async ({ onTestFinished }) => {
 	vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
 	const { fake, act } = await observed(onTestFinished);
