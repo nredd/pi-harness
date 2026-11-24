@@ -47,7 +47,7 @@ it("locks the installed registry and shares it with same-realm reloads", async (
 
 	// Built-in IDs are reserved through the protocol object before usage loads.
 	const read = vi.fn(fake.read);
-	for (const id of ["anthropic", "openai-codex"]) {
+	for (const id of ["anthropic", "openai-codex", "antigravity"]) {
 		expect(() => registry.register({ provider: id, kind: "custom", read })).toThrow(/reserved for a built-in/);
 		expect(Object.isFrozen(first.collectorFor(id))).toBe(true);
 	}

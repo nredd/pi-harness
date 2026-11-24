@@ -81,6 +81,18 @@ function fixture() {
 	return { snapshot, shard, bytes: encodeShard(shard) };
 }
 
+it("omits shared origins even when the caller supplies pre-flattened calls", () => {
+	const first = call("2026-01-02", "physical", "fixture", 7, 1, { origin: 0 });
+	const second = { ...first, input: 8 };
+	const unique = { ...first, input: 9, origin: 1 };
+	const { shards } = makeSnapshot(
+		{ calls: [first, second, unique], sessions: [], errors: 0, badLines: 0 },
+		identity,
+		ms,
+	);
+	expect(shards.flatMap((shard) => shard.events.map((e) => e.origin))).toEqual([null, null, 1]);
+});
+
 interface WireFixture extends Record<string, unknown> {
 	s: unknown[];
 	p: unknown[];
