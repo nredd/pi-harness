@@ -69,6 +69,5 @@
   "packages/computer-use: test/windows-native-refusals.test.mjs: test-extension",
   "packages/computer-use: test/wsl-detection.test.mjs: test-extension",
   "packages/computer-use: test/wsl2-diagnostics.test.mjs: test-extension",
-  "packages/computer-use: test: top-level-entry",
-  "packages/subagents: package.json: script-name bench:ab"
+  "packages/computer-use: test: top-level-entry"
 ]
