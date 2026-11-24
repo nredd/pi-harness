@@ -357,6 +357,25 @@ async function privateOutboxes(dir: string): Promise<void> {
 		);
 	if ((info.mode & 0o777) !== 0o700) await chmod(dir, 0o700);
 }
+/**
+ * The last instant this outbox key published, beside its bookkeeping and never synced, so a corrupt,
+ * denied or missing `manifest.json` still has a watermark to follow. A separate file, because older kits
+ * refuse any extra bookkeeping field.
+ */
+const watermarkFile = (statePath: string): string => statePath.replace(/\.json$/, ".published.json");
+/**
+ * The recorded watermark, `0` when there is none. A file that cannot be read or does not validate is
+ * ignored: the manifest alone bounds the export, as it did before the file existed.
+ */
+async function recordedWatermark(path: string): Promise<number> {
+	try {
+		const value = await jsonFile(path);
+		exact(value, ["version", "exportedAt"]);
+		return value.version === 1 && count(value.exportedAt) && value.exportedAt <= LAST_ISO_MS ? value.exportedAt : 0;
+	} catch {
+		return 0;
+	}
+}
 /** Written 0600 through an atomic rename into the directory `privateOutboxes` checked. */
 async function recordOutbox(path: string, state: OutboxState): Promise<void> {
 	await atomicJson(path, { version: 1, ...state });
@@ -1678,15 +1697,22 @@ async function publishStats(
 	// The wall clock is read once, first, so the manifest read cannot move it.
 	const now = Date.now();
 	const loadedPrevious = await loadPrevious(snapshotDir);
-	// The publication instant is monotonic over the readable manifest: strictly after the last published
-	// export, even when this clock is behind it, so viewers holding the published snapshot accept this one
-	// as newer. Without a readable manifest there is nothing to follow.
-	const publishedAt =
+	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
+	// stale recovery state over this one's. Its directory is checked before the watermark beside it is read.
+	const statePath = await outboxStateFile(dir, snapshotDir);
+	await privateOutboxes(dirname(statePath));
+	const watermarkPath = watermarkFile(statePath);
+	// The publication instant is monotonic over the readable manifest and this outbox's recorded watermark:
+	// strictly after the last published export, even when this clock is behind it, so viewers holding the
+	// published snapshot accept this one as newer. With neither there is nothing to follow.
+	const manifestAt =
 		loadedPrevious === null || loadedPrevious === "unreadable"
 			? 0
 			: "damaged" in loadedPrevious
 				? (loadedPrevious.exportedAt ?? 0)
 				: loadedPrevious.manifest.exportedAt;
+	const recordedAt = await recordedWatermark(watermarkPath);
+	const publishedAt = Math.max(manifestAt, recordedAt);
 	const exportedAt = Math.max(now, publishedAt + 1);
 	// A watermark that is implausibly far ahead would misdate everything sealed after it, and one past year
 	// 9999 has no `YYYY-MM` month that sorts after the sealed ones: refuse, replacement included, with no
@@ -1696,9 +1722,11 @@ async function publishStats(
 	if (publishedAt - now > MAX_CLOCK_LEAD_MS || exportedAt > LAST_ISO_MS)
 		throw new ExportRefusal(
 			"watermark-ahead",
-			`Published usage manifest exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
+			`${recordedAt > manifestAt ? "Recorded usage publication watermark" : "Published usage manifest"} ` +
+				`exportedAt (${new Date(publishedAt).toISOString()}) is more than 366 days ahead ` +
 				`of this clock (${new Date(now).toISOString()}) or leaves no instant before year 10000 to publish after ` +
-				`it (${JSON.stringify(join(snapshotDir, "manifest.json"))}); there is no supported in-place repair ` +
+				`it (${JSON.stringify(recordedAt > manifestAt ? watermarkPath : join(snapshotDir, "manifest.json"))}); ` +
+				"there is no supported in-place repair " +
 				"(https://github.com/nredd/pi-harness/issues/1327): back up this outbox and publish into a fresh one. " +
 				"--replace-harnesses does not bypass this",
 		);
@@ -1725,10 +1753,6 @@ async function publishStats(
 						`${new Date(publishedAt).toISOString()}); published at ${new Date(exportedAt).toISOString()} instead`,
 				]
 			: [];
-	// Bookkeeping is per outbox and written only under its lock: another outbox's export cannot record
-	// stale recovery state over this one's.
-	const statePath = await outboxStateFile(dir, snapshotDir);
-	await privateOutboxes(dirname(statePath));
 	const own = await ownOutbox(statePath);
 	// A missing manifest is a first export only if nothing says this outbox published before. Otherwise
 	// publishing the scan would replace its sealed history and prune the shards that hold it.
@@ -1745,9 +1769,9 @@ async function publishStats(
 				"before (its bookkeeping or shard files remain); restore manifest.json from the sync checkout, " +
 				"or pass --replace-harnesses to publish without that history",
 		);
-	// Nothing records the last published instant but the manifest, so without it there is no watermark to
-	// follow: publish by the wall clock rather than guess one, and say so.
-	const unbounded = unboundedBy(loadedPrevious, publishedBefore);
+	// Without the manifest and the recorded watermark (deleted, or the checkout moved and so rekeyed) there
+	// is no watermark to follow: publish by the wall clock rather than guess one, and say so.
+	const unbounded = recordedAt > 0 ? undefined : unboundedBy(loadedPrevious, publishedBefore);
 	const unboundedWarning =
 		unbounded === undefined
 			? []
@@ -2007,6 +2031,9 @@ async function publishStats(
 	}
 	validateSnapshot({ manifest: snapshot.manifest, shards: publishedShards });
 	validateManifest(snapshot.manifest);
+	// Recorded before anything is published, so it is never behind a published `exportedAt`; failing to
+	// record it fails the export with nothing published. A failed publication leaves it ahead, harmlessly.
+	await atomicJson(watermarkPath, { version: 1, exportedAt });
 	for (const { file, bytes } of writes) {
 		// Valid content-addressed bytes are immutable; repair an existing corrupt file atomically.
 		try {

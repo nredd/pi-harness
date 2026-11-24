@@ -9,6 +9,11 @@ export function outboxStatePath(agent: string, snapshotDir: string): string {
 	return join(agent, "pi-session-kit", "outboxes", `${key}.json`);
 }
 
+/** Where an export records one outbox's publication watermark, beside its bookkeeping. */
+export function outboxWatermarkPath(agent: string, snapshotDir: string): string {
+	return outboxStatePath(agent, snapshotDir).replace(/\.json$/, ".published.json");
+}
+
 /** Local-time instant for `YYYY-MM-DD` at `hour`. */
 export function at(day: string, hour = 12): number {
 	const [y, m, d] = day.split("-").map(Number);

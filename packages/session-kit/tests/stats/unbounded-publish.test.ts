@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { type ExportOptions, exportStats, importStats, type Manifest } from "../../src/stats/snapshot.ts";
-import { assistantLine, outboxStatePath, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { assistantLine, outboxStatePath, outboxWatermarkPath, sessionFile } from "../fixtures/stats/fixtures.ts";
 
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
@@ -51,10 +51,14 @@ async function deny(path: string, code = "EACCES"): Promise<void> {
 	});
 }
 
-/** Publish at the clock-ahead watermark, damage the outbox as `damage` says, then export at `clock`. */
+/**
+ * Publish at the clock-ahead watermark, damage the outbox as `damage` says, then export at `clock`. The
+ * recorded watermark is gone too, as when the checkout moved or an older kit published without one.
+ */
 async function exportAfter(damage: (snapshotDir: string) => unknown, options: ExportOptions = {}, clock = WALL) {
 	const published = await exportStats(agent, out);
 	await damage(published.snapshotDir);
+	rmSync(outboxWatermarkPath(agent, published.snapshotDir));
 	vi.mocked(Date.now).mockReturnValue(clock);
 	return { published, next: await exportStats(agent, out, undefined, options) };
 }

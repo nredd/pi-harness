@@ -152,7 +152,8 @@ describe("cleanRecovery", () => {
 		writeFileSync(join(snapshotDir, "manifest.json"), "corrupt");
 		vi.mocked(Date.now).mockReturnValue(at("2026-11-02", 3));
 		expect((await exportStats(agent, out)).warnings).toEqual([
-			expect.stringMatching(/^no readable published manifest bounds this export \(manifest\.json unreadable\)/),
+			// The recorded watermark still bounds the export over the corrupt manifest.
+			expect.stringMatching(/^clock is behind the last published export /),
 			"recovery files retained: run clean-recovery to remove those the active snapshot covers",
 		]);
 		expect(stateOf().recoveryFiles).toEqual([superseded]);
@@ -164,6 +165,7 @@ describe("cleanRecovery", () => {
 		);
 		expect(stateOf()).toMatchObject({ recoveryPending: false, recoveryFiles: [] });
 		expect(existsSync(join(snapshotDir, ".export.lock"))).toBe(false);
+		vi.mocked(Date.now).mockReturnValue(at("2026-11-02", 13));
 		expect((await exportStats(agent, out)).warnings).toBeUndefined();
 		expect(await importStats(join(root, "viewer"), out)).toMatchObject({ imported: 1, problems: [] });
 	});
