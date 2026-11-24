@@ -242,12 +242,11 @@ def test_native_check_packs_compiled_helpers(tmp_path: Path, monkeypatch: pytest
                         name (str): Member path.
 
                     Returns:
-                        bytes: Member bytes, with the x64 helper's identity replaced.
+                        bytes: The x64 helper's bytes with its identity replaced.
                     """
-                    data = original_read(path, name)
-                    if name == "prebuilt/macos/x64/bridge":
-                        return data.replace(expected.encode(), ("0.0.1+" + "0" * 64).encode())
-                    return data
+                    assert name == "prebuilt/macos/x64/bridge"
+                    stale = ("0.0.1+" + "0" * 64).encode()
+                    return original_read(path, name).replace(expected.encode(), stale)
 
                 patch.setattr(pc, "read_member", stale_read)
                 return original_check(tarball, arch, expected)
