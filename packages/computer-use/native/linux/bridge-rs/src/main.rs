@@ -246,8 +246,16 @@ async fn settle_before_exit() -> i32 {
 /// The exit status for inputs that may stay held: 0 for none, else
 /// `EXIT_RELEASE_DEBT` with them named on stderr for the client.
 fn exit_status(held: Vec<String>) -> i32 {
+    let journal_problem = InputState::shared().exit_journal_problem();
+    if let Some(problem) = &journal_problem {
+        eprintln!("linux-bridge: unresolved release journal: {problem}");
+    }
     if held.is_empty() {
-        return 0;
+        return if journal_problem.is_some() {
+            EXIT_RELEASE_DEBT
+        } else {
+            0
+        };
     }
     eprintln!(
         "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",

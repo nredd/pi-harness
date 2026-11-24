@@ -775,9 +775,9 @@ struct Owed {
     /// `KEY_RELEASE_EVENT` or `BUTTON_RELEASE_EVENT`.
     event: u8,
     detail: u8,
-    /// A release was submitted but its delivery is unknown. Never resent blindly:
-    /// it is settled only by observing the input up, so one on an input the state
-    /// source cannot observe stays owed.
+    /// A release or its preceding press is delivery-unknown. Never resend it
+    /// blindly. An observed up state can settle an uncertain release, but not an
+    /// uncertain press: the old connection might still have that press queued.
     ambiguous: bool,
 }
 impl Owed {
@@ -869,6 +869,7 @@ pub struct InputState {
     owing: Mutex<Owing>,
     cancelled: AtomicBool,
     press_unconfirmed: AtomicBool,
+    journal_problem: Mutex<Option<String>>,
     // Kept across requests only while this helper still has debt or a failed write.
     journal: Mutex<Option<Journal>>,
 }
@@ -980,6 +981,19 @@ impl InputState {
         }
     }
 
+    /// An unresolved journal refusal or write failure, independent of held inputs.
+    pub fn exit_journal_problem(&self) -> Option<String> {
+        self.journal_problem
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    fn set_journal_problem(&self, problem: Option<String>) {
+        *self
+            .journal_problem
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = problem;
+    }
     fn journal_slot(&self) -> std::sync::MutexGuard<'_, Option<Journal>> {
         self.journal.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1122,7 +1136,13 @@ impl Input<XtestSink> {
                 let home = std::env::var_os("HOME").ok_or_else(|| {
                     journal_error("No HOME for the X11 release-debt journal".to_owned())
                 })?;
-                Journal::open_fresh(std::path::Path::new(&home)).map_err(journal_error)?
+                let journal = Journal::open(std::path::Path::new(&home)).map_err(journal_error)?;
+                journal.require_fresh().map_err(|cause| {
+                    state.set_journal_problem(Some(cause.clone()));
+                    journal_error(cause)
+                })?;
+                state.set_journal_problem(None);
+                journal
             }
         };
         let opened = (|| {
@@ -1214,13 +1234,16 @@ impl<S: InputSink> Input<S> {
                 }
             }
         }
-        journal.sync(binding, releases).map_err(|cause| {
+        let result = journal.sync(binding, releases).map_err(|cause| {
             if journal.releases().is_empty() {
                 journal_error(cause)
             } else {
                 journal_error(journal.recovery(&cause))
             }
-        })
+        });
+        self.state
+            .set_journal_problem(result.as_ref().err().map(|error| error.message.clone()));
+        result
     }
     fn mark_held_unknown(&self, owed: Owed) {
         if let Some(entry) = self
@@ -2764,12 +2787,12 @@ mod tests {
         reader.join().unwrap();
         entered.unwrap();
         assert!(locked, "the live helper holds the cross-process lock");
-        let error = Journal::open_fresh(home.path()).unwrap_err();
+        let recovered = Journal::open(home.path()).unwrap();
+        let error = recovered.require_fresh().unwrap_err();
         assert!(
             error.contains("keycode 37") && error.contains("remove only"),
             "{error}"
         );
-        let recovered = Journal::open(home.path()).unwrap();
         recovered.bind(&binding).unwrap();
         assert_eq!(recovered.releases().len(), 1);
     }
