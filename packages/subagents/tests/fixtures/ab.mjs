@@ -5,7 +5,9 @@
  *   node tests/fixtures/ab.mjs master
  *   node tests/fixtures/ab.mjs HEAD~1 --rounds 5 --filter viewer
  *
- * Run it from `packages/subagents`: the working tree is `process.cwd()`.
+ * Run it from `packages/subagents`: the working tree is `process.cwd()`. The
+ * base ref is exported with `git archive` (whole repo, so root scripts and
+ * configs exist) and benchmarked at the same package-relative path.
  *
  * This is the question `vitest bench --compare` cannot answer. `--compare` only
  * annotates a run with a stored baseline and never fails; more importantly the
@@ -33,9 +35,10 @@
  *    taking the run down.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { exportTree, linkDependencies, parseBenchReport, resolveLayout } from "./ab-tree.mjs";
 
 const REPO = process.cwd();
 const PERF_DIR = "tests";
@@ -69,10 +72,11 @@ function parseArgs(argv) {
 }
 
 const git = (...args) => execFileSync("git", args, { cwd: REPO, encoding: "utf-8" }).trim();
+const LAYOUT = resolveLayout(REPO);
 
 /** Run the benchmarks in `cwd`, returning task name → median ms per sample. */
 function runBench(cwd, filter, jsonPath) {
-	const args = ["vitest", "bench", ...(filter ? [filter] : []), `--outputJson=${jsonPath}`];
+	const args = ["vitest", "bench", "--run", ...(filter ? [filter] : []), "--reporter=json", `--outputFile=${jsonPath}`];
 	try {
 		execFileSync("npx", args, { cwd, stdio: "ignore" });
 	} catch {
@@ -82,21 +86,7 @@ function runBench(cwd, filter, jsonPath) {
 	}
 	if (!existsSync(jsonPath)) return null;
 
-	const report = JSON.parse(readFileSync(jsonPath, "utf-8"));
-	const out = new Map();
-	for (const file of report.files ?? []) {
-		for (const group of file.groups ?? []) {
-			// Group names are absolute-path-prefixed; strip so the two trees agree.
-			const groupName = String(group.fullName ?? "").replace(/^.*\.bench\.ts > /, "");
-			for (const bench of group.benchmarks ?? []) {
-				// Median, not mean: the spawn task does real disk I/O and throws the
-				// occasional millisecond-scale outlier, which drags a mean around by
-				// tens of percent between runs while the median barely moves.
-				out.set(`${groupName} > ${bench.name}`, bench.median ?? bench.mean);
-			}
-		}
-	}
-	return out;
+	return parseBenchReport(JSON.parse(readFileSync(jsonPath, "utf-8")));
 }
 
 /** Keep the fastest round per task. */
@@ -159,7 +149,7 @@ if (!existsSync(join(REPO, PERF_DIR)))
 const sha = git("rev-parse", "--short", opts.ref);
 let removeWorktree;
 let removeJsonDir;
-const worktree = makeTestTempDir("pi-subagents-ab-", (cleanup) => {
+const exportRoot = makeTestTempDir("pi-subagents-ab-", (cleanup) => {
 	removeWorktree = cleanup;
 });
 
@@ -169,11 +159,8 @@ try {
 	const jsonDir = makeTestTempDir("pi-subagents-ab-json-", (cleanup) => {
 		removeJsonDir = cleanup;
 	});
-	git("worktree", "add", "--detach", worktree, sha);
-
-	// Dependencies are identical for both sides by construction; installing them
-	// twice would take minutes and prove nothing.
-	symlinkSync(join(REPO, "node_modules"), join(worktree, "node_modules"), "dir");
+	const worktree = exportTree(LAYOUT, sha, exportRoot);
+	linkDependencies(LAYOUT, exportRoot);
 
 	// The base commit predates these files. Carrying them over is what makes the
 	// two runs the same benchmark.
@@ -201,15 +188,6 @@ try {
 
 	report(head, base, sha);
 } finally {
-	try {
-		execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, stdio: "ignore" });
-	} catch {
-		removeWorktree();
-		try {
-			execFileSync("git", ["worktree", "prune"], { cwd: REPO, stdio: "ignore" });
-		} catch {
-			/* best effort */
-		}
-	}
+	removeWorktree?.();
 	removeJsonDir?.();
 }
