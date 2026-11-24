@@ -5,7 +5,9 @@
  *   node tests/fixtures/ab.mjs master
  *   node tests/fixtures/ab.mjs HEAD~1 --rounds 5 --filter viewer
  *
- * Run it from `packages/subagents`: the working tree is `process.cwd()`.
+ * Run it from `packages/subagents`: the working tree is `process.cwd()`. The
+ * base ref is exported with `git archive` (whole repo, so root scripts and
+ * configs exist) and benchmarked at the same package-relative path.
  *
  * This is the question `vitest bench --compare` cannot answer. `--compare` only
  * annotates a run with a stored baseline and never fails; more importantly the
@@ -25,7 +27,7 @@
  *    observation sits closest to the truth; the median makes each round robust
  *    to a single outlier rather than letting one GC pause set the number.
  *  - The working tree's benchmark files and fixtures are COPIED into the base
- *    worktree before it runs. The base commit does not contain them; without
+ *    tree before it runs. The base commit does not contain them; without
  *    this the older side silently benchmarks nothing.
  *  - Surplus arguments are ignored by JavaScript, which is what lets one
  *    benchmark file drive an older constructor. A benchmark that names a symbol
@@ -33,9 +35,10 @@
  *    taking the run down.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
+import { exportTree, linkDependencies, parseBenchReport, resolveLayout } from "./ab-tree.mjs";
 
 const REPO = process.cwd();
 const PERF_DIR = "tests";
@@ -69,10 +72,11 @@ function parseArgs(argv) {
 }
 
 const git = (...args) => execFileSync("git", args, { cwd: REPO, encoding: "utf-8" }).trim();
+const LAYOUT = resolveLayout(REPO);
 
 /** Run the benchmarks in `cwd`, returning task name → median ms per sample. */
 function runBench(cwd, filter, jsonPath) {
-	const args = ["vitest", "bench", ...(filter ? [filter] : []), `--outputJson=${jsonPath}`];
+	const args = ["vitest", "bench", "--run", ...(filter ? [filter] : []), "--reporter=json", `--outputFile=${jsonPath}`];
 	try {
 		execFileSync("npx", args, { cwd, stdio: "ignore" });
 	} catch {
@@ -82,21 +86,7 @@ function runBench(cwd, filter, jsonPath) {
 	}
 	if (!existsSync(jsonPath)) return null;
 
-	const report = JSON.parse(readFileSync(jsonPath, "utf-8"));
-	const out = new Map();
-	for (const file of report.files ?? []) {
-		for (const group of file.groups ?? []) {
-			// Group names are absolute-path-prefixed; strip so the two trees agree.
-			const groupName = String(group.fullName ?? "").replace(/^.*\.bench\.ts > /, "");
-			for (const bench of group.benchmarks ?? []) {
-				// Median, not mean: the spawn task does real disk I/O and throws the
-				// occasional millisecond-scale outlier, which drags a mean around by
-				// tens of percent between runs while the median barely moves.
-				out.set(`${groupName} > ${bench.name}`, bench.median ?? bench.mean);
-			}
-		}
-	}
-	return out;
+	return parseBenchReport(JSON.parse(readFileSync(jsonPath, "utf-8")));
 }
 
 /** Keep the fastest round per task. */
@@ -157,10 +147,10 @@ if (!existsSync(join(REPO, PERF_DIR)))
 	usage(`No ${PERF_DIR} directory here — run from the packages/subagents directory.`);
 
 const sha = git("rev-parse", "--short", opts.ref);
-let removeWorktree;
+let removeExport;
 let removeJsonDir;
-const worktree = makeTestTempDir("pi-subagents-ab-", (cleanup) => {
-	removeWorktree = cleanup;
+const exportRoot = makeTestTempDir("pi-subagents-ab-", (cleanup) => {
+	removeExport = cleanup;
 });
 
 console.log(`\n  Comparing working tree against ${opts.ref} (${sha}), ${opts.rounds} round(s).`);
@@ -169,24 +159,21 @@ try {
 	const jsonDir = makeTestTempDir("pi-subagents-ab-json-", (cleanup) => {
 		removeJsonDir = cleanup;
 	});
-	git("worktree", "add", "--detach", worktree, sha);
-
-	// Dependencies are identical for both sides by construction; installing them
-	// twice would take minutes and prove nothing.
-	symlinkSync(join(REPO, "node_modules"), join(worktree, "node_modules"), "dir");
+	const baseDir = exportTree(LAYOUT, sha, exportRoot);
+	linkDependencies(LAYOUT, exportRoot);
 
 	// The base commit predates these files. Carrying them over is what makes the
 	// two runs the same benchmark.
-	mkdirSync(join(worktree, PERF_DIR), { recursive: true });
+	mkdirSync(join(baseDir, PERF_DIR), { recursive: true });
 	for (const file of readdirSync(join(REPO, PERF_DIR))) {
 		if (file.endsWith(".bench.ts")) {
-			cpSync(join(REPO, PERF_DIR, file), join(worktree, PERF_DIR, file));
+			cpSync(join(REPO, PERF_DIR, file), join(baseDir, PERF_DIR, file));
 		}
 	}
-	mkdirSync(join(worktree, "tests", "fixtures"), { recursive: true });
-	cpSync(join(REPO, FIXTURES), join(worktree, FIXTURES));
+	mkdirSync(join(baseDir, "tests", "fixtures"), { recursive: true });
+	cpSync(join(REPO, FIXTURES), join(baseDir, FIXTURES));
 	const benchmarkFixture = join("tests", "fixtures", "benchmark.ts");
-	cpSync(join(REPO, benchmarkFixture), join(worktree, benchmarkFixture));
+	cpSync(join(REPO, benchmarkFixture), join(baseDir, benchmarkFixture));
 
 	const head = new Map();
 	const base = new Map();
@@ -195,21 +182,12 @@ try {
 		process.stdout.write(`  round ${round}/${opts.rounds}: working tree… `);
 		mergeMin(head, runBench(REPO, opts.filter, join(jsonDir, `head-${round}.json`)));
 		process.stdout.write(`${sha}… `);
-		mergeMin(base, runBench(worktree, opts.filter, join(jsonDir, `base-${round}.json`)));
+		mergeMin(base, runBench(baseDir, opts.filter, join(jsonDir, `base-${round}.json`)));
 		console.log("done");
 	}
 
 	report(head, base, sha);
 } finally {
-	try {
-		execFileSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, stdio: "ignore" });
-	} catch {
-		removeWorktree();
-		try {
-			execFileSync("git", ["worktree", "prune"], { cwd: REPO, stdio: "ignore" });
-		} catch {
-			/* best effort */
-		}
-	}
+	removeExport?.();
 	removeJsonDir?.();
 }
