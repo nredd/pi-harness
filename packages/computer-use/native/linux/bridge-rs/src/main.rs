@@ -155,7 +155,7 @@ async fn main() {
             () = shutdown.recv() => break,
             line = lines.recv() => line,
         };
-        let Some(line) = line else {
+        let Some((received, line)) = line else {
             break;
         };
         if line.trim().is_empty() {
@@ -203,11 +203,12 @@ async fn main() {
             output.send(Response::err(&request.id, shutting_down()));
             continue;
         }
+        let deadline = request.deadline(received);
         let state = Arc::clone(&state);
         let output = output.clone();
         requests.spawn(async move {
             let _permit = permit;
-            let response = handle_request(&state, &request).await;
+            let response = handle_request(&state, &request, deadline).await;
             output.send(response);
         });
     }
@@ -215,7 +216,7 @@ async fn main() {
     // An in-flight action runs its owed releases and replies; then the helper exits.
     InputState::shared().cancel();
     // Requests read but never started are answered, not dropped: none of them ran.
-    while let Ok(line) = lines.try_recv() {
+    while let Ok((_, line)) = lines.try_recv() {
         if let Some(id) = extract_id(&line) {
             output.send(Response::err(&id, shutting_down()));
         }
@@ -259,15 +260,19 @@ fn exit_status(held: Vec<String>) -> i32 {
 /// Read stdin lines on their own task, so EOF is seen even while every worker is busy
 /// and the request loop waits for one. EOF or a read error cancels physical input at
 /// once and fires the returned notification, which wakes a request waiting for a worker
-/// into shutdown; lines already read stay queued and are still answered.
-fn stdin_lines() -> (mpsc::UnboundedReceiver<String>, Arc<tokio::sync::Notify>) {
+/// into shutdown; lines already read stay queued and are still answered. Each line comes
+/// with the instant it was read, which its request's deadline budget counts from.
+fn stdin_lines() -> (
+    mpsc::UnboundedReceiver<(Instant, String)>,
+    Arc<tokio::sync::Notify>,
+) {
     let (sender, receiver) = mpsc::unbounded_channel();
     let closed = Arc::new(tokio::sync::Notify::new());
     let notify = Arc::clone(&closed);
     tokio::spawn(async move {
         let mut lines = BufReader::new(tokio::io::stdin()).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            if sender.send(line).is_err() {
+            if sender.send((Instant::now(), line)).is_err() {
                 return;
             }
         }
@@ -320,26 +325,29 @@ fn action_lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 /// Wait for the action lock: actions and batches run one at a time. Any request that
-/// holds the lock once shutdown began answers `cancelled` without starting, whether it
-/// waited or got the lock at once, semantic (AT-SPI) actions included: nothing admitted
-/// after cancellation began may mutate the desktop.
+/// holds the lock once shutdown began answers `cancelled`, and one past its `deadline`
+/// answers `input_deadline_expired`, without starting, whether it waited or got the lock
+/// at once, semantic (AT-SPI) actions included: nothing admitted after cancellation began,
+/// or after the client stopped waiting, may mutate the desktop.
 async fn begin_transaction(
     id: &str,
     input: &InputState,
+    deadline: Instant,
 ) -> Result<tokio::sync::MutexGuard<'static, ()>, ProtocolError> {
     testing_ready("waiting", id);
     let guard = action_lock().lock().await;
     testing_ready("locked", id);
-    admit_mutation(input)?;
+    admit_mutation(input, deadline)?;
     Ok(guard)
 }
 
-/// Refuse a desktop mutation (action, focus, browser launch) once shutdown began.
-fn admit_mutation(input: &InputState) -> Result<(), ProtocolError> {
+/// Refuse a desktop mutation (action, focus, browser launch) once shutdown began or its
+/// request's `deadline` passed.
+fn admit_mutation(input: &InputState, deadline: Instant) -> Result<(), ProtocolError> {
     if input.is_cancelled() {
         return Err(shutting_down());
     }
-    Ok(())
+    x11::admit_before(Some(deadline))
 }
 
 /// Report a scheduling point on stderr, so process tests establish their preconditions
@@ -359,10 +367,15 @@ fn extract_id(line: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-async fn handle_request(state: &Arc<Mutex<HelperState>>, request: &Request) -> Response {
+async fn handle_request(
+    state: &Arc<Mutex<HelperState>>,
+    request: &Request,
+    deadline: Option<Instant>,
+) -> Response {
     handle_request_with(
         state,
         request,
+        deadline,
         &InputState::shared(),
         AtspiClient::connect,
         physical_act,
@@ -370,10 +383,13 @@ async fn handle_request(state: &Arc<Mutex<HelperState>>, request: &Request) -> R
     .await
 }
 
-/// Answer `request`; `input` carries the shutdown flag mutations are admitted against.
+/// Answer `request`; `input` carries the shutdown flag and `deadline` the instant the
+/// client stops waiting, which mutations are admitted against. A request without one is
+/// refused before any command runs.
 async fn handle_request_with(
     state: &Arc<Mutex<HelperState>>,
     request: &Request,
+    deadline: Option<Instant>,
     input: &InputState,
     connect: impl AsyncFn() -> Result<AtspiClient, ProtocolError>,
     physical: PhysicalAct,
@@ -387,32 +403,38 @@ async fn handle_request_with(
             )),
         );
     }
+    let Some(deadline) = deadline else {
+        return Response::err(
+            &request.id,
+            invalid("Linux helper requests require deadlineMs and budgetMs"),
+        );
+    };
     let result = match request.cmd.as_str() {
         "diagnostics" => Ok(diagnostics().await),
         "listRoots" | "listWindows" => list_roots(state, &request.args).await,
         "look" | "screenshot" => {
             look_with(state, &request.args, &connect, x11::capture_window).await
         }
-        "act" => match begin_transaction(&request.id, input).await {
-            Ok(_transaction) => act(state, &request.args, &connect, physical).await,
+        "act" => match begin_transaction(&request.id, input, deadline).await {
+            Ok(_transaction) => act(state, &request.args, deadline, &connect, physical).await,
             Err(error) => Err(error),
         },
-        "actBatch" => match begin_transaction(&request.id, input).await {
+        "actBatch" => match begin_transaction(&request.id, input, deadline).await {
             Ok(_transaction) => {
                 act_batch_with(
                     &request.args,
                     || input.is_cancelled(),
-                    |args| act(state, args, &connect, physical),
+                    |args| act(state, args, deadline, &connect, physical),
                 )
                 .await
             }
             Err(error) => Err(error),
         },
         #[cfg(feature = "testing")]
-        "testingAct" => match begin_transaction(&request.id, input).await {
+        "testingAct" => match begin_transaction(&request.id, input, deadline).await {
             Ok(_transaction) => {
                 let args = request.args.clone();
-                off_worker(move || testing_act(&args)).await
+                off_worker(move || testing_act(&args, deadline)).await
             }
             Err(error) => Err(error),
         },
@@ -437,12 +459,12 @@ async fn handle_request_with(
         "atspiWaitFor" | "uiaWaitFor" | "axWaitFor" => {
             wait_for(state, &request.args, &connect).await
         }
-        "focusWindow" => match admit_mutation(input) {
-            Ok(()) => focus_window(state, &request.args).await,
+        "focusWindow" => match admit_mutation(input, deadline) {
+            Ok(()) => focus_window(state, &request.args, deadline).await,
             Err(error) => Err(error),
         },
         "openBrowserLocation" => {
-            admit_mutation(input).and_then(|()| open_browser_location(&request.args))
+            admit_mutation(input, deadline).and_then(|()| open_browser_location(&request.args))
         }
         other => Err(ProtocolError::new(
             format!("Unknown command '{other}'"),
@@ -961,15 +983,18 @@ async fn look_with<S: SnapshotSource>(
 async fn focus_window(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
+    deadline: Instant,
 ) -> Result<Value, ProtocolError> {
-    focus_window_with(state, args, x11::focus_window).await
+    focus_window_with(state, args, deadline, x11::focus_window).await
 }
 
-/// [`focus_window`] activating through `focus`, run off the request workers.
+/// [`focus_window`] activating through `focus`, run off the request workers; `focus`
+/// sends no activation past `deadline`.
 async fn focus_window_with(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
-    focus: impl FnOnce(u32, PhysicalPolicy) -> Result<Value, ProtocolError> + Send + 'static,
+    deadline: Instant,
+    focus: impl FnOnce(u32, PhysicalPolicy, Instant) -> Result<Value, ProtocolError> + Send + 'static,
 ) -> Result<Value, ProtocolError> {
     let reference = args
         .get("rootRef")
@@ -989,7 +1014,7 @@ async fn focus_window_with(
     let window = root
         .x11_window
         .ok_or_else(|| capability("Root is not correlated with an X11 window"))?;
-    off_worker(move || focus(window, policy)).await
+    off_worker(move || focus(window, policy, deadline)).await
 }
 
 fn open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
@@ -1006,6 +1031,8 @@ fn open_browser_location(args: &Value) -> Result<Value, ProtocolError> {
     Ok(json!({"opened": true, "delivery": "xdg-open"}))
 }
 
+/// Physical delivery of one action; nothing but owed releases is submitted past the
+/// `Instant`, the request deadline.
 type PhysicalAct = fn(
     &str,
     &Value,
@@ -1013,6 +1040,7 @@ type PhysicalAct = fn(
     u32,
     (i32, i32),
     ActionGeometry,
+    Instant,
 ) -> Result<Value, ProtocolError>;
 
 /// Element actions `act` tries semantically (`press`, `setText`) before any physical fallback;
@@ -1028,6 +1056,7 @@ enum ActTarget<'a> {
 async fn act(
     state: &Arc<Mutex<HelperState>>,
     args: &Value,
+    deadline: Instant,
     connect: impl AsyncFnOnce() -> Result<AtspiClient, ProtocolError>,
     physical: PhysicalAct,
 ) -> Result<Value, ProtocolError> {
@@ -1061,7 +1090,9 @@ async fn act(
         policy.refuse_strict_headless()?;
     }
     let record = lock(state)?.look(look_id)?;
-    let client = connect().await?;
+    // The client refuses each semantic mutation past the deadline, checked after the bus
+    // connection, the proxy setup and the preparatory reads, any of which may block.
+    let client = connect().await?.with_deadline(deadline);
 
     let (x, y) = match target {
         ActTarget::Point(x, y) => (x, y),
@@ -1086,8 +1117,16 @@ async fn act(
                     }
                     return Ok(result);
                 }
-                // Shutdown began before the mutation: nothing ran, and nothing may fall back.
-                Some(Err(error)) if error.code == ErrorCode::Cancelled => return Err(error),
+                // Shutdown began or the deadline passed before the mutation: nothing ran,
+                // and nothing may fall back.
+                Some(Err(error))
+                    if matches!(
+                        error.code,
+                        ErrorCode::Cancelled | ErrorCode::InputDeadlineExpired
+                    ) =>
+                {
+                    return Err(error)
+                }
                 Some(Err(error)) if error.code == ErrorCode::Timeout => {
                     return Err(ProtocolError::new(
                         format!("{}; semantic action outcome is unknown", error.message),
@@ -1122,7 +1161,15 @@ async fn act(
                 image_height: record.image_height,
             };
             return off_worker(move || {
-                physical(&action, &params, policy, owning_window, center, geometry)
+                physical(
+                    &action,
+                    &params,
+                    policy,
+                    owning_window,
+                    center,
+                    geometry,
+                    deadline,
+                )
             })
             .await;
         }
@@ -1144,7 +1191,18 @@ async fn act(
         image_width: record.image_width,
         image_height: record.image_height,
     };
-    off_worker(move || physical(&action, &params, policy, owning_window, point, geometry)).await
+    off_worker(move || {
+        physical(
+            &action,
+            &params,
+            policy,
+            owning_window,
+            point,
+            geometry,
+            deadline,
+        )
+    })
+    .await
 }
 
 #[derive(Debug, Clone)]
@@ -1211,19 +1269,21 @@ fn physical_act(
     owning_window: u32,
     point: (i32, i32),
     geometry: ActionGeometry,
+    deadline: Instant,
 ) -> Result<Value, ProtocolError> {
-    let input = Input::connect(policy, owning_window)?;
+    let input = Input::connect(policy, owning_window, deadline)?;
     deliver_physical(&input, action, params, owning_window, point, &geometry)
 }
 
 /// Drive one physical action through a scripted `RecordingSink` that shares the
 /// helper-wide input state, so process tests exercise shutdown and release debt with no
-/// display. Compiled only with the dev-only `testing` feature, never into a release.
+/// display, and the request `deadline`. Compiled only with the dev-only `testing` feature,
+/// never into a release.
 #[cfg(feature = "testing")]
-fn testing_act(args: &Value) -> Result<Value, ProtocolError> {
+fn testing_act(args: &Value, deadline: Instant) -> Result<Value, ProtocolError> {
     use linux_bridge::testing::RecordingSink;
     let sink = RecordingSink::scripted(args.get("sink").unwrap_or(&Value::Null));
-    let input = Input::with_state(sink, InputState::shared());
+    let input = Input::with_state(sink, InputState::shared()).with_deadline(deadline);
     input.settle()?;
     let action = required_str(args, "action", "testingAct requires action")?;
     let params = args.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -1655,6 +1715,11 @@ mod tests {
     use tokio::sync::watch;
     use zbus::{zvariant::OwnedObjectPath, Connection};
 
+    /// A request deadline no test reaches.
+    fn far() -> Instant {
+        Instant::now() + Duration::from_secs(3600)
+    }
+
     /// A stdout that accepts no bytes until `opens` (never when `None`), then records them.
     struct ScriptedStdout {
         opens: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
@@ -2012,8 +2077,9 @@ mod tests {
                 let reply = act(
                     &state,
                     &args,
+                    far(),
                     async || Ok(AtspiClient::from_connection(connection.clone(), Duration::from_secs(2))),
-                    |_, _, _, _, _, _| {
+                    |_, _, _, _, _, _, _| {
                         assert_off_request_thread("physical delivery");
                         Ok(json!({"outcome":"worked"}))
                     },
@@ -2034,7 +2100,8 @@ mod tests {
         let focused = focus_window_with(
             &state,
             &json!({"rootRef": reference, "policy": "foreground"}),
-            |window, _| {
+            far(),
+            |window, _, _| {
                 assert_off_request_thread("focus");
                 Ok(json!({"focused": window}))
             },
@@ -2270,7 +2337,11 @@ mod tests {
                 id: "peer".into(),
                 cmd: cmd.into(),
                 args,
+                deadline_ms: Some(u64::MAX),
+                budget_ms: Some(u32::MAX),
+                deadline_mono_ms: None,
             },
+            Some(far()),
             &InputState::default(),
             async || {
                 Ok(AtspiClient::from_connection(
@@ -2278,7 +2349,7 @@ mod tests {
                     Duration::from_millis(250),
                 ))
             },
-            |_, _, _, _, _, _| panic!("attempted physical fallback"),
+            |_, _, _, _, _, _, _| panic!("attempted physical fallback"),
         )
         .await
     }
@@ -3157,11 +3228,14 @@ mod tests {
     #[tokio::test]
     async fn a_request_admitted_after_cancellation_never_mutates() {
         let input = InputState::default();
-        drop(begin_transaction("before", &input).await.unwrap());
+        drop(begin_transaction("before", &input, far()).await.unwrap());
         input.cancel();
         // The lock is free, so this request does not wait: it is refused all the same.
         assert_eq!(
-            begin_transaction("after", &input).await.unwrap_err().code,
+            begin_transaction("after", &input, far())
+                .await
+                .unwrap_err()
+                .code,
             ErrorCode::Cancelled
         );
         let (state, root_ref) = peer_root_state();
@@ -3184,10 +3258,14 @@ mod tests {
                     id: "late".into(),
                     cmd: cmd.into(),
                     args,
+                    deadline_ms: Some(u64::MAX),
+                    budget_ms: Some(u32::MAX),
+                    deadline_mono_ms: None,
                 },
+                Some(far()),
                 &input,
                 async || -> Result<AtspiClient, ProtocolError> { panic!("{cmd} connected") },
-                |_, _, _, _, _, _| panic!("attempted physical input"),
+                |_, _, _, _, _, _, _| panic!("attempted physical input"),
             )
             .await;
             assert_eq!(
@@ -3196,6 +3274,133 @@ mod tests {
                 "{cmd}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_request_past_its_deadline_never_mutates() {
+        let input = InputState::default();
+        // Not cancelled, but the client stopped waiting: refused whether or not it waited.
+        assert_eq!(
+            begin_transaction("late", &input, Instant::now())
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::InputDeadlineExpired
+        );
+        let (state, root_ref) = peer_root_state();
+        for (cmd, args) in [
+            (
+                "act",
+                json!({"lookId":"l1","action":"press","target":{"x":1,"y":1}}),
+            ),
+            ("actBatch", json!({"actions":[]})),
+            ("focusWindow", json!({"rootRef":root_ref})),
+            (
+                "openBrowserLocation",
+                json!({"url":"https://example.invalid/"}),
+            ),
+        ] {
+            let request = Request {
+                protocol_version: PROTOCOL_VERSION,
+                id: "late".into(),
+                cmd: cmd.into(),
+                args,
+                deadline_ms: Some(0),
+                budget_ms: Some(0),
+                deadline_mono_ms: None,
+            };
+            let reply = handle_request_with(
+                &state,
+                &request,
+                request.deadline(Instant::now()),
+                &input,
+                async || -> Result<AtspiClient, ProtocolError> { panic!("{cmd} connected") },
+                |_, _, _, _, _, _, _| panic!("attempted physical input"),
+            )
+            .await;
+            assert_eq!(
+                reply.error.map(|error| error.code),
+                Some(ErrorCode::InputDeadlineExpired),
+                "{cmd}"
+            );
+        }
+        // The physical delivery a live act hands off gets the request's own deadline.
+        static HANDED: Mutex<Option<Instant>> = Mutex::new(None);
+        let deadline = far();
+        let (look_id, _) = lock(&state)
+            .unwrap()
+            .insert_look(observed_root(), vec![node()], None);
+        lock(&state)
+            .unwrap()
+            .set_look_image_size(&look_id, 100, 100)
+            .unwrap();
+        with_peer(Ok, async |connection| {
+            let args = json!({"lookId":look_id,"action":"click","target":{"x":1,"y":1},"policy":"foreground"});
+            act(
+                &state,
+                &args,
+                deadline,
+                async || Ok(AtspiClient::from_connection(connection.clone(), Duration::from_secs(2))),
+                |_, _, _, _, _, _, handed| {
+                    *HANDED.lock().unwrap() = Some(handed);
+                    Ok(json!({"outcome":"worked"}))
+                },
+            )
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(*HANDED.lock().unwrap(), Some(deadline));
+    }
+
+    #[tokio::test]
+    async fn a_semantic_step_whose_bus_connection_outlasts_the_deadline_never_mutates() {
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let (state, _) = peer_root_state();
+        let mut target = node();
+        target
+            .interfaces
+            .insert("org.a11y.atspi.EditableText".into());
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![target], None);
+        with_peer(
+            |peer| peer.serve_at("/node", CountedEdit(Arc::clone(&mutations))),
+            async |connection| {
+                let args = json!({"lookId":look_id,"action":"setText","target":{"ref":nodes[0].reference},"params":{"text":"x"},"policy":"foreground"});
+                let client =
+                    || AtspiClient::from_connection(connection.clone(), Duration::from_millis(250));
+                let deadline = Instant::now() + Duration::from_millis(20);
+                let error = act(
+                    &state,
+                    &args,
+                    deadline,
+                    async || {
+                        tokio::time::sleep_until(deadline.into()).await;
+                        Ok(client())
+                    },
+                    |_, _, _, _, _, _, _| panic!("attempted physical fallback"),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InputDeadlineExpired);
+                assert_eq!(mutations.load(Ordering::SeqCst), 0, "no semantic mutation");
+                // In time, the same step mutates.
+                let reply = act(
+                    &state,
+                    &args,
+                    far(),
+                    async || Ok(client()),
+                    |_, _, _, _, _, _, _| panic!("attempted physical fallback"),
+                )
+                .await
+                .unwrap();
+                assert_eq!(reply["outcome"], "worked", "{reply}");
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+            },
+        )
+        .await;
     }
 
     /// An Action whose preparatory `NActions` read is where shutdown begins.
@@ -3216,6 +3421,97 @@ mod tests {
             self.mutations.fetch_add(1, Ordering::SeqCst);
             true
         }
+    }
+
+    /// An Action whose preparatory `NActions` read returns only once `deadline` passed, as
+    /// a stalled provider would; nothing is cancelled.
+    struct ExpiresDuringPreparation {
+        deadline: Instant,
+        reads: Arc<AtomicUsize>,
+        mutations: Arc<AtomicUsize>,
+    }
+
+    #[zbus::interface(name = "org.a11y.atspi.Action")]
+    impl ExpiresDuringPreparation {
+        #[zbus(property, name = "NActions")]
+        async fn n_actions(&self) -> i32 {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep_until(self.deadline.into()).await;
+            1
+        }
+
+        async fn do_action(&self, _index: i32) -> bool {
+            self.mutations.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn semantic_press_refuses_after_preparation_deadline() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let (state, _) = peer_root_state();
+        let mut target = node();
+        target.interfaces.extend([
+            "org.a11y.atspi.Action".into(),
+            "org.a11y.atspi.EditableText".into(),
+        ]);
+        let (look_id, nodes) =
+            lock(&state)
+                .unwrap()
+                .insert_look(observed_root(), vec![target.clone()], None);
+        let deadline = Instant::now() + Duration::from_millis(20);
+        with_peer(
+            |peer| {
+                peer.serve_at(
+                    "/node",
+                    ExpiresDuringPreparation {
+                        deadline,
+                        reads: Arc::clone(&reads),
+                        mutations: Arc::clone(&mutations),
+                    },
+                )?
+                .serve_at("/node", CountedEdit(Arc::clone(&mutations)))
+            },
+            async |connection| {
+                let client = || {
+                    AtspiClient::from_connection(connection.clone(), Duration::from_secs(2))
+                        .with_input_state(Arc::new(InputState::default()))
+                };
+                // In time when the press starts; the deadline passes inside `NActions`.
+                let args = json!({"lookId":look_id,"action":"press","target":{"ref":nodes[0].reference},"policy":"foreground"});
+                let error = act(
+                    &state,
+                    &args,
+                    deadline,
+                    async || Ok(client()),
+                    |_, _, _, _, _, _, _| panic!("attempted physical fallback"),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(error.code, ErrorCode::InputDeadlineExpired);
+                assert_eq!(reads.load(Ordering::SeqCst), 1, "reached NActions");
+                // The text replacement checks the same boundary, after its proxy setup.
+                assert_eq!(
+                    client()
+                        .with_deadline(deadline)
+                        .set_text(&target, "replacement")
+                        .await
+                        .unwrap_err()
+                        .code,
+                    ErrorCode::InputDeadlineExpired
+                );
+                assert_eq!(mutations.load(Ordering::SeqCst), 0, "no semantic mutation");
+                // In time, the same replacement mutates.
+                assert!(client()
+                    .with_deadline(far())
+                    .set_text(&target, "replacement")
+                    .await
+                    .unwrap());
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+            },
+        )
+        .await;
     }
 
     struct CountedEdit(Arc<AtomicUsize>);
@@ -3266,10 +3562,14 @@ mod tests {
                         id: "press".into(),
                         cmd: "act".into(),
                         args: json!({"lookId":look_id,"action":"press","target":{"ref":nodes[0].reference},"policy":"foreground"}),
+                        deadline_ms: Some(u64::MAX),
+                        budget_ms: Some(u32::MAX),
+                        deadline_mono_ms: None,
                     },
+                    Some(far()),
                     &input,
                     async || Ok(client()),
-                    |_, _, _, _, _, _| panic!("attempted physical fallback"),
+                    |_, _, _, _, _, _, _| panic!("attempted physical fallback"),
                 )
                 .await;
                 assert_eq!(
@@ -5413,16 +5713,20 @@ mod tests {
         for mut args in physical_only.clone() {
             args["lookId"] = json!("look_999");
             args["policy"] = json!("ax_only");
-            let error = act(&state, &args, no_bus, |_, _, _, _, _, _| {
+            let error = act(&state, &args, far(), no_bus, |_, _, _, _, _, _, _| {
                 panic!("attempted physical input")
             })
             .await
             .unwrap_err();
             assert_eq!(error.code, ErrorCode::ForegroundRequired, "{args}");
         }
-        let error = focus_window(&state, &json!({"rootRef":"@w999","policy":"ax_only"}))
-            .await
-            .unwrap_err();
+        let error = focus_window(
+            &state,
+            &json!({"rootRef":"@w999","policy":"ax_only"}),
+            far(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.code, ErrorCode::ForegroundRequired);
         // Batch steps take the same path.
         let steps = physical_only
@@ -5441,10 +5745,14 @@ mod tests {
                 id: "batch".into(),
                 cmd: "actBatch".into(),
                 args: json!({ "actions": steps }),
+                deadline_ms: Some(u64::MAX),
+                budget_ms: Some(u32::MAX),
+                deadline_mono_ms: None,
             },
+            Some(far()),
             &InputState::default(),
             no_bus,
-            |_, _, _, _, _, _| panic!("attempted physical input"),
+            |_, _, _, _, _, _, _| panic!("attempted physical input"),
         )
         .await
         .result
@@ -5462,7 +5770,7 @@ mod tests {
                 ErrorCode::StaleLook,
             ),
         ] {
-            let error = act(&state, &args, no_bus, |_, _, _, _, _, _| {
+            let error = act(&state, &args, far(), no_bus, |_, _, _, _, _, _, _| {
                 panic!("attempted physical input")
             })
             .await

@@ -8,14 +8,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Address, Connection, Proxy};
 
-use crate::x11::InputState;
+use crate::x11::{admit_before, InputState};
 use crate::{ErrorCode, ProtocolError};
 
 const DBUS_DESTINATION: &str = "org.freedesktop.DBus";
@@ -192,6 +192,8 @@ pub struct AtspiClient {
     snapshot_timeout: Duration,
     /// Its shutdown flag is checked at each semantic mutation.
     input: Arc<InputState>,
+    /// The request deadline, checked at each semantic mutation; `None` sets none.
+    deadline: Option<Instant>,
     /// The procfs mount used to attribute root PIDs to executables.
     proc_root: Arc<Path>,
 }
@@ -225,6 +227,7 @@ impl AtspiClient {
             request_timeout,
             snapshot_timeout: SNAPSHOT_TIMEOUT,
             input: InputState::shared(),
+            deadline: None,
             proc_root: Arc::from(Path::new(PROC_ROOT)),
         }
     }
@@ -234,7 +237,17 @@ impl AtspiClient {
         Self { input, ..self }
     }
 
+    /// Refuse each semantic mutation past `deadline`, the request's. This is the client's
+    /// request deadline for input; it does not bound snapshots, see `with_snapshot_timeout`.
+    pub fn with_deadline(self, deadline: Instant) -> Self {
+        Self {
+            deadline: Some(deadline),
+            ..self
+        }
+    }
+
     /// Bound each snapshot by `snapshot_timeout` instead of `SNAPSHOT_TIMEOUT`, e.g. in tests.
+    /// Independent of the request deadline `with_deadline` sets, which only gates mutations.
     pub fn with_snapshot_timeout(self, snapshot_timeout: Duration) -> Self {
         Self {
             snapshot_timeout,
@@ -250,10 +263,11 @@ impl AtspiClient {
         }
     }
 
-    /// Refuse a semantic mutation once shutdown began. Checked right before `DoAction`
-    /// or `SetTextContents`, after every preparatory request, so an action admitted
-    /// before shutdown never first mutates the UI after it; a mutation already sent
-    /// finishes and is never replayed.
+    /// Refuse a semantic mutation once shutdown began or the request deadline passed.
+    /// Checked right before `DoAction` or `SetTextContents`, after the proxy setup and
+    /// every preparatory read, so an action admitted before shutdown or its deadline never
+    /// first mutates the UI after it; a mutation already sent finishes and is never
+    /// replayed.
     fn admit_mutation(&self) -> Result<(), ProtocolError> {
         if self.input.is_cancelled() {
             return Err(ProtocolError::new(
@@ -261,7 +275,7 @@ impl AtspiClient {
                 ErrorCode::Cancelled,
             ));
         }
-        Ok(())
+        admit_before(self.deadline)
     }
 
     /// Bound a single request, keeping transport and reply errors distinct from a deadline.
@@ -1477,17 +1491,15 @@ enum OptionArg {
 }
 
 impl Interpreter {
-    /// The interpreter an `exe` basename names, `None` for any other executable.
+    /// The interpreter an `exe` basename names for script-alias parsing only.
     fn of(name: &str) -> Option<Self> {
-        if is_python(name) {
-            return Some(Self::Python);
-        }
         match name {
             "node" | "nodejs" => Some(Self::Node),
             "java" => Some(Self::Java),
             "gjs" | "gjs-console" => Some(Self::Gjs),
-            "perl" => Some(Self::Perl),
-            "ruby" => Some(Self::Ruby),
+            _ if matches_versioned_name(name, "python") => Some(Self::Python),
+            _ if matches_versioned_name(name, "perl") => Some(Self::Perl),
+            _ if matches_versioned_name(name, "ruby") => Some(Self::Ruby),
             _ => None,
         }
     }
@@ -1606,10 +1618,9 @@ const NODE_INLINE_OPTIONS: [&str; 5] = [
     "--stack-size",
 ];
 
-/// Whether an `exe` basename is `python`, `python3` or `python3.12`: `python` plus a
-/// version of dot-separated digit runs.
-fn is_python(name: &str) -> bool {
-    name.strip_prefix("python").is_some_and(|version| {
+/// Whether `name` is `base` with an optional version of dot-separated ASCII digit runs.
+fn matches_versioned_name(name: &str, base: &str) -> bool {
+    name.strip_prefix(base).is_some_and(|version| {
         version.is_empty()
             || version
                 .split('.')
@@ -1700,7 +1711,8 @@ fn hosted_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
     Vec::new()
 }
 
-/// A script path's basename, plus its stem for a known script extension.
+/// A script path's basename, plus its stem for `.pl` with Perl, `.rb` with Ruby,
+/// or [`SCRIPT_EXTENSIONS`] with other interpreters.
 fn file_aliases(interpreter: Interpreter, path: &str) -> Vec<String> {
     let Some(basename) = path.rsplit('/').next().filter(|name| is_hosted_name(name)) else {
         return Vec::new();
@@ -3768,9 +3780,23 @@ mod tests {
         assert_eq!(Interpreter::of("java"), Some(Interpreter::Java));
         assert_eq!(Interpreter::of("gjs"), Some(Interpreter::Gjs));
         assert_eq!(Interpreter::of("gjs-console"), Some(Interpreter::Gjs));
-        assert_eq!(Interpreter::of("perl"), Some(Interpreter::Perl));
-        assert_eq!(Interpreter::of("ruby"), Some(Interpreter::Ruby));
-        for name in ["KeePassXC", "bash", "electron", "sh", "busybox", "ruby3.1"] {
+        for name in ["perl", "perl5", "perl5.36", "perl5.36.0"] {
+            assert_eq!(Interpreter::of(name), Some(Interpreter::Perl), "{name}");
+        }
+        for name in ["ruby", "ruby3", "ruby3.1", "ruby3.1.2"] {
+            assert_eq!(Interpreter::of(name), Some(Interpreter::Ruby), "{name}");
+        }
+        for name in [
+            "KeePassXC",
+            "bash",
+            "electron",
+            "sh",
+            "busybox",
+            "ruby-foo",
+            "rubyx",
+            "perl5a",
+            "ruby3.",
+        ] {
             assert_eq!(Interpreter::of(name), None, "{name}");
         }
     }
@@ -3976,26 +4002,28 @@ mod tests {
     #[test]
     fn perl_and_ruby_add_block_aliases_without_changing_executable_identity() {
         let fixture = ProcFixture::new(&[
-            (1, "/usr/bin/perl"),
-            (2, "/usr/bin/ruby"),
+            (1, "/usr/bin/perl5.36.0"),
+            (2, "/usr/bin/ruby3.1"),
             (3, "/usr/bin/bash"),
             (4, "/usr/bin/electron"),
+            (5, "/usr/bin/busybox"),
         ]);
         for (pid, name, cmdline, expected) in [
             (
                 1,
-                "perl",
+                "perl5.36.0",
                 "perl\0/opt/tool.pl\0secret\0",
                 &["tool.pl", "tool"][..],
             ),
             (
                 2,
-                "ruby",
+                "ruby3.1",
                 "ruby\0/opt/tool.rb\0secret\0",
                 &["tool.rb", "tool"][..],
             ),
             (3, "bash", "bash\0/opt/tool.sh\0secret\0", &[][..]),
             (4, "electron", "electron\0/opt/app.asar\0secret\0", &[][..]),
+            (5, "busybox", "busybox\0/opt/tool.pl\0secret\0", &[][..]),
         ] {
             std::fs::write(fixture.0.join(pid.to_string()).join("cmdline"), cmdline).unwrap();
             let executable = process_executable(&fixture.0, pid).unwrap();

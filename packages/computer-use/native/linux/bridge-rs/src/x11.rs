@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::xproto::{
@@ -337,10 +337,34 @@ fn distance(a: Option<&Rect>, b: &Rect) -> i64 {
     .unwrap_or(0)
 }
 
-pub fn focus_window(window: Window, policy: PhysicalPolicy) -> Result<Value, ProtocolError> {
+/// Refuse with `input_deadline_expired` once `deadline` passed: the client stopped waiting
+/// for the reply, so nothing may reach the desktop for it any more. `None` sets no deadline.
+pub fn admit_before(deadline: Option<Instant>) -> Result<(), ProtocolError> {
+    admit_by(deadline, Instant::now())
+}
+
+/// [`admit_before`] at `now`.
+fn admit_by(deadline: Option<Instant>, now: Instant) -> Result<(), ProtocolError> {
+    match deadline {
+        Some(deadline) if now >= deadline => Err(err(
+            "The request deadline passed; no further input was sent for it",
+            ErrorCode::InputDeadlineExpired,
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Ask the window manager to activate `window`, unless shutdown began or `deadline` passed
+/// by the time the blocking preparation returned.
+pub fn focus_window(
+    window: Window,
+    policy: PhysicalPolicy,
+    deadline: Instant,
+) -> Result<Value, ProtocolError> {
     policy.require_physical(SessionKind::detect())?;
     activate_unless_cancelled(
         &InputState::shared(),
+        Some(deadline),
         || {
             let (conn, screen) = connect()?;
             let root = conn.setup().roots[screen].root;
@@ -353,10 +377,11 @@ pub fn focus_window(window: Window, policy: PhysicalPolicy) -> Result<Value, Pro
 }
 
 /// Run the blocking preparation for an EWMH activation request, e.g. X11 connection
-/// setup and the atom lookup, then send it with `send` unless shutdown began in the
-/// meantime: admission before `prepare` does not cover a request sent after it.
+/// setup and the atom lookup, then send it with `send` unless shutdown began or `deadline`
+/// passed in the meantime: admission before `prepare` does not cover a request sent after it.
 fn activate_unless_cancelled<P>(
     state: &InputState,
+    deadline: Option<Instant>,
     prepare: impl FnOnce() -> Result<P, ProtocolError>,
     send: impl FnOnce(P) -> Result<(), ProtocolError>,
 ) -> Result<(), ProtocolError> {
@@ -367,6 +392,7 @@ fn activate_unless_cancelled<P>(
             ErrorCode::Cancelled,
         ));
     }
+    admit_before(deadline)?;
     send(prepared)
 }
 
@@ -626,6 +652,11 @@ pub trait InputSink {
     fn is_down(&self, button: bool, detail: u8) -> Result<Option<bool>, ProtocolError>;
     /// Post one event unconditionally.
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), PostFailure>;
+    /// The instant request deadlines are checked against: the clock, unless a test sink
+    /// runs it ahead to expire a deadline at a scripted point.
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
 /// The logical button core pointer state shows for physical button `detail` under the
@@ -1046,19 +1077,34 @@ fn open_physical<T>(
 pub struct Input<S: InputSink = XtestSink> {
     sink: S,
     state: Arc<InputState>,
+    /// No press, motion or activation is submitted from this instant on; releases are.
+    deadline: Option<Instant>,
     delivered: Cell<usize>,
     uncertain: Cell<bool>,
 }
 impl Input<XtestSink> {
     /// Connect and settle earlier unconfirmed releases before focusing the target, so
-    /// a release reaches the window its press did when nothing has changed since.
-    pub fn connect(policy: PhysicalPolicy, target: Window) -> Result<Self, ProtocolError> {
+    /// a release reaches the window its press did when nothing has changed since. Nothing
+    /// but owed releases is submitted from `deadline` on.
+    pub fn connect(
+        policy: PhysicalPolicy,
+        target: Window,
+        deadline: Instant,
+    ) -> Result<Self, ProtocolError> {
         let state = InputState::shared();
         let (conn, root) = open_physical(policy, SessionKind::detect(), &state, connect_xtest)?;
-        let input = Self::with_state(XtestSink { conn, root, target }, state);
+        let input =
+            Self::with_state(XtestSink { conn, root, target }, state).with_deadline(deadline);
         input.settle()?;
         validate_target(&input.sink.conn, root, target)?;
-        prepare_focus(&input.sink.conn, root, target, policy, &input.state)?;
+        prepare_focus(
+            &input.sink.conn,
+            root,
+            target,
+            policy,
+            &input.state,
+            input.deadline,
+        )?;
         Ok(input)
     }
 }
@@ -1071,9 +1117,15 @@ impl<S: InputSink> Input<S> {
         Self {
             sink,
             state,
+            deadline: None,
             delivered: Cell::new(0),
             uncertain: Cell::new(false),
         }
+    }
+    /// Submit no press or motion from `deadline` on. Owed releases still go out.
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
     pub fn sink(&self) -> &S {
         &self.sink
@@ -1238,14 +1290,20 @@ impl<S: InputSink> Input<S> {
         self.admit()?;
         self.sink.admit_point(x, y)
     }
+    /// Refuse once the request deadline passed, by the sink's clock.
+    fn admit_deadline(&self) -> Result<(), ProtocolError> {
+        admit_by(self.deadline, self.sink.now())
+    }
     fn key_code(&self, sym: u32) -> Result<Keycode, ProtocolError> {
         self.sink
             .keycode(sym)?
             .ok_or_else(|| invalid(format!("No keycode for keysym 0x{sym:x}")))
     }
-    /// Admit the target and the point, then post one event.
+    /// Admit the target and the point, then post one event unless the deadline passed
+    /// during those blocking reads.
     fn fake_at(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
         self.preflight_point(x, y)?;
+        self.admit_deadline()?;
         self.post(event, detail, x, y)
     }
     fn post(&self, event: u8, detail: u8, x: i32, y: i32) -> Result<(), ProtocolError> {
@@ -1331,6 +1389,9 @@ impl<'a, S: InputSink> Held<'a, S> {
             ));
         }
         admit()?;
+        // Last, after the blocking state and target reads: a press is never submitted
+        // past the deadline.
+        self.input.admit_deadline()?;
         let owed = Owed {
             event: release,
             detail,
@@ -1431,10 +1492,11 @@ fn prepare_focus(
     target: Window,
     policy: PhysicalPolicy,
     state: &InputState,
+    deadline: Option<Instant>,
 ) -> Result<(), ProtocolError> {
     let plan = focus_plan(policy, active_window(c, root)? == Some(target))?;
     if plan == FocusPlan::ActivateAndConfirm {
-        request_active_window(c, root, target, state)?;
+        request_active_window(c, root, target, state, deadline)?;
     }
     for _ in 0..20 {
         if active_window(c, root)? == Some(target) {
@@ -1497,9 +1559,11 @@ fn request_active_window(
     root: Window,
     target: Window,
     state: &InputState,
+    deadline: Option<Instant>,
 ) -> Result<(), ProtocolError> {
     activate_unless_cancelled(
         state,
+        deadline,
         || intern(c, "_NET_ACTIVE_WINDOW"),
         |atom| send_active_window(c, root, target, atom),
     )
@@ -1880,6 +1944,7 @@ mod tests {
         let sent = Cell::new(false);
         let result = activate_unless_cancelled(
             &state,
+            None,
             || {
                 state.cancel();
                 Ok(())
@@ -1896,6 +1961,7 @@ mod tests {
         let state = InputState::default();
         activate_unless_cancelled(
             &state,
+            None,
             || Ok(()),
             |()| {
                 sent.set(true);
@@ -1906,6 +1972,7 @@ mod tests {
         assert!(sent.replace(false));
         let failed = activate_unless_cancelled(
             &state,
+            None,
             || Err::<(), _>(err("no atom", ErrorCode::InternalError)),
             |()| {
                 sent.set(true);
@@ -1914,6 +1981,40 @@ mod tests {
         );
         assert_eq!(failed.unwrap_err().code, ErrorCode::InternalError);
         assert!(!sent.get());
+    }
+
+    #[test]
+    fn focus_does_not_send_once_the_preparation_outlasts_the_deadline() {
+        // The atom lookup blocks past the deadline: the request is never sent (#1341).
+        let state = InputState::default();
+        let sent = Cell::new(false);
+        let deadline = Instant::now() + Duration::from_millis(20);
+        let result = activate_unless_cancelled(
+            &state,
+            Some(deadline),
+            || {
+                std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                Ok(())
+            },
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().code, ErrorCode::InputDeadlineExpired);
+        assert!(!sent.get(), "no _NET_ACTIVE_WINDOW past the deadline");
+        // Before the deadline it is sent.
+        activate_unless_cancelled(
+            &state,
+            Some(Instant::now() + Duration::from_secs(60)),
+            || Ok(()),
+            |()| {
+                sent.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(sent.get());
     }
 
     #[test]
@@ -2622,6 +2723,68 @@ mod tests {
             ErrorCode::Cancelled
         );
         assert!(later.sink().events().is_empty());
+    }
+
+    #[test]
+    fn nothing_is_submitted_once_the_deadline_passed() {
+        // Already past: every pointer and keyboard action refuses before its first post.
+        let input = Input::with_sink(RecordingSink::default()).with_deadline(Instant::now());
+        let refused = [
+            input.move_pointer(1, 1),
+            input.click(1, 1, "left", 1),
+            input.keypress(&["a"]),
+            input.type_text("a"),
+            input.drag(&[(1, 1), (2, 2)], "left"),
+        ];
+        for result in refused {
+            assert_eq!(result.unwrap_err().code, ErrorCode::InputDeadlineExpired);
+        }
+        assert!(input.sink().events().is_empty());
+        assert_eq!(input.delivered_units(), 0);
+    }
+
+    #[test]
+    fn a_deadline_passing_in_the_target_checks_stops_before_the_post() {
+        // The first target check blocks until the deadline passed, as a stalled X server
+        // reply would: the motion it admitted and the press it admitted are never posted.
+        for press in [false, true] {
+            let deadline = Instant::now() + Duration::from_millis(20);
+            let sink = RecordingSink::default().stall_admissions_until(0, deadline);
+            let input = Input::with_sink(sink).with_deadline(deadline);
+            let result = if press {
+                input.keypress(&["a"])
+            } else {
+                input.move_pointer(1, 1)
+            };
+            assert_eq!(
+                result.unwrap_err().code,
+                ErrorCode::InputDeadlineExpired,
+                "press {press}"
+            );
+            assert!(input.sink().events().is_empty(), "press {press}");
+            assert!(input.state().possibly_held().is_empty(), "press {press}");
+        }
+    }
+
+    #[test]
+    fn a_deadline_after_a_press_still_sends_its_release() {
+        // Shift is pressed in time; the deadline passes in the target check before `a`,
+        // scripted at that admission rather than raced against the clock. `a` is never
+        // pressed, and the release shift is owed still goes out (#1341).
+        let sink = RecordingSink::default().expire_at_admission(1);
+        let input =
+            Input::with_sink(sink).with_deadline(Instant::now() + Duration::from_secs(3600));
+        let error = input.type_text("A").unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputDeadlineExpired);
+        // The release follows the refused press's target check, so the recording marks it
+        // admitted; only the posts matter here.
+        let posts = trace(&input)
+            .into_iter()
+            .map(|(kind, detail, _)| (kind, detail))
+            .collect::<Vec<_>>();
+        assert_eq!(posts, [("key+", 8), ("key-", 8)]);
+        assert!(input.sink().held_inputs().is_empty());
+        assert!(input.state().unconfirmed_releases().is_empty());
     }
 
     #[test]

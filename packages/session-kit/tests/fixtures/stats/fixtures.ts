@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import type { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Call } from "../../../src/stats/load.ts";
+import type { Manifest } from "../../../src/stats/snapshot.ts";
 
 /** Where an export records one outbox's bookkeeping: keyed by the resolved snapshot directory. */
 export function outboxStatePath(agent: string, snapshotDir: string): string {
@@ -12,6 +14,29 @@ export function outboxStatePath(agent: string, snapshotDir: string): string {
 /** UTC instant for `YYYY-MM-DD` at `hour`: snapshot shards, seals and quota windows key on UTC months. */
 export function utcAt(day: string, hour = 12): number {
 	return Date.parse(`${day}T${String(hour).padStart(2, "0")}:00:00Z`);
+}
+
+/** Where an export records one outbox's publication watermark, beside its bookkeeping. */
+export function outboxWatermarkPath(agent: string, snapshotDir: string): string {
+	return outboxStatePath(agent, snapshotDir).replace(/\.json$/, ".published.json");
+}
+
+/** Parse `manifest.json` from `snapshotDir`. */
+export function manifestOf(snapshotDir: string): Manifest {
+	return JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
+}
+
+/** Build a `readFile` implementation that fails with `code` on `deniedPath` and delegates everything else. */
+export function denyPathOnRead(actualReadFile: typeof readFile, deniedPath: string, code = "EACCES"): typeof readFile {
+	return (async (...[file, options]: Parameters<typeof readFile>) => {
+		if (file === deniedPath)
+			throw Object.assign(new Error(`${code}: denied, open '${deniedPath}'`), {
+				code,
+				syscall: "open",
+				path: deniedPath,
+			});
+		return actualReadFile(file, options);
+	}) as typeof readFile;
 }
 
 /** Local-time instant for `YYYY-MM-DD` at `hour`: day and hour views bucket in local time. */
