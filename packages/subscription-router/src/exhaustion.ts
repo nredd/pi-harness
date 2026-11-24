@@ -51,6 +51,7 @@ export class ExhaustionTracker {
 	private readonly lifetimes = new Map<string, Disposable>();
 	/** Failures (`model@timestamp`) already counted by each live evidence-carrying mark. */
 	private readonly counted = new Map<string, ReadonlySet<string>>();
+	private readonly listeners = new Set<() => void>();
 
 	constructor(private readonly now: () => number = Date.now) {}
 
@@ -106,6 +107,7 @@ export class ExhaustionTracker {
 				const kept = { ...previous, confirmations };
 				this.marks.set(key, kept);
 				if (failure !== undefined) this.counted.set(key, new Set(counted).add(failure));
+				this.notify();
 				return kept;
 			}
 			mark.evidence = decision.evidence;
@@ -123,6 +125,7 @@ export class ExhaustionTracker {
 				key,
 				addAbortListener(signal, () => this.remove(key)),
 			);
+		this.notify();
 		return mark;
 	}
 
@@ -164,15 +167,25 @@ export class ExhaustionTracker {
 		}
 	}
 
+	/** Subscribe to mark additions, updates and removals. */
+	subscribe(listener: () => void): void {
+		this.listeners.add(listener);
+	}
+
 	/** Forget every mark, e.g. from `/router reset`. */
 	clear(): void {
 		for (const key of this.marks.keys()) this.remove(key);
+	}
+
+	private notify(): void {
+		for (const listener of this.listeners) listener();
 	}
 
 	private remove(key: string): void {
 		this.detach(key);
 		this.marks.delete(key);
 		this.counted.delete(key);
+		this.notify();
 	}
 
 	private detach(key: string): void {
