@@ -4141,61 +4141,49 @@ mod tests {
     #[tokio::test]
     async fn unconfirmed_ancestry_refuses_contained_reads() {
         const PANEL: Option<(&str, &str)> = Some((":1.1", "/window/panel"));
-        // (field `Parent`, panel role name, field reads' code, panel scopes' code, full look
-        // discloses the field)
-        for (field_parent, panel_role_name, code, panel_code, discloses) in [
+        // (field `Parent`, panel role name, field reads' code, panel scopes' code); no full look
+        // discloses the field.
+        for (field_parent, panel_role_name, code, panel_code) in [
             (
                 PANEL,
                 FAILING_ROLE_NAME,
                 ErrorCode::InternalError,
                 Some(ErrorCode::InternalError),
-                false,
             ),
             (
                 PANEL,
                 "  ",
                 ErrorCode::SecureTextUnreadable,
                 Some(ErrorCode::SecureTextUnreadable),
-                false,
             ),
-            // Only a provider that does not implement `Parent` keeps its `GetChildren` edges;
-            // an explicit read still needs the live ancestry.
-            (None, "panel", ErrorCode::InternalError, None, true),
+            // A provider that does not implement `Parent` cannot confirm its `GetChildren`
+            // edges (#1377), and an explicit read still needs the live ancestry.
+            (None, "panel", ErrorCode::InternalError, None),
             // A `Parent` that fails, fast or by timing out, does not confirm the edge.
             (
                 Some(FAILING_PARENT),
                 "panel",
                 ErrorCode::InternalError,
                 None,
-                false,
             ),
-            (
-                Some(STALLED_PARENT),
-                "panel",
-                ErrorCode::Timeout,
-                None,
-                false,
-            ),
+            (Some(STALLED_PARENT), "panel", ErrorCode::Timeout, None),
             (
                 Some((":1.2", "/window/panel")),
                 "panel",
                 ErrorCode::SecureTextUnreadable,
                 None,
-                false,
             ),
             (
                 Some(("", "/org/a11y/atspi/null")),
                 "panel",
                 ErrorCode::SecureTextUnreadable,
                 None,
-                false,
             ),
             (
                 Some((":1.1", "/window/panel/field")),
                 "panel",
                 ErrorCode::SecureTextUnreadable,
                 None,
-                false,
             ),
         ] {
             let case = format!("{field_parent:?} {panel_role_name:?}");
@@ -4242,11 +4230,7 @@ mod tests {
                         .result
                         .unwrap()
                         .to_string();
-                    assert_eq!(
-                        fresh.contains(CONTAINED_SECRET),
-                        discloses,
-                        "{case}: {fresh}"
-                    );
+                    assert!(!fresh.contains(CONTAINED_SECRET), "{case}: {fresh}");
                     let mut requests = contained_requests(&root_ref, &look);
                     let field_requests = requests.split_off(2);
                     for (cmd, args) in requests {
@@ -4260,7 +4244,7 @@ mod tests {
                         } else if cmd == "look" {
                             // The panel scope is readable; the field below it is not reached.
                             let scoped = reply.result.unwrap().to_string();
-                            assert_eq!(scoped.contains(CONTAINED_SECRET), discloses, "{case}");
+                            assert!(!scoped.contains(CONTAINED_SECRET), "{case}");
                         }
                     }
                     let permitted_reads = reads.load(Ordering::SeqCst);
@@ -4361,7 +4345,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: stalled,
                             child: Some("/window/parent/match"),
-                            parent: None,
+                            parent: Some((":1.1", "/window")),
                             text: false,
                         },
                     )?
@@ -4374,7 +4358,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
-                            parent: None,
+                            parent: Some((":1.1", "/window/parent")),
                             text: false,
                         },
                     )
@@ -4472,7 +4456,7 @@ mod tests {
                             stalled_role: None,
                             stalled_children: None,
                             child: None,
-                            parent: None,
+                            parent: Some((":1.1", "/window")),
                             text: false,
                         },
                     )
