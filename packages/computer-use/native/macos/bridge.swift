@@ -1884,8 +1884,26 @@ final class InputSuppressionGuard {
 
 }
 
+/// Kernel vnode identity (`"<dev>:<ino>"`) of the executable image mapped at `#dsohandle`.
+/// Reads the active VM mapping rather than resolving a path on disk, so unlinking or replacing
+/// the installed binary leaves a running helper reporting the vnode it launched from.
+func mappedExecutableId(
+	_ regionInfo: (UInt64, UnsafeMutablePointer<proc_regionwithpathinfo>, Int32) -> Int32 = { address, info, size in
+		proc_pidinfo(getpid(), PROC_PIDREGIONPATHINFO, address, info, size)
+	}
+) -> String? {
+	var info = proc_regionwithpathinfo()
+	let size = Int32(MemoryLayout<proc_regionwithpathinfo>.stride)
+	guard regionInfo(UInt64(UInt(bitPattern: #dsohandle)), &info, size) == size else { return nil }
+	let vst = info.prp_vip.vip_vi.vi_stat
+	guard vst.vst_ino != 0 else { return nil }
+	let dev = UInt64(bitPattern: Int64(Int32(bitPattern: vst.vst_dev)))
+	return "\(dev):\(vst.vst_ino)"
+}
+
 final class Bridge {
 	private let protocolVersion = 8
+	private let executableId: String?
 	private let refStore: AXRefStore
 	private let activityGlow: ActivityGlowController?
 	private let inputSuppressionGuard = InputSuppressionGuard()
@@ -1912,8 +1930,10 @@ final class Bridge {
 		writeSocket: @escaping (Int32, UnsafeRawPointer, Int) -> Int = { Darwin.send($0, $1, $2, 0) },
 		inputSink: NativeInputSink = .live,
 		physicalInputLock: NSLocking = NSRecursiveLock(),
-		refStore: AXRefStore = AXRefStore()
+		refStore: AXRefStore = AXRefStore(),
+		executableId: String? = mappedExecutableId()
 	) {
+		self.executableId = executableId
 		self.refStore = refStore
 		self.activityGlow = activityGlow
 		self.inputSink = inputSink
@@ -2337,6 +2357,9 @@ final class Bridge {
 			// The boot-relative clock keyboard deadlines are expressed in (see `keyboardDeadline`).
 			"uptimeMs": ProcessInfo.processInfo.systemUptime * 1000,
 		]
+		if let executableId {
+			output["executableId"] = executableId
+		}
 		if let parentPath {
 			output["parentPath"] = parentPath
 		}
