@@ -92,6 +92,15 @@ func runRequestAdmissionAssertions() throws {
     let absentRef = refStore.storeElement(AXUIElementCreateApplication(absentPid))
     refused("text_unavailable", "Element has no readable AXValue. Call snapshot/screenshot and choose a text-bearing ref.", ["cmd": "axReadText", "elementRef": absentRef, "offset": -3, "limit": 0])
 
+    // Element identity compares two live refs by `CFEqual`; a ref the store does not hold never matches.
+    refused("invalid_args", "Missing string argument 'otherRef'", ["cmd": "axSameElement", "ref": absentRef])
+    let sameRef = refStore.storeElement(AXUIElementCreateApplication(absentPid))
+    let otherRef = refStore.storeElement(AXUIElementCreateApplication(absentPid - 1))
+    for (other, same) in [(sameRef, true), (otherRef, false), ("ax:missing", false)] {
+        let reply = try call(["cmd": "axSameElement", "ref": absentRef, "otherRef": other])
+        expect(reply.count == 1 && reply["same"] as? Bool == same, "axSameElement(\(other)) is \(same), got \(reply)")
+    }
+
     // Look admission: argument checks and capturability come before ownership.
     refused("invalid_args", "readText must be auto, always, or never", ["cmd": "look", "windowId": 42, "readText": "sometimes"])
     refused("root_not_capturable", "Root has no capturable window (unpaired with any on-screen window); use semantic observation (mode: semantic)", ["cmd": "look", "includeImage": true])

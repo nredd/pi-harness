@@ -76,6 +76,7 @@ const BACKEND_KEYS = [
 	"actBatch",
 	"readText",
 	"waitFor",
+	"sameElement",
 	"isBrowserApp",
 	"isChromeFamilyApp",
 	"setActivity",
@@ -116,7 +117,7 @@ export const lookPayload = ({ lookId = "look1", children, image = true, window =
  * Install a scripted platform backend and return its controls.
  * `roots` is the live root listing, `tree` the children of the next look's window node, `frontmostPid`
  * picks the frontmost root, and `listRootsHook`, `lookPayload` and `waitFor` may be replaced to script
- * the backend. Every look, wait and act request is recorded. `apps` and `frontmost` override the listing
+ * the backend, as may `sameElement`. Every look, wait, act request and identity check is recorded. `apps` and `frontmost` override the listing
  * derived from `roots` and `frontmostPid`; `browserApps`/`chromeApps` name the browser-family apps.
  * @param {(fn: () => void | Promise<void>) => void} onTestFinished Vitest cleanup registrar.
  * @param {object} [options] `platform` pins the host policy; `roots` seeds the listing without selecting the frontmost pid.
@@ -172,6 +173,10 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		lookPayload: undefined,
 		/** Replaceable `waitFor` backend result: receives the request. */
 		waitFor: async () => ({ found: true, nodeCount: 2 }),
+		/** Every `sameElement` call as `[ref, otherRef]`. */
+		identityChecks: [],
+		/** Replaceable `sameElement` backend: receives both wire refs and the call options; no element is proven alike by default. */
+		sameElement: async () => false,
 		/** `parseLookResponse` options, e.g. the Linux backend's `{ unmarkedNodesUnread: true }`. */
 		parseOptions: undefined,
 	};
@@ -266,6 +271,10 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 		waitFor: async (request, options) => {
 			fake.waits.push({ request, options });
 			return await fake.waitFor(request, options);
+		},
+		sameElement: async (ref, otherRef, options) => {
+			fake.identityChecks.push([ref, otherRef]);
+			return await fake.sameElement(ref, otherRef, options);
 		},
 	});
 	// The fake answers per-PID `listRoots`; a Linux host's batched listing would bypass it and start the real helper.

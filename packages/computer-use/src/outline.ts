@@ -46,8 +46,9 @@ export interface OutlineNode {
 	/**
 	 * Set only on a `truncated` node whose helper read every own matchable field and left only its descendants unread
 	 * (the macOS walk's failed children read or budget cut). A bare `truncated` (Linux unread fields, Windows, older
-	 * helpers, a failed macOS own-field read) may also mean the node's own fields are unread. Evidence only: absence
-	 * corroboration still blocks on it, since a structurally carried ref may name a lookalike (#1338).
+	 * helpers, a failed macOS own-field read) may also mean the node's own fields are unread. Absence corroboration
+	 * ignores it only at or above an exact scope the helper proved is the waited element, since a structurally
+	 * carried ref may name a lookalike (#1310, #1338).
 	 */
 	childrenUnread?: true;
 	scrollExtent?: OutlineScrollExtent;

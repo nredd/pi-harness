@@ -296,6 +296,12 @@ export interface ComputerUsePlatformBackend {
 		args: PlatformWaitForRequest,
 		options?: { timeoutMs?: number; signal?: AbortSignal },
 	): Promise<PlatformWaitForResponse>;
+	/**
+	 * Whether two live element wire refs, e.g. from a base look and its successor, name one native element (macOS:
+	 * `CFEqual` on the retained `AXUIElement`s). `false` when either ref is no longer held. Without it no successor
+	 * node is proven to be the element a wait read (#1310).
+	 */
+	sameElement?(ref: string, otherRef: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<boolean>;
 	isBrowserApp(appName: string, bundleId?: string): boolean;
 	isChromeFamilyApp(appName: string, bundleId?: string): boolean;
 	openBrowserLocation(

@@ -134,6 +134,18 @@ func runRefLookAssertions() {
   let destination = store.storeElement(equivalent, snapshot: snapshot, owner: "destination")
   let unrelated = store.storeElement(element, owner: "unrelated")
   check(source != destination && source != window, "element refs are fresh even for equal handles")
+  let distinctElement = store.storeElement(distinct, owner: "identity")
+  check(
+    store.refsNameOneElement(source, destination) && store.refsNameOneElement(source, source),
+    "refs from two looks for equal handles name one element")
+  check(
+    !store.refsNameOneElement(source, distinctElement) && !store.refsNameOneElement(source, window)
+      && !store.refsNameOneElement("missing", source) && !store.refsNameOneElement(source, "missing"),
+    "an unequal handle, a window ref or an unknown ref never names the element")
+  store.dropElements(owner: "identity")
+  check(
+    !store.refsNameOneElement(distinctElement, distinctElement),
+    "a ref whose look aged out names no element, not even itself")
   check(
     store.window(for: source) == nil && store.element(for: window) == nil,
     "window and element namespaces do not cross-resolve")

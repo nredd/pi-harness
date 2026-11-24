@@ -929,6 +929,16 @@ final class AXRefStore {
 		defer { lock.unlock() }
 		return snapshots[ref]
 	}
+
+	/// Whether two live element refs, e.g. minted by two looks, name one AX element (`CFEqual`): the native identity an
+	/// exact absence needs to know the successor's scope node is the element the wait read (#1310). A ref this store
+	/// no longer holds (its look aged out, another helper process) never matches.
+	func refsNameOneElement(_ ref: String, _ otherRef: String) -> Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		guard let element = elements[ref], let other = elements[otherRef] else { return false }
+		return CFEqual(element, other)
+	}
 }
 
 /// Modality of a root. An explicit `AXModal` answer is authoritative: Fusion's nonmodal BROWSER
@@ -2261,6 +2271,8 @@ final class Bridge {
 			return try hitTest(request)
 		case "axWaitFor":
 			return try axWaitFor(request)
+		case "axSameElement":
+			return try ["same": refStore.refsNameOneElement(stringArg(request, "ref"), stringArg(request, "otherRef"))]
 		case "focusedElement":
 			return try focusedElement(request)
 		case "axReadText":
@@ -5948,7 +5960,7 @@ An advertised AX action is a delivery capability, not proof of an application-le
 
 - An empty outline usually indicates missing Accessibility trust, an inaccessible target, or an app that exposes no useful AX hierarchy.
 - `truncated` means the bounded walk did not retrieve the complete descendant tree.
-- `childrenUnread` comes with `truncated` only when the node's own matchable fields (role, subrole, identifier, title, description, value) all read or were authoritatively absent and only its descendants are unread. It never proves an absence: `wait_for` and `act_ui` `expect` still treat the node like any `truncated` node, because a public ref carried over structurally may name a lookalike.
+- `childrenUnread` comes with `truncated` only when the node's own matchable fields (role, subrole, identifier, title, description, value) all read or were authoritatively absent and only its descendants are unread. It never proves an absence by itself: `wait_for` and `act_ui` `expect` ignore it only at or above an exact `ref` scope that `axSameElement` proved is the element the wait read, because a public ref carried over structurally may name a lookalike.
 - `pictureOnly` means the element came from visual evidence and cannot be targeted by AX ref.
 - A supported action describes what the element reports, not whether the app will honor it.
 - AX frames and Core Graphics windows are paired heuristically; low-confidence pairing must not be treated as exact identity.

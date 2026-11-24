@@ -75,6 +75,7 @@ import {
 	controlLine,
 	foldToBudget,
 	graftScopedOutline,
+	isProtectedNode,
 	type LookResponse,
 	nodeByRef,
 	type Outline,
@@ -2105,13 +2106,15 @@ interface AbsenceUnproven {
  * the condition's scope, above it, or (unless exact) inside it is unread (`truncated`). The Windows UIA wait does
  * not report its own truncation, so absence is checked here on every platform. Element wire refs are look-local and
  * public refs carry over structurally, so a moved scope can arrive under a fresh ref: a scope ref missing from the
- * successor proves nothing while the condition shows anywhere in it. A `childrenUnread` marker still blocks, even on
- * the exact scope node: the successor binds the scope's public ref structurally, so its unread descendants can hide
- * the very node the wait read (#1338). `undefined` when corroborated.
+ * successor proves nothing while the condition shows anywhere in it. A `childrenUnread` marker blocks too, unless
+ * `provenScope` (see `provenExactScope`) is the exact scope: then that node is the element the wait read, its own
+ * fields were read, and nothing unread below or beside it can satisfy a condition on the node itself (#1310, #1338).
+ * `undefined` when corroborated.
  */
 function absenceUnproven(
 	outline: Outline,
 	condition: ReturnType<typeof validateCondition>,
+	provenScope?: OutlineNode,
 ): AbsenceUnproven | undefined {
 	if (outlineConditionPresent(outline, condition)) return { reason: "present", unreadRefs: [] };
 	const scope = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
@@ -2121,12 +2124,45 @@ function absenceUnproven(
 		.filter(
 			(node) =>
 				node.truncated &&
+				!(provenScope && provenScope === scope && node.childrenUnread) &&
 				(!scope ||
 					nodeWithinScope(scope, node.ref, false) ||
 					(!condition.scopeExact && nodeWithinScope(node, scope.ref, false))),
 		)
 		.map((node) => node.ref);
 	return unreadRefs.length > 0 ? { reason: "unread", unreadRefs } : undefined;
+}
+
+/**
+ * The successor's exact scope node when the helper proves it is the element the wait read: `sameElement` on the wire
+ * ref the wait was sent and the successor node's. A public ref carries over structurally, so without that proof the
+ * node may be a lookalike whose unread descendants hide the waited one (#1310). Asked only when the condition is
+ * absent and every unread node at or above the scope is `childrenUnread`; a backend without the check, a failed or
+ * negative check (e.g. an older helper, an aged-out base look) proves nothing, and so does a protected scope.
+ */
+async function provenExactScope(
+	outline: Outline,
+	condition: ReturnType<typeof validateCondition>,
+	waitedWireRef: string | undefined,
+	signal?: AbortSignal,
+): Promise<OutlineNode | undefined> {
+	const sameElement = currentPlatformBackend.sameElement;
+	if (!condition.scopeExact || !waitedWireRef || !sameElement || outlineConditionPresent(outline, condition))
+		return undefined;
+	const scope = nodeByRef(outline, condition.scopeRef!);
+	// A protected or unconfirmed node's own text is not evidence: its fields are redacted or never read.
+	if (!scope?.wireRef || scope.pictureOnly || scope.unconfirmed || isProtectedNode(scope)) return undefined;
+	const unread: OutlineNode[] = [];
+	for (let node: OutlineNode | undefined = scope; node; node = node.parent) if (node.truncated) unread.push(node);
+	if (unread.length === 0 || unread.some((node) => !node.childrenUnread)) return undefined;
+	try {
+		return (await sameElement.call(currentPlatformBackend, waitedWireRef, scope.wireRef, { signal }))
+			? scope
+			: undefined;
+	} catch (error) {
+		if (signal?.aborted) throw error;
+		return undefined;
+	}
 }
 
 function absenceUnprovenMessage(unproven: AbsenceUnproven): string {
@@ -2272,6 +2308,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 	let target = await resolveCurrentTarget(signal);
 	target = await ensureTargetWindowId(target, signal);
 	const scopeNode = conditionScopeNode(state.currentOutline!, condition);
+	const waitedWireRef = scopeNode ? wireRefForNode(scopeNode) : undefined;
 	const raw = await currentPlatformBackend.waitFor(
 		{
 			...nativeWindowRequest(target),
@@ -2279,7 +2316,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 			text,
 			role: platformRole(state.currentOutline!, role),
 			value,
-			scopeRef: scopeNode ? wireRefForNode(scopeNode) : undefined,
+			scopeRef: waitedWireRef,
 			scopeExact,
 			gone,
 			timeoutMs,
@@ -2316,7 +2353,13 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 	const matches = searchOutline(refreshed.outline, text, role, undefined, 1);
 	const foundTarget = matches[0];
 	const helperIncomplete = gone && raw.incomplete === true;
-	const unproven = absenceClaimed ? absenceUnproven(refreshed.outline, condition) : undefined;
+	const unproven = absenceClaimed
+		? absenceUnproven(
+				refreshed.outline,
+				condition,
+				await provenExactScope(refreshed.outline, condition, waitedWireRef, signal),
+			)
+		: undefined;
 	const inconclusive = helperIncomplete || unproven !== undefined;
 	const details: WaitForDetails = {
 		tool: "wait_for",
@@ -3253,6 +3296,7 @@ async function performDesktopTransaction(
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
 	const scopeNode = condition ? conditionScopeNode(look.parsedOutline!, condition) : undefined;
+	const waitedWireRef = scopeNode ? wireRefForNode(scopeNode) : undefined;
 	const headless = getComputerUseConfig().headless;
 	preflightUiTransaction(actions, look, headless);
 	const target = await ensureTargetWindowId(await resolveCurrentTarget(signal, { preferModal: false }), signal);
@@ -3286,7 +3330,7 @@ async function performDesktopTransaction(
 							text: expectedText,
 							role: platformRole(look.parsedOutline!, expectedRole),
 							value: expectedValue,
-							scopeRef: scopeNode ? wireRefForNode(scopeNode) : undefined,
+							scopeRef: waitedWireRef,
 							scopeExact,
 							gone,
 							timeoutMs,
@@ -3330,7 +3374,11 @@ async function performDesktopTransaction(
 					target.windowId > 0,
 				);
 				if (provisional) {
-					const unproven = absenceUnproven(capture.outline, condition!);
+					const unproven = absenceUnproven(
+						capture.outline,
+						condition!,
+						await provenExactScope(capture.outline, condition!, waitedWireRef, signal),
+					);
 					if (unproven) settleUnprovenAbsence(execution, provisional.fallback, absenceUnprovenMessage(unproven));
 					provisional = undefined;
 				}
@@ -4590,15 +4638,18 @@ failed wait (`found: false`, `timedOut: true`), not an inconclusive one, and a
 failed successor observation after it, or after any presence wait, is an error.
 The Windows UIA wait still answers `gone` from a truncated walk; only the
 successor's `truncated` root catches that.
-Known gap: an exact `ref` scope whose own `AXChildren` read keeps failing on
-macOS stays `inconclusive`. The macOS helper marks such a node `childrenUnread`
-next to `truncated` when it read every own matchable field and only the
-descendants are unread, but the check does not use the marker yet: the
-successor binds the scope's public ref structurally, so the marked node can be
-a same-role, same-label replacement whose unread children hide the node the wait
-read. Ignoring the descendant gap needs native identity continuity between that
-node and the successor scope, and an exact absence would only show the condition
-gone on that node, never that the node is gone (#1338).
+On macOS a `childrenUnread` exact `ref` scope (every own matchable field read,
+only its descendants unread: a failed `AXChildren` read or the walk's cut), or
+a `childrenUnread` node above it, does not block once the helper's
+`axSameElement` shows the successor's scope node is the element the wait read
+(`CFEqual` on the two looks' `AXUIElement`s). The public ref carries over
+structurally, so without that check a same-role, same-label replacement could
+hide the waited node under its unread children. A bare `truncated` there still
+blocks, as do a protected scope, a failed check, a helper without
+`axSameElement` and the Linux and Windows helpers. This shows the condition gone
+from that node, never that the node is gone, and trusts the app's AX element
+identity: an app that gives a replacement the identity of the element it
+replaced defeats it.
 
 Batch steps only when the second step does not need to inspect the result of the first:
 

@@ -93,30 +93,54 @@ test.for([
 		],
 		condition: { ref: "@e3" },
 		unread: ["@e2"],
+		asked: [["inner", "inner"]],
 	},
 	{
-		name: "a subtree scope whose children are unread",
+		name: "a subtree scope whose children are unread, though the helper says it is the waited element",
 		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
 		condition: { scopeRef: "@e2" },
 		unread: ["@e2"],
+		same: true,
 	},
 	{
-		// The successor binds the scope's public ref structurally: no native identity proves the waited node (#1338).
-		name: "an exact scope whose children alone are unread",
+		// The successor binds the scope's public ref structurally: only native identity proves the waited node.
+		name: "an exact scope whose children alone are unread, not proven the waited element",
 		tree: () => [wireNode("outer", "AXGroup", "Outer", CHILDREN_UNREAD)],
 		condition: { ref: "@e2" },
 		unread: ["@e2"],
+		asked: [["outer", "outer"]],
 	},
 	{
-		name: "a protected exact scope whose children are unread",
+		name: "a protected exact scope whose children are unread, though proven the waited element",
 		tree: () => [wireNode("outer", "AXGroup", "Outer", { ...CHILDREN_UNREAD, subrole: "AXSecureTextField" })],
 		condition: { ref: "@e2" },
 		unread: ["@e2"],
+		same: true,
+	},
+	{
+		name: "a bare truncated exact scope, though proven the waited element",
+		tree: () => [wireNode("outer", "AXGroup", "Outer", UNREAD)],
+		condition: { ref: "@e2" },
+		unread: ["@e2"],
+		same: true,
+	},
+	{
+		name: "an exact scope whose children are unread under a bare truncated ancestor, though proven the waited element",
+		tree: () => [
+			wireNode("outer", "AXGroup", "Outer", {
+				...UNREAD,
+				children: [wireNode("inner", "AXGroup", "Inner", CHILDREN_UNREAD)],
+			}),
+		],
+		condition: { ref: "@e3" },
+		unread: ["@e2", "@e3"],
+		same: true,
 	},
 ])(
 	"a helper's gone is inconclusive with $name in the successor",
-	async ({ tree, condition, unread }, { onTestFinished }) => {
+	async ({ tree, condition, unread, same, asked }, { onTestFinished }) => {
 		const fake = await installFakeDesktop(onTestFinished);
+		fake.sameElement = async () => same === true;
 		fake.tree = [wireNode("outer", "AXGroup", "Outer", { children: [wireNode("inner", "AXGroup", "Inner")] })];
 		const { stateId } = await fake.observe();
 		// The Windows UIA wait returns `gone` even when its walk was truncated; only the successor shows the cut.
@@ -136,8 +160,10 @@ test.for([
 		);
 		assert.match(
 			fake.text(result),
-			/^Inconclusive: the condition is not proven gone: 1 node in its scope could not be read \(@e/,
+			/^Inconclusive: the condition is not proven gone: \d nodes? in its scope could not be read \(@e/,
 		);
+		// Identity is asked only when a `childrenUnread` marker at or above an exact, readable scope is all that blocks.
+		assert.deepEqual(fake.identityChecks, asked ?? []);
 	},
 );
 
@@ -723,6 +749,7 @@ test("a Linux exact scope sent without a truncated marker stays unread despite c
 	onTestFinished,
 }) => {
 	const fake = await installFakeDesktop(onTestFinished);
+	fake.sameElement = async () => true;
 	// Linux omits the marker on a node whose own fields it could not read; only an explicit `truncated` pairs.
 	fake.parseOptions = { unmarkedNodesUnread: true };
 	fake.tree = [wireNode("outer", "AXGroup", "Outer", { truncated: false })];
@@ -738,6 +765,7 @@ test("a Linux exact scope sent without a truncated marker stays unread despite c
 		ref: "@e2",
 	});
 	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
+	assert.deepEqual(fake.identityChecks, [], "a bare truncated node is never exempted, so identity is not asked");
 });
 
 test("a remapped exact scope whose children alone are unread cannot corroborate a gone value", async ({
@@ -747,7 +775,9 @@ test("a remapped exact scope whose children alone are unread cannot corroborate 
 	fake.tree = [wireNode("a", "AXButton", "Save", { value: "Go" })];
 	const { stateId } = await fake.observe();
 	// The wait read A's value as "Stop"; A then moved under a same-role, same-label B in its old slot and went back
-	// to "Go". The successor carries A's public ref onto B, whose unread children hide A.
+	// to "Go". The successor carries A's public ref onto B, whose unread children hide A, and the helper's identity
+	// check tells B from A.
+	fake.sameElement = async (ref, otherRef) => ref === otherRef;
 	fake.waitFor = async () => {
 		fake.tree = [
 			wireNode("b", "AXButton", "Save", {
@@ -769,16 +799,123 @@ test("a remapped exact scope whose children alone are unread cannot corroborate 
 		[fake.waits.at(-1)?.request.scopeRef, result.details.gone, result.details.inconclusive, result.details.unreadRefs],
 		["a", undefined, true, ["@e2"]],
 	);
+	assert.deepEqual(fake.identityChecks, [["a", "b"]]);
+});
+
+/** Observe `before`, then wait for `Go` to leave exact ref `ref` while the successor shows `after`. */
+async function waitExactAbsence(
+	fake: Awaited<ReturnType<typeof installFakeDesktop>>,
+	before: object[],
+	after: object[],
+	ref: string,
+	signal?: AbortSignal,
+) {
+	fake.tree = before;
+	const { stateId } = await fake.observe();
+	fake.waitFor = async () => {
+		fake.tree = after;
+		return { found: true, gone: true, nodeCount: 1 };
+	};
+	return await fake.call(fake.bridge.executeWaitFor, { stateId, text: "Go", until: "absent", ref }, signal);
+}
+
+test.for([
+	{
+		name: "its children alone are unread",
+		before: () => [wireButton("go", "Go")],
+		after: () => [wireButton("go", "Stop", CHILDREN_UNREAD)],
+		ref: "@e2",
+		asked: [["go", "go"]],
+	},
+	{
+		// The window's budget cut leaves an ancestor `childrenUnread`; the proven scope cannot hide there (#1338).
+		name: "it sits under ancestors whose children the walk cut",
+		before: () => [wireNode("outer", "AXGroup", "Outer", { children: [wireButton("go", "Go")] })],
+		after: () => [
+			wireNode("outer", "AXGroup", "Outer", {
+				...CHILDREN_UNREAD,
+				children: [wireButton("go", "Stop", CHILDREN_UNREAD)],
+			}),
+		],
+		ref: "@e3",
+		asked: [["go", "go"]],
+	},
+])(
+	"a proven exact scope corroborates a gone condition when $name",
+	async ({ before, after, ref, asked }, { onTestFinished }) => {
+		const fake = await installFakeDesktop(onTestFinished);
+		fake.sameElement = async (wireRef, otherRef) => wireRef === otherRef;
+		const result = await waitExactAbsence(fake, before(), after(), ref);
+		assert.deepEqual(
+			[result.details.found, result.details.gone, result.details.inconclusive, result.details.unreadRefs],
+			[true, true, undefined, undefined],
+		);
+		assert.match(fake.text(result), /^Condition disappeared\./);
+		assert.deepEqual(fake.identityChecks, asked);
+	},
+);
+
+test("an exact scope whose children are unread stays inconclusive without an identity check", async ({
+	onTestFinished,
+}) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	// Linux and Windows backends have no `sameElement`.
+	const { currentPlatformBackend } = await import("../src/platform/index.ts");
+	delete currentPlatformBackend.sameElement;
+	const result = await waitExactAbsence(
+		fake,
+		[wireButton("go", "Go")],
+		[wireButton("go", "Stop", CHILDREN_UNREAD)],
+		"@e2",
+	);
+	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
+});
+
+test("a failed identity check proves nothing", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	// e.g. an older external helper: `unknown_command`.
+	fake.sameElement = async () => {
+		throw new Error("Unknown command 'axSameElement'");
+	};
+	const result = await waitExactAbsence(
+		fake,
+		[wireButton("go", "Go")],
+		[wireButton("go", "Stop", CHILDREN_UNREAD)],
+		"@e2",
+	);
+	assert.deepEqual([result.details.inconclusive, result.details.unreadRefs], [true, ["@e2"]]);
+	assert.deepEqual(fake.identityChecks, [["go", "go"]]);
+});
+
+test("an identity check cancelled with the call rejects instead of settling", async ({ onTestFinished }) => {
+	const fake = await installFakeDesktop(onTestFinished);
+	const controller = new AbortController();
+	fake.sameElement = async (_ref, _otherRef, options) => {
+		assert.equal(options.signal, controller.signal, "the check gets the call's signal");
+		controller.abort();
+		throw new Error("aborted");
+	};
+	await expect(
+		waitExactAbsence(
+			fake,
+			[wireButton("go", "Go")],
+			[wireButton("go", "Stop", CHILDREN_UNREAD)],
+			"@e2",
+			controller.signal,
+		),
+	).rejects.toThrow("aborted");
 });
 
 test.for([
-	{ name: "children-unread", marker: CHILDREN_UNREAD },
-	{ name: "bare truncated", marker: UNREAD },
+	{ name: "children-unread", marker: CHILDREN_UNREAD, same: false, status: "inconclusive" },
+	{ name: "bare truncated", marker: UNREAD, same: true, status: "inconclusive" },
+	{ name: "proven children-unread", marker: CHILDREN_UNREAD, same: true, status: "verified" },
 ])(
-	"act_ui keeps an exact ref absence on a $name successor node inconclusive",
-	async ({ marker }, { onTestFinished }) => {
+	"act_ui settles an exact ref absence on a $name successor node $status",
+	async ({ marker, same, status }, { onTestFinished }) => {
 		vi.stubEnv("PI_COMPUTER_USE_HEADLESS", "1");
 		const fake = await installFakeDesktop(onTestFinished);
+		fake.sameElement = async () => same;
 		fake.tree = [wireButton("go", "Go")];
 		const { stateId } = await fake.observe();
 		fake.actBatchResult = {
@@ -796,6 +933,7 @@ test.for([
 			actions: [{ action: "press", ref: "@e2" }],
 			expect: { ref: "@e2", text: "Go", until: "absent", timeoutMs: 250 },
 		});
-		assert.equal(result.details.execution.verification.status, "inconclusive");
+		assert.equal(result.details.execution.verification.status, status);
+		assert.deepEqual(fake.identityChecks, marker === UNREAD ? [] : [["go", "go"]]);
 	},
 );

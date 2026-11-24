@@ -138,6 +138,7 @@ export const macosBackend: Pick<
 	| "actBatch"
 	| "readText"
 	| "waitFor"
+	| "sameElement"
 > = {
 	async shutdown(): Promise<void> {
 		await macosActivityGlow.close();
@@ -265,5 +266,15 @@ export const macosBackend: Pick<
 			return { ...rest, found: false, incomplete: true };
 		}
 		return reply;
+	},
+
+	async sameElement(
+		ref: string,
+		otherRef: string,
+		options?: { timeoutMs?: number; signal?: AbortSignal },
+	): Promise<boolean> {
+		const reply = await macosHelper.command<{ same?: unknown }>("axSameElement", { ref, otherRef }, options);
+		// Anything but an explicit `true`, e.g. an older helper's reply, proves nothing.
+		return reply?.same === true;
 	},
 };
