@@ -8,14 +8,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 use zbus::{Address, Connection, Proxy};
 
-use crate::x11::InputState;
+use crate::x11::{admit_before, InputState};
 use crate::{ErrorCode, ProtocolError};
 
 const DBUS_DESTINATION: &str = "org.freedesktop.DBus";
@@ -192,6 +192,8 @@ pub struct AtspiClient {
     snapshot_timeout: Duration,
     /// Its shutdown flag is checked at each semantic mutation.
     input: Arc<InputState>,
+    /// The request deadline, checked at each semantic mutation; `None` sets none.
+    deadline: Option<Instant>,
     /// The procfs mount used to attribute root PIDs to executables.
     proc_root: Arc<Path>,
 }
@@ -225,6 +227,7 @@ impl AtspiClient {
             request_timeout,
             snapshot_timeout: SNAPSHOT_TIMEOUT,
             input: InputState::shared(),
+            deadline: None,
             proc_root: Arc::from(Path::new(PROC_ROOT)),
         }
     }
@@ -234,7 +237,17 @@ impl AtspiClient {
         Self { input, ..self }
     }
 
+    /// Refuse each semantic mutation past `deadline`, the request's. This is the client's
+    /// request deadline for input; it does not bound snapshots, see `with_snapshot_timeout`.
+    pub fn with_deadline(self, deadline: Instant) -> Self {
+        Self {
+            deadline: Some(deadline),
+            ..self
+        }
+    }
+
     /// Bound each snapshot by `snapshot_timeout` instead of `SNAPSHOT_TIMEOUT`, e.g. in tests.
+    /// Independent of the request deadline `with_deadline` sets, which only gates mutations.
     pub fn with_snapshot_timeout(self, snapshot_timeout: Duration) -> Self {
         Self {
             snapshot_timeout,
@@ -250,10 +263,11 @@ impl AtspiClient {
         }
     }
 
-    /// Refuse a semantic mutation once shutdown began. Checked right before `DoAction`
-    /// or `SetTextContents`, after every preparatory request, so an action admitted
-    /// before shutdown never first mutates the UI after it; a mutation already sent
-    /// finishes and is never replayed.
+    /// Refuse a semantic mutation once shutdown began or the request deadline passed.
+    /// Checked right before `DoAction` or `SetTextContents`, after the proxy setup and
+    /// every preparatory read, so an action admitted before shutdown or its deadline never
+    /// first mutates the UI after it; a mutation already sent finishes and is never
+    /// replayed.
     fn admit_mutation(&self) -> Result<(), ProtocolError> {
         if self.input.is_cancelled() {
             return Err(ProtocolError::new(
@@ -261,7 +275,7 @@ impl AtspiClient {
                 ErrorCode::Cancelled,
             ));
         }
-        Ok(())
+        admit_before(self.deadline)
     }
 
     /// Bound a single request, keeping transport and reply errors distinct from a deadline.
