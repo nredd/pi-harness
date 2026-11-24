@@ -27,20 +27,28 @@ class Reopener {
 	private readonly lines: string[] = [];
 	private stderr = "";
 	private failure: Error | undefined;
-	private closed = false;
+	private childClosed = false;
+	private linesClosed = false;
 	private waiting: (() => void) | undefined;
 
 	constructor(name: string, file: string, release: string, root: string) {
 		this.name = name;
-		// Isolated home and agent dir so direct Vitest runs never read developer config.
+		// Allowlisted environment and disposable home/temp so direct Vitest runs stay isolated.
 		const home = join(root, `home-${name}`);
-		mkdirSync(home, { recursive: true });
+		const temp = join(root, `tmp-${name}`);
+		mkdirSync(home);
+		mkdirSync(temp);
 		const env: NodeJS.ProcessEnv = {
-			...process.env,
+			PATH: process.env.PATH,
+			...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
 			...isolatedHomeEnv(home),
-			PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+			TMPDIR: temp,
+			TMP: temp,
+			TEMP: temp,
+			JITI_FS_CACHE: "false",
+			PI_OFFLINE: "1",
+			PI_NO_LOCAL_LLM: "1",
 		};
-		delete env.PI_CODING_AGENT_SESSION_DIR;
 		this.child = spawn(process.execPath, [CHILD, file, release, name], { cwd: root, env });
 		const recordFailure = (err: Error) => {
 			this.failure ??= new Error(`${this.name} stream failed: ${err.message}${this.stderr ? `: ${this.stderr}` : ""}`);
@@ -48,16 +56,20 @@ class Reopener {
 		};
 		this.child.on("error", recordFailure);
 		this.child.stdin.on("error", recordFailure);
-		createInterface({ input: this.child.stdout }).on("line", (line) => {
-			this.lines.push(line);
-			this.waiting?.();
-		});
+		createInterface({ input: this.child.stdout })
+			.on("line", (line) => {
+				this.lines.push(line);
+				this.waiting?.();
+			})
+			.once("close", () => {
+				this.linesClosed = true;
+				this.waiting?.();
+			});
 		this.child.stderr.on("data", (chunk) => {
 			this.stderr += chunk;
 		});
-		// After stdout closes, so every line it wrote has arrived.
 		this.child.once("close", () => {
-			this.closed = true;
+			this.childClosed = true;
 			this.waiting?.();
 		});
 		onTestFinished(() => {
@@ -65,11 +77,11 @@ class Reopener {
 		});
 	}
 
-	/** The next line the child writes, or its failure/stderr when it terminates first. */
+	/** The next line the child writes, or its failure/stderr when stdout drains first. */
 	async next(): Promise<string> {
 		while (this.lines.length === 0) {
 			if (this.failure) throw this.failure;
-			if (this.closed) {
+			if (this.childClosed && this.linesClosed) {
 				throw new Error(`${this.name} exited ${this.child.exitCode ?? this.child.signalCode}: ${this.stderr}`);
 			}
 			await new Promise<void>((resolve) => {
@@ -87,16 +99,15 @@ class Reopener {
 		return this.lines.length > 0;
 	}
 
-	async exit(): Promise<number | null> {
-		if (this.failure) throw this.failure;
-		if (this.child.exitCode === null && this.child.signalCode === null) {
+	/** Wait for both process close and stdout line drain, returning exit status and any unread lines. */
+	async finish(): Promise<{ code: number | null; remaining: string[] }> {
+		while (!this.failure && !(this.childClosed && this.linesClosed)) {
 			await new Promise<void>((resolve) => {
-				this.child.once("exit", () => resolve());
-				this.child.once("error", () => resolve());
+				this.waiting = resolve;
 			});
 		}
 		if (this.failure) throw this.failure;
-		return this.child.exitCode;
+		return { code: this.child.exitCode, remaining: [...this.lines] };
 	}
 }
 
@@ -152,7 +163,7 @@ it("lets one of two processes racing runAgent reopen claim, open and write the t
 	expect(outcomes[reopeners.indexOf(loser)]).toBe(
 		`refused child session is in use (writer claim held by pid ${winner.child.pid}): ${file}`,
 	);
-	expect(await loser.exit()).toBe(0);
+	expect(await loser.finish()).toEqual({ code: 0, remaining: [] });
 	expect(heldClaimRefusal(file)).toBe(
 		`child session is in use (writer claim held by pid ${winner.child.pid}): ${file}`,
 	);
@@ -162,7 +173,7 @@ it("lets one of two processes racing runAgent reopen claim, open and write the t
 	writeFileSync(release, "");
 	expect(await winner.next()).toBe("opened");
 	expect(await winner.next()).toBe(`done reply ${winner.name}`);
-	expect(await winner.exit()).toBe(0);
+	expect(await winner.finish()).toEqual({ code: 0, remaining: [] });
 	expect(existsSync(`${file}${WRITER_CLAIM_SUFFIX}`)).toBe(false);
 	// The winner continued the saved conversation; the refused process never wrote to it.
 	const after = readFileSync(file);
