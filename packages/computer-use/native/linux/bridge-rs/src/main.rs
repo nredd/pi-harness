@@ -231,8 +231,8 @@ async fn main() {
 }
 
 /// Try once, bounded, to confirm owed releases on a fresh X11 connection. Returns the
-/// exit status: nonzero, with the releases named on stderr, while any stay owed. Nothing
-/// records them past this exit, so the client must refuse physical input from then on.
+/// exit status: nonzero, with the releases named on stderr, while any stay owed.
+/// Keep the client refusal as a backstop even when the journal could not be updated.
 async fn settle_before_exit() -> i32 {
     let left = tokio::task::spawn_blocking(|| {
         x11::exit_settlement(InputState::shared(), EXIT_SETTLE_LIMIT)
@@ -246,14 +246,47 @@ async fn settle_before_exit() -> i32 {
 /// The exit status for inputs that may stay held: 0 for none, else
 /// `EXIT_RELEASE_DEBT` with them named on stderr for the client.
 fn exit_status(held: Vec<String>) -> i32 {
-    if held.is_empty() {
-        return 0;
+    report_exit(held, InputState::shared().exit_journal_problem(), |line| {
+        eprintln!("{line}")
+    })
+}
+
+fn report_exit(
+    held: Vec<String>,
+    journal_problem: Option<String>,
+    mut report: impl FnMut(String),
+) -> i32 {
+    if let Some(problem) = &journal_problem {
+        report(format!(
+            "linux-bridge: unresolved release journal: {problem}"
+        ));
     }
-    eprintln!(
+    if held.is_empty() {
+        return if journal_problem.is_some() {
+            EXIT_RELEASE_DEBT
+        } else {
+            0
+        };
+    }
+    report(format!(
         "linux-bridge: exiting with the release of {} unconfirmed; it may still be held. Release it by hand, then restart Pi.",
         held.join(", ")
-    );
+    ));
+    report("linux-bridge: if a fresh helper still refuses, check its journal recovery instructions before removing any record.".into());
     EXIT_RELEASE_DEBT
+}
+
+#[test]
+fn journal_problem_alone_returns_debt_status_and_reports_why() {
+    for problem in [
+        "record names keycode 37",
+        "journal clear has not been confirmed",
+    ] {
+        let mut lines = Vec::new();
+        let status = report_exit(Vec::new(), Some(problem.into()), |line| lines.push(line));
+        assert_eq!(status, EXIT_RELEASE_DEBT);
+        assert!(lines[0].contains(problem));
+    }
 }
 
 /// Read stdin lines on their own task, so EOF is seen even while every worker is busy
@@ -1263,7 +1296,7 @@ fn deliver_physical<S: InputSink>(
         "performed":{"grounding":"coordinates","delivery":"hid","mechanism":"xtest","deltaSource":"snapshot","windowId":owning_window},
         "evidence":{"mechanism":"xtest","windowId":owning_window}
     });
-    match result {
+    match input.with_cleanup_error(result) {
         Ok(()) => Ok(response),
         Err(error) if input.delivered_units() == 0 && !input.delivery_uncertain() => Err(error),
         Err(error) => {

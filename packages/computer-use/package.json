@@ -49,6 +49,7 @@
     "native/linux/bridge-rs/src/tests.rs",
     "native/linux/bridge-rs/src/wayland.rs",
     "native/linux/bridge-rs/src/x11.rs",
+    "native/linux/bridge-rs/src/x11/release_journal.rs",
     "prebuilt/macos",
     "README.md",
     "LICENSE"
