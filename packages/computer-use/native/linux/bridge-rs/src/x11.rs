@@ -868,6 +868,7 @@ impl Owing {
 pub struct InputState {
     owing: Mutex<Owing>,
     cancelled: AtomicBool,
+    press_unconfirmed: AtomicBool,
     // Kept across requests only while this helper still has debt or a failed write.
     journal: Mutex<Option<Journal>>,
 }
@@ -1268,6 +1269,12 @@ impl<S: InputSink> Input<S> {
     /// may hold that input now. These posts belong to the earlier action and are not
     /// counted.
     pub fn settle(&self) -> Result<(), ProtocolError> {
+        if self.state.press_unconfirmed.load(Ordering::SeqCst) {
+            if let Some((journal, _)) = self.journal.borrow().as_ref() {
+                return Err(journal_error(journal.recovery("The original connection may still have a press queued. Manual recovery required.")));
+            }
+            return Err(journal_error("An X11 press remains unconfirmed".into()));
+        }
         let pending = self.state.owing().debt.clone();
         if pending.is_empty()
             && self
@@ -1567,7 +1574,23 @@ impl<'a, S: InputSink> Held<'a, S> {
             }
         }
         self.owed.push(owed);
-        match self.input.post_checked(press, detail, 0, 0) {
+        // A lost ack can mean the request is still queued on this connection.
+        // Do not settle on a different connection, even if it reports the input up.
+        let journaled = self.input.journal.borrow().is_some();
+        if journaled {
+            self.input
+                .state
+                .press_unconfirmed
+                .store(true, Ordering::SeqCst);
+        }
+        let result = self.input.post_checked(press, detail, 0, 0);
+        if journaled && !matches!(result, Err(PostFailure::Uncertain(_))) {
+            self.input
+                .state
+                .press_unconfirmed
+                .store(false, Ordering::SeqCst);
+        }
+        match result {
             Err(PostFailure::Rejected(error)) => {
                 self.owed.pop();
                 self.input.state.unhold(owed);
@@ -1625,11 +1648,17 @@ impl<S: InputSink> Drop for Held<'_, S> {
     fn drop(&mut self) {
         let mut unconfirmed = Vec::new();
         let mut released = Vec::new();
+        let mut press_unconfirmed = self.input.state.press_unconfirmed.load(Ordering::SeqCst);
         while let Some(owed) = self.owed.pop() {
             let input = self.input;
-            let left = catch_unwind(AssertUnwindSafe(|| input.release_owed(owed)))
-                // A panic mid-post leaves its delivery unknown.
-                .unwrap_or(Some(owed.unknown()));
+            let left = if std::mem::take(&mut press_unconfirmed) {
+                // The most recent press may still be queued. Preserve its debt.
+                Some(owed.unknown())
+            } else {
+                catch_unwind(AssertUnwindSafe(|| input.release_owed(owed)))
+                    // A panic mid-post leaves its delivery unknown.
+                    .unwrap_or(Some(owed.unknown()))
+            };
             unconfirmed.extend(left);
             released.push(owed);
         }
@@ -2801,6 +2830,40 @@ mod tests {
         input.settle().unwrap();
         assert!(input.state.owing().debt.is_empty());
         assert_eq!(input.sink().events().len(), 1);
+    }
+
+    #[test]
+    fn journal_keeps_unconfirmed_press_debt_when_reconnect_reports_up() {
+        let (_home, binding, journal) = journal_fixture();
+        let state = Arc::new(InputState::default());
+        let input = Input::with_state(
+            RecordingSink::default().lose_ack(0, false),
+            Arc::clone(&state),
+        );
+        *input.journal.borrow_mut() = Some((journal, binding.clone()));
+        assert!(Held::new(&input)
+            .press(KEY_PRESS_EVENT, KEY_RELEASE_EVENT, 37)
+            .is_err());
+        assert!(input.sink().events().is_empty());
+        drop(input);
+        let journal = state.journal_slot().take().unwrap();
+        let reconnect = Input::with_state(RecordingSink::default(), state);
+        *reconnect.journal.borrow_mut() = Some((journal, binding));
+        let error = reconnect.settle().unwrap_err();
+        assert_eq!(error.code, ErrorCode::InputUnsafe);
+        assert!(error.message.contains("keycode 37") && error.message.contains("queued"));
+        assert!(reconnect.sink().events().is_empty());
+        assert_eq!(
+            reconnect
+                .journal
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .0
+                .releases()
+                .len(),
+            1
+        );
     }
 
     #[test]
