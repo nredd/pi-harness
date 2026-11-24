@@ -82,9 +82,19 @@ func runPureAssertions() {
     var frontmost: Int32 = 5
     let (freshFrontmost, focused) = sampleKeyboardTargets(frontmostPid: { frontmost }, focusedPid: {
         frontmost = 10
-        return nil
+        return .failed
     })
-    check(keyboardTargetRefusalPid(frontmostPid: freshFrontmost, focusedPid: focused, isBlockedPid: isBlockedPid) == 10, "AX timeout samples the changed frontmost app after the probe")
+    check(keyboardTargetRefusalPid(frontmostPid: freshFrontmost, focusedPid: focused.pid, isBlockedPid: isBlockedPid) == 10, "AX timeout samples the changed frontmost app after the probe")
+    // Only noValue confirms no focused app; a timeout, any other error or a success without a pid is a failed probe
+    let app7 = AXUIElementCreateApplication(7)
+    check(keyFocusProbe(.noValue, focused: nil) == .noFocus, "noValue means no focused app")
+    check(keyFocusProbe(.cannotComplete, focused: nil) == .failed, "a messaging timeout is a failed probe")
+    check(keyFocusProbe(.cannotComplete, focused: app7) == .failed, "a timeout with a stale element is still a failed probe")
+    check(keyFocusProbe(.apiDisabled, focused: nil) == .failed, "another AX error is a failed probe")
+    check(keyFocusProbe(.success, focused: nil) == .failed, "a success without an element is a failed probe")
+    check(keyFocusProbe(.success, focused: "app" as CFString) == .failed, "a success with a non-element is a failed probe")
+    check(keyFocusProbe(.success, focused: app7) == .focused(7) && KeyFocusProbe.focused(7).pid == 7, "a focused pid is reported")
+    check(KeyFocusProbe.failed.pid == nil && KeyFocusProbe.noFocus.pid == nil, "only a focused probe has a pid")
     // Coordinate act refuses a blocked window or AX hit at the point
     check(coordinateTargetRefusalPid(windows: overlayList, at: CGPoint(x: 150, y: 150), hitPid: nil, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked window at the point")
     check(coordinateTargetRefusalPid(windows: [], at: CGPoint(x: 1, y: 1), hitPid: 10, excludingPid: 99, isBlockedPid: isBlockedPid) == 10, "coordinate act refuses a blocked AX hit")

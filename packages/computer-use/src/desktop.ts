@@ -228,7 +228,7 @@ export function desktopInputText(result: DesktopInputResult): string {
 
 /** Fixed wording per keyboard stop code. Helper prose can quote the keys or text, so none of it is rendered. */
 const KEYBOARD_STOP_REASONS: Readonly<Record<string, string>> = {
-	app_blocked: "a blocked app was frontmost or held key focus",
+	app_blocked: "a blocked app was frontmost or held key focus, or key focus could not be read",
 	input_deadline_expired: "the keyboard delivery deadline expired",
 	input_failed: "a key event could not be created",
 	invalid_args: "the key sequence was rejected before delivery",
