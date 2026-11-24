@@ -584,7 +584,7 @@ allowed_subagents: support-file-finder, support-callsite-tracer   # or `all`
 
 **The allowlist is a privilege boundary, not just a routing hint.** A child runs with *its own* `tools:`, `extensions:`, and `isolated:` — the parent's restrictions are not inherited — so delegation grants the parent the union of what the listed agents can do. The read-only agent above can write and run commands through any listed agent that can, and `all` reaches every enabled agent including `general-purpose`. Choose the list as carefully as you would choose `tools:` itself; that is the main reason this is default-off.
 
-`allowed_subagents` is runtime-enforced. A comma-separated list restricts nesting to those types; `all` (or `"*"` / `true`, matching how `extensions:` and `skills:` take booleans) allows any enabled agent; omitted, empty, `none`, or `false` means no nested tools are injected at all. The same holds when a listed allowlist resolves to no enabled agent (every name missing or disabled, or `all` over an empty registry): the child gets no nested tools and the prompt says nesting is off, instead of an `Agent` tool whose only advertised type is `none`. Unknown, disabled, and out-of-list types are rejected rather than falling back — regardless of the project's [fallback agent](#persistent-settings) setting, so a configured fallback can never hand a nested caller an agent outside its allowlist — and a nested `model:` is validated against [Model Scope](#model-scope) exactly like a top-level spawn. Result, resume, steering, and stop operations are ownership-scoped, so a parent can control only its own children. Nested records remain internal to that parent and do not appear in top-level tools, lifecycle events, or agent UI — so when a parent finishes, is stopped, or ends a resumed turn, its nested children are stopped with it. They do write their own `.output` transcript (subject to the same `output_transcript` gate), filed under the root session's directory alongside their ancestors', so a nested run can still be inspected after the fact. Their token usage is folded into every ancestor's totals up to the top-level agent (lifecycle events, completion notifications, `/agents`), so nested spend stays attributable at any depth even though the children themselves stay hidden. A nested result that ends `stopped`, `aborted`, or `steered` is labelled as partial, the same guarantee top-level results carry.
+`allowed_subagents` is runtime-enforced. A comma-separated list restricts nesting to those types; `all` (or `"*"` / `true`, matching how `extensions:` and `skills:` take booleans) allows any enabled agent; omitted, empty, `none`, or `false` means no nested tools are injected at all. The same holds when a listed allowlist resolves to no enabled agent (every name missing or disabled, or `all` over an empty registry): the child gets no nested tools and the prompt says nesting is off, instead of an `Agent` tool whose only advertised type is `none`. Unknown, disabled, and out-of-list types are rejected rather than falling back — regardless of the project's [fallback agent](#persistent-settings) setting, so a configured fallback can never hand a nested caller an agent outside its allowlist — and a nested `model:` is validated against [Model Scope](#model-scope) exactly like a top-level spawn. Result, resume, steering, and stop operations are ownership-scoped, so a parent can control only its own children. They take the child's id or its current run id (shown in the `run` field when the optional `list_agents` roster lists that child; resume replaces it), with one leading `@` and surrounding spaces ignored. An id with a recorded successor forwards to that successor, which must still belong to the parent; a handle, a top-level agent's id or another parent's child answers not found. Nested records remain internal to that parent and do not appear in top-level tools, lifecycle events, or agent UI — so when a parent finishes, is stopped, or ends a resumed turn, its nested children are stopped with it. They do write their own `.output` transcript (subject to the same `output_transcript` gate), filed under the root session's directory alongside their ancestors', so a nested run can still be inspected after the fact. Their token usage is folded into every ancestor's totals up to the top-level agent (lifecycle events, completion notifications, `/agents`), so nested spend stays attributable at any depth even though the children themselves stay hidden. A nested result that ends `stopped`, `aborted`, or `steered` is labelled as partial, the same guarantee top-level results carry.
 
 **No background work inside a subagent.** A nested `Agent` call always blocks and returns the child's result inline. `run_in_background: true` returns an error (a frontmatter `run_in_background: true` on the nested type is ignored and the child runs in the foreground), and the `workflow` / `Workflow` / `SubagentWorkflow` tools, including another extension's, return an error explaining why when a subagent calls them. A child gets a refusing `SubagentWorkflow` stand-in for this (one short tool definition), since the real tool is excluded and core would otherwise answer "Tool SubagentWorkflow not found" before the refusal could run; an isolated or `extensions: false` child gets no workflow tool at all. Both would deliver their completion to a session that ends the moment the subagent returns its answer, and a detached child is aborted with its owner anyway.
 
@@ -2424,7 +2424,7 @@ Formatting and linting use the root `biome.json`. Four scoped rules retain the f
 
 `npm run typecheck` includes all TypeScript tests and fixtures with unchecked indexed access and erasable syntax enforced. The JavaScript build entry opts into TypeScript checking too. Indexed fixture lookups make their existing setup/bounds assumptions explicit; malformed-input probes retain their original runtime inputs. The recording hook map deliberately erases SDK event signatures because it stores every hook and wiring probes pass only the fields that hook reads. Real-host suites retain the complete SDK boundary.
 
-`npm run bench` runs Vitest benchmarks once through the shared temp sandbox without replacing the operator home. For interactive watch mode, run `node ../../scripts/run-vitest.ts node --keep-home bench --watch` from this package directory and press `q` to quit cleanly. Appending `-- --watch` to the npm script does not override its `--run`. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. `npm run bench:ab -- <ref>` retains its existing command through the moved `tests/fixtures/ab.mjs`; its existing baseline-comparison machinery is not redesigned here. The inherited `bench:ab` script-name layout waiver is retained to preserve that entry point; all structural package waivers are removed.
+`npm run bench` runs Vitest benchmarks once through the shared temp sandbox without replacing the operator home. For interactive watch mode, run `node ../../scripts/run-vitest.ts node --keep-home bench --watch` from this package directory and press `q` to quit cleanly. Appending `-- --watch` to the npm script does not override its `--run`. Vitest 5 moved `bench` from a top-level export to the test context, so a fixture adapter preserves the named cases and sampling options through that native API. Vitest's dedicated benchmark project selects only `tests/*.bench.ts`, not the ordinary test suite. The A/B comparison command is `node tests/fixtures/ab.mjs <ref>`, run from this package directory; it has no npm script because the layout standard allows only `bench` for benchmarks. Its baseline paths are broken in the monorepo ([#1378](https://github.com/nredd/pi-harness/issues/1378)); this command has not been run end to end.
 
 `prepublishOnly` is removed because publishing is owned by the monorepo release workflow, not a package-local shortcut: `scripts/release_descriptors.py` runs this workspace's `check`, and `scripts/npm_release.py` packs once and exercises those bytes through stock Pi before `.github/workflows/publish.yml` publishes the verified tarball. `prepack` still builds local tarballs. Use the release workflow, not direct `npm publish`, for publication.
 
@@ -2449,9 +2449,9 @@ The initial migration moves 49 exact historical bullets. Eighteen bullets remain
 `[Unreleased]`: the repeated issue/category groups `330.fixed` (five), `436.fixed` (two),
 `548.fixed` (two), `264.fixed` (two), six unattributed bullets and the PR-only `#196` bullet.
 The nonbullet `#900` breaking warning also remains verbatim. No historical issue IDs were
-invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode
-and resource-sampler now use the same fragment contract; their READMEs record retained legacy
-entries. Preset, subscription-router and computer-use remain outside this migration.
+invented, and released sections are untouched. Session-kit, dev-tools, todo, plan-mode,
+resource-sampler, preset and subscription-router now use the same fragment contract; their READMEs
+record retained legacy entries. Computer-use remains outside this migration.
 
 ### Contributing
 
@@ -2475,14 +2475,34 @@ For iteration from `packages/subagents`:
 node ../../scripts/run-vitest.ts node tests/tool-description-mode.test.ts
 npm run test:e2e
 npm run bench
-npm run bench:ab -- origin/main
 ```
+
+The A/B command `node tests/fixtures/ab.mjs origin/main` must run from this package directory, but its baseline paths are broken ([#1378](https://github.com/nredd/pi-harness/issues/1378)); it has not been run end to end.
 
 The full workspace check builds the runtime and runs Biome, strict TypeScript and the full Vitest
 suite on Node and Bun. `test:e2e` defaults to scripted faux providers;
 `PI_E2E_LIVE=1 npm run test:e2e` uses the operator's login (optional `PI_PROVIDER` /
 `PI_MODEL`), not an isolated gate. Benchmarks are opt-in and separate from ordinary performance
 tests, which assert operation counts. The benchmark entry points and sampling behavior remain unchanged. `ScenarioSession` uses `@nredd/pi-test-lib/harness`; only an explicit `terminal: true` loads `tests/fixtures/scenario-terminal.ts` and the fork's interactive host. The fixed stock Pi `1.5.2` headless scope is `tests/{scenario-session-headless,session-scenarios,steer-resume-scenarios,stop-subagent-scenarios}.test.ts` (29 cases on Node and Bun), including a native subprocess that observes the import boundary, persists a real physical child session and removes its temporary roots. Injected eager testing imports and a terminal request are negative controls. This is not full upstream compatibility: requester-bound routing and stale-context recovery (`tests/stale-ctx-*.test.ts`), terminal/workflow rendering, credential-command retries, detached-session reload, fatal startup and injected-home discovery remain fork contracts, with their existing assertions retained in the full fork suite. Stock tests do not manufacture `ctx.session`, resource-loader `homeDir` or `ExtensionStartupError`.
+
+`tests/{restart-lifecycle-diagnosis,stale-ctx-captured,stale-ctx-recovery}.test.ts` import
+`createHarness` and the faux builders from `@nredd/pi-test-lib/harness`, not the fork's `/testing`
+root. They still run only against the fork: the shared harness changes their imports, not their
+fork contracts.
+
+`tests/fixture-boundary.test.ts` bundles those three entries with esbuild and rejects any
+`@earendil-works/pi-coding-agent` or `@earendil-works/pi-tui` `/testing` import it can see: static
+imports and `import()`/`require()` with a literal specifier. It does not see computed specifiers
+(`import(name)`) or `/testing` subpaths of other forked packages. It resolves
+`@nredd/pi-test-lib/*` with `require.resolve` (CJS condition), while Vitest uses the import
+condition. `ScenarioSession`'s on-demand `./scenario-terminal.ts` edge is external in that graph;
+only the test's control case and `scenario-session-headless.test.ts` check it.
+
+Still open under #916: `tests/integration/probes/compaction-children.test.ts`,
+`packages/session-kit/tests/{monitor/extension-terminal,scenarios/titles}.test.ts` and
+`packages/todo/tests/fixtures/settled-row.ts` still import the fork's headless `/testing` root.
+The interactive hosts (`/testing/interactive`, `pi-tui/testing`) stay on the fork by design. The
+list of core internals the interactive harness needs is not written yet.
 
 Read affected modules completely and check installed SDK types before changing APIs. Keep changes
 small, avoid unnecessary `any` and abstractions, and follow root Biome/type rules. Use

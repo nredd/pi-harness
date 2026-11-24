@@ -58,6 +58,8 @@ TESTED_DOCUMENTATION = frozenset(
         "packages/todo/CHANGELOG.md",
         "packages/plan-mode/CHANGELOG.md",
         "packages/resource-sampler/CHANGELOG.md",
+        "packages/preset/CHANGELOG.md",
+        "packages/subscription-router/CHANGELOG.md",
     }
 )
 # Tool pins and root manifests read by both the WSL bootstrap and the stack job.
