@@ -763,31 +763,36 @@ def check_attributes(attrs: bytes) -> None:
 def check_upstream(path: Path, branch: str) -> str:
     """Compare HEAD with the already-fetched upstream ref; never contact the remote.
 
-    Only local config, refs and commit objects are read, so no transport,
-    `core.sshCommand`, credential helper or askpass can run. The fetched ref may be stale.
+    Only local config, refs and the local commit walk are read, so no transport,
+    `core.sshCommand`, credential helper or askpass can run. The result is local
+    graph evidence: the fetched ref may be stale, a shallow boundary can hide
+    ancestry and a graft can make containment look true.
 
     Parameters:
         path: Path, Candidate checkout.
         branch: str, Checked-out branch name.
     Returns:
-        str: Description of the fetched upstream evidence
+        str: Local graph evidence, either containment or commits outside the ref
     Raises:
-        KeepError: No fetched upstream exists or HEAD has commits outside it.
+        KeepError: The local upstream evidence is unavailable.
     """
-    remote = config(path, f"branch.{branch}.remote")
-    merge = config(path, f"branch.{branch}.merge")
-    if not remote or remote == "." or not merge.startswith("refs/heads/"):
-        raise KeepError("no configured remote upstream")
-    upstream = (
-        git(path, "rev-parse", "--symbolic-full-name", "@{upstream}")
-        .decode()
-        .rstrip("\n")
-    )
+    try:
+        remote = config(path, f"branch.{branch}.remote")
+        merge = config(path, f"branch.{branch}.merge")
+        if not remote or remote == "." or not merge.startswith("refs/heads/"):
+            raise KeepError("no configured remote upstream")
+        upstream = (
+            git(path, "rev-parse", "--symbolic-full-name", "@{upstream}")
+            .decode()
+            .rstrip("\n")
+        )
+    except UnicodeDecodeError as exc:
+        raise KeepError("non-UTF-8 upstream config or ref") from exc
     if not upstream.startswith("refs/remotes/"):
         raise KeepError(f"upstream is not a remote-tracking ref: {upstream!r}")
     if git(path, "rev-list", "--end-of-options", f"{upstream}..HEAD"):
-        raise KeepError(f"HEAD has commits outside fetched `{upstream}`")
-    return f"fetched `{upstream}` contains HEAD"
+        return f"local graph: HEAD has commits outside fetched `{upstream}`"
+    return f"local graph: fetched `{upstream}` contains HEAD"
 
 
 def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
@@ -834,8 +839,10 @@ def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
         try:
             fetched = check_upstream(path, branch)
         except KeepError as exc:
-            raise KeepError(f"no PR; upstream not checked; {exc}") from exc
-        raise KeepError(f"no PR; upstream not checked; {fetched}")
+            raise KeepError(
+                f"no PR; live upstream not checked; local upstream unavailable: {exc}"
+            ) from exc
+        raise KeepError(f"no PR; live upstream not checked; {fetched}")
     merged = [pr["number"] for pr in prs if pr["state"] == "MERGED"]
     if len(merged) != 1:
         raise KeepError("no unique merged PR")
