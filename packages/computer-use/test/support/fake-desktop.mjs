@@ -256,8 +256,8 @@ export async function installFakeDesktop(onTestFinished, options = {}) {
 			fake.actBatchCalls.push(requests);
 			return fake.actBatchResult;
 		},
-		isBrowserApp: (name) => fake.browserApps.has(name),
-		isChromeFamilyApp: (name) => fake.chromeApps.has(name),
+		isBrowserApp: ({ appName }) => fake.browserApps.has(appName),
+		isChromeFamilyApp: ({ appName }) => fake.chromeApps.has(appName),
 		setActivity: async (active) => {
 			fake.activity.push(active);
 		},
