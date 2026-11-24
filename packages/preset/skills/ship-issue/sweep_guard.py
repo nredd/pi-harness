@@ -760,6 +760,41 @@ def check_attributes(attrs: bytes) -> None:
         raise KeepError("built-in conversion attributes on tracked paths")
 
 
+def check_upstream(path: Path, branch: str) -> str:
+    """Compare HEAD with the already-fetched upstream ref; never contact the remote.
+
+    Only local config, refs and the local commit walk are read, so no transport,
+    `core.sshCommand`, credential helper or askpass can run. The result is local
+    graph evidence: the fetched ref may be stale, a shallow boundary can hide
+    ancestry and a graft can make containment look true.
+
+    Parameters:
+        path: Path, Candidate checkout.
+        branch: str, Checked-out branch name.
+    Returns:
+        str: Local graph evidence, either containment or commits outside the ref
+    Raises:
+        KeepError: The local upstream evidence is unavailable.
+    """
+    try:
+        remote = config(path, f"branch.{branch}.remote")
+        merge = config(path, f"branch.{branch}.merge")
+        if not remote or remote == "." or not merge.startswith("refs/heads/"):
+            raise KeepError("no configured remote upstream")
+        upstream = (
+            git(path, "rev-parse", "--symbolic-full-name", "@{upstream}")
+            .decode()
+            .rstrip("\n")
+        )
+    except UnicodeDecodeError as exc:
+        raise KeepError("non-UTF-8 upstream config or ref") from exc
+    if not upstream.startswith("refs/remotes/"):
+        raise KeepError(f"upstream is not a remote-tracking ref: {upstream!r}")
+    if git(path, "rev-list", "--end-of-options", f"{upstream}..HEAD"):
+        return f"local graph: HEAD has commits outside fetched `{upstream}`"
+    return f"local graph: fetched `{upstream}` contains HEAD"
+
+
 def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
     """Require exact merged PR identity without probing the upstream transport.
 
@@ -801,7 +836,13 @@ def check_remote(path: Path, branch: str, base: str, gh: Path) -> str:
     if any(pr["state"] == "OPEN" for pr in prs):
         raise KeepError("open PR")
     if not prs:
-        raise KeepError("no PR; upstream not checked")
+        try:
+            fetched = check_upstream(path, branch)
+        except KeepError as exc:
+            raise KeepError(
+                f"no PR; live upstream not checked; local upstream unavailable: {exc}"
+            ) from exc
+        raise KeepError(f"no PR; live upstream not checked; {fetched}")
     merged = [pr["number"] for pr in prs if pr["state"] == "MERGED"]
     if len(merged) != 1:
         raise KeepError("no unique merged PR")

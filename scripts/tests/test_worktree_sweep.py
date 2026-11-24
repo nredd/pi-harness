@@ -1027,6 +1027,126 @@ def test_open_pr_remains_a_hold(wt: Worktrees) -> None:
     keep(wt, "open PR", SWEEP_LIST='[{"state":"OPEN"}]')
 
 
+def track_upstream(wt: Worktrees, remote: str = "origin") -> None:
+    """Configure `merged` to track `<remote>/merged` without fetching.
+
+    Parameters:
+        wt: Worktrees, Candidate checkout.
+        remote: str, Configured upstream remote name.
+    Returns:
+        None.
+    Raises:
+        subprocess.SubprocessError: Git setup failed.
+    """
+    git(wt.path, "config", "branch.merged.remote", remote)
+    git(wt.path, "config", "branch.merged.merge", "refs/heads/merged")
+
+
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [
+        ("none", "local upstream unavailable: no configured remote upstream"),
+        ("dot", "local upstream unavailable: no configured remote upstream"),
+        ("tag merge", "local upstream unavailable: no configured remote upstream"),
+        ("not fetched", "local upstream unavailable: `git rev-parse --symbolic-full-name` failed (128)"),
+        (
+            "local mapping",
+            "local upstream unavailable: upstream is not a remote-tracking ref: 'refs/heads/mirror/merged'",
+        ),
+        ("ahead", "local graph: HEAD has commits outside fetched `refs/remotes/origin/merged`"),
+        ("non-UTF-8 merge", "local upstream unavailable: non-UTF-8 upstream config or ref"),
+        ("missing object", "local upstream unavailable: `git rev-list --end-of-options` failed (128)"),
+        ("contains", "local graph: fetched `refs/remotes/origin/merged` contains HEAD"),
+    ],
+)
+def test_no_pr_reports_fetched_upstream_evidence(wt: Worktrees, setup: str, reason: str) -> None:
+    head = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    if setup == "dot":
+        track_upstream(wt, ".")
+    elif setup == "tag merge":
+        track_upstream(wt)
+        git(wt.path, "config", "branch.merged.merge", "refs/tags/merged")
+    elif setup == "local mapping":
+        track_upstream(wt)
+        git(wt.path, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/mirror/*")
+        git(wt.repo, "update-ref", "refs/heads/mirror/merged", head)
+    elif setup == "non-UTF-8 merge":
+        track_upstream(wt)
+        git(wt.path, "config", "branch.merged.merge", os.fsdecode(b"refs/heads/\xff"))
+    elif setup != "none":
+        track_upstream(wt)
+    if setup in {"ahead", "contains"}:
+        git(wt.repo, "update-ref", "refs/remotes/origin/merged", head)
+    if setup == "ahead":
+        git(wt.path, "commit", "--allow-empty", "-m", "Not fetched upstream")
+    if setup == "missing object":
+        (wt.repo / ".git/refs/remotes/origin").mkdir(parents=True)
+        (wt.repo / ".git/refs/remotes/origin/merged").write_text("1" * len(head) + "\n")
+    quiet(wt)
+    keep(wt, f"no PR; live upstream not checked; {reason}", SWEEP_LIST="[]")
+
+
+def test_no_pr_with_fetched_upstream_stays_keep_under_closed_scope(wt: Worktrees) -> None:
+    track_upstream(wt)
+    git(wt.repo, "update-ref", "refs/remotes/origin/merged", "HEAD")
+    quiet(wt)
+    code, (result,) = run(wt, variables={"SWEEP_LIST": "[]"}, borrower_gitdirs=())
+    assert code == 0
+    assert result["verdict"] == "keep", result
+    assert "contains HEAD" in str(result["reasons"])
+
+
+@pytest.mark.parametrize("upstream_ahead", [True, False])
+def test_fetched_upstream_containment_follows_descendant_direction(
+    wt: Worktrees, upstream_ahead: bool
+) -> None:
+    """Upstream descending from HEAD contains it; HEAD descending from upstream does not."""
+    track_upstream(wt)
+    head = git(wt.path, "rev-parse", "HEAD").decode().strip()
+    tree = git(wt.path, "rev-parse", "HEAD^{tree}").decode().strip()
+    child = git(wt.path, "commit-tree", tree, "-p", head, "-m", "Descendant").decode().strip()
+    if upstream_ahead:
+        git(wt.repo, "update-ref", "refs/remotes/origin/merged", child)
+        reason = "local graph: fetched `refs/remotes/origin/merged` contains HEAD"
+    else:
+        git(wt.repo, "update-ref", "refs/remotes/origin/merged", head)
+        git(wt.path, "update-ref", "refs/heads/merged", child)
+        reason = "local graph: HEAD has commits outside fetched `refs/remotes/origin/merged`"
+    quiet(wt)
+    keep(wt, f"no PR; live upstream not checked; {reason}", SWEEP_LIST="[]")
+
+
+def test_fetched_upstream_check_runs_no_configured_transport(wt: Worktrees) -> None:
+    """No configured transport, helper or askpass runs while reading fetched evidence.
+
+    Note: every marker adapter only touches its file and speaks no Git protocol, so the
+    positive-control `git ls-remote` fails by design. Only `core.sshCommand` is proven live
+    there; the other keys guard against future code paths, not this control.
+    """
+    git(wt.path, "remote", "set-url", "origin", "ssh://git@forge.example/source/project.git")
+    track_upstream(wt)
+    git(wt.repo, "update-ref", "refs/remotes/origin/merged", "HEAD")
+    markers = {}
+    for key in ("core.sshCommand", "credential.helper", "core.askPass", "remote.origin.uploadpack"):
+        marker = wt.bin / f"{key}.ran"
+        markers[key] = marker
+        adapter(wt.bin, key, f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+        git(wt.path, "config", key, str(wt.bin / key))
+    quiet(wt)
+    keep(wt, "local graph: fetched `refs/remotes/origin/merged` contains HEAD", SWEEP_LIST="[]")
+    assert not [marker for marker in markers.values() if marker.exists()]
+    # Positive control: a live upstream probe in the same checkout runs the configured transport.
+    live = subprocess.run(
+        [str(GIT), "-C", str(wt.path), "ls-remote", "origin"],
+        env=git_env(),
+        timeout=TIMEOUT,
+        capture_output=True,
+        check=False,
+    )
+    assert live.returncode != 0
+    assert markers["core.sshCommand"].exists()
+
+
 @pytest.mark.parametrize("version", ["git version 2.35.1", "unknown"])
 def test_unsafe_git_keeps_before_inventory(
     wt: Worktrees,
