@@ -228,6 +228,14 @@ test("does not follow a const past a nearer binding of the name it does not mode
 		"declare namespace N { const expected = 'ok'; }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
 		"declare namespace N { const expected = { m: /x/ }; const used = expect(x).toMatchObject(expected); }",
 		"namespace N { const expected = 'ok'; expect(x).toMatchObject({ m: expected }); }",
+		"export {};\n{ function expected() {} expect(x).toMatchObject({ m: expected }); }",
+		"{ class expected {} expect(x).toMatchObject({ m: expected }); }",
+		"{ enum expected { A } expect(x).toMatchObject({ m: expected }); }",
+		"namespace O { namespace expected {} expect(x).toMatchObject({ m: expected }); }",
+		"enum E { expected = 1 }\nenum E { other = expect(x).toMatchObject({ m: expected }) }",
+		"namespace N { export enum E { expected = 1 } }\nnamespace N { export enum E { other = expect(x).toMatchObject({ m: expected }) } }",
+		"namespace N { export class expected {} }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
+		"declare namespace N { class expected {} }\nnamespace N { expect(x).toMatchObject({ m: expected }); }",
 	];
 	const control = "{ { const expected = 'ok'; } expect(x).toMatchObject({ m: expected }); }";
 	const found = [];
@@ -255,6 +263,33 @@ test("follows a local namespace-block const and scopes catch, for header and des
 		"a.test.ts:3:16: bare /c/ in toMatchObject via `caught` at 10:30",
 		"a.test.ts:5:16: bare /h/ in toMatchObject via `header` at 10:38",
 		"a.test.ts:7:16: bare /p/ in toMatchObject via `picked` at 10:46",
+	]);
+});
+
+test("scopes class, enum, namespace, expression and module function names to their statement (#1334)", async () => {
+	const source = [
+		"export {};",
+		"const klass = /k/, kenum = /e/, member = /m/, space = /s/, named = /n/, block = /b/;",
+		"{ class klass {} enum kenum { A } enum E { member } function block() {} }",
+		"switch (k) { case 1: function block() {} } namespace Outer { namespace space {} class klass {} }",
+		"const fn = function named() {}, cls = class named {};",
+		"expect(x).toMatchObject({ klass, kenum, member, space, named, block });",
+	].join("\n");
+	expect(await scan(source)).toEqual([
+		"a.test.ts:2:15: bare /k/ in toMatchObject via `klass` at 6:27",
+		"a.test.ts:2:28: bare /e/ in toMatchObject via `kenum` at 6:34",
+		"a.test.ts:2:42: bare /m/ in toMatchObject via `member` at 6:41",
+		"a.test.ts:2:55: bare /s/ in toMatchObject via `space` at 6:49",
+		"a.test.ts:2:68: bare /n/ in toMatchObject via `named` at 6:56",
+		"a.test.ts:2:81: bare /b/ in toMatchObject via `block` at 6:63",
+	]);
+	// CommonJS is sloppy even where `tsgo` calls it a module, so a block function there may be hoisted.
+	const sloppy =
+		"const expected = /a/;\nfunction g() { { function expected() {} } expect(x).toMatchObject({ m: expected }); }";
+	expect(await scan(sloppy, "a.test.cjs")).toEqual([]);
+	expect(await scan(`export {};\n${sloppy}`, "a.test.cts")).toEqual([]);
+	expect(await scan(sloppy, "a.test.mts")).toEqual([
+		"a.test.mts:1:18: bare /a/ in toMatchObject via `expected` at 2:72",
 	]);
 });
 

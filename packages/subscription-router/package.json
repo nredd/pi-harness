@@ -4,7 +4,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Pi virtual models that route across included subscription quota: Anthropic and ChatGPT Codex usage collectors, confirmed per-family exhaustion, and mid-run quota recovery.",
+  "description": "Pi virtual models that route across included subscription quota: Anthropic, ChatGPT Codex and Antigravity usage collectors, confirmed per-family exhaustion, and mid-run quota recovery.",
   "author": "nredd",
   "license": "MIT",
   "type": "module",

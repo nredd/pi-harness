@@ -4,13 +4,15 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { agentDir } from "../agent-dir.ts";
 import { HARNESSES, type Harness, sessionsDir } from "./load.ts";
-import { cleanRecovery, ExportRefusal, exportStats, IncompleteScan, importStats } from "./snapshot.ts";
+import { cleanRecovery, ExportRefusal, exportStats, IncompleteScan, importStats, restoreSnapshot } from "./snapshot.ts";
 import { reportSubagents } from "./subagents.ts";
 
 const USAGE =
 	"usage: export --agent-dir DIR --output OUT [--sessions-dir DIR] [--harness pi,claude,codex,opencode] " +
 	"[--claude-dir DIR] [--codex-dir DIR] [--opencode-db FILE] [--replace-harnesses] | import --agent-dir DIR --input REPO | " +
+	"restore --agent-dir DIR --input SRC --output OUT | " +
 	"clean-recovery --agent-dir DIR --output OUT | subagents [--agent-dir DIR] [--sessions-dir DIR]\n" +
+	"  restore: restore this machine's manifest and referenced shards from SRC into OUT under the export lock\n" +
 	"  clean-recovery: remove frozen recovery shard files the active snapshot fully covers; never part of an export\n" +
 	"  --replace-harnesses: publish this scan as a replacement generation, bypassing the narrower-set, " +
 	"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
@@ -86,6 +88,17 @@ export async function main(): Promise<void> {
 					`${name}: scan incomplete (${status.consecutiveFailures} in a row), ${status.failed === "kept" ? "kept what was last published" : "last published contents unreadable, dropped"}`,
 				);
 		}
+	} else if (
+		command === "restore" &&
+		// Mutating an outbox never falls back to the default installation: name it.
+		options.has("--agent-dir") &&
+		input !== undefined &&
+		output !== undefined &&
+		!EXPORT_ONLY.some((f) => options.has(f))
+	) {
+		const result = await restoreSnapshot(dir, resolve(input), resolve(output));
+		console.log(JSON.stringify(result));
+		for (const warning of result.warnings ?? []) console.error(oneLine(warning));
 	} else if (
 		command === "clean-recovery" &&
 		// Deleting files never falls back to the default installation: name it.

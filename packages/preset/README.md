@@ -142,7 +142,15 @@ Bind that tier locally, and keep any intentional `agentModels["Explore"]` bindin
   reported percentages, metered counts and balances, and active blocks with their evidence.
   Counts such as `37/250 req obs` describe locally observed usage, not account-wide quota;
   unknown limits have no denominator. Model buckets appear for the routed or directly selected
-  model and for models with active blocks. No Google collector or credentials are needed by the footer.
+  model and for models with active blocks.
+  V1 replies also get a `Gemini` (`Gem`) row with the router's `antigravity` 5h and 7d windows when
+  the reply carries an `antigravity` snapshot that is not `unavailable` (the router returns only
+  cached readings, fresh or stale) or an active block for it. The footer never reads credentials
+  directly: Gemini percentages and `--` placeholders need a cached router reading, so a cold cache
+  without a readable credential adds no row, while an active block adds a block-only `Gemini` row
+  until that block expires. Windows scoped to the `gemini` family show
+  whatever the current model, since the row name says so, as in a v2 view that keeps that
+  selection; other windows on the row keep the ordinary model-bucket rule.
   Every active block is shown, legacy rows included: v1 `blocks` attach to their provider (a block
   for a provider without a row gets its own), and a confirmed Opus block appears beside healthy
   provider-wide quota, e.g. `| opus blocked->Jan 18 12:00 read`. The pre-view footer ignored
@@ -333,6 +341,16 @@ unmerged and gitlink entries, and entries hidden by `skip-worktree` or `assume-u
 keep, as does a `HEAD` the comparison cannot read; the cached `git diff-index` compares object IDs
 and reads no worktree files. This is defense in depth for a future `eligible` path; today it only
 names the keep reason.
+After the earlier holds pass, the guard hashes tracked entries in process as raw Git blobs (file
+bytes, or a symlink's target string, with no filters or stat cache) and compares each with its
+index object ID and mode, stopping at the first entry that keeps. A same-size edit with a restored
+mtime under `core.trustctime=false` therefore keeps. Parent directories are opened without
+following symlinks and the leaf is read relative to them. A symlinked parent, unmerged or
+unexpected index entries, and missing entries or entries that are neither regular files nor
+symlinks also keep, as does a parent or file whose replacement or rewrite during the hash the
+guard's rechecks detect. The rechecks are not atomic: a same-content replacement between the path
+stat and the open can pass. A tracked symlink compares by its target string only and passes when
+that matches.
 Limits:
 - Use a trusted `python3 -I -S` so `PYTHON*` startup settings and site initialization do not load.
   Children inherit only absolute `PATH` entries, `HOME`, `LANG`, `LC_ALL` and `TMPDIR`; `gh` also
@@ -342,14 +360,26 @@ Limits:
 - The CLI cannot prove a closed borrower scope: Git cannot enumerate independent clones,
   alternate stores or unmounted checkouts. Every verdict carries that hold first, even when the
   candidate has no other hold. Report only the guard's evidence; delete nothing.
-- The guard does not probe upstream transports. If no PR exists, it reports `no PR; upstream not checked`.
-- The guard omits `git status` and does not compare tracked worktree content with the index. Attributes
+- The guard does not probe upstream transports. With no PR, it reports
+  `no PR; live upstream not checked; <local evidence>`. The local evidence is
+  `local graph: fetched <ref> contains HEAD`, `local graph: HEAD has commits outside fetched <ref>`,
+  or `local upstream unavailable: <why>` when no fetched `refs/remotes/` upstream can be read.
+  Only local config, refs and the local commit walk are read, so no transport, `core.sshCommand`,
+  credential helper or askpass runs. This is local graph evidence: the fetched ref can be stale or
+  locally rewritten, a shallow boundary can hide ancestry and a graft can make containment look
+  true. It is a reason, never removal authority.
+- The guard omits `git status`. Attributes
   or driver configuration could change after an attribute scan and cause `git status` to run a
   clean filter. Untracked and ignored paths are reported separately. Never run standalone
   `git status` or `git diff` on a retained worktree to fill that gap.
-- No raw content hash comparison is performed. With effective `core.trustctime=false`, a same-size
-  edit with its original mtime restored can look clean to Git, so the guard keeps the worktree
-  without trying to distinguish it from a clean one.
+- The scan is NOT atomic against concurrent writers. Deepest-first parent revalidation narrows,
+  but does not close, the race window. Any future deletion must separately exclude writers through
+  removal. Its total cost is unbounded: chunked reads bound per-file memory only and there is no time
+  budget yet (#1388); measure it before any deletion is enabled.
+- Non-goals here: a case-only rename can pass the raw comparison when the indexed spelling still
+  resolves to the renamed file (e.g. on a case-insensitive filesystem), and so can an intent-to-add
+  entry whose file is still empty; the index-vs-`HEAD` check in #1369 covers intent-to-add. The
+  CLI stays keep-only until #1220.
 - The guard does not check `core.ignorecase` or `core.symlinks`; the CLI authorizes nothing.
   A verdict is a snapshot, not a lock. The installed `git prune-merged-worktrees` command and
   older copies of the skills are unchanged; migrate those separately before retiring the legacy helper.

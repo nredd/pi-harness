@@ -39,6 +39,7 @@ import { formatResets } from "./resets.ts";
 import { formatDecision, type RouteDecision, type RouteEnv, Router } from "./router.ts";
 import { formatScore } from "./selection.ts";
 import { collectorIdFor, type RegistryContext, UsageService } from "./usage.ts";
+import { bindViewStore, type ViewStore } from "./view-store.ts";
 
 export {
 	type Collector,
@@ -135,6 +136,7 @@ interface Shared {
 	usage: RouterUsage;
 	tracker: ExhaustionTracker;
 	codex?: CodexResets;
+	view?: ViewStore;
 }
 
 /** Decisions of one requesting session, for `/router status` and persistence de-duplication. */
@@ -168,7 +170,11 @@ function sessionDecisions(manager: object | undefined): SessionDecisions {
 
 function shared(): Shared {
 	const host = globalThis as typeof globalThis & { [SHARED_KEY]?: Shared };
-	host[SHARED_KEY] ??= { usage: new UsageService(), tracker: new ExhaustionTracker() };
+	if (!host[SHARED_KEY]) {
+		const usage = new UsageService();
+		const tracker = new ExhaustionTracker();
+		host[SHARED_KEY] = { usage, tracker, view: bindViewStore(getAgentDir(), usage, tracker) };
+	}
 	return host[SHARED_KEY];
 }
 
@@ -353,6 +359,7 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 			sessionDecisions(ctx.sessionManager).persisted.clear();
 			if (!config.ok) ctx.ui.notify(`subscription-router: ignoring config. ${config.error}`, "error");
 			warm(ctx, usage, sessionProviders(ctx, profiles, declarations));
+			void state.view?.schedule();
 		});
 
 		// Cached data only: a slow usage endpoint must not delay the turn. Coarse
@@ -379,8 +386,9 @@ export function createSubscriptionRouter(options?: SubscriptionRouterOptions): E
 		pi.on("model_select", (_event, ctx) => {
 			selectionEpoch(ctx.sessionManager).generation++;
 		});
-		pi.on("session_shutdown", (_event, ctx) => {
+		pi.on("session_shutdown", async (_event, ctx) => {
 			selectionEpoch(ctx.sessionManager).generation++;
+			await state.view?.flush();
 		});
 
 		pi.on("agent_before_settle", async (event, ctx) => {

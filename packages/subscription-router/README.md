@@ -171,8 +171,9 @@ Merge declarations from [here](examples/providers.json) into an existing config,
   if unknown. The Google example declares no project-specific limits and no Vertex windows.
 - `collector.id` names a registered collector, not a URL or a module path. Use lowercase
   kebab-case starting with a letter, at most 64 characters. Omit it to select
-  by provider ID. `collector.options` is an opaque object for that collector. No Google
-  subscription collector or OAuth client is shipped.
+  by provider ID. `collector.options` is an opaque object for that collector. No Google OAuth
+  client is shipped; the built-in `antigravity` collector reads the credential Pi's
+  `pi-antigravity` provider already holds (see [here](#antigravity-collector)).
 - `evidence` lists unique adapter IDs in order: `read`, `failure` and `observed`.
   `fallbackOnReadError` opts in to continuing after a failed read; `failure` can declare
   `parser`, `minHintSeconds` (non-negative), `repeat` (`count` and `withinMinutes`) and
@@ -220,7 +221,26 @@ issue is named:
   Read-confirmed marks stay in memory only. Not built yet: marks live in memory (#1402, with L8
   reload) and the ledger does not exist (#1401, with declared `windows`, `observed` and L5 early
   clear)
-- Not built yet: live v2 views and applied `label` over `router:rpc:usage` and `view.json`
+- The router atomically writes cached quota readings and active blocks to
+  `<agentDir>/router-state/v1/view.json` for `/stats`, without triggering provider requests. The
+  disk view contains only fields used by `/stats`; the v1 RPC is unchanged. An oversized
+  provider reading is dropped without dropping its active blocks that fit. Both provider rows
+  and the complete file have byte limits. Gemini appears when an `antigravity` collector supplies
+  usage.
+
+  Limits:
+  - Pi processes sharing an agent directory are last-writer-wins. A cold process preserves the
+    previous file until it has data to publish. After the original publisher exits, `/stats`
+    ages its readings to stale and shows blocks until their actual provider `until` deadlines.
+    #1440 tracks a lease design with writer-owned views and retrieval-time selection.
+  - When the file budget runs out, later providers or blocks can be dropped without a
+    reader-visible truncation indicator (#1440).
+  - Labels, families and `display.full` come from trusted in-process collectors. Built-ins are
+    fixed, but a custom collector returning account text as a label will persist it. #1440
+    tracks persisting only router-owned public labels.
+  - An interrupted write can leave a harmless `.view-*.tmp` orphan. Delete it by hand once the
+    writer is known to have exited.
+- Not built yet: live v2 `router:rpc:usage` views and applied `label`
   (#1403), applied `quotaGroup` and the access-flip rule (#1405), an end-to-end third-party
   collector proof (#1404)
 - Decision records live in this README and in commit bodies, not `docs/adr`
@@ -388,14 +408,15 @@ destination once. It never hides partial text, thinking or tool calls. Confirmat
 precede the context edit and continuation; manual changes or aborts while it waits suppress both
 the edit and notice. Hosts older than core `v1.3.0-nredd.12` lack the cancellation signal this depends on.
 
-Built-in usage collectors: Anthropic OAuth (`/api/oauth/usage`) and ChatGPT Codex (`wham/usage`). API-key
+Built-in usage collectors: Anthropic OAuth (`/api/oauth/usage`), ChatGPT Codex (`wham/usage`) and
+Antigravity (`antigravity`, described [here](#antigravity-collector)). API-key
 auth has no subscription window, so only failure-inferred evidence blocks it. Codex window names follow the reported
 `limit_window_seconds`, not their primary/secondary position: some plans expose only a weekly
 primary window. Missing durations retain the legacy positional fallback; other durations stay
 explicit in seconds rather than being mislabeled as 5h or weekly. Normalized windows carry optional
 `durationMs`: Anthropic's known 5h/7d durations (5h only when `five_hour` is reported; an absent, `null` or
 `{ utilization: null }` window is dropped, and some plans report only `seven_day`) and Codex's reported duration (legacy positional
-fallback when absent). Older or third-party snapshots without durations still score safely. Windows also carry optional `spanSource` (`reported` when the provider stated the span: Anthropic's fixed windows and Codex `limit_window_seconds`; `assumed` for the Codex positional fallback). It is display provenance only, so a footer can avoid calling a guessed window 5h or weekly; scoring, admission and blocking never read it.
+fallback when absent). Older or third-party snapshots without durations still score safely. Windows also carry optional `spanSource` (`reported` when the provider stated the span: Anthropic's fixed windows, Codex `limit_window_seconds` and Antigravity's `window`; `assumed` for the Codex positional fallback). It is display provenance only, so a footer can avoid calling a guessed window 5h or weekly; scoring, admission and blocking never read it.
 
 Surfaces:
 
@@ -407,7 +428,7 @@ Surfaces:
 - `/router [status|refresh|reset]`: cached-only fresh-dispatch forecast, explicit refresh, or clear all LOCAL confirmed blocks. `reset` does not reset provider quota, redeem a grant, or modify usage counters. Status explains each eligible candidate's score and limiting window, unlimited quota, or fallback reason, plus ineligible entries. Status also lists the last five routing decisions of the current session (of the process, on a core without request-owned routing). The forecast uses chain-order ties without a session incumbent, like admission; an existing balanced conversation additionally applies its previous-model hysteresis/stickiness
 - `pi.events` RPC with the pi-subagents envelope (`{ requestId, ... }`, reply on `<channel>:reply:<requestId>` as `{ success, data | error }`):
   - `router:rpc:admit` `{ model }` -> `{ ok, resolvedModel?, resetAt?, wait? }` (`wait`, only when refused: the caller may park until `resetAt`, see `exhaustionPolicy`; a physical model uses the default `wait` policy). Unknown models are admitted. A `router/*` profile is refused only when a quota block leaves no entry eligible; a chain unusable for config or credential reasons is admitted so the child reports the real cause. Before the first `session_start`, everything is admitted
-  - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads registered providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, independent of the selected model
+  - `router:rpc:usage` `{ refresh?: boolean }` -> `{ snapshots, blocks }`. Omitted refresh is cached-only. `refresh: true` reads registered providers through the ordinary five-minute cache, shared in-flight requests, endpoint timeout and failure backoff; it is not a forced refresh. Before session start it remains cached-only. The personal TUI footer uses this RPC once a minute to show provider-wide remaining quota for both subscriptions, plus the Gemini 5h and 7d windows once `antigravity` has been read, independent of the selected model
 
 Usage and block state is process-global, so in-process subagent sessions share it. A newer
 confirmation read supersedes older in-flight reads for cache and backoff writes, even when the older
@@ -426,8 +447,8 @@ in usage errors. These bounds do not prove live OAuth refresh or revocation beha
 ### Collector extensions
 
 Trusted extensions can call `registerCollector` from `src/collectors.ts` in the installed package.
-Register before or after the router extension loads. The built-in IDs `anthropic` and
-`openai-codex` are reserved; registering either throws. A collector ID must be a primitive string
+Register before or after the router extension loads. The built-in IDs `anthropic`,
+`openai-codex` and `antigravity` are reserved; registering any of them throws. A collector ID must be a primitive string
 Pi provider ID: non-blank, at most 256 characters, no whitespace or slashes. Other values throw and
 are never coerced, because Pi resolves a non-string credential argument as a model and reads its
 `provider`. For external IDs the last registration wins.
@@ -478,13 +499,42 @@ The router reads each declared own reading field once into plain records and den
 `length` from 0 to 128) without calling adapter methods such as `map`, then validates and uses only that copy. A
 throwing getter is an adapter error. An external reset later than `MAX_EXTERNAL_RESET_MS` (31 days)
 after the read started is implausible and becomes unknown, so it blocks only while the reading is
-fresh instead of for its stated lifetime. Built-in collector resets are not bounded. Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
+fresh instead of for its stated lifetime. The legacy Anthropic and Codex collectors do not bound
+resets; Antigravity bounds each window against its reported span (see below). Malformed readings return a sanitized error (or retain the previous reading as stale). Accepted readings have
 reported basis; extensions cannot set snapshot metadata.
 
-No Google subscription collector or OAuth client is bundled. A user-supplied Google subscription
-collector must be read-only, use local first-party client state or a documented first-party client
-surface, never send Gemini CLI or Antigravity OAuth credentials from third-party code, and label its
-window spans `assumed` until a first-party contract exists.
+### Antigravity collector
+
+The built-in `antigravity` collector reads quota for Pi's `antigravity` provider (the
+`pi-antigravity` package). It ships no OAuth client: Pi hands it that provider's credential, the
+`{"token","projectId"}` JSON string `pi-antigravity` returns from `getApiKey`, and core owns login
+and refresh. Only a non-empty string `token` is read; `projectId` is unused. A credential that is
+not a JSON object with such a `token` reads as `unavailable` (no subscription usage window) on a
+cold cache, without a request and without echoing the credential; after an earlier good read the
+cached windows are kept as `stale`, like any other failed read. The read is one `POST https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`
+with body `{}`, a bearer token, the Antigravity CLI `User-Agent`, and `redirect: "error"` so HTTP
+redirects are refused rather than followed with the credential. The collector does not retry
+against `cloudcode-pa.googleapis.com`, so a failure or redirect on the daily host is an ordinary
+failed read with the usual backoff.
+
+Each usable `groups[].buckets[]` entry becomes a model-scoped window with a `reported` span from
+its `window` (`5h` or `weekly`; others are skipped). The first usable bucket for a window name
+wins; later ones with the same name are ignored. A payload with no usable bucket reads as an
+unsupported shape, while a malformed bucket beside usable ones is just skipped:
+
+- `gemini-*` buckets gate the `gemini` family as `5h` and `7d`, e.g. `antigravity/gemini-4-neon`
+- `3p-*` buckets gate the `claude` and `gpt` families as `3p-5h` and `3p-7d`
+- Other `bucketId` prefixes are skipped
+
+`usedPercent` is `(1 - remainingFraction) * 100` with the fraction clamped to 0..1; a bucket without
+a finite fraction is skipped. `resetTime` is absent while a bucket is untouched, so the reset stays
+unknown, as does one without a valid RFC 3339 timestamp and explicit UTC offset, or one later than
+the read start plus the bucket's reported span (`5h` or `7d`) and five minutes of clock-skew
+tolerance (the exhaustion percentage is kept, so a fresh reading still blocks without parking
+admission on an implausible deadline, and a stale one fails open). An exhausted Gemini 5h window blocks only `gemini` models of the provider; Claude and GPT
+models served through Antigravity keep their own `3p-*` windows. The footer display is `Gemini`
+(`Gem`) with the `5h` and `7d` windows. The payload is an undocumented internal endpoint verified
+against a live account, not a published contract; a shape change reads as an unsupported shape.
 
 ## Reset schedules and free Codex resets
 
