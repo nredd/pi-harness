@@ -668,8 +668,9 @@ CLI results:
   command, an incomplete pi scan or unwritable pi cache, an unwritable output, corrupt installation
   state, a refused narrower harness set, a published or recorded `exportedAt` implausibly far ahead (more than
   366 days, or past year 9999), an ordinary export whose next instant falls in a later month than its
-  clock, or a readable manifest whose history is not. A clock behind the last published export within
-  its month is not one: it publishes just after it and exits 0 with a `warnings` entry. (A harness cache that cannot be written is a failed
+  clock, or a readable manifest whose history is not (or a corrupt manifest with no recorded harness
+  set). A clock behind that bound within its month is not one: it publishes just after it and exits 0
+  with a `warnings` entry. (A harness cache that cannot be written is a failed
   harness, carried, not a nonzero exit.) A partial or corrupt import emits a JSON result and exits
   nonzero, retaining every failed machine's last-good snapshot; one that only finds stale harnesses
   exits 0 and lists them in `stale`.

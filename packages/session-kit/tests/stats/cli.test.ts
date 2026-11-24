@@ -405,12 +405,15 @@ describe("stats CLI", () => {
 				"unreadable-history, missing-manifest and later-month safeguards and unfreezing recovery files; drops " +
 				"published history absent from the scan (sealed months included). Viewers holding a snapshot newer than " +
 				"the replacement keep it until this machine exports a later one\n" +
-				"  A clock behind the last published export in its month still publishes, just after it, with a warning; " +
-				"a corrupt manifest still publishes after the last instant the outbox's watermark recorded, as does a denied " +
-				"or missing one under --replace-harnesses (ordinary exports refuse those: history-unreadable, manifest-missing; " +
-				"older kits do not update that watermark, so if one exported later and the manifest is then lost or restored, " +
-				"an export can omit the unbounded warning while viewers holding that later snapshot reject it as older); " +
-				"with no recorded watermark, it publishes by the wall clock with a warning",
+				"  exportedAt is bounded by the later of the readable manifest and the outbox's recorded watermark " +
+				"(which can hold an unpublished instant from a failed export). When an export passes the clock and " +
+				"harness-set safeguards (ordinary exports refuse denied or missing manifests as history-unreadable/" +
+				"manifest-missing, and corrupt ones with no recorded harness set as harness-set-unknown; >366d-ahead " +
+				"bounds refuse watermark-ahead, and cross-month rollbacks refuse without --replace-harnesses), a same-month " +
+				"clock behind that bound publishes just after it with a warning; older kits do not update the watermark, " +
+				"so if one exported later and the manifest is then lost or restored, an export can omit the unbounded " +
+				"warning while viewers holding that later snapshot reject it as older; when neither source supplies a " +
+				"bound, it publishes by the wall clock with a warning",
 		);
 	});
 

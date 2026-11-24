@@ -3,8 +3,15 @@ import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { exportStats, importStats, type Manifest } from "../../src/stats/snapshot.ts";
-import { assistantLine, outboxStatePath, outboxWatermarkPath, sessionFile } from "../fixtures/stats/fixtures.ts";
+import { exportStats, importStats } from "../../src/stats/snapshot.ts";
+import {
+	assistantLine,
+	denyPathOnRead,
+	manifestOf,
+	outboxStatePath,
+	outboxWatermarkPath,
+	sessionFile,
+} from "../fixtures/stats/fixtures.ts";
 
 vi.mock("node:fs/promises", async (original) => {
 	const actual = await original<typeof import("node:fs/promises")>();
@@ -37,19 +44,12 @@ afterEach(() => {
 	vi.mocked(rename).mockRestore();
 });
 
-const manifestOf = (snapshotDir: string): Manifest =>
-	JSON.parse(readFileSync(join(snapshotDir, "manifest.json"), "utf8")) as Manifest;
 const unboundedWarning = (warnings: string[] | undefined): boolean =>
 	(warnings ?? []).some((warning) => warning.startsWith("no readable published manifest"));
 
-/** Make `readFile` fail with EACCES for exactly `path`, as a permission denial would. */
 async function deny(path: string): Promise<void> {
 	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-	vi.mocked(readFile).mockImplementation(async (file, options) => {
-		if (file === path)
-			throw Object.assign(new Error(`EACCES: denied, open '${path}'`), { code: "EACCES", syscall: "open", path });
-		return actual.readFile(file, options);
-	});
+	vi.mocked(readFile).mockImplementation(denyPathOnRead(actual.readFile, path));
 }
 
 it("records the published exportedAt beside the outbox bookkeeping", async () => {
