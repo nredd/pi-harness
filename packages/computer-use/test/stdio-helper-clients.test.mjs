@@ -357,16 +357,24 @@ describe("Windows helper client", () => {
 		await assert.rejects(client.command("unversioned"), /expected 6, got unknown\./);
 	});
 
-	test("a command that gets no reply times out and a late reply is ignored", async () => {
+	test("a command that gets no reply times out as reply_lost and a late reply is ignored", async () => {
 		install();
 		const engine = envelope("Windows", { hang: silent() });
 		const { client, children } = await windows({ helper: { engine } });
-		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), /Helper command 'hang' timed out after 30ms\./);
-		children[0].stdout.write(
-			`${JSON.stringify({ protocolVersion: 6, id: engine.requests[0].id, ok: true, result: {} })}\n`,
-		);
-		engine.script("hang", ok("again"));
-		assert.equal(await client.command("hang"), "again");
+		// The request was written: the helper may have run it, so its effect is unknown (#1190).
+		await assert.rejects(client.command("hang", {}, { timeoutMs: 30 }), (error) => {
+			assert.equal(error.message, "Helper command 'hang' timed out after 30ms.");
+			assert.equal(error.code, "reply_lost");
+			return true;
+		});
+		// The stale reply arrives while a successor is pending: it must not settle the successor.
+		const successor = client.command("hang");
+		await vi.waitFor(() => assert.equal(engine.requests.length, 2));
+		const reply = (id, result) =>
+			children[0].stdout.write(`${JSON.stringify({ protocolVersion: 6, id, ok: true, result })}\n`);
+		reply(engine.requests[0].id, "stale");
+		reply(engine.requests[1].id, "again");
+		assert.equal(await successor, "again");
 	});
 
 	test("default command timeout is 15s", async () => {

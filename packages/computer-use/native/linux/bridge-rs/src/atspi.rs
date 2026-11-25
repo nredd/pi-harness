@@ -1470,6 +1470,8 @@ enum Interpreter {
     Node,
     Java,
     Gjs,
+    Perl,
+    Ruby,
 }
 
 /// How an interpreter reads one option token.
@@ -1489,15 +1491,15 @@ enum OptionArg {
 }
 
 impl Interpreter {
-    /// The interpreter an `exe` basename names, `None` for any other executable.
+    /// The interpreter an `exe` basename names for script-alias parsing only.
     fn of(name: &str) -> Option<Self> {
-        if is_python(name) {
-            return Some(Self::Python);
-        }
         match name {
             "node" | "nodejs" => Some(Self::Node),
             "java" => Some(Self::Java),
             "gjs" | "gjs-console" => Some(Self::Gjs),
+            _ if matches_versioned_name(name, "python") => Some(Self::Python),
+            _ if matches_versioned_name(name, "perl") => Some(Self::Perl),
+            _ if matches_versioned_name(name, "ruby") => Some(Self::Ruby),
             _ => None,
         }
     }
@@ -1588,6 +1590,8 @@ impl Interpreter {
                 }
                 _ => OptionArg::Stop,
             },
+            // No option allowlist for these hosts. In particular, never read past -e or -E.
+            Self::Perl | Self::Ruby => OptionArg::Stop,
         }
     }
 
@@ -1614,10 +1618,9 @@ const NODE_INLINE_OPTIONS: [&str; 5] = [
     "--stack-size",
 ];
 
-/// Whether an `exe` basename is `python`, `python3` or `python3.12`: `python` plus a
-/// version of dot-separated digit runs.
-fn is_python(name: &str) -> bool {
-    name.strip_prefix("python").is_some_and(|version| {
+/// Whether `name` is `base` with an optional version of dot-separated ASCII digit runs.
+fn matches_versioned_name(name: &str, base: &str) -> bool {
+    name.strip_prefix(base).is_some_and(|version| {
         version.is_empty()
             || version
                 .split('.')
@@ -1679,10 +1682,10 @@ fn hosted_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
                 _ => (interpreter.option(token), None),
             },
             // `java Tool.java` runs a source file; any other Java target is a class name.
-            _ if java && token.ends_with(".java") => return file_aliases(token),
+            _ if java && token.ends_with(".java") => return file_aliases(interpreter, token),
             _ if java && token.starts_with('@') => (OptionArg::Stop, None),
             _ if java => return module_aliases(token, false),
-            _ => return file_aliases(token),
+            _ => return file_aliases(interpreter, token),
         };
         let mut value = || {
             inline.or_else(|| {
@@ -1699,19 +1702,27 @@ fn hosted_aliases(interpreter: Interpreter, cmdline: &[u8]) -> Vec<String> {
             OptionArg::Module => {
                 return value().map_or_else(Vec::new, |module| module_aliases(module, java));
             }
-            OptionArg::Jar => return value().map_or_else(Vec::new, file_aliases),
+            OptionArg::Jar => {
+                return value().map_or_else(Vec::new, |path| file_aliases(interpreter, path));
+            }
             OptionArg::Stop => return Vec::new(),
         }
     }
     Vec::new()
 }
 
-/// A script path's basename, plus its stem for a known script extension.
-fn file_aliases(path: &str) -> Vec<String> {
+/// A script path's basename, plus its stem for `.pl` with Perl, `.rb` with Ruby,
+/// or [`SCRIPT_EXTENSIONS`] with other interpreters.
+fn file_aliases(interpreter: Interpreter, path: &str) -> Vec<String> {
     let Some(basename) = path.rsplit('/').next().filter(|name| is_hosted_name(name)) else {
         return Vec::new();
     };
-    let stem = SCRIPT_EXTENSIONS
+    let extensions: &[&str] = match interpreter {
+        Interpreter::Perl => &[".pl"],
+        Interpreter::Ruby => &[".rb"],
+        _ => &SCRIPT_EXTENSIONS,
+    };
+    let stem = extensions
         .iter()
         .find_map(|extension| basename.strip_suffix(extension))
         .filter(|stem| is_hosted_name(stem));
@@ -3769,7 +3780,23 @@ mod tests {
         assert_eq!(Interpreter::of("java"), Some(Interpreter::Java));
         assert_eq!(Interpreter::of("gjs"), Some(Interpreter::Gjs));
         assert_eq!(Interpreter::of("gjs-console"), Some(Interpreter::Gjs));
-        for name in ["KeePassXC", "bash", "electron", "perl"] {
+        for name in ["perl", "perl5", "perl5.36", "perl5.36.0"] {
+            assert_eq!(Interpreter::of(name), Some(Interpreter::Perl), "{name}");
+        }
+        for name in ["ruby", "ruby3", "ruby3.1", "ruby3.1.2"] {
+            assert_eq!(Interpreter::of(name), Some(Interpreter::Ruby), "{name}");
+        }
+        for name in [
+            "KeePassXC",
+            "bash",
+            "electron",
+            "sh",
+            "busybox",
+            "ruby-foo",
+            "rubyx",
+            "perl5a",
+            "ruby3.",
+        ] {
             assert_eq!(Interpreter::of(name), None, "{name}");
         }
     }
@@ -3970,6 +3997,76 @@ mod tests {
         );
         // A rewritten title is one token: no argv to read.
         assert_eq!(hosted_aliases(Python, b"python3 tool.py"), none);
+    }
+
+    #[test]
+    fn perl_and_ruby_add_block_aliases_without_changing_executable_identity() {
+        let fixture = ProcFixture::new(&[
+            (1, "/usr/bin/perl5.36.0"),
+            (2, "/usr/bin/ruby3.1"),
+            (3, "/usr/bin/bash"),
+            (4, "/usr/bin/electron"),
+            (5, "/usr/bin/busybox"),
+        ]);
+        for (pid, name, cmdline, expected) in [
+            (
+                1,
+                "perl5.36.0",
+                "perl\0/opt/tool.pl\0secret\0",
+                &["tool.pl", "tool"][..],
+            ),
+            (
+                2,
+                "ruby3.1",
+                "ruby\0/opt/tool.rb\0secret\0",
+                &["tool.rb", "tool"][..],
+            ),
+            (3, "bash", "bash\0/opt/tool.sh\0secret\0", &[][..]),
+            (4, "electron", "electron\0/opt/app.asar\0secret\0", &[][..]),
+            (5, "busybox", "busybox\0/opt/tool.pl\0secret\0", &[][..]),
+        ] {
+            std::fs::write(fixture.0.join(pid.to_string()).join("cmdline"), cmdline).unwrap();
+            let executable = process_executable(&fixture.0, pid).unwrap();
+            assert_eq!(executable.name, name);
+            assert_eq!(executable.script_aliases, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn perl_and_ruby_alias_only_the_first_script_token() {
+        for (interpreter, name, path, basename) in [
+            (Interpreter::Perl, "perl", "/opt/tool.pl", "tool.pl"),
+            (Interpreter::Ruby, "ruby", "/opt/tool.rb", "tool.rb"),
+        ] {
+            assert_eq!(
+                aliases_of(interpreter, &[name, path, "--token", "secret"]),
+                [basename, "tool"]
+            );
+            assert_eq!(
+                aliases_of(interpreter, &[name, "--", path, "secret"]),
+                [basename, "tool"]
+            );
+            for option in [
+                "-e",
+                "-E",
+                "-einline",
+                "-Einline",
+                "-I",
+                "--unknown",
+                "--unknown=value",
+                "-",
+            ] {
+                assert!(
+                    aliases_of(interpreter, &[name, option, path, "secret"]).is_empty(),
+                    "{name} {option}"
+                );
+            }
+            assert_eq!(aliases_of(interpreter, &[name, "/opt/tool"]), ["tool"]);
+            let other_suffix = if name == "perl" { "tool.rb" } else { "tool.pl" };
+            for other in [other_suffix, "tool.js"] {
+                assert_eq!(aliases_of(interpreter, &[name, other]), [other]);
+            }
+        }
     }
 
     #[test]
