@@ -17,6 +17,16 @@ describe("Linux helper fixture (#1352)", () => {
 		assert.deepEqual(diagnostics.features, [...helper.LINUX_REQUIRED_HELPER_FEATURES]);
 		assert.doesNotThrow(() => helper.assertLinuxHelperFeatures(diagnostics));
 	});
+
+	test("a features list with any non-string entry counts as lacking every feature", async () => {
+		const { helper } = await clientFor(() => ({}));
+		for (const features of [[...helper.LINUX_REQUIRED_HELPER_FEATURES, 42], [null], "snapshot-deadline", {}]) {
+			assert.throws(
+				() => helper.assertLinuxHelperFeatures({ features }),
+				new RegExp(`lacks required features: ${helper.LINUX_REQUIRED_HELPER_FEATURES.join(", ")}\\.`),
+			);
+		}
+	});
 });
 
 describe("Linux helper client disconnects (#725)", () => {

@@ -188,7 +188,10 @@ function probeReason(error: unknown): string {
  * otherwise reinstall.
  */
 export function assertLinuxHelperFeatures(diagnostics: PlatformDiagnostics): void {
-	const reported = new Set(Array.isArray(diagnostics.features) ? diagnostics.features : []);
+	const list = diagnostics.features as unknown;
+	const reported = new Set<string>(
+		Array.isArray(list) && list.every((feature) => typeof feature === "string") ? (list as string[]) : [],
+	);
 	const missing = LINUX_REQUIRED_HELPER_FEATURES.filter((feature) => !reported.has(feature));
 	if (missing.length > 0) {
 		throw new Error(
