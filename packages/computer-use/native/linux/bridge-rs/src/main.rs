@@ -508,6 +508,8 @@ async fn diagnostics_with(x11_probe: impl FnOnce() -> bool + Send + 'static) -> 
             "concurrent-requests",
             "transactional-batching"
         ],
+        // Protocol 11 clients also require this Linux-only marker for the AT-SPI snapshot deadline (#1349).
+        "features": ["snapshot-deadline"],
         "pid": std::process::id(),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
@@ -2115,6 +2117,7 @@ mod tests {
         })
         .await;
         assert_eq!(report["x11"], true);
+        assert_eq!(report["features"], json!(["snapshot-deadline"]));
     }
 
     fn panicking_work() -> Result<(), ProtocolError> {

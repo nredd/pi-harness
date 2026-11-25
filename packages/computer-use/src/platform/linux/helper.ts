@@ -10,6 +10,8 @@ import type { PlatformDiagnostics } from "../types.ts";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const SETUP_HELPER_SCRIPT = path.join(PACKAGE_ROOT, "scripts", "setup-helper.mjs");
+/** The package prebuilt that setup installs ahead of any source build, so a stale one is reinstalled. */
+const LINUX_PREBUILT_PATH = path.join(PACKAGE_ROOT, "prebuilt", "linux", process.arch, "linux-bridge");
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 const COMMAND_TIMEOUT_MS = 15_000;
 const HELPER_PROBE_TIMEOUT_MS = 5_000;
@@ -35,6 +37,12 @@ export const DISCARDED_EXIT_WAIT_MS = HELPER_TERMINATE_GRACE_MS + 1_000;
 const MANUAL_SETUP_HINT = `Run \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\` once outside Pi (a cold cargo build can exceed the ${HELPER_SETUP_TIMEOUT_MS / 1000}s in-session setup limit), then restart Pi.`;
 
 export const LINUX_HELPER_PROTOCOL_VERSION = 11;
+/**
+ * Helper features the client requires beyond the protocol version, from `diagnostics.features`. Reject and
+ * replace even a protocol-11 helper if it lacks `snapshot-deadline`. This marker ships with protocol 11,
+ * the AT-SPI snapshot deadline (#1349, #1352) and the interpreter `blockAliases` (#1333).
+ */
+export const LINUX_REQUIRED_HELPER_FEATURES = ["snapshot-deadline"] as const;
 /**
  * How far ahead of the client's own timeout the helper's request deadline sits: past it the helper starts no press,
  * motion, activation or semantic mutation for the request (one already in flight completes). It also covers the time
@@ -171,6 +179,25 @@ function reason(error: unknown): string {
 /** `reason` for a probe failure: the restart hint is wrong while setup is about to replace the helper. */
 function probeReason(error: unknown): string {
 	return reason(error).replace(new RegExp(`\\.? ${RESTART_HINT.replace(/\.$/, "")}$`), "");
+}
+
+/**
+ * Require every `LINUX_REQUIRED_HELPER_FEATURES` entry in `diagnostics.features`. A missing or malformed list
+ * lacks them all: a helper that does not report a feature is treated as not having it. Setup copies a package
+ * prebuilt before it would build from source, so the message also names the prebuilt that a rebuild would
+ * otherwise reinstall.
+ */
+export function assertLinuxHelperFeatures(diagnostics: PlatformDiagnostics): void {
+	const list = diagnostics.features as unknown;
+	const reported = new Set<string>(
+		Array.isArray(list) && list.every((feature) => typeof feature === "string") ? (list as string[]) : [],
+	);
+	const missing = LINUX_REQUIRED_HELPER_FEATURES.filter((feature) => !reported.has(feature));
+	if (missing.length > 0) {
+		throw new Error(
+			`Linux helper lacks required features: ${missing.join(", ")}. Rebuild it with \`PI_COMPUTER_USE_ALLOW_BUILD=1 node ${SETUP_HELPER_SCRIPT} --platform linux\`. Setup installs a prebuilt before building from source: if \`${LINUX_PREBUILT_PATH}\` exists, remove it or rebuild it with \`npm run build:linux\`, or setup reinstalls the same stale helper.`,
+		);
+	}
 }
 
 async function waitForShared<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -427,6 +454,7 @@ export class LinuxHelperClient {
 			);
 		}
 		assertPlatformArchitecture("Linux", diagnostics);
+		assertLinuxHelperFeatures(diagnostics);
 	}
 
 	private async process(signal?: AbortSignal): Promise<ChildProcessWithoutNullStreams> {

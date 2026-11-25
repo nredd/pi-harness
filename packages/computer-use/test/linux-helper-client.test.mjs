@@ -10,6 +10,25 @@ afterEach(() => {
 	vi.resetModules();
 });
 
+describe("Linux helper fixture (#1352)", () => {
+	test("the shared fixture's `diagnostics` reports every required feature", async () => {
+		const { client, helper } = await clientFor(() => ({}));
+		const diagnostics = await client.command("diagnostics");
+		assert.deepEqual(diagnostics.features, [...helper.LINUX_REQUIRED_HELPER_FEATURES]);
+		assert.doesNotThrow(() => helper.assertLinuxHelperFeatures(diagnostics));
+	});
+
+	test("a features list with any non-string entry counts as lacking every feature", async () => {
+		const { helper } = await clientFor(() => ({}));
+		for (const features of [[...helper.LINUX_REQUIRED_HELPER_FEATURES, 42], [null], "snapshot-deadline", {}]) {
+			assert.throws(
+				() => helper.assertLinuxHelperFeatures({ features }),
+				new RegExp(`lacks required features: ${helper.LINUX_REQUIRED_HELPER_FEATURES.join(", ")}\\.`),
+			);
+		}
+	});
+});
+
 describe("Linux helper client disconnects (#725)", () => {
 	test("a helper that exits mid-command rejects at once, not at the command timeout", async () => {
 		const { client } = await clientFor((children) => ({

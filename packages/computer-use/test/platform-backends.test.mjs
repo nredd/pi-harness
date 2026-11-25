@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, test, vi } from "vitest";
 import { REQUIRED_PLATFORM_INVARIANTS } from "../src/platform/architecture.ts";
+import { LINUX_REQUIRED_HELPER_FEATURES } from "../src/platform/linux/helper.ts";
 
 const fakes = vi.hoisted(() => {
 	const helper = () => ({ command: vi.fn(), ensureInstalled: vi.fn(async () => undefined), dispose: vi.fn() });
@@ -20,7 +21,9 @@ vi.mock("../src/platform/macos/helper.ts", () => ({
 	HELPER_APP_PATH: "/fake/pi-computer-use.app",
 	runProcess: vi.fn(),
 }));
-vi.mock("../src/platform/linux/helper.ts", () => ({
+vi.mock("../src/platform/linux/helper.ts", async (importOriginal) => ({
+	assertLinuxHelperFeatures: (await importOriginal()).assertLinuxHelperFeatures,
+	LINUX_REQUIRED_HELPER_FEATURES: (await importOriginal()).LINUX_REQUIRED_HELPER_FEATURES,
 	LINUX_HELPER_PROTOCOL_VERSION: 11,
 	linuxHelper: fakes.linux,
 	resetLinuxHelper: fakes.resetLinux,
@@ -44,7 +47,8 @@ const diagnostics = (over = {}) => ({
 	...over,
 });
 /** The Linux helper speaks its own protocol version (#1300). */
-const linuxDiagnostics = (over = {}) => diagnostics({ protocolVersion: 11, ...over });
+const linuxDiagnostics = (over = {}) =>
+	diagnostics({ protocolVersion: 11, features: [...LINUX_REQUIRED_HELPER_FEATURES], ...over });
 const lastCall = (fake) => fake.command.mock.calls.at(-1);
 const rejectsWith = (promise, pattern) => assert.rejects(promise, pattern);
 
@@ -668,7 +672,7 @@ describe("Linux backend", () => {
 		assert.match(backend.emptyRootsHint(), /WSL2/);
 	});
 
-	test("ensureReady validates protocol, architecture and accessibility", async () => {
+	test("ensureReady validates protocol, architecture, features and accessibility", async () => {
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics());
 		const state = await backend.ensureReady({}, { lastPermissionCheckAt: 0, keep: 1 }, signal);
 		assert.equal(state.keep, 1);
@@ -681,6 +685,16 @@ describe("Linux backend", () => {
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /got unknown/);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ invariants: [] }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /Linux helper does not satisfy/);
+		// Matching protocol and architecture alone are not enough (#1352).
+		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ features: undefined }));
+		await rejectsWith(
+			backend.ensureReady({}, { lastPermissionCheckAt: 0 }),
+			new RegExp(
+				`Linux helper lacks required features: ${LINUX_REQUIRED_HELPER_FEATURES.join(", ")}\\. ` +
+					"Rebuild it with `PI_COMPUTER_USE_ALLOW_BUILD=1 node .*setup-helper\\.mjs --platform linux`\\. " +
+					`Setup installs a prebuilt before building from source: if \`.*prebuilt[\\\\/]linux[\\\\/]${process.arch}[\\\\/]linux-bridge\` exists, remove it or rebuild it with \`npm run build:linux\``,
+			),
+		);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: false }));
 		await rejectsWith(backend.ensureReady({}, { lastPermissionCheckAt: 0 }), /AT-SPI/);
 		fakes.linux.command.mockResolvedValue(linuxDiagnostics({ accessibility: undefined }));

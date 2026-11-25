@@ -21,7 +21,13 @@ import type {
 	PlatformWaitForRequest,
 	PlatformWaitForResponse,
 } from "../types.ts";
-import { isHelperDeadline, LINUX_HELPER_PROTOCOL_VERSION, linuxHelper, resetLinuxHelper } from "./helper.ts";
+import {
+	assertLinuxHelperFeatures,
+	isHelperDeadline,
+	LINUX_HELPER_PROTOCOL_VERSION,
+	linuxHelper,
+	resetLinuxHelper,
+} from "./helper.ts";
 import { wslNoWindowsHint } from "./wsl.ts";
 
 /**
@@ -167,6 +173,7 @@ async function ensureReady(
 		);
 	}
 	assertPlatformArchitecture("Linux", diagnostics);
+	assertLinuxHelperFeatures(diagnostics);
 	if (diagnostics?.accessibility === false) {
 		throw new Error(
 			"Linux accessibility is unavailable. Ensure AT-SPI is enabled and a D-Bus desktop accessibility bus is running.",

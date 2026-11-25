@@ -17,6 +17,8 @@ export interface PlatformDiagnostics {
 	protocolVersion: number;
 	architectureVersion?: number;
 	invariants?: string[];
+	/** Platform-specific helper features beyond the protocol version, e.g. Linux `snapshot-deadline`. */
+	features?: string[];
 	pid: number;
 	parentPid?: number;
 	parentAppName?: string;

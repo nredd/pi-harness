@@ -8,11 +8,14 @@ import os from "node:os";
 import path from "node:path";
 import { makeTestTempDir } from "@nredd/pi-test-lib/temp-dir";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
+import { assertPlatformArchitecture } from "../src/platform/architecture.ts";
+import { LINUX_HELPER_PROTOCOL_VERSION, LINUX_REQUIRED_HELPER_FEATURES } from "../src/platform/linux/helper.ts";
 import {
 	body,
 	createFakeChild,
 	createFakeSpawn,
 	createHelperEngine,
+	defaultDiagnostics,
 	fail,
 	ok,
 	raw,
@@ -96,7 +99,10 @@ function envelope(platform, handlers = {}, extra = {}) {
 		protocolVersion: platform === "Linux" ? 11 : 6,
 		platform,
 		handlers,
-		diagnostics: { invariants: REQUIRED_INVARIANTS },
+		diagnostics: {
+			invariants: REQUIRED_INVARIANTS,
+			...(platform === "Linux" ? { features: [...LINUX_REQUIRED_HELPER_FEATURES] } : {}),
+		},
 		...extra,
 	});
 }
@@ -705,6 +711,68 @@ describe("Linux helper client", () => {
 			return true;
 		});
 		assert.equal(setupSpawns(spawn).length, 1);
+	});
+
+	test("a protocol 11 helper without the snapshot-deadline marker is rejected and setup replaces it (#1352)", async () => {
+		install();
+		// Match the current protocol and architecture to exercise only the feature check.
+		const stale = linuxEngine({
+			diagnostics: ok({
+				protocolVersion: 11,
+				architectureVersion: 1,
+				invariants: REQUIRED_INVARIANTS,
+				features: undefined,
+			}),
+		});
+		const fresh = linuxEngine({ look: ok("fresh") });
+		let generation = 0;
+		const { client, spawn, children } = await linux({
+			setup: () => {
+				generation = 1;
+				return { exitCode: 0 };
+			},
+			helper: (list) => realisticChild(list, { engine: generation ? fresh : stale }),
+		});
+		assert.equal(await client.command("look"), "fresh");
+		assert.equal(setupSpawns(spawn).length, 1);
+		assert.deepEqual(children[0].signals, ["SIGTERM"], "the helper without the marker is killed, never reused");
+	});
+
+	test("a helper still lacking a required feature after setup fails validation with the rebuild command", async () => {
+		// A malformed `features` value counts as reporting none.
+		const engine = linuxEngine({
+			diagnostics: ok({
+				protocolVersion: 11,
+				architectureVersion: 1,
+				invariants: REQUIRED_INVARIANTS,
+				features: LINUX_REQUIRED_HELPER_FEATURES.join(","),
+			}),
+		});
+		const { client } = await linux({ setup: installing, helper: { engine } });
+		await assert.rejects(client.ensureInstalled(), (error) => {
+			assert.ok(error.message.startsWith(`Linux helper installed at ${helperPath} failed validation: `));
+			assert.match(
+				error.message,
+				new RegExp(
+					`failed validation: Linux helper lacks required features: ${LINUX_REQUIRED_HELPER_FEATURES.join(", ")}\\. ` +
+						"Rebuild it with `PI_COMPUTER_USE_ALLOW_BUILD=1 node \\S*setup-helper\\.mjs --platform linux`\\. " +
+						`Setup installs a prebuilt before building from source: if \`\\S*prebuilt[\\\\/]linux[\\\\/]${process.arch}[\\\\/]linux-bridge\` exists, ` +
+						"remove it or rebuild it with `npm run build:linux`, or setup reinstalls the same stale helper\\. " +
+						"Re-run setup or delete it\\.$",
+				),
+			);
+			return true;
+		});
+	});
+
+	test("protocol-11 checks without feature validation accept a helper that reports `features`", () => {
+		// A protocol-11 client that only checks protocol and architecture ignores the new field.
+		const diagnostics = defaultDiagnostics(11, {
+			invariants: REQUIRED_INVARIANTS,
+			features: [...LINUX_REQUIRED_HELPER_FEATURES],
+		});
+		assert.equal(diagnostics.protocolVersion, LINUX_HELPER_PROTOCOL_VERSION, "`features` needs no protocol bump");
+		assert.doesNotThrow(() => assertPlatformArchitecture("Linux", diagnostics));
 	});
 
 	test("a rejected helper that setup replaces is re-probed and then used", async () => {

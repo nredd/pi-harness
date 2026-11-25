@@ -94,6 +94,22 @@ test("Linux build/setup scripts and process lifetime", async () => {
 	].map((match) => match[1]);
 	assert.ok(tsInvariants.length > 0);
 	assert.deepEqual(rustInvariants, tsInvariants, "Rust and TS architecture invariants drifted");
+	// Anchored to the `diagnostics` reply: its `features` list directly follows `invariants`, comments allowed between.
+	const rustFeatures = [
+		...(
+			nativeSource.match(/"invariants": \[[^\]]*\],\s*(?:\/\/[^\n]*\n\s*)*"features": \[([^\]]*)\]/)?.[1] ?? ""
+		).matchAll(/"([a-z-]+)"/g),
+	].map((match) => match[1]);
+	assert.ok(rustFeatures.length > 0, "no `features` list found after `invariants` in the Rust `diagnostics` reply");
+	const tsFeatures = [
+		...(helperSource.match(/LINUX_REQUIRED_HELPER_FEATURES = \[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([a-z-]+)"/g),
+	].map((match) => match[1]);
+	assert.ok(tsFeatures.length > 0);
+	assert.deepEqual(
+		rustFeatures,
+		tsFeatures,
+		"the Linux helper's reported features drifted from the client's required ones",
+	);
 	assert.match(linuxDoc, /PI_COMPUTER_USE_ALLOW_BUILD=1/, "the Linux guide must document the opt-in source build");
 	assert.match(linuxDoc, /cargo/);
 	assert.equal(pkg.scripts["build:linux"], "node scripts/build-native.mjs --platform linux");
