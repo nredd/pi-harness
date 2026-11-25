@@ -197,14 +197,18 @@ function throwIfAborted(signal?: AbortSignal): void {
 	if (signal?.aborted) throw new Error("Operation aborted.");
 }
 
+/** Wait `ms` unless `signal` aborts first; the abort listener is removed either way, so a long poll does not pile them up. */
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	throwIfAborted(signal);
 	await new Promise<void>((resolve, reject) => {
-		const timer = setTimeout(resolve, ms);
 		const onAbort = () => {
 			clearTimeout(timer);
 			reject(new Error("Operation aborted."));
 		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
 		signal?.addEventListener("abort", onAbort, { once: true });
 	}).finally(() => signal?.throwIfAborted?.());
 }
@@ -341,8 +345,34 @@ interface ConnectionClass {
 	managed: boolean;
 }
 
+/** One daemon start shared by concurrent `ensureDaemon` callers. */
+interface PendingStart {
+	promise: Promise<boolean>;
+	/** Aborts the start once every waiter has abandoned it. */
+	controller: AbortController;
+	waiters: number;
+}
+
+/**
+ * Wait for `start` as one of its waiters. An abort ends only this wait, and drops this waiter synchronously: the
+ * last one to leave aborts the start in the same turn, so a caller arriving right after never joins it.
+ */
+async function awaitSharedStart(start: PendingStart, signal?: AbortSignal): Promise<boolean> {
+	start.waiters += 1;
+	return await new Promise<boolean>((resolve, reject) => {
+		const onAbort = () => {
+			start.waiters -= 1;
+			if (start.waiters === 0) start.controller.abort();
+			reject(new Error("Operation aborted."));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		void start.promise.then(resolve, reject).finally(() => signal?.removeEventListener("abort", onAbort));
+	});
+}
+
 export class MacosHelperClient {
 	private daemonAvailable = false;
+	private pendingStart?: PendingStart;
 	private requestSequence = 0;
 	private diagnosticsCache?: PlatformDiagnostics;
 	/** Last reported build, safe to display (see `displayBuild`). */
@@ -590,8 +620,40 @@ export class MacosHelperClient {
 		}
 	}
 
+	/**
+	 * Make sure a verified daemon answers, launching the installed app on positive absence.
+	 * Concurrent callers in this process share one start, so they launch at most one helper between them (`open -n`
+	 * starts a new instance every time). Each caller's signal abandons only its own wait; the shared start is
+	 * aborted once every waiter has, and a later caller starts afresh.
+	 * @returns false when no daemon answered within the probe loop.
+	 */
 	async ensureDaemon(signal?: AbortSignal): Promise<boolean> {
 		if (this.daemonAvailable) return true;
+		throwIfAborted(signal);
+		return await awaitSharedStart(this.joinStart(), signal);
+	}
+
+	/**
+	 * The in-flight start, or a new one. An abandoned start is never joined: it is already rejecting with the
+	 * abort, which every step it awaits honours at once.
+	 */
+	private joinStart(): PendingStart {
+		const current = this.pendingStart;
+		if (current && !current.controller.signal.aborted) return current;
+		const controller = new AbortController();
+		const start: PendingStart = {
+			controller,
+			waiters: 0,
+			promise: this.startDaemon(controller.signal).finally(() => {
+				// An abandoned start settles after its replacement was created; it must not clear that one.
+				if (this.pendingStart === start) this.pendingStart = undefined;
+			}),
+		};
+		this.pendingStart = start;
+		return start;
+	}
+
+	private async startDaemon(signal: AbortSignal): Promise<boolean> {
 		// Launch only on positive absence: `probeResident` throws on anything inconclusive, and `launchDaemon`
 		// refuses an external socket.
 		if (!(await this.probeResident(signal))) {
