@@ -5,14 +5,15 @@
  * read that shows the block, or a failure the provider's thresholds accept. A
  * read-confirmed mark carries no `evidence` field; a failure-inferred one says
  * `inferred`, how it expires and why. A transient per-minute 429 never removes a
- * model from its chain. A mark with a known reset lasts until that reset.
- * Without one it backs off exponentially, 5 minutes doubling up to 60, keyed on
- * how often the same scope was re-confirmed.
+ * model from its chain. A mark with a known collector reset uses a
+ * monotonic-projected deadline. A mark without a reset backs off exponentially,
+ * 5 minutes doubling up to 60, keyed on how often the same scope was re-confirmed.
  */
 
 import { addAbortListener } from "node:events";
 import type { EvidenceDecision } from "./evidence.ts";
-import { COLLECTOR_EVIDENCE, modelMatchesFamily, type UsageSnapshot } from "./usage.ts";
+import type { ResetDeadline } from "./reset-deadline.ts";
+import { COLLECTOR_EVIDENCE, COLLECTOR_RESET, modelMatchesFamily, type UsageSnapshot } from "./usage.ts";
 
 const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_CAP_MS = 60 * 60_000;
@@ -47,7 +48,7 @@ function scopeKey(provider: string, families: readonly string[] | undefined): st
 
 /** Tracks confirmed exhaustion so routing can skip blocked families without a network read. */
 export class ExhaustionTracker {
-	private readonly marks = new Map<string, ExhaustionMark>();
+	private readonly marks = new Map<string, { mark: ExhaustionMark; deadline?: ResetDeadline }>();
 	private readonly lifetimes = new Map<string, Disposable>();
 	/** Failures (`model@timestamp`) already counted by each live evidence-carrying mark. */
 	private readonly counted = new Map<string, ReadonlySet<string>>();
@@ -56,28 +57,31 @@ export class ExhaustionTracker {
 	constructor(private readonly now: () => number = Date.now) {}
 
 	/**
-	 * Record confirmed evidence: the mark, or nothing when an inferred deadline (`hinted` or
-	 * `window-reset`) already passed before confirmation finished. Only a decision without a
-	 * deadline backs off, so an elapsed hint is never replaced by a fresh backoff.
+	 * Record confirmed evidence, unless its collector reset or inferred deadline already passed.
+	 * An elapsed collector reset or inferred deadline is never replaced by a fresh backoff.
 	 */
 	record(model: ModelRef, decision: EvidenceDecision): ExhaustionMark | undefined {
 		// One clock sample for the check and the write: crossing the deadline between two samples
 		// would otherwise turn a valid deadline into a fresh backoff.
 		const now = this.now();
-		const deadline = decision.expiry === "hinted" || decision.expiry === "window-reset";
-		if (deadline && (decision.resetAt ?? -Infinity) <= now) return undefined;
-		return this.write(model, decision, now);
+		const anchor = decision[COLLECTOR_RESET];
+		const resetAt = anchor?.(now) ?? decision.resetAt;
+		if ((anchor || decision.expiry === "hinted" || decision.expiry === "window-reset") && (resetAt ?? -Infinity) <= now)
+			return undefined;
+		return this.write(model, decision, now, resetAt);
 	}
 
 	/** Record a confirmed block for the scope of `decision` and return the mark. Routing uses `record`. */
 	mark(model: ModelRef, decision: EvidenceDecision): ExhaustionMark {
-		return this.write(model, decision, this.now());
+		const now = this.now();
+		return this.write(model, decision, now, decision[COLLECTOR_RESET]?.(now) ?? decision.resetAt);
 	}
 
-	private write(model: ModelRef, decision: EvidenceDecision, now: number): ExhaustionMark {
+	private write(model: ModelRef, decision: EvidenceDecision, now: number, resetAt: number | undefined): ExhaustionMark {
 		const families = decision.scope === "model" ? decision.families : undefined;
 		const key = scopeKey(model.provider, families);
-		const previous = this.marks.get(key);
+		const stored = this.marks.get(key);
+		const previous = stored && this.project(stored, now);
 		// L7: one failure, keyed by model and message timestamp, counts once while its mark is live.
 		// Distinct failures count separately even when both precede the first confirmation, so dedupe
 		// never compares `markedAt` with the failure time.
@@ -87,7 +91,7 @@ export class ExhaustionTracker {
 		// A block that lifted more than a full backoff cycle ago is a new episode.
 		const recent = previous !== undefined && now - previous.until < BACKOFF_CAP_MS;
 		const confirmations = (recent ? previous.confirmations : 0) + 1;
-		const resetKnown = decision.resetAt !== undefined && decision.resetAt > now;
+		const resetKnown = resetAt !== undefined && resetAt > now;
 		const backoff = Math.min(
 			BACKOFF_BASE_MS * 2 ** (confirmations - 1),
 			BACKOFF_CAP_MS,
@@ -97,7 +101,7 @@ export class ExhaustionTracker {
 			provider: model.provider,
 			families,
 			window: decision.window ?? "included quota",
-			until: resetKnown && decision.resetAt !== undefined ? decision.resetAt : now + backoff,
+			until: resetKnown ? resetAt : now + backoff,
 			resetKnown,
 			confirmations,
 		};
@@ -105,7 +109,7 @@ export class ExhaustionTracker {
 			// Late or weaker evidence counts, but never shortens a live mark: keep the later deadline.
 			if (previous !== undefined && previous.until > now && previous.until >= mark.until) {
 				const kept = { ...previous, confirmations };
-				this.marks.set(key, kept);
+				this.marks.set(key, { ...stored, mark: kept });
 				if (failure !== undefined) this.counted.set(key, new Set(counted).add(failure));
 				this.notify();
 				return kept;
@@ -116,7 +120,7 @@ export class ExhaustionTracker {
 			mark.markedAt = now;
 		}
 		this.detach(key);
-		this.marks.set(key, mark);
+		this.marks.set(key, { mark, deadline: resetKnown ? decision[COLLECTOR_RESET] : undefined });
 		if (failure === undefined) this.counted.delete(key);
 		else this.counted.set(key, new Set(counted).add(failure));
 		const signal = decision[COLLECTOR_EVIDENCE];
@@ -129,20 +133,30 @@ export class ExhaustionTracker {
 		return mark;
 	}
 
+	/** Project a read-confirmed deadline without changing the stored mark or its evidence. */
+	private project({ mark, deadline }: { mark: ExhaustionMark; deadline?: ResetDeadline }, now: number): ExhaustionMark {
+		const until = deadline?.(now) ?? mark.until;
+		return until === mark.until ? mark : { ...mark, until };
+	}
+
 	/** The live mark covering `model`, if any. Expired marks are kept so a quick re-confirmation grows the backoff. */
 	blocking(model: ModelRef): ExhaustionMark | undefined {
 		const now = this.now();
-		for (const mark of this.marks.values()) {
-			if (mark.until <= now || mark.provider !== model.provider) continue;
-			if (!mark.families || mark.families.some((family) => modelMatchesFamily(model.id, family))) return mark;
+		let first: ExhaustionMark | undefined;
+		for (const stored of this.marks.values()) {
+			if (stored.mark.provider !== model.provider) continue;
+			// Project overlapping marks too, so a later clock rollback cannot revive them.
+			const mark = this.project(stored, now);
+			if (first || mark.until <= now) continue;
+			if (!mark.families || mark.families.some((family) => modelMatchesFamily(model.id, family))) first = mark;
 		}
-		return undefined;
+		return first;
 	}
 
 	/** Live marks, for status output. */
 	active(): ExhaustionMark[] {
 		const now = this.now();
-		return [...this.marks.values()].filter((mark) => mark.until > now);
+		return [...this.marks.values()].map((stored) => this.project(stored, now)).filter((mark) => mark.until > now);
 	}
 
 	/**
@@ -151,7 +165,7 @@ export class ExhaustionTracker {
 	 */
 	reconcile(snapshot: UsageSnapshot): void {
 		if (snapshot.status !== "available" || snapshot.expiresAt <= this.now()) return;
-		for (const [key, mark] of this.marks) {
+		for (const [key, { mark }] of this.marks) {
 			if (mark.provider !== snapshot.provider || mark.evidence) continue;
 			if (
 				snapshot.windows.some(

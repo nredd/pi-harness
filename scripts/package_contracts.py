@@ -566,6 +566,7 @@ CONTRACTS = (
             "src/model-ref.ts",
             "src/policy.ts",
             "src/recovery.ts",
+            "src/reset-deadline.ts",
             "src/reset-journal.ts",
             "src/reset-view.ts",
             "src/resets.ts",

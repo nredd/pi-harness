@@ -203,6 +203,7 @@ it("preserves overlapping exact-snapshot confirmations in both completion orders
 			const pending: ((value: Response) => void)[] = [];
 			const usage = new UsageService({
 				now: () => now,
+				monotonicNow: () => now - 1_700_000_000_000,
 				getAccessToken: async () => "synthetic",
 				fetch: async () => new Promise<Response>((resolve) => pending.push(resolve)),
 			});

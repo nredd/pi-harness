@@ -26,6 +26,7 @@ const ROUTER_USAGE: RouterUsage = {
 		expiresAt: Number.MAX_SAFE_INTEGER,
 	}),
 	decisionFor: () => ({ block: false }),
+	observeResets: () => {},
 	format: () => "available",
 	formatForPrompt: () => "available",
 };

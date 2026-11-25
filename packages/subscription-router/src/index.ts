@@ -120,7 +120,10 @@ const DECISION_ENTRY = "router:decision";
 const RECENT_DECISIONS = 5;
 
 /** The usage cache surface consumed by the extension, including routing decisions. */
-export type RouterUsage = Pick<UsageService, "get" | "peek" | "decisionFor" | "format" | "formatForPrompt"> &
+export type RouterUsage = Pick<
+	UsageService,
+	"get" | "peek" | "decisionFor" | "observeResets" | "format" | "formatForPrompt"
+> &
 	Partial<Pick<UsageService, "invalidate" | "configureCollectors">>;
 
 /** Explicit dependencies isolate embedded sessions from process-global quota and credentials. */

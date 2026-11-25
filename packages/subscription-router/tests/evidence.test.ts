@@ -19,8 +19,10 @@ import {
 } from "../src/evidence.ts";
 import { type ExhaustionMark, ExhaustionTracker, markEvidence } from "../src/exhaustion.ts";
 import { classify, nextPacificMidnight } from "../src/failure.ts";
+import { anchorReset } from "../src/reset-deadline.ts";
 import { isQuotaError, type RouteEnv, Router } from "../src/router.ts";
 import {
+	COLLECTOR_RESET,
 	NO_USAGE_SOURCE,
 	type RegistryContext,
 	type UsageDecision,
@@ -605,6 +607,24 @@ describe("inferred marks", () => {
 		});
 	});
 
+	it("keeps a collector deadline when weaker evidence updates the live mark", () => {
+		const { clock, tracker } = tracked();
+		let elapsed = 0;
+		const resetAt = T0 + 20 * MINUTE;
+		tracker.record(CARBON, {
+			block: true,
+			resetAt,
+			[COLLECTOR_RESET]: anchorReset(resetAt, T0, 0, () => elapsed),
+		});
+		expect(tracker.record(CARBON, { block: true, evidence: "inferred" })).toMatchObject({
+			until: resetAt,
+			confirmations: 2,
+		});
+		clock.now -= MINUTE;
+		elapsed = 20 * MINUTE;
+		expect(tracker.blocking(CARBON)).toBeUndefined();
+	});
+
 	it("counts an older, shorter confirmation but never shortens the live mark", () => {
 		const { clock, tracker } = tracked();
 		const scope = { block: true, scope: "model" as const, families: [CARBON.id], evidence: "inferred" as const };
@@ -739,7 +759,11 @@ describe("routing on the composed chain", () => {
 	function routed(usage: UsageRead = reader(noSource()).usage) {
 		const clock = { now: T0 };
 		const tracker = new ExhaustionTracker(() => clock.now);
-		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => clock.now);
+		const router = new Router(
+			{ observeResets: () => {}, decisionFor: () => ({ block: false }) },
+			tracker,
+			() => clock.now,
+		);
 		const confirm = confirmEvidence(usage, new FailureHistory(), undefined);
 		const env: RouteEnv = {
 			resolve: (entry) => asModel(entry),
@@ -849,7 +873,7 @@ describe("routing on the composed chain", () => {
 	// Decision record: C9 applies to inferred marks only.
 	it("C9: a stale selection drops an inferred mark but still writes a read-confirmed one", async () => {
 		const tracker = new ExhaustionTracker(() => T0);
-		const router = new Router({ decisionFor: () => ({ block: false }) }, tracker, () => T0);
+		const router = new Router({ observeResets: () => {}, decisionFor: () => ({ block: false }) }, tracker, () => T0);
 		const stale = (decision: UsageDecision): RouteEnv => ({
 			resolve: (entry) => asModel(entry),
 			refresh: async () => decision,

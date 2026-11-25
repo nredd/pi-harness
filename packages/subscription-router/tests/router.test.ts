@@ -42,6 +42,7 @@ function harness(options: { live?: Record<string, UsageDecision>; unknown?: stri
 	const live = options.live ?? {};
 	const refreshed: string[] = [];
 	const usage: UsageDecider = {
+		observeResets: () => {},
 		decisionFor: (m) => {
 			const decision = cached[`${m.provider}/${m.id}`] ?? cached[m.provider];
 			if (!decision?.block) return { block: false };
@@ -239,6 +240,7 @@ describe("balanced routing", () => {
 		const h = harness();
 		const snapshots: Record<string, UsageSnapshot> = {};
 		const usage: UsageDecider = {
+			observeResets: () => {},
 			decisionFor: (entry) => h.cached[entry.provider] ?? { block: false },
 			peek: (provider) => snapshots[provider],
 		};
@@ -257,7 +259,11 @@ describe("balanced routing", () => {
 	it("records why each pick happened, including freshness, and skips sticky continuations", async () => {
 		const { tracker, env, snapshots, set } = balanced();
 		const decisions: RouteDecision[] = [];
-		const usage: UsageDecider = { decisionFor: () => ({ block: false }), peek: (provider) => snapshots[provider] };
+		const usage: UsageDecider = {
+			observeResets: () => {},
+			decisionFor: () => ({ block: false }),
+			peek: (provider) => snapshots[provider],
+		};
 		const router = new Router(
 			usage,
 			tracker,
